@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
+import { saveDiffMode } from "./diff-mode.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -73,7 +74,7 @@ vi.mock("./client.ts", async (orig) => ({
     reconnect = opts.onOpen ?? (() => {});
     setStatus = opts.onStatus ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), search: async () => ({}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
@@ -528,9 +529,9 @@ it("the palette on the new-session tab changes the draft's permission mode, and 
     await openNewTab();
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     expect(paletteRow("Focus prompt")).toBeDefined();
-    // No side panel or terminal on the new-session tab.
-    expect(paletteRow("Toggle side panel")).toBeUndefined();
-    expect(paletteRow("Toggle terminal")).toBeUndefined();
+    // GH-430: the panels show on the new-session tab (wide screens): their commands are listed.
+    expect(paletteRow("Toggle side panel")).toBeDefined();
+    expect(paletteRow("Toggle terminal")).toBeDefined();
     await act(async () => paletteRow("Change permission mode")!.click());
     expect(paletteRow("Bypass permissions")).toBeDefined();
     await act(async () => paletteRow("Plan mode")!.click());
@@ -676,6 +677,19 @@ it("wide screens dock the terminal at the bottom by default, spanning the sessio
   expect(t.closest("main")).toBeNull();
   expect(q("work-area")!.querySelector('[data-testid="side-panel"]')).not.toBeNull();
   expect(q("work-area")!.contains(q("sidebar"))).toBe(false);
+});
+
+it("GH-434: the side panel terminal toggle uses the quiet pressed style", async () => {
+  const b = () => q("terminal-toggle")!;
+  expect(b().className).toContain("aria-pressed:bg-transparent");
+  expect(b().className).toContain("aria-pressed:shadow-none");
+  expect(b().className).toContain("aria-pressed:text-faint");
+  expect(b().className).toContain("aria-pressed:hover:bg-accent");
+  // The default pressed fill is replaced, not stacked under the quiet one.
+  expect(b().className).not.toContain("aria-pressed:bg-secondary");
+  expect(b().getAttribute("aria-pressed")).toBe("false");
+  await clickId("terminal-toggle");
+  expect(b().getAttribute("aria-pressed")).toBe("true");
 });
 
 it("the titlebar terminal button opens and hides the terminal, pressed while shown", async () => {
@@ -944,7 +958,7 @@ it("dropping a pane on the area body appends it; a session tab drag is not a tar
   await dnd(q("side-panel"), "dragover", data);
   expect(q("side-panel")!.className).toContain("outline-primary");
   await dnd(q("side-panel"), "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
   const other = new Map<string, string>();
   await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
   expect(q("side-panel")!.className).not.toContain("outline-primary");
@@ -960,7 +974,7 @@ it("dropping a pane on an area's content (inside a pane host) moves it and fills
   expect(q("side-panel")!.className).toContain("outline-primary");
   expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
   await dnd(body, "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
 });
 
 /** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */
@@ -1567,7 +1581,7 @@ describe("worktrees", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
-  it("New worktree from the sidebar opens the new-session tab held, then in the new worktree", async () => {
+  it("Shift+click on Create worktree creates at once with a generated name: the new-session tab held, then in the new worktree", async () => {
     let done!: (r: unknown) => void;
     const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } };
     const restore = await remount({
@@ -1576,7 +1590,7 @@ describe("worktrees", () => {
     });
     const from = sent.length;
     try {
-      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.click());
+      await act(async () => void el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
       expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo" }]);
       expect(el.querySelector('[data-testid="external-turn"]')?.textContent).toBe("Creating worktree…");
       replies["session.list"] = { ...listed, worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
@@ -1638,18 +1652,34 @@ describe("worktrees", () => {
     }
   });
 
-  it("the name dialog: an invalid name disables Create with the rule; Enter creates the valid one", async () => {
-    const restore = await remount({ "session.list": { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } }, "worktree.create": { path: "/p/demo/.claude/worktrees/my-feature", branch: "worktree-my-feature" } });
+  it("Create worktree: click opens the modal; Create sends the normalized branch and opens a new session tab in the worktree; Shift+click and the palette", async () => {
+    const made = "/p/demo/.claude/worktrees/fix-login-u";
+    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main] } };
+    const restore = await remount({
+      "session.list": listed,
+      "settings.get": { settings: { jira: { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: false },
+      "worktree.branches": { branches: [{ name: "main", local: true, worktree: "/p/demo" }], defaultBase: "HEAD" },
+      "worktree.create": { path: made, branch: "fix-login-u" },
+    });
     const from = sent.length;
     try {
-      await act(async () => void el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
-      await field("new-worktree-name", "a b");
-      expect(document.querySelector<HTMLButtonElement>('[data-testid="new-worktree-confirm"]')!.disabled).toBe(true);
-      expect(document.querySelector('[data-testid="new-worktree-hint"]')?.textContent).toBe("Only letters, numbers, dots, hyphens, and underscores");
-      await field("new-worktree-name", "my-feature");
-      expect(document.querySelector<HTMLButtonElement>('[data-testid="new-worktree-confirm"]')!.disabled).toBe(false);
-      await press({ key: "Enter" }, document.querySelector('[data-testid="new-worktree-name"]')!);
-      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo", name: "my-feature" }]);
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.click());
+      await act(async () => {});
+      expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull();
+      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([]);
+      await field("create-worktree-name", "Fix Login Ü");
+      replies["session.list"] = { ...listed, worktrees: { "/p/demo": [main, { path: made, branch: "fix-login-u", main: false }] } };
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="create-worktree-confirm"]')!.click());
+      await act(async () => {});
+      await act(async () => {});
+      expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([{ type: "worktree.create", cwd: "/p/demo", branch: "fix-login-u" }]);
+      expect(document.querySelector('[data-testid="create-worktree"]')).toBeNull();
+      expect(el.querySelector('[data-testid="worktree-chip"]')?.textContent).toContain("fix-login-u");
+      // The palette opens the same modal.
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => paletteRow("New worktree…")!.click());
+      await act(async () => {});
+      expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull();
     } finally {
       restore();
     }
@@ -1876,6 +1906,146 @@ it("leaving and coming back to the graph tab keeps the panel mounted", async () 
     delete replies["git.status"];
     delete replies["git.log"];
     delete replies["git.refs"];
+  }
+});
+
+const api = { path: "/p/demo/api", rel: "api", kind: "nested", branch: "main" };
+const web = { path: "/p/demo/web", rel: "web", kind: "nested", branch: "main" };
+const reposOf = () => (sent as { type: string; cwd?: string; exact?: boolean; openFiles?: string[]; fresh?: boolean }[]).filter((m) => m.type === "git.repos");
+
+it("a workspace folder that holds repositories shows the Graph tab; the graph reads the first repository with exact", async () => {
+  const restore = await remount({ "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).not.toBeNull();
+    sent.length = 0;
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect((sent as { type: string; cwd?: string; exact?: boolean }[]).filter((m) => m.type === "git.log")).toMatchObject([{ cwd: "/p/demo/api", exact: true }]);
+  } finally {
+    restore();
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos"]) delete replies[k];
+  }
+});
+
+it("Changes and Graph show the repository chosen for the project; a pick in either switches both", async () => {
+  localStorage.setItem("claude-ui.diffMode", "uncommitted");
+  localStorage.setItem("claude-ui.repoChoice", JSON.stringify({ "/p/demo": "web" }));
+  const restore = await remount({ "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.diff": { diff: { prefix: "", base: "b".repeat(40), files: [] } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    const wait = () => act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    const gits = sent as { type: string; cwd?: string; exact?: boolean }[];
+    const last = (t: string) => gits.filter((m) => m.type === t).at(-1);
+    const selectors = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid=repo-selector]')];
+    const pick = async (trigger: HTMLElement, rel: string) => {
+      await act(async () => trigger.click());
+      await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
+      await wait();
+    };
+    await pickSide(/changes/i);
+    await wait();
+    expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);
+    expect(el.querySelector("[data-testid=repo-selector]")!.getAttribute("aria-label")).toBe("Repository: web, branch main");
+    gits.length = 0;
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    // The graph chunk loads lazily.
+    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await wait();
+    expect(gits.filter((m) => m.type === "git.log").length).toBeGreaterThan(0);
+    for (const l of gits.filter((m) => m.type === "git.log")) expect(l).toMatchObject({ cwd: "/p/demo/web", exact: true });
+    const graphSel = () => el.querySelector<HTMLElement>("[data-testid=graph-panel] [data-testid=repo-selector]")!;
+    expect(graphSel().getAttribute("aria-label")).toBe("Repository: web, branch main");
+    await pick(graphSel(), "api");
+    expect(last("git.log")).toMatchObject({ cwd: "/p/demo/api", exact: true });
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-changes"]')!.click());
+    await wait();
+    expect(selectors().some((s) => s.getAttribute("aria-label") === "Repository: api, branch main")).toBe(true);
+    expect(last("git.diff")).toMatchObject({ cwd: "/p/demo/api", exact: true });
+    const changesSel = selectors().find((s) => !s.closest("[data-testid=graph-panel]"))!;
+    await pick(changesSel, "web");
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    await wait();
+    expect(last("git.log")).toMatchObject({ cwd: "/p/demo/web", exact: true });
+  } finally {
+    restore();
+    localStorage.removeItem("claude-ui.diffMode");
+    localStorage.removeItem("claude-ui.repoChoice");
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos", "git.diff"]) delete replies[k];
+  }
+});
+
+it("the Graph shows Loading graph… until the session list is loaded, then mounts once", async () => {
+  const saved = replies["session.list"];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const list = { sessions: [session], projects: ["/p/demo"] };
+  const restore = await remount({ "session.list": async () => (await gate, list), "git.repos": { repos: [api, web] }, "git.status": { status: null }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } });
+  try {
+    const gits = sent as { type: string; skip?: number }[];
+    gits.length = 0;
+    release();
+    for (let i = 0; i < 40 && !el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]'); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="side-panel"] [data-testid="pane-graph"]')!.click());
+    for (let i = 0; i < 40 && !gits.some((m) => m.type === "git.log"); i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 100))));
+    expect(gits.filter((m) => m.type === "git.log" && !m.skip)).toHaveLength(1);
+  } finally {
+    restore();
+    replies["session.list"] = saved;
+    for (const k of ["git.status", "git.refs", "git.log", "git.repos"]) delete replies[k];
+  }
+});
+
+it("settings ignoreSubmodules from settings.get and settings_changed reach ChangesPanel", async () => {
+  localStorage.setItem("claude-ui.diffMode", "uncommitted");
+  const own = { path: "/p/demo", rel: "", kind: "main", branch: "main" };
+  const lib = { path: "/p/demo/libs/lib", rel: "libs/lib", kind: "submodule", parent: "/p/demo", branch: "x" };
+  const probes = () => (sent as { type: string; cwd?: string; exact?: boolean }[]).filter((m) => m.type === "git.status" && m.cwd === lib.path && m.exact);
+  const restore = await remount({
+    "settings.get": { settings: { orchestration: {}, git: { ignoreSubmodules: true } } },
+    "git.repos": { repos: [own, lib] },
+    "git.status": { status: { branch: "main", added: 0, removed: 0, files: 1 } },
+    "git.diff": { diff: { prefix: "", base: "b".repeat(40), files: [] } },
+  });
+  try {
+    await pickSide(/changes/i);
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(probes()).toEqual([]);
+    await act(async () => settingsChanged({ settings: { orchestration: {}, git: { ignoreSubmodules: false } } }));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(probes().length).toBeGreaterThan(0);
+  } finally {
+    restore();
+    localStorage.removeItem("claude-ui.diffMode");
+    for (const k of ["settings.get", "git.status", "git.repos", "git.diff"]) delete replies[k];
+  }
+});
+
+it("git.repos [] hides the Graph tab even when git.status would answer; without a repos array git.status decides", async () => {
+  let restore = await remount({ "git.repos": { repos: [] }, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
+  try {
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).toBeNull();
+    restore();
+    restore = await remount({ "git.repos": {}, "git.status": { status: { branch: "main", added: 0, removed: 0 } } });
+    expect(el.querySelector('[data-testid="side-panel"] [data-testid="pane-graph"]')).not.toBeNull();
+  } finally {
+    restore();
+    for (const k of ["git.status", "git.repos"]) delete replies[k];
+  }
+});
+
+it("git.repos is asked again on sessions.changed and on settings_changed", async () => {
+  const restore = await remount({ "git.repos": { repos: [api] } });
+  try {
+    const n = reposOf().length;
+    await act(async () => sessionsChanged({}));
+    await act(async () => {});
+    expect(reposOf().length).toBe(n + 1);
+    await act(async () => settingsChanged({ settings: { orchestration: {} } }));
+    await act(async () => {});
+    expect(reposOf().length).toBe(n + 2);
+    expect(reposOf().at(-1)!.fresh).toBeUndefined();
+  } finally {
+    restore();
+    delete replies["git.repos"];
   }
 });
 
@@ -2124,6 +2294,7 @@ describe("GH-358 sidebar menus", () => {
   });
   const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
     replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
+    localStorage.setItem("claude-ui.expandedWorkers", JSON.stringify([`coordinator:${ID}`]));
     act(() => root.unmount());
     root = createRoot(el);
     await act(async () => root.render(<App />));
@@ -3093,5 +3264,1435 @@ describe("GH-378 clean up tabs", () => {
     await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
     await act(async () => {});
     expect(tabIds()).toEqual([ID, S2, S3]);
+  });
+});
+
+describe("GH-394: the file dialog", () => {
+  // jsdom has no layout: CodeMirror measures through Range rects when it scrolls to a line.
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+  const lines = Array.from({ length: 60 }, (_, i) => `l${i + 1}`).join("\n");
+  const call = (id: string, tool: string, input: unknown) => ({ type: "tool_call", id, toolUseId: id, tool, input, status: "done" });
+  const fileDialog = () => document.querySelector("[data-testid=file-dialog]");
+  const popup = () => document.querySelector("[data-testid=viewer-dialog]");
+  const cursorLine = async () => {
+    const v = (await import("@codemirror/view")).EditorView.findFromDOM(document.querySelector<HTMLElement>("[data-testid=file-dialog] .cm-editor")!)!;
+    return v.state.doc.lineAt(v.state.selection.main.head).number;
+  };
+  beforeEach(() => void (replies["fs.read"] = { content: lines, mtime: 1 }));
+  afterEach(() => void (replies["fs.read"] = { content: "x", mtime: 1 }));
+
+  it("a Read card's open button opens the file dialog at the read's offset, not the popup viewer", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts", offset: 40 }) }));
+    const open = el.querySelector<HTMLElement>("[data-testid=viewer-open]")!;
+    expect(open.getAttribute("aria-label")).toBe("Open a.ts in file dialog");
+    await act(async () => open.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    expect(popup()).toBeNull();
+    expect(await cursorLine()).toBe(40);
+  });
+
+  it("a file reference in assistant text opens the file dialog with the cursor on its line", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/demo/a.ts:12` now.", streaming: false } }));
+    const ref = el.querySelector<HTMLElement>("button[title='Open in file dialog']")!;
+    await act(async () => ref.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    expect(await cursorLine()).toBe(12);
+  });
+
+  it("git.repos gets the open editor tab paths as openFiles", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    expect(reposOf().at(-1)!.openFiles).toEqual(["/p/demo/a.ts"]);
+  });
+
+  it("an Edit card still opens the diff popup, not the file dialog", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("e1", "Edit", { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(popup()).not.toBeNull();
+    expect(fileDialog()).toBeNull();
+  });
+
+  it("the file dialog closes when another tab shows", async () => {
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: call("r1", "Read", { file_path: "/p/demo/a.ts" }) }));
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(fileDialog()).not.toBeNull();
+    await act(async () => void (location.hash = "#new"));
+    await act(async () => {});
+    await vi.waitFor(() => expect(fileDialog()).toBeNull());
+  });
+});
+
+describe("GH-381: remembered dock tabs", () => {
+  const tabsKey = () => JSON.parse(localStorage.getItem("claude-ui.paneTabs") ?? "null") as Record<string, string> | null;
+  const selected = (area: string, p: string) => paneTab(area, p)?.getAttribute("aria-selected");
+
+  it("the selected side and bottom tabs reopen after a reload", async () => {
+    await clickId("terminal-toggle");
+    await clickId("pane-files");
+    await moveFromMenu("side");
+    await act(async () => paneTab("bottom-panel", "terminal")!.click());
+    await act(async () => paneTab("side-panel", "changes")!.click());
+    expect(tabsKey()).toMatchObject({ side: "changes", bottom: "terminal" });
+    await rerender();
+    expect(selected("side-panel", "changes")).toBe("true");
+    expect(selected("bottom-panel", "terminal")).toBe("true");
+  });
+
+  it("a remembered tab the area no longer holds falls back to the area's default", async () => {
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal", bottom: "zzz" }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "graph" }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+  });
+
+  it("Reset layout forgets the remembered side and bottom tabs", async () => {
+    await act(async () => paneTab("side-panel", "changes")!.click());
+    expect(tabsKey()?.side).toBe("changes");
+    await clickId("dock-menu-side");
+    await act(async () => menuItem("dock-reset").click());
+    expect(localStorage.getItem("claude-ui.paneTabs")).toBeNull();
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+  });
+
+  it("narrow: the pane switcher reopens on the last selected pane", async () => {
+    width = 390;
+    await rerender();
+    await clickId("pane-files");
+    await rerender();
+    expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+    expect(q("pane-session")!.getAttribute("aria-selected")).toBe("false");
+    await clickId("pane-session");
+    await rerender();
+    expect(q("pane-session")!.getAttribute("aria-selected")).toBe("true");
+    width = 1440;
+  });
+
+  it("a terminal restored as the remembered pane does not take the focus (narrow, and in the side panel)", async () => {
+    const g = globalThis as { __termFocused?: number };
+    width = 390;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ narrow: "terminal", bottom: "terminal" }));
+    const before = g.__termFocused ?? 0;
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(q("pane-terminal")!.getAttribute("aria-selected")).toBe("true");
+    expect(q("terminal-panel")).not.toBeNull();
+    expect(g.__termFocused ?? 0).toBe(before);
+    width = 1440;
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal" }));
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(selected("side-panel", "terminal")).toBe("true");
+    expect(g.__termFocused ?? 0).toBe(before);
+  });
+
+  it("a bottom terminal shown by the page load does not take the focus; a Terminal tab click then does", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "changes" }));
+    const before = g.__termFocused ?? 0;
+    await rerender();
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(q("bottom-panel")!.contains(q("terminal-panel"))).toBe(true);
+    expect(g.__termFocused ?? 0).toBe(before);
+    // Also after the user's first key: the latch ends on an explicit request, not on input.
+    await press({ key: "a" });
+    await act(async () => new Promise((r) => setTimeout(r, 100)));
+    expect(g.__termFocused ?? 0).toBe(before);
+    await act(async () => paneTab("bottom-panel", "terminal")!.click());
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  });
+
+  it("another browser tab's pick (storage event) changes nothing shown here and focuses nothing", async () => {
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    await rerender();
+    expect(selected("side-panel", "files")).toBe("true");
+    const before = g.__termFocused ?? 0;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ side: "terminal", narrow: "terminal" }));
+    await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.paneTabs" })));
+    await act(async () => new Promise((r) => setTimeout(r, 200)));
+    expect(selected("side-panel", "files")).toBe("true");
+    expect(q("terminal-panel")).toBeNull();
+    expect(g.__termFocused ?? 0).toBe(before);
+  });
+
+  it("narrow: the restore waits for the first session tab (a New session tab at load does not use it up)", async () => {
+    width = 390;
+    localStorage.setItem("claude-ui.paneTabs", JSON.stringify({ narrow: "files" }));
+    location.hash = "#new";
+    await rerender();
+    await act(async () => {
+      location.hash = `#${ID}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => {});
+    expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+    width = 1440;
+  });
+});
+
+// GH-430: the new-session tab shows the side and bottom panel of its project (wide screens), so nothing jumps when the first prompt is sent.
+describe("GH-430: panels on the new-session tab", () => {
+  const OTHER_ID = "99999999-2222-3333-4444-555555555555";
+  const other: SessionListItem = { ...session, id: OTHER_ID, cwd: "/p/other", title: "Other" };
+  const NEW_ID = "aaaaaaaa-2222-3333-4444-555555555555";
+  const created: SessionListItem = { ...session, id: NEW_ID, title: "New session", transcript: false };
+  const TWO = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+  /** An element is out of sight when it or an ancestor is `hidden` (not `hidden lg:flex`) or `lg:hidden`. */
+  const hiddenBy = (n: Element | null) => {
+    for (let e: Element | null = n; e; e = e.parentElement) {
+      const c = (e.getAttribute("class") ?? "").split(/\s+/);
+      if ((c.includes("hidden") && !c.includes("lg:flex")) || c.includes("lg:hidden")) return true;
+    }
+    return false;
+  };
+  const panelShown = (id: string) => !!q(id) && !hiddenBy(q(id));
+  const callsSince = (n: number, type: string) => sent.slice(n).filter((m) => m.type === type) as Record<string, unknown>[];
+  const sendFirst = async (text: string) => {
+    const box = newPrompt() as HTMLTextAreaElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(box, text);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+  };
+  const hashTo = async (id: string) => {
+    await act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+  };
+  const bySession = (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, other, created].find((x) => x.id === m.sessionId) ?? session });
+
+  it("AC1: the new-session tab shows the side panel and the remembered bottom terminal; after the first prompt the same panels and panes stay", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const restore = await remount({
+      "session.list": () => ({ sessions: sent.some((m) => m.type === "session.create") ? [session, created] : [session], projects: ["/p/demo"] }),
+      "session.subscribe": bySession,
+      "session.create": { session: created },
+      "session.prompt": {},
+    });
+    try {
+      await openNewTab();
+      expect(panelShown("side-panel")).toBe(true);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+      await pickSide(/changes/i);
+      const side = q("side-panel")!;
+      const term = q("terminal-panel")!;
+      expect(term).not.toBeNull();
+      expect(sideTab()).toMatch(/changes/i);
+      await sendFirst("hello");
+      expect(location.hash).toBe(`#${NEW_ID}`);
+      expect(q("side-panel")).toBe(side);
+      expect(q("terminal-panel")).toBe(term);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="pane-terminal"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(sideTab()).toMatch(/changes/i);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC2: on the new-session tab Files, Graph and Terminal ask with the draft project's cwd", async () => {
+    const restore = await remount({
+      "session.list": { ...TWO, worktrees: { "/p/other": [{ path: "/p/other", branch: "main", main: true }] } },
+      "terminal.list": (m: { cwd: string }) => ({ terminals: m.cwd === "/p/other" ? [{ id: "t9", title: "Terminal 1" }] : [] }),
+      "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } },
+      "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } },
+      "git.refs": { refs: "s1" },
+    });
+    try {
+      await openNewTab();
+      const n = sent.length;
+      await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(n, "terminal.list")).toContainEqual({ type: "terminal.list", cwd: "/p/other" });
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      // The terminal of that folder shows (it has a shell); the Graph tab is there (a git work tree) and asks for the draft's log.
+      expect(panelShown("side-panel")).toBe(true);
+      expect(q("terminal-panel")).toBeNull();
+      await pickSide(/graph/i);
+      await vi.waitFor(() => expect(callsSince(n, "git.log").some((m) => m.cwd === "/p/other")).toBe(true));
+      expect(callsSince(n, "git.log").every((m) => m.cwd === "/p/other")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC3: Changes on the new-session tab shows the empty state; Uncommitted asks git.diff for the draft cwd", async () => {
+    await openNewTab();
+    await pickSide(/changes/i);
+    expect(q("changes-empty")!.textContent).toBe("No changes yet. Claude's edits appear here.");
+    // The session's own Changes keeps its message.
+    await act(async () => void (location.hash = `#${ID}`));
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(q("changes-empty")!.textContent).toBe("No changes in this session yet.");
+    saveDiffMode("uncommitted");
+    const restore = await remount({ "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.diff": { diff: { prefix: "", base: "b", files: [] } } });
+    try {
+      await openNewTab();
+      await pickSide(/changes/i);
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(sent.filter((m) => m.type === "git.diff")).toContainEqual({ type: "git.diff", cwd: "/p/demo", base: "head" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC4: switching the draft's project chip moves the panels to the new project", async () => {
+    const restore = await remount({ "session.list": TWO });
+    try {
+      await openNewTab();
+      const chip = '[data-testid="new-session-tab"] [data-testid="project-chip"]';
+      const n = sent.length;
+      await pickOption(chip, "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      const m = sent.length;
+      await pickOption(chip, "Ddemo/p/demo");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(callsSince(m, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/demo" });
+      expect(callsSince(m, "terminal.list").every((c) => c.cwd === "/p/demo")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC5: on the new-session tab the titlebar side panel and terminal toggles show and work; the palette lists Toggle terminal and Toggle side panel; Ctrl+` toggles the terminal", async () => {
+    await openNewTab();
+    expect(q("panel-toggle")).not.toBeNull();
+    expect(q("terminal-toggle-titlebar")).not.toBeNull();
+    await clickId("terminal-toggle-titlebar");
+    expect(q("terminal-toggle-titlebar")!.getAttribute("aria-pressed")).toBe("true");
+    expect(panelShown("bottom-panel")).toBe(true);
+    expect(q("terminal-panel")).not.toBeNull();
+    await clickId("terminal-toggle-titlebar");
+    expect(q("bottom-panel")).toBeNull();
+    await press({ key: "`", code: "Backquote", ctrlKey: true });
+    expect(panelShown("bottom-panel")).toBe(true);
+    await press({ key: "`", code: "Backquote", ctrlKey: true });
+    expect(q("bottom-panel")).toBeNull();
+    expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("true");
+    await clickId("panel-toggle");
+    expect(q("panel-toggle")!.getAttribute("aria-expanded")).toBe("false");
+    await clickId("panel-toggle");
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    expect(paletteRow("Toggle side panel")).toBeDefined();
+    expect(paletteRow("Toggle terminal")).toBeDefined();
+    expect(paletteRow("View changes in popup")).toBeUndefined();
+  });
+
+  it("AC6: a new-session tab in another project shows the draft's project, not the last shown session's", async () => {
+    const restore = await remount({ "session.list": TWO });
+    try {
+      const n = sent.length;
+      await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/other"] [data-testid="project-new-session"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(el.querySelector('[data-testid="new-session-tab"] [data-testid="project-chip"]')!.getAttribute("title")).toBe("/p/other");
+      expect(callsSince(n, "fs.list")).toContainEqual({ type: "fs.list", path: "/p/other" });
+      expect(callsSince(n, "terminal.list").at(-1)).toEqual({ type: "terminal.list", cwd: "/p/other" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC7: below 1024px the new-session tab shows no side or bottom panel and no titlebar toggles", async () => {
+    width = 390;
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    await rerender();
+    await openNewTab();
+    expect(q("panel-toggle")).toBeNull();
+    expect(q("terminal-toggle-titlebar")).toBeNull();
+    expect(q("bottom-panel")).toBeNull();
+    expect(panelShown("side-panel")).toBe(false);
+    width = 1440;
+  });
+
+  it("AC8: the titlebar terminal toggle uses the terminal icon and the quiet pressed style", async () => {
+    const b = q("terminal-toggle-titlebar")!;
+    expect(b.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+    expect(b.className).toContain("aria-pressed:bg-transparent");
+  });
+
+  /** terminal.list / terminal.create over a list of shells per folder, like the daemon. */
+  const shellsFor = (initial: Record<string, number> = {}) => {
+    const shells: Record<string, { id: string; title: string }[]> = {};
+    for (const [cwd, n] of Object.entries(initial)) shells[cwd] = Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, title: `Terminal ${i + 1}` }));
+    return {
+      "terminal.list": (m: { cwd: string }) => ({ terminals: [...(shells[m.cwd] ??= [])] }),
+      "terminal.create": (m: { cwd: string }) => {
+        const l = (shells[m.cwd] ??= []);
+        const t = { id: `n${l.length + 1}`, title: `Terminal ${l.length + 1}` };
+        l.push(t);
+        return { terminal: t };
+      },
+      reset: () => Object.keys(shells).forEach((k) => delete shells[k]),
+    };
+  };
+  const creates = () => sent.filter((m) => m.type === "terminal.create");
+
+  it("AC9: a remembered-open bottom terminal stays hidden after a reload when the folder has no shells; no terminal.create", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(q("bottom-panel")).toBeNull();
+      expect(q("terminal-panel")).toBeNull();
+      expect(creates()).toEqual([]);
+      // The preference is kept: the folder gets shells and the terminal shows again.
+      expect(localStorage.getItem("claude-ui.terminalOpen")).toBe("1");
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: with the terminal in the side panel and no shells the side panel shows another pane; its Terminal tab click spawns a shell", async () => {
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      expect(panelShown("side-panel")).toBe(true);
+      expect(paneTab("side-panel", "terminal")).not.toBeNull();
+      expect(paneTab("side-panel", "terminal")!.getAttribute("aria-selected")).toBe("false");
+      expect(q("terminal-panel")).toBeNull();
+      expect(creates()).toEqual([]);
+      await act(async () => paneTab("side-panel", "terminal")!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(paneTab("side-panel", "terminal")!.getAttribute("aria-selected")).toBe("true");
+      expect(q("terminal-panel")).not.toBeNull();
+      expect(creates()).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: Toggle terminal, Ctrl+` and New terminal on a folder without shells open the terminal and send one terminal.create", async () => {
+    const { reset, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      await clickId("terminal-toggle-titlebar");
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(q("terminal-panel")).not.toBeNull();
+      expect(creates()).toHaveLength(1);
+      // Hidden and shown again with a shell running: no second shell.
+      await clickId("terminal-toggle-titlebar");
+      await clickId("terminal-toggle-titlebar");
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(creates()).toHaveLength(1);
+
+      for (const open of [
+        () => press({ key: "`", code: "Backquote", ctrlKey: true }),
+        async () => {
+          await press({ key: "k", code: "KeyK", ctrlKey: true });
+          await act(async () => paletteRow("New terminal")!.click());
+        },
+      ]) {
+        reset();
+        sent.length = 0;
+        await rerender();
+        await act(async () => new Promise((r) => setTimeout(r, 50)));
+        expect(q("terminal-panel")).toBeNull();
+        await open();
+        await act(async () => new Promise((r) => setTimeout(r, 100)));
+        expect(q("terminal-panel")).not.toBeNull();
+        expect(creates()).toHaveLength(1);
+      }
+    } finally {
+      restore();
+    }
+  }, 20000);
+
+  it("AC9: switching to a session of a project without shells hides the bottom terminal; back to a project with shells shows it", async () => {
+    localStorage.setItem("claude-ui.terminalOpen", "1");
+    const { reset: _r, ...rest } = shellsFor({ "/p/demo": 1 });
+    const restore = await remount({ ...rest, "session.list": TWO, "session.subscribe": bySession });
+    sent.length = 0;
+    try {
+      expect(panelShown("bottom-panel")).toBe(true);
+      await hashTo(OTHER_ID);
+      expect(q("bottom-panel")).toBeNull();
+      await hashTo(ID);
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(creates()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("AC9: moving the Terminal pane on purpose with no shells shows its empty tab bar, no terminal.create", async () => {
+    localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+    const { reset: _r, ...rest } = shellsFor();
+    const restore = await remount(rest);
+    sent.length = 0;
+    try {
+      expect(q("bottom-panel")).toBeNull();
+      const tab = paneTab("side-panel", "terminal")!;
+      await act(async () => void tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+      await act(async () => menuItem("pane-move").click());
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      expect(panelShown("bottom-panel")).toBe(true);
+      expect(q("bottom-panel")!.querySelector('[data-testid="terminal-new"]')).not.toBeNull();
+      expect(q("bottom-panel")!.querySelectorAll('[data-testid="terminal-tab"]')).toHaveLength(0);
+      expect(creates()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  // Review round 1: a remembered terminal never collapses, steals the focus or starts a shell when switching sessions or reloading.
+  describe("review round 1", () => {
+    const wait = (ms: number) => act(async () => new Promise((r) => setTimeout(r, ms)));
+    const focusedN = () => (globalThis as { __termFocused?: number }).__termFocused ?? 0;
+    const T1 = { id: "t1", title: "Terminal 1" };
+    /** terminal.list per folder from `shells` (mutable); `gate` holds every reply back until released. */
+    const lists = (shells: Record<string, { id: string; title: string }[]>) => {
+      const gate: { p?: Promise<void>; release: () => void } = { release: () => {} };
+      return {
+        gate,
+        hold: () => (gate.p = new Promise<void>((r) => (gate.release = () => (gate.p = undefined, r())))),
+        replies: {
+          "terminal.list": async (m: { cwd: string }) => (gate.p && (await gate.p), { terminals: [...(shells[m.cwd] ?? [])] }),
+          "terminal.create": (m: { cwd: string }) => {
+            const t = { id: `n${(shells[m.cwd] ??= []).length + 1}`, title: "Terminal" };
+            shells[m.cwd]!.push(t);
+            return { terminal: t };
+          },
+        },
+      };
+    };
+    const hash = async (id: string) => {
+      await act(async () => {
+        location.hash = `#${id}`;
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    };
+    const both = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
+    const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER_ID ? other : session });
+
+    it("a session switch to a project whose shells are not listed yet keeps the bottom panel mounted and the focus off the shell", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({ "/p/demo": [T1], "/p/other": [T1] });
+      const restore = await remount({ ...l.replies, "session.list": both, "session.subscribe": bySess });
+      try {
+        await wait(100);
+        const panel = q("bottom-panel");
+        expect(panel).not.toBeNull();
+        const before = focusedN();
+        l.hold();
+        await hash(OTHER_ID);
+        await wait(30);
+        expect(q("bottom-panel")).toBe(panel);
+        l.gate.release();
+        await wait(300);
+        expect(q("bottom-panel")).toBe(panel);
+        expect(focusedN()).toBe(before);
+      } finally {
+        restore();
+      }
+    });
+
+    it("a reload with a remembered terminal: input before terminal.list answers, then the shell shows without the focus", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({ "/p/demo": [T1] });
+      l.hold();
+      const before = focusedN();
+      const restore = await remount({ ...l.replies });
+      try {
+        await wait(50);
+        expect(q("bottom-panel")).toBeNull();
+        await act(async () => void window.dispatchEvent(new PointerEvent("pointerdown")));
+        await press({ key: "a" });
+        l.gate.release();
+        await wait(300);
+        expect(q("bottom-panel")).not.toBeNull();
+        expect(focusedN()).toBe(before);
+      } finally {
+        restore();
+      }
+    });
+
+    it("New session while the bottom panel is maximized shows the draft", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      await rerender();
+      await wait(100);
+      await clickId("dock-maximize");
+      expect(el.querySelector("main")!.className.split(/\s+/)).toContain("hidden");
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-session"]')!.click());
+      await wait(100);
+      expect(el.querySelector("main")!.className.split(/\s+/)).not.toContain("hidden");
+    });
+
+    it("Ctrl+` twice before the list answers leaves no pending spawn: reopening the side panel starts no shell", async () => {
+      localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "terminal"], bottom: [] } }));
+      const l = lists({});
+      l.hold();
+      const restore = await remount({ ...l.replies });
+      sent.length = 0;
+      try {
+        await press({ key: "`", code: "Backquote", ctrlKey: true });
+        await wait(50);
+        await press({ key: "`", code: "Backquote", ctrlKey: true });
+        l.gate.release();
+        await wait(200);
+        await clickId("panel-toggle");
+        await wait(200);
+        expect(sent.filter((m) => m.type === "terminal.create")).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+
+    it("shells that ended while another folder showed: coming back hides the terminal instead of an empty tab bar", async () => {
+      const shells: Record<string, { id: string; title: string }[]> = { "/p/demo": [T1], "/p/other": [] };
+      const l = lists(shells);
+      const restore = await remount({ ...l.replies, "session.list": both, "session.subscribe": bySess });
+      try {
+        await clickId("terminal-toggle");
+        await wait(100);
+        expect(q("bottom-panel")).not.toBeNull();
+        await hash(OTHER_ID);
+        await wait(100);
+        expect(q("bottom-panel")).toBeNull();
+        shells["/p/demo"] = [];
+        await hash(ID);
+        await wait(200);
+        expect(q("bottom-panel")).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    it("the draft's project chip and a reconnect start no shell", async () => {
+      localStorage.setItem("claude-ui.terminalOpen", "1");
+      const l = lists({});
+      const restore = await remount({ ...l.replies, "session.list": both });
+      sent.length = 0;
+      try {
+        await openNewTab();
+        await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+        await wait(100);
+        await act(async () => setStatus("reconnecting"));
+        await act(async () => setStatus("connected"));
+        await wait(100);
+        expect(sent.filter((m) => m.type === "terminal.create")).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+  });
+});
+
+describe("GH-395 Plan pane", () => {
+  const OTHER = "99999999-8888-7777-6666-555555555555";
+  const other: SessionListItem = { ...session, id: OTHER, cwd: "/p/demo", title: "Other" };
+  const two = { sessions: [session, other], projects: ["/p/demo"] };
+  const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER ? other : session });
+  const hashTo = async (id: string) => {
+    await act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  };
+  const planPart = (id = "plan1", plan = "# Plan\n\n1. do **it**") => ({ type: "tool_call", id, toolUseId: id, tool: "ExitPlanMode", input: { plan }, status: "done" });
+  const permPart = { type: "permission_request", id: "perm1", requestId: "r1", toolUseId: "plan1", tool: "ExitPlanMode", input: { plan: "# Plan" }, suggestions: [], settled: false };
+  const sendPart = (sessionId: string, seq: number, part: unknown) => act(async () => emit({ type: "event", sessionId, seq, part }));
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+
+  it("the Plan tab appears in the side panel only while the current session has a plan, after Files", async () => {
+    const restore = await remount({ "session.list": two, "session.subscribe": bySess });
+    try {
+      expect(sideTabs()).not.toContain("pane-plan");
+      await sendPart(ID, 1, planPart());
+      const tabs = sideTabs();
+      expect(tabs).toContain("pane-plan");
+      expect(tabs.indexOf("pane-plan")).toBeGreaterThan(tabs.indexOf("pane-files"));
+      await hashTo(OTHER);
+      expect(sideTabs()).not.toContain("pane-plan");
+      await hashTo(ID);
+      expect(sideTabs()).toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the Plan tab appears for a plan only in the snapshot aux", async () => {
+    const withAux = { logEpoch: "e1", session, seq: 1, snapshot: { heads: [], attentionSeq: 0, page: { parts: [] }, aux: [{ part: planPart("old", "# Old call"), pos: 1 }] } };
+    const restore = await remount({ "session.subscribe": withAux });
+    try {
+      expect(sideTabs()).toContain("pane-plan");
+      await pickSide(/plan/i);
+      expect(q("plan-pane")!.textContent).toContain("Old call");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the Plan tab shows the plan the model wrote to its plan file when ExitPlanMode has an empty input (Claude Code 2.1.294)", async () => {
+    await sendPart(ID, 1, { type: "tool_call", id: "w", toolUseId: "w", tool: "Write", input: { file_path: "/home/user/.claude/plans/p.md", content: "# Plan from the file" }, status: "done" });
+    expect(sideTabs()).not.toContain("pane-plan");
+    await sendPart(ID, 2, planPart("exit", ""));
+    await sendPart(ID, 3, { ...planPart("exit", ""), input: {} });
+    expect(sideTabs()).toContain("pane-plan");
+    await pickSide(/plan/i);
+    expect(q("plan-pane")!.textContent).toContain("Plan from the file");
+  });
+
+  it("Go to request in the Plan pane focuses the plan permission panel of the session", async () => {
+    await sendPart(ID, 1, planPart());
+    await sendPart(ID, 2, permPart);
+    await pickSide(/plan/i);
+    expect(q("plan-waiting")!.textContent).toContain("Waiting for your answer");
+    // jsdom has no layout: every element counts as visible.
+    const spy = vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+    try {
+      await clickId("plan-go-to-request");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(q("permission-panel")!.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(q("plan-open"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("Open in tab on the ExitPlanMode card reveals the dock Plan tab", async () => {
+    await sendPart(ID, 1, planPart());
+    await pickSide(/changes/i);
+    await clickId("plan-open-tab");
+    expect(sideTab()).toMatch(/plan/i);
+  });
+
+  it("narrow: the pane switcher lists Plan while a plan exists and selecting it shows the plan", async () => {
+    width = 800;
+    await sendPart(ID, 1, planPart());
+    expect(q("pane-plan")).not.toBeNull();
+    await clickId("pane-plan");
+    expect(q("plan-pane")!.textContent).toContain("Plan");
+    expect(q("pane-plan")!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  // --- the Plan tab in the main area ---
+  const REF = `plan:${ID}`;
+  const REF2 = `plan:${OTHER}`;
+  const MAIN = JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph"], bottom: ["terminal"], main: ["plan"] } });
+  const subs = (id: string) => sent.filter((m) => m.type === "session.subscribe" && (m as unknown as { sessionId: string }).sessionId === id) as unknown as { sessionId: string; background?: boolean }[];
+  const unsubs = (id: string) => sent.filter((m) => m.type === "session.unsubscribe" && (m as unknown as { sessionId: string }).sessionId === id);
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const ctxMenu = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="tab-menu-${id}"]`)!;
+  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
+  const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
+  /** Mounts with the stored layout, tabs and hash, and both sessions (the plan of `ID` and `OTHER` come as events). */
+  async function mountMain(opts: { tabs: string[]; hash?: string; layout?: string; pinned?: string[]; list?: typeof two; extra?: Record<string, unknown> }) {
+    localStorage.setItem("claude-ui.layout", opts.layout ?? MAIN);
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(opts.tabs));
+    if (opts.pinned) localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify(opts.pinned));
+    location.hash = opts.hash ?? `#${encodeURIComponent(opts.tabs[0]!)}`;
+    sent.length = 0;
+    return remount({ "session.list": opts.list ?? two, "session.subscribe": bySess, ...opts.extra });
+  }
+  const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+
+  it("Move to main area from the Plan tab menu opens \"Plan · <title>\" right of its session tab, focused; Open in tab again focuses the same tab", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
+    const spy = visible();
+    try {
+      await sendPart(ID, 1, planPart());
+      await act(async () => void el.querySelector('[data-pane-tab="plan"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="pane-move-main"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(tabIds()).toEqual([ID, REF, OTHER]);
+      expect(stripTab(REF).textContent).toContain("Plan · Demo");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      expect(document.activeElement).toBe(stripTab(REF).querySelector('[role="tab"]'));
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+      expect(sideTabs()).not.toContain("pane-plan");
+      // The plan card's Open in tab: the same tab, no second one.
+      await clickId("plan-open-tab");
+      expect(tabIds().filter((t) => t === REF)).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Open in tab on the ExitPlanMode card with home main opens the plan tab", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER] });
+    try {
+      await sendPart(ID, 1, planPart());
+      expect(sideTabs()).not.toContain("pane-plan");
+      await clickId("plan-open-tab");
+      expect(tabIds()).toEqual([ID, REF, OTHER]);
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Activating a plan tab makes its session current: the side panel shows that session's changes; the split is suspended", async () => {
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, OTHER], at: 1, ratio: 0.5 }));
+    const restore = await mountMain({ tabs: [ID, OTHER, REF2], hash: `#${ID}` });
+    try {
+      await sendPart(OTHER, 1, { type: "tool_call", id: "e1", toolUseId: "e1", tool: "Edit", input: { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }, status: "done" });
+      await sendPart(OTHER, 2, { type: "tool_result", id: "e1:result", toolUseId: "e1", output: "ok", isError: false });
+      expect(q("pane-changes")!.textContent).not.toContain("1");
+      await hashTo(`plan%3A${OTHER}`);
+      expect(location.hash).toBe(`#plan%3A${OTHER}`);
+      expect(q("pane-changes")!.textContent).toContain("1");
+      expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(0);
+      // The sidebar shows the owner's row as the current one.
+      expect(el.querySelector('[data-testid="sidebar"] [aria-current="page"]')?.textContent).toContain("Other");
+    } finally {
+      restore();
+    }
+  });
+
+  it("A plan tab keeps showing its own session's plan while another session is active", async () => {
+    const restore = await mountMain({ tabs: [ID, OTHER, REF], hash: `#${OTHER}` });
+    try {
+      await sendPart(ID, 1, planPart("a", "# Plan of Demo"));
+      await sendPart(OTHER, 1, planPart("b", "# Plan of Other"));
+      expect(bodyOf(REF)!.textContent).toContain("Plan of Demo");
+      expect(bodyOf(REF)!.textContent).not.toContain("Plan of Other");
+      expect(sideTabs()).not.toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move Plan to side panel from a plan tab closes all plan tabs with \"Closed 2 Plan tabs\"; Undo restores the main home and the tabs", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER, REF2], hash: `#plan%3A${ID}` });
+    try {
+      await sendPart(ID, 1, planPart());
+      await sendPart(OTHER, 1, planPart("b"));
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("moveSide").click());
+      expect(toastEl()!.textContent).toContain("Closed 2 Plan tabs");
+      expect(tabIds()).toEqual([ID, OTHER]);
+      expect(layoutNow()?.areas.main ?? []).toEqual([]);
+      expect(sideTabs()).toContain("pane-plan");
+      await undoToast();
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+      expect(tabIds()).toEqual([ID, REF, OTHER, REF2]);
+      // No stray close after the Undo.
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      expect(tabIds()).toEqual([ID, REF, OTHER, REF2]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reset layout returns Plan to the side panel and closes plan tabs", async () => {
+    const restore = await mountMain({ tabs: [ID, REF] });
+    try {
+      await sendPart(ID, 1, planPart());
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reset layout"))!;
+      await act(async () => row.click());
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()!.textContent).toContain("Closed 1 Plan tab");
+      expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+      expect(sideTabs()).toContain("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reload restores plan tabs, order, pin and the active plan tab from the hash; its owner without a tab is subscribed once with background: true", async () => {
+    const restore = await mountMain({ tabs: [REF], hash: `#plan%3A${ID}`, pinned: [REF] });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([REF]);
+      expect(stripTab(REF).hasAttribute("data-pinned")).toBe(true);
+      expect(stripTab(REF).querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      // Double subscribe guard: the owner is followed once, without a CLI hold.
+      expect(subs(ID)).toHaveLength(1);
+      expect(subs(ID)[0]!.background).toBe(true);
+      await sendPart(ID, 1, planPart("a", "# Restored plan"));
+      expect(bodyOf(REF)!.textContent).toContain("Restored plan");
+      // A list refresh and a reconnect resubscribe the one view, still in the background.
+      await act(async () => sessionsChanged({}));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).filter((m) => !m.background)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("A subscribe error of a plan tab's owner ends Loading plan… with a message and is asked again after a reconnect", async () => {
+    let broken = true;
+    const restore = await mountMain({
+      tabs: [REF],
+      hash: `#plan%3A${ID}`,
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (broken ? Promise.reject(Object.assign(new Error("boom"), { code: "failed" })) : bySess(m)) },
+    });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).not.toBeNull();
+      broken = false;
+      await act(async () => setStatus("reconnecting"));
+      await act(async () => setStatus("connected"));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
+      await sendPart(ID, 1, planPart());
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move plan to main area from the palette without a plan says so in a toast", async () => {
+    const restore = await mountMain({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
+    try {
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Move plan to main area"))!;
+      await act(async () => row.click());
+      expect(toastEl()!.textContent).toContain("Plan moved to the main area");
+      expect(layoutNow()!.areas.main).toEqual(["plan"]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("A dropped subscription of a plan tab's owner is asked again after a reconnect", async () => {
+    let n = 0;
+    const restore = await mountMain({
+      tabs: [REF],
+      hash: `#plan%3A${ID}`,
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (++n === 1 ? Promise.reject(new Error("disconnected")) : bySess(m)) },
+    });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      await act(async () => setStatus("reconnecting"));
+      await act(async () => setStatus("connected"));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
+      await sendPart(ID, 1, planPart());
+      expect(bodyOf(REF)!.textContent).toContain("do it");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Closing the owner's session tab keeps the plan tab and follows the owner in the background; closing the plan tab then drops a closed owner", async () => {
+    const closedList = { sessions: [{ ...session, state: "closed" as const }, other], projects: ["/p/demo"] };
+    const restore = await mountMain({ tabs: [ID, REF], hash: `#${ID}`, list: closedList as never });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      sent.length = 0;
+      await act(async () => stripTab(ID).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(tabIds()).toEqual([REF]);
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(unsubs(ID)).toHaveLength(0);
+      expect(subs(ID).every((m) => m.background)).toBe(true);
+      expect(subs(ID).length).toBeGreaterThan(0);
+      await act(async () => stripTab(REF).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([]);
+      expect(unsubs(ID).length).toBeGreaterThan(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Deleting the session closes its plan tab; a session whose project was removed closes its plan tab", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER, REF2], hash: `#plan%3A${ID}` });
+    try {
+      await act(async () => sessionsChanged({ deleted: ID }));
+      expect(tabIds()).toEqual([OTHER, REF2]);
+      expect(location.hash).not.toContain(ID);
+      replies["session.list"] = { sessions: [], projects: [] };
+      await act(async () => sessionsChanged({}));
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Plan tab menu: Close others, Pin, Go to session; Split right and down are disabled", async () => {
+    const restore = await mountMain({ tabs: [ID, REF, OTHER], hash: `#plan%3A${ID}` });
+    try {
+      await ctxMenu(stripTab(REF));
+      expect(menuItem("splitRight").hasAttribute("data-disabled")).toBe(true);
+      expect(menuItem("splitDown").hasAttribute("data-disabled")).toBe(true);
+      expect(document.querySelector('[data-testid="tab-menu-copyId"]')).toBeNull();
+      await act(async () => menuItem("pin").click());
+      expect(stripTab(REF).hasAttribute("data-pinned")).toBe(true);
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("goToSession").click());
+      expect(location.hash).toBe(`#${ID}`);
+      await ctxMenu(stripTab(REF));
+      await act(async () => menuItem("closeOthers").click());
+      expect(tabIds()).toEqual([REF]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Phone switcher: removing a plan row toasts \"Closed Plan · Demo\" with Undo", async () => {
+    width = 500;
+    const restore = await mountMain({ tabs: [ID, REF], hash: `#${ID}` });
+    try {
+      await act(async () => q("tab-switcher")!.click());
+      const row = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((r) => r.textContent?.includes("Plan · Demo"))!;
+      await act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+      expect(toastEl()!.textContent).toContain("Closed Plan · Demo");
+      expect(tabIds()).toEqual([ID]);
+      await undoToast();
+      expect(tabIds()).toEqual([ID, REF]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Narrow: with home main the Plan switcher entry opens and focuses the plan tab; leaving it by Session returns to the session", async () => {
+    width = 800;
+    const restore = await mountMain({ tabs: [ID], hash: `#${ID}` });
+    const spy = visible();
+    try {
+      await sendPart(ID, 1, planPart());
+      expect(q("pane-plan")).not.toBeNull();
+      await clickId("pane-plan");
+      expect(location.hash).toBe(`#plan%3A${ID}`);
+      expect(q("pane-plan")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-session");
+      expect(location.hash).toBe(`#${ID}`);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Stored layout and tabs without plan or main load with the default; a stored plan tab while Plan's home is the side panel closes silently", async () => {
+    const old = JSON.stringify({ side: "left", areas: { side: ["files", "changes", "graph"], bottom: ["terminal"] } });
+    const restore = await mountMain({ tabs: [ID, REF], layout: old });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()).toBeNull();
+      await sendPart(ID, 1, planPart());
+      expect(sideTabs().at(-1)).toBe("pane-plan");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Clean up: the archived rule closes a plan tab of an archived owner; Close idle tabs does not", async () => {
+    const archived = { sessions: [{ ...session, archived: true }, other], projects: ["/p/demo"] };
+    const restore = await mountMain({ tabs: [REF, OTHER], hash: `#${OTHER}`, list: archived as never });
+    try {
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      await ctxMenu(stripTab(OTHER));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
+      const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="tab-cleanup-menu"] [role="menuitem"]')];
+      const idle = items().find((x) => /idle/i.test(x.textContent ?? ""));
+      if (idle && !idle.hasAttribute("data-disabled")) await act(async () => idle.click());
+      expect(tabIds()).toContain(REF);
+      await ctxMenu(stripTab(OTHER));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
+      const arch = items().find((x) => /archived/i.test(x.textContent ?? ""))!;
+      await act(async () => arch.click());
+      expect(tabIds()).not.toContain(REF);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("GH-396 Files and Git graph in the main area", () => {
+  const SAME = "99999999-8888-7777-6666-555555555555";
+  const OTHERP = "aaaaaaaa-8888-7777-6666-555555555555";
+  const same: SessionListItem = { ...session, id: SAME, cwd: "/p/demo", title: "Same" };
+  const elsewhere: SessionListItem = { ...session, id: OTHERP, cwd: "/p/other", title: "Elsewhere" };
+  const list3 = { sessions: [session, same, elsewhere], projects: ["/p/demo", "/p/other"], worktrees: { "/p/demo": [{ path: "/p/demo", branch: "main", main: true }], "/p/other": [{ path: "/p/other", branch: "main", main: true }] } };
+  const FILES = `files:${ID}`;
+  const GRAPH = `graph:${ID}`;
+  const FILES_O = `files:${OTHERP}`;
+  const bySess = (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, same, elsewhere].find((s) => s.id === m.sessionId) ?? session });
+  const gitReplies = { "git.repos": (m: { cwd: string }) => ({ repos: [{ path: m.cwd, rel: "", kind: "main", branch: "main" }] }), "git.status": { status: { branch: "main", added: 0, removed: 0, refs: "s1" } }, "git.refs": { refs: "s1" }, "git.log": { log: { commits: [], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } } };
+  const HOME_MAIN = JSON.stringify({ side: "right", areas: { side: ["changes"], bottom: ["terminal"], main: ["plan", "files", "graph"] } });
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+  const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
+  const hashTo = async (id: string) =>
+    act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
+  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const palette = async (title: string) => {
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
+    expect(row, title).toBeDefined();
+    await act(async () => row!.click());
+  };
+  const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+  const E = { key: "E", code: "KeyE", ctrlKey: true, shiftKey: true };
+  const H = { key: "H", code: "KeyH", ctrlKey: true, shiftKey: true };
+  const fsLists = () => (sent as unknown as { type: string; path?: string }[]).filter((m) => m.type === "fs.list");
+  async function mount(o: { tabs: string[]; hash?: string; layout?: string; git?: boolean; list?: unknown; pinned?: string[]; extra?: Record<string, unknown> }) {
+    if (o.layout) localStorage.setItem("claude-ui.layout", o.layout);
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(o.tabs));
+    if (o.pinned) localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify(o.pinned));
+    location.hash = `#${encodeURIComponent(o.hash ?? o.tabs[0]!)}`;
+    sent.length = 0;
+    const undo = await remount({ "session.list": o.list ?? { sessions: [session, same, elsewhere], projects: ["/p/demo", "/p/other"] }, "session.subscribe": bySess, ...(o.git ? gitReplies : {}), ...o.extra });
+    return () => (undo(), void Object.keys(gitReplies).forEach((k) => delete replies[k]));
+  }
+
+  it("Move to main area from the Files dock tab menu opens \"Files · demo\" right of the session tab with the focus; the side panel has no Files tab", async () => {
+    const restore = await mount({ tabs: [ID, SAME] });
+    const spy = visible();
+    try {
+      await ctx(el.querySelector('[data-pane-tab="files"]')!);
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="pane-move-main"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, SAME]);
+      expect(stripTab(FILES).textContent).toContain("Files · demo");
+      expect(document.activeElement).toBe(stripTab(FILES).querySelector('[role="tab"]'));
+      expect(sideTabs()).not.toContain("pane-files");
+      expect(layoutNow()!.areas.main).toEqual(["files"]);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Move git graph to main area from the palette opens \"Git graph · demo\"; the stored layout has files and graph in main", async () => {
+    const restore = await mount({ tabs: [ID], git: true, list: list3 });
+    try {
+      await settle();
+      await palette("Move git graph to main area");
+      await settle();
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      expect(stripTab(GRAPH).textContent).toContain("Git graph · demo");
+      await palette("Move files to main area");
+      await settle();
+      expect(layoutNow()!.areas.main).toEqual(["graph", "files"]);
+      expect(tabIds()).toEqual([ID, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Ctrl+Shift+E with home main opens the current session's Files tab; again focuses the same tab; a second session in the same folder focuses it (one tab per folder); another folder opens a second tab", async () => {
+    const restore = await mount({ tabs: [ID, SAME, OTHERP], layout: HOME_MAIN });
+    try {
+      await press(E);
+      expect(tabIds()).toEqual([ID, FILES, SAME, OTHERP]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await press(E);
+      expect(tabIds().filter((t) => t === FILES)).toHaveLength(1);
+      await hashTo(SAME);
+      await press(E);
+      expect(tabIds().filter((t) => t?.startsWith("files:"))).toEqual([FILES]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await hashTo(OTHERP);
+      await press(E);
+      expect(tabIds().filter((t) => t?.startsWith("files:"))).toEqual([FILES, FILES_O]);
+      expect(stripTab(FILES_O).textContent).toContain("Files · other");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Ctrl+Shift+H with home main opens or focuses the Git graph tab; Ctrl+\\ hides the tree of a Files tab that shows", async () => {
+    const restore = await mount({ tabs: [ID], layout: HOME_MAIN, git: true, list: list3 });
+    try {
+      await settle();
+      await press(H);
+      await settle();
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      await press(H);
+      expect(tabIds().filter((t) => t === GRAPH)).toHaveLength(1);
+      expect(bodyOf(GRAPH)!.querySelector('[data-testid="graph-panel"]')).not.toBeNull();
+      await press(E);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).not.toBeNull();
+      await press({ key: "\\", ctrlKey: true });
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).toBeNull();
+      await press({ key: "\\", ctrlKey: true });
+      expect(bodyOf(FILES)!.querySelector('[data-testid="file-tree"]')).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Quick open and the file popup's Open in editor open the file in the current session's Files tab (openPath reaches only that tab)", async () => {
+    const restore = await mount({ tabs: [ID, SAME, OTHERP], layout: HOME_MAIN });
+    try {
+      replies["fs.search"] = { paths: ["src/app.ts"] };
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "app");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {});
+      await act(async () => document.querySelector<HTMLElement>('[data-id="file:src/app.ts"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, SAME, OTHERP]);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(sent.some((m) => (m as unknown as { path?: string }).path === "/p/demo/src/app.ts" && m.type === "fs.read")).toBe(true);
+      expect(bodyOf(FILES)!.textContent).toContain("app.ts");
+    } finally {
+      replies["fs.search"] = { paths: [] };
+      restore();
+    }
+  });
+
+  it("Show changes from the Files tab reveals Changes of the tab's owner in the side panel", async () => {
+    const restore = await mount({ tabs: [ID, FILES], layout: HOME_MAIN, hash: FILES });
+    try {
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      await press({ key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
+      expect(sideTab()).toMatch(/changes/i);
+      expect(sideTabs()).not.toContain("pane-files");
+    } finally {
+      restore();
+    }
+  });
+
+  it("On New session and Focus, Ctrl+Shift+E opens the Files tab of the session shown last; with no session shown yet it toasts \"Open a session to show Files.\"", async () => {
+    const restore = await mount({ tabs: [ID, "new"], layout: HOME_MAIN, hash: ID });
+    try {
+      await settle();
+      await hashTo("new");
+      await press(E);
+      expect(tabIds()).toContain(FILES);
+      expect(location.hash).toBe(`#files%3A${ID}`);
+    } finally {
+      restore();
+    }
+    const restore2 = await mount({ tabs: ["new"], layout: HOME_MAIN, hash: "new", list: { sessions: [], projects: ["/p/demo"] } });
+    try {
+      await press(E);
+      expect(toastEl()!.textContent).toContain("Open a session to show Files.");
+    } finally {
+      restore2();
+    }
+  });
+
+  it("A hidden Files tab keeps its tree and editor tabs: switching to another session's tab and back sends no new fs.list for the open folders and shows the same file", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP], layout: HOME_MAIN, hash: FILES });
+    try {
+      await settle();
+      replies["fs.search"] = { paths: [] };
+      // Open a file in the tab through the palette's file search.
+      replies["fs.search"] = { paths: ["a.ts"] };
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "a");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {});
+      await act(async () => document.querySelector<HTMLElement>('[data-id="file:a.ts"]')!.click());
+      await settle();
+      expect(bodyOf(FILES)!.textContent).toContain("a.ts");
+      const before = fsLists().length;
+      await hashTo(OTHERP);
+      expect(bodyOf(FILES)!.className).toContain("hidden");
+      await hashTo(FILES.replace(":", "%3A"));
+      await settle();
+      expect(bodyOf(FILES)!.className).not.toContain("hidden");
+      expect(bodyOf(FILES)!.textContent).toContain("a.ts");
+      expect(fsLists().length).toBe(before);
+    } finally {
+      replies["fs.search"] = { paths: [] };
+      restore();
+    }
+  });
+
+  it("A hidden Git graph tab keeps its loaded graph: no new git.log after a round trip when git.refs is unchanged", async () => {
+    const restore = await mount({ tabs: [ID, GRAPH, SAME], layout: HOME_MAIN, hash: GRAPH, git: true, list: list3 });
+    try {
+      await settle();
+      const logs = () => (sent as unknown as { type: string }[]).filter((m) => m.type === "git.log").length;
+      const n = logs();
+      expect(n).toBeGreaterThan(0);
+      await hashTo(SAME);
+      expect(bodyOf(GRAPH)!.className).toContain("hidden");
+      await hashTo(GRAPH.replace(":", "%3A"));
+      await settle();
+      expect(bodyOf(GRAPH)!.className).not.toContain("hidden");
+      expect(logs()).toBe(n);
+    } finally {
+      restore();
+    }
+  });
+
+  it("While two sessions are split, activating a Git graph tab shows it alone (no split) and the next session tab brings the split back", async () => {
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, SAME], at: 1, ratio: 0.5 }));
+    const restore = await mount({ tabs: [ID, SAME, GRAPH], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await settle();
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(1);
+      await hashTo(GRAPH.replace(":", "%3A"));
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(0);
+      await hashTo(ID);
+      expect(el.querySelectorAll("[data-split]")).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Move Files to side panel from a files tab closes all files tabs with \"Closed 2 Files tabs\"; Undo restores the main home and the tabs", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP, FILES_O], layout: HOME_MAIN, hash: FILES });
+    try {
+      await ctx(stripTab(FILES));
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveSide"]')!.click());
+      expect(toastEl()!.textContent).toContain("Closed 2 Files tabs");
+      expect(tabIds()).toEqual([ID, OTHERP]);
+      expect(layoutNow()!.areas.main).not.toContain("files");
+      expect(sideTabs()).toContain("pane-files");
+      await undoToast();
+      expect(layoutNow()!.areas.main).toContain("files");
+      expect(tabIds()).toEqual([ID, FILES, OTHERP, FILES_O]);
+      await settle();
+      expect(tabIds()).toEqual([ID, FILES, OTHERP, FILES_O]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Changes never reaches the main area: no Move to main area in its dock menus or the palette; a stored layout with changes in main keeps it in the side panel", async () => {
+    const restore = await mount({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: [], bottom: ["terminal"], main: ["changes", "files"] } }) });
+    try {
+      expect(sideTabs()).toContain("pane-changes");
+      await ctx(el.querySelector('[data-pane-tab="changes"]')!);
+      expect(document.querySelector('[data-testid="pane-move-main"]')).toBeNull();
+      await press({ key: "Escape" });
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const titles = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].map((o) => o.textContent ?? "");
+      expect(titles.some((t) => /move changes/i.test(t))).toBe(false);
+      expect(titles.some((t) => t.startsWith("Move files to side panel"))).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reset layout returns Files and Git graph to the side panel and closes plan, files and graph tabs with \"Closed 3 pane tabs\"; Undo brings them back", async () => {
+    const PLAN = `plan:${ID}`;
+    const restore = await mount({ tabs: [ID, PLAN, FILES, GRAPH], layout: HOME_MAIN, git: true, list: list3 });
+    try {
+      await settle();
+      await palette("Reset layout");
+      expect(tabIds()).toEqual([ID]);
+      expect(toastEl()!.textContent).toContain("Closed 3 pane tabs");
+      expect(localStorage.getItem("claude-ui.layout")).toBeNull();
+      expect(sideTabs()).toContain("pane-files");
+      await undoToast();
+      expect(tabIds()).toEqual([ID, PLAN, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reload restores files and graph tabs, order, pins and the active tab from the hash; a stored second files tab of the same folder closes silently", async () => {
+    const FILES_S = `files:${SAME}`;
+    const restore = await mount({ tabs: [ID, FILES, FILES_S, GRAPH], layout: HOME_MAIN, hash: GRAPH, pinned: [GRAPH], git: true, list: list3 });
+    try {
+      await settle();
+      expect(tabIds()).toEqual([GRAPH, ID, FILES]);
+      expect(stripTab(GRAPH).hasAttribute("data-pinned")).toBe(true);
+      expect(stripTab(GRAPH).querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
+      expect(location.hash).toBe(`#graph%3A${ID}`);
+      expect(toastEl()).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Narrow: the pane switcher's Files with home main opens the files tab; Session returns to the session; a restored narrow \"files\" pane reads as session", async () => {
+    width = 800;
+    localStorage.setItem("claude-ui.pane-tabs", JSON.stringify({ narrow: "files" }));
+    const restore = await mount({ tabs: [ID], layout: HOME_MAIN });
+    const spy = visible();
+    try {
+      await settle();
+      expect(q("pane-session")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-files");
+      expect(location.hash).toBe(`#files%3A${ID}`);
+      expect(q("pane-files")!.getAttribute("aria-selected")).toBe("true");
+      await clickId("pane-session");
+      expect(location.hash).toBe(`#${ID}`);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Phone switcher lists \"Files · demo\" and \"Git graph · demo\" rows with their icons; Delete on a row toasts \"Closed Files · demo\" with Undo", async () => {
+    width = 500;
+    const restore = await mount({ tabs: [ID, FILES, GRAPH], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await act(async () => q("tab-switcher")!.click());
+      const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      const files = rows().find((r) => r.textContent?.includes("Files · demo"))!;
+      expect(files.querySelector(".lucide-folder")).not.toBeNull();
+      expect(rows().find((r) => r.textContent?.includes("Git graph · demo"))!.querySelector(".lucide-git-graph")).not.toBeNull();
+      await act(async () => void files.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })));
+      expect(toastEl()!.textContent).toContain("Closed Files · demo");
+      expect(tabIds()).toEqual([ID, GRAPH]);
+      await undoToast();
+      expect(tabIds()).toEqual([ID, FILES, GRAPH]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Deleting the owner closes its files and graph tabs; closing the owner's session tab keeps them", async () => {
+    const restore = await mount({ tabs: [ID, FILES, GRAPH, OTHERP], layout: HOME_MAIN, hash: ID, git: true, list: list3 });
+    try {
+      await settle();
+      await act(async () => stripTab(ID).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(tabIds()).toEqual([FILES, GRAPH, OTHERP]);
+      await act(async () => sessionsChanged({ deleted: ID }));
+      expect(tabIds()).toEqual([OTHERP]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Only one fs.watch stream runs for the store: the shared sync, not one per Files view", async () => {
+    const restore = await mount({ tabs: [ID, FILES, OTHERP, FILES_O], layout: HOME_MAIN, hash: FILES });
+    try {
+      await settle();
+      const watches = (sent as unknown as { type: string; paths: string[] }[]).filter((m) => m.type === "fs.watch");
+      // Every watch carries the one list of the store; no per-view lists alternate.
+      expect(new Set(watches.map((w) => JSON.stringify(w.paths))).size).toBeLessThanOrEqual(1);
+    } finally {
+      restore();
+    }
   });
 });

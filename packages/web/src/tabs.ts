@@ -1,5 +1,6 @@
 // Tabs bar (docs/spec.md "Layout"): open sessions as browser-like tabs, plus one new-session tab. Order persists per browser.
 import { baseName } from "./paths.ts";
+import { ownerOf, parseRef } from "./pane-ref.ts";
 
 /** Id of the new-session tab; every other tab id is a session id. */
 export const NEW_TAB = "new";
@@ -65,7 +66,7 @@ export function groupTabs(tabs: string[], cwdOf: CwdOf) {
  * Needs the first session list (`listLoaded`) and, per tab, either its session known (`known`) or its subscribe failed (`failed`: any error but unknown_session and a dropped connection; there is no timeout, and such a tab would otherwise hide every chip until it is closed; such a tab keeps the group "" like the new-session tab). The new-session tab has no session and is always final.
  */
 export function keysFinal(tabs: string[], listLoaded: boolean, known: (id: string) => boolean, failed: ReadonlySet<string> = new Set()) {
-  return listLoaded && tabs.every((id) => id === NEW_TAB || known(id) || failed.has(id));
+  return listLoaded && tabs.every((id) => id === NEW_TAB || known(ownerOf(id)) || failed.has(ownerOf(id)));
 }
 
 /** Drag/keyboard reorder inside a group: a tab does not leave its project, and (with `pinned`) a pinned tab does not cross the unpinned ones. */
@@ -110,6 +111,20 @@ export function moveGroupTo(tabs: string[], cwdOf: CwdOf, from: string, to: stri
   return groups.flatMap(([, ids]) => ids);
 }
 
+/** Opens a pane tab right of its owner's tab; without one, after the last tab of the owner's group (`cwdOf(ref)` is the owner's group); else at the end. Unchanged when open. */
+export function insertPaneTab(tabs: string[], ref: string, cwdOf: CwdOf) {
+  if (tabs.includes(ref)) return tabs;
+  let at = tabs.indexOf(ownerOf(ref));
+  if (at < 0) {
+    const key = cwdOf(ref);
+    if (key !== undefined) tabs.forEach((t, i) => (cwdOf(t) ?? "") === key && (at = i));
+  }
+  if (at < 0) return [...tabs, ref];
+  const next = [...tabs];
+  next.splice(at + 1, 0, ref);
+  return next;
+}
+
 export function replaceTab(tabs: string[], old: string, id: string) {
   const at = tabs.indexOf(old);
   if (at < 0) return openTab(tabs, id);
@@ -117,7 +132,7 @@ export function replaceTab(tabs: string[], old: string, id: string) {
 }
 
 /** Session tabs the daemon does not list, e.g. never prompted before a daemon restart. */
-export const staleTabs = (tabs: string[], known: Set<string>) => tabs.filter((id) => id !== NEW_TAB && !known.has(id));
+export const staleTabs = (tabs: string[], known: Set<string>) => tabs.filter((id) => id !== NEW_TAB && !known.has(ownerOf(id)));
 
 /** Project avatar color (OpenCode project-avatar-v2 palette). */
 export const AVATAR_COLORS = ["orange", "yellow", "cyan", "green", "red", "pink", "blue", "purple", "gray"] as const;
@@ -148,7 +163,20 @@ export const avatarColor = (cwd: string, known?: Map<string, AvatarColor>) => kn
 export const tabHash = (id: string) => `#${encodeURIComponent(id)}`;
 // A subagent view adds its run: `#<session id>/agent/<subagent part id>`.
 const SESSION_HASH = /^#([0-9a-f-]{36})(?:\/agent\/([^/]+))?$/i;
-export const tabFromHash = (hash: string) => (hash === tabHash(NEW_TAB) ? NEW_TAB : hash === tabHash(FOCUS_TAB) ? FOCUS_TAB : SESSION_HASH.exec(hash)?.[1]);
+const safeDecode = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return "";
+  }
+};
+/** A pane ref's hash is `#plan%3A<uuid>` (`#plan:<uuid>` reads too). */
+export const tabFromHash = (hash: string) => {
+  if (hash === tabHash(NEW_TAB)) return NEW_TAB;
+  if (hash === tabHash(FOCUS_TAB)) return FOCUS_TAB;
+  const raw = safeDecode(hash.slice(1));
+  return parseRef(raw) ? raw : SESSION_HASH.exec(hash)?.[1];
+};
 /** The subagent run of a subagent view's hash; undefined for the session view. */
 export const runFromHash = (hash: string) => {
   const run = SESSION_HASH.exec(hash)?.[2];

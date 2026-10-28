@@ -9,6 +9,11 @@ describe("treeMenuSections (GH-360)", () => {
   it("a file: open, prompt and copy, change", () => {
     expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "viewer"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
   });
+  it("the file dialog item is named so and left out where there is no dialog", () => {
+    const t = { kind: "file", entry: file, changed: false } as const;
+    expect(treeMenuSections(t, false)[0]!.find((e) => e.id === "viewer")!.label).toBe("Open in file dialog");
+    expect(ids(treeMenuSections(t, false, false))[0]).toEqual(["open"]);
+  });
   it("Show changes only for a changed file", () => {
     expect(ids(treeMenuSections({ kind: "file", entry: file, changed: true }, false))[0]).toEqual(["open", "viewer", "changes"]);
   });
@@ -48,5 +53,16 @@ describe("nameSelection (GH-360)", () => {
     expect(nameSelection(".env", false)).toEqual([0, 4]);
     expect(nameSelection("Makefile", false)).toEqual([0, 8]);
     expect(nameSelection("v1.2", true)).toEqual([0, 4]);
+  });
+});
+
+describe("GH-392 repository folder items", () => {
+  const repo = { path: "/p/src", rel: "src", kind: "nested" as const };
+  it("a repository folder: Show changes and Show graph first, then the folder items; no Show graph without onShowGraph; a plain folder has neither", () => {
+    const t = { kind: "dir", entry: dir, expanded: true, repo } as const;
+    expect(ids(treeMenuSections(t, false, true, true))[0]).toEqual(["repoChanges", "repoGraph"]);
+    expect(ids(treeMenuSections(t, false, true, true)).slice(1)).toEqual(ids(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false)));
+    expect(ids(treeMenuSections(t, false))[0]).toEqual(["repoChanges"]);
+    expect(ids(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false, true, true)).flat()).not.toContain("repoChanges");
   });
 });

@@ -3,7 +3,8 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
-import { FilesPanel } from "./files-panel.tsx";
+import { createEditorStore } from "./editor-store.ts";
+import { EditorSync, FilesPanel } from "./files-panel.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -136,7 +137,7 @@ it("the editor follows the app theme: dark chrome while `.dark` is on <html>, sw
   const { EditorView } = await import("@codemirror/view");
   const { highlightingFor } = await import("@codemirror/language");
   const { tags } = await import("@lezer/highlight");
-  const { syntaxStyle } = await import("./files-panel.tsx");
+  const { syntaxStyle } = await import("./code-theme.ts");
   const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
   expect(view.state.facet(EditorView.darkTheme)).toBe(false);
   await act(async () => document.documentElement.classList.add("dark"));
@@ -146,43 +147,6 @@ it("the editor follows the app theme: dark chrome while `.dark` is on <html>, sw
   expect(highlightingFor(view.state, [tags.keyword])).toBe(syntaxStyle.style([tags.keyword]));
   expect(syntaxStyle.module!.getRules()).toContain("var(--syntax-keyword)");
   act(() => root.render(null));
-});
-
-it("markdown: headings and quotes take --syntax-constant (OpenCode markup.heading/quote: syntax-info), marks --syntax-comment, fenced code its own language colors", async () => {
-  const md = "# Title\n\n> quote\n\n```python\ndef f():\n    return 1\n```\n";
-  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: md, mtime: 1 } : {}));
-  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/README.md" />));
-  const { EditorView } = await import("@codemirror/view");
-  const { ensureSyntaxTree, highlightingFor } = await import("@codemirror/language");
-  const { tags } = await import("@lezer/highlight");
-  const { syntaxStyle } = await import("./files-panel.tsx");
-  const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
-  const rules = syntaxStyle.module!.getRules();
-  const colorOf = (tag: Parameters<typeof highlightingFor>[1]) => {
-    const cls = highlightingFor(view.state, tag)!;
-    return new RegExp(`\\.${cls} \\{[^}]*color: (var\\(--[\\w-]+\\))`).exec(rules)?.[1];
-  };
-  expect(colorOf([tags.heading1])).toBe("var(--syntax-constant)");
-  expect(colorOf([tags.quote])).toBe("var(--syntax-constant)");
-  expect(colorOf([tags.processingInstruction])).toBe("var(--syntax-comment)");
-  act(() => root.render(null));
-  const { loadLanguage } = await import("./files-panel.tsx");
-  const { languages } = await import("@codemirror/language-data");
-  const { EditorState } = await import("@codemirror/state");
-  await languages.find((l) => l.name === "Python")!.load();
-  const state = EditorState.create({ doc: md, extensions: await loadLanguage("/p/README.md")! });
-  // Tables as in OpenCode (no Shiki theme scope for markup.table or its separators): header cells and pipes keep the text color.
-  const { highlightTree } = await import("@lezer/highlight");
-  const table = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-  const tableState = EditorState.create({ doc: table, extensions: await loadLanguage("/p/README.md")! });
-  const styled: string[] = [];
-  highlightTree(ensureSyntaxTree(tableState, table.length, 5000)!, syntaxStyle, (from, to) => void styled.push(table.slice(from, to)));
-  expect(styled).toEqual([]);
-  // The fenced block is a mounted Python tree: the node at `def` is Python's keyword, not markdown CodeText.
-  expect(ensureSyntaxTree(state, state.doc.length, 5000)!.resolveInner(md.indexOf("def") + 1, 1).name).toBe("def");
 });
 
 it("autocomplete popup and search panel use the app tokens: popover, selected row on --secondary with a --foreground left bar (3:1 indicator), flex rows that do not wrap single labels", async () => {
@@ -571,7 +535,7 @@ it("a link and a path in the markdown preview open that file in a tab, resolved 
   const t = mdPanel();
   await t.show({ openPath: "/p/docs/guide.md" });
   await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
-  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in Files tab']")];
+  const buttons = [...t.el.querySelectorAll<HTMLButtonElement>("[data-testid=md-preview] button[title='Open in file dialog']")];
   expect(buttons.map((b) => b.textContent)).toEqual(["next", "src/c.ts:2"]);
   await act(async () => buttons[0]!.click());
   expect(t.request).toHaveBeenCalledWith({ type: "fs.read", path: "/p/docs/next.md" });
@@ -708,4 +672,69 @@ it("GH-360 renaming an open file moves its tab; deleting an open clean file clos
   await act(async () => {});
   expect(titles().join()).not.toContain("c.ts");
   act(() => root.render(null));
+});
+
+it("GH-392 FilesPanel passes repos to the tree: one git.diff per repository with exact", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : { diff: null }));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const list = [
+    { path: "/p", rel: "", kind: "main" as const },
+    { path: "/p/in", rel: "in", kind: "nested" as const, parent: "/p" },
+  ];
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} gitStamp="s" repos={{ list, projectKey: "proj" }} />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
+  const diffs = request.mock.calls.map(([m]) => m).filter((m) => m.type === "git.diff");
+  expect(diffs).toEqual([
+    { type: "git.diff", cwd: "/p", base: "head", exact: true },
+    { type: "git.diff", cwd: "/p/in", base: "head", exact: true },
+  ]);
+  act(() => root.render(null));
+});
+
+it("GH-396 with sync false the panel sends no fs.watch; EditorSync sends one for every open tab", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "x", mtime: 1 } : {}));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const store = createEditorStore(() => client);
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/p/a.ts" />));
+  expect(request.mock.calls.filter(([m]) => m.type === "fs.watch")).toEqual([]);
+  await act(async () => root.render(
+    <>
+      <EditorSync store={store} client={client} status="connected" watch={[]} />
+      <FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/p/a.ts" />
+      <FilesPanel client={client} status="connected" cwd="/q" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/q/b.ts" />
+    </>,
+  ));
+  const watches = request.mock.calls.map(([m]) => m).filter((m) => m.type === "fs.watch");
+  expect(watches.at(-1)).toMatchObject({ type: "fs.watch", paths: expect.arrayContaining(["/p/a.ts", "/q/b.ts"]) });
+  act(() => root.render(null));
+});
+
+it("GH-396 two panels on one editor store keep their own shown file; becoming visible makes its file the store's active path", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "x", mtime: 1 } : {}));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const store = createEditorStore(() => client);
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const panel = (cwd: string, visible: boolean, openPath?: string) => (
+    <div data-cwd={cwd}>
+      <FilesPanel client={client} status="connected" cwd={cwd} onSend={() => {}} showTree={false} onToggleTree={() => {}} editors={store} sync={false} visible={visible} suspended={!visible} openPath={openPath} />
+    </div>
+  );
+  const view = (p: string, q: string, openP?: string, openQ?: string) => <>{panel("/p", p === "on", openP)}{panel("/q", q === "on", openQ)}</>;
+  await act(async () => root.render(view("on", "off", "/p/a.ts")));
+  await act(async () => root.render(view("off", "on", undefined, "/q/b.ts")));
+  expect(store.get().activePath).toBe("/q/b.ts");
+  const crumb = (cwd: string) => el.querySelector(`[data-cwd="${cwd}"]`)!.textContent ?? "";
+  expect(crumb("/p")).toContain("a.ts");
+  expect(crumb("/p")).not.toContain("b.ts");
+  await act(async () => root.render(view("on", "off")));
+  expect(store.get().activePath).toBe("/p/a.ts");
+  act(() => root.render(null));
+  el.remove();
 });

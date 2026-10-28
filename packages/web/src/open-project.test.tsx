@@ -208,7 +208,7 @@ describe("side chooser", () => {
   const chk = (verdict: SideCheck["verdict"], more: Partial<SideCheck> = {}, facts: Partial<SideCheck["facts"]> = {}): SideCheck => ({
     verdict,
     key: "0.5.0-1",
-    facts: { reachable: true, node: "v22.1.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, credentialsFile: true, installed: verdict === "install" ? "none" : verdict === "update" ? "other" : "current", ...facts },
+    facts: { reachable: true, node: "v22.1.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, installed: verdict === "install" ? "none" : verdict === "update" ? "other" : "current", ...facts },
     ...more,
   });
   async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install")), dockerState?: DockerState) {
@@ -480,7 +480,7 @@ describe("side chooser", () => {
       await click(kind("WSL"));
       expect(byId("side-check")).not.toBeNull();
       const rows = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((r) => r.textContent);
-      expect(rows).toHaveLength(5);
+      expect(rows).toHaveLength(4);
       expect(rows.join("|")).toMatch(/Node\.js 22\+.*v22\.1\.0/);
       expect(rows.join("|")).toMatch(/claude-ui.*Not installed/);
       expect(byId("side-install")!.textContent).toBe("Install");
@@ -529,15 +529,6 @@ describe("side chooser", () => {
       expect(byId("side-install")).toBeNull();
       await click(byId("side-check-again")!);
       expect(onCheckSide).toHaveBeenCalledTimes(2);
-    });
-
-    it("a missing login is a soft block: the fix text and an Install anyway button that installs", async () => {
-      const { kind, click, byId, status, onStartSide } = await withCheck(chk("blocked", { reason: "not_logged_in" }, { credentialsFile: false }));
-      await click(kind("WSL"));
-      expect(status()).toMatch(/log ?in/i);
-      expect(byId("side-install")!.textContent).toBe("Install anyway");
-      await click(byId("side-install")!);
-      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "needed");
     });
 
     it("a running side opens the browser at once, nothing started", async () => {
@@ -677,7 +668,6 @@ describe("side chooser", () => {
       it.each([
         ["Install", chk("install"), "needed"],
         ["Update", chk("update"), "needed"],
-        ["Install anyway", chk("blocked", { reason: "not_logged_in" }, { credentialsFile: false }), "needed"],
       ] as const)("%s: the focus moves to the progress area, then to the folder input", async (label, c, mode) => {
         let done!: () => void;
         const { kind, click, byId, input, onStartSide } = await withCheck(c, vi.fn(() => new Promise<void>((r) => (done = r))));

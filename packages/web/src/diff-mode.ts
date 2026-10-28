@@ -73,8 +73,8 @@ function subscribe(l: () => void) {
 /** The Settings default; re-renders when it is saved here or in another tab. */
 export const useDefaultDiffMode = (): DiffMode => useSyncExternalStore(subscribe, readMode, () => "session");
 
-/** A panel's own choice per session, for this page only (a panel remounts on every session tab switch); `ref`: the branch compared. */
-export const sessionDiffChoice = new Map<string, { mode: DiffMode; ref?: string }>();
+/** A panel's own choice per session, for this page only (a panel remounts on every session tab switch); `ref`: the branch compared, `refRepo`: the repository (its canonical top) it belongs to. */
+export const sessionDiffChoice = new Map<string, { mode: DiffMode; ref?: string; refRepo?: string }>();
 
 /** The repository top of `cwd` from `GitDiff.prefix`: drops the prefix's segments from the end of cwd, keeping cwd's own spelling (drive letter, separators). */
 export function repoRoot(cwd: string, prefix: string): string {

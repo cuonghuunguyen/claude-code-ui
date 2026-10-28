@@ -9,6 +9,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { cn } from "@/lib/utils";
+import type { RepoList } from "./repo-choice.ts";
 import { ChangesPanel, loadStyle, saveStyle, type DiffStyle } from "./changes-panel.tsx";
 import type { connect, RequestError } from "./client.ts";
 import { sessionDiffChoice } from "./diff-mode.ts";
@@ -22,10 +23,13 @@ import type { SessionView } from "./store.ts";
 import { CwdContext, InputDiff } from "./tool-card.tsx";
 import { callPath, type ViewerTarget } from "./viewer.ts";
 
+/** What this dialog shows: a file opens in the file dialog (file-dialog.tsx). */
+type PopupTarget = Exclude<ViewerTarget, { kind: "file" }>;
+
 type Client = ReturnType<typeof connect>;
 const noop = () => {};
 
-const title = (t: ViewerTarget, cwd: string) => (t.kind === "file" ? relPath(t.path, cwd) : t.kind === "diff" ? relPath(callPath(t.call), cwd) : t.kind === "plan" ? "Plan" : "Changes");
+const title = (t: PopupTarget, cwd: string) => (t.kind === "diff" ? relPath(callPath(t.call), cwd) : t.kind === "plan" ? "Plan" : "Changes");
 
 /** `opener`: the element focused when the popup opened; focus returns to it on close, else to the prompt box. */
 export function ViewerDialog({
@@ -35,15 +39,20 @@ export function ViewerDialog({
   cwd,
   view,
   sessionId,
+  repos,
+  ignoreSubmodules,
   onClose,
   onOpenInEditor,
 }: {
-  target: ViewerTarget | undefined;
+  target: PopupTarget | undefined;
   opener?: HTMLElement | null;
   client: Client;
   cwd: string;
   view?: SessionView;
   sessionId?: string;
+  /** `git.repos` of the pane's cwd (App); see ChangesPanel. */
+  repos?: RepoList;
+  ignoreSubmodules?: boolean;
   onClose: () => void;
   /** Opens `path` in the Files tab (at `line`) and closes the viewer. */
   onOpenInEditor: (path: string, line?: number) => void;
@@ -78,7 +87,7 @@ export function ViewerDialog({
         >
           {shown && (
             <CwdContext value={cwd}>
-              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} onOpenInEditor={onOpenInEditor} />
+              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpenInEditor={onOpenInEditor} />
             </CwdContext>
           )}
         </Dialog.Popup>
@@ -92,22 +101,27 @@ function Header({ text, children }: { text: string; children?: React.ReactNode }
     <div className="flex min-h-11 shrink-0 items-center gap-2 border-b py-1 pr-2 pl-4">
       <Dialog.Title className="min-w-0 flex-1 truncate font-medium text-[15px] tracking-[-0.13px]">{text}</Dialog.Title>
       {children}
-      <Dialog.Close
-        aria-label="Close"
-        data-testid="viewer-close"
-        className="grid size-7 shrink-0 place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 pointer-coarse:size-11"
-      >
-        <XIcon className="size-4" />
-      </Dialog.Close>
+      <DialogClose />
     </div>
   );
 }
 
-function Content({ target, client, cwd, view, sessionId, onOpenInEditor }: { target: ViewerTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; onOpenInEditor: (path: string, line?: number) => void }) {
+/** The X of a dialog header. */
+export function DialogClose() {
+  return (
+    <Dialog.Close
+      aria-label="Close"
+      data-testid="viewer-close"
+      className="grid size-7 shrink-0 place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 pointer-coarse:size-11"
+    >
+      <XIcon className="size-4" />
+    </Dialog.Close>
+  );
+}
+
+function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void }) {
   const text = title(target, cwd);
   switch (target.kind) {
-    case "file":
-      return <FileBody client={client} path={target.path} line={target.line} onOpenInEditor={onOpenInEditor} header={(extra) => <Header text={text}>{extra}</Header>} />;
     case "diff":
       return <DiffBody client={client} call={target.call} onOpenInEditor={onOpenInEditor} header={(extra) => <Header text={text}>{extra}</Header>} />;
     case "plan":
@@ -125,7 +139,7 @@ function Content({ target, client, cwd, view, sessionId, onOpenInEditor }: { tar
           <Header text={text} />
           {view ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChangesPanel client={client} view={view} cwd={cwd} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
+              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
             </div>
           ) : (
             <p className="p-4 text-muted-foreground text-sm">No session.</p>

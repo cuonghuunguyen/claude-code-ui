@@ -12,6 +12,19 @@ Default five labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for
 
 Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
+## Talking to the user about tickets
+
+Never refer to a ticket by ID alone (`#455`, `GH-455`). Name it by its title or a short description of it. An ID may follow in parentheses, never stand alone. Applies to chat, tables, lists and status reports.
+
+## Before every push: scan for internal and personal data
+
+This repo is public. Before `git push`, scan the added lines of the outgoing commits (`git diff origin/<base>...HEAD | grep '^+'`): code, tests, fixtures, docs, commit messages.
+
+- Remove: employer or client hostnames and URLs, internal project keys, repo names, ticket keys of other trackers, real people's names or emails, usernames, home paths, IPs, tokens, keys, passwords.
+- Replace with neutral values: `example.com`, `acme.atlassian.net`, `proj/repo`, `PROJ-123`, `alice@example.com`.
+- Allowed: this repo's own name and GitHub URLs, public hosts (`github.com`, `gitlab.com`, `bitbucket.org`), protocol defaults (Bitbucket port 7999).
+- Found and not removable: do not push; ask the user.
+
 ## Subagent model selection (orchestrator)
 
 Every `Agent`/worker dispatch sets `model` explicitly, at every spawn depth. Never rely on inheritance.
@@ -25,6 +38,6 @@ Every `Agent`/worker dispatch sets `model` explicitly, at every spawn depth. Nev
 - `haiku` never edits code.
 - Escalate one tier after a failed worker result or two review rejects; do not retry on the same model a third time.
 - Unsure between two tiers: pick the lower one when the output is checked by an `opus` review later, the higher one otherwise.
-- Issue work: stages and models in `.claude/skills/orchestrate-tickets/SKILL.md` section 1.
+- Issue work: stages and models in `plugins/orchestration/skills/orchestrate-tickets/SKILL.md` section 1.
 
 Ticket playbook: .claude/skills/implement-issue/SKILL.md

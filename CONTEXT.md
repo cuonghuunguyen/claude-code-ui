@@ -8,6 +8,18 @@ A browser UI that drives Claude Agent SDK sessions running in a local daemon. Fu
 The local process that owns all sessions, runs the SDK, and serves browsers over WebSocket. Single source of truth.
 _Avoid_: server, backend
 
+**Hub**:
+The Daemon the browser connects to. It routes each request to itself or to the Side that owns the session, terminal or path.
+_Avoid_: main daemon, host daemon
+
+**Side**:
+A Daemon run with `--side` inside a WSL distro or a Docker container, reached by the Hub over stdio. Never the side panel.
+_Avoid_: remote, node, side panel (different thing)
+
+**Relay**:
+A self-hosted server that forwards traffic between browsers and the Hubs of its users, one hostname per Hub. Session content crosses it end-to-end encrypted only.
+_Avoid_: proxy, tunnel service, gateway
+
 **Client command**:
 A `claude-ui <command>` (status, open, sessions, projects, workers) that asks the running Daemon from a terminal and exits. It never starts a Daemon and never creates the token. It finds the Daemon through `daemon.json` in the config dir.
 _Avoid_: CLI session, remote control
@@ -26,6 +38,26 @@ _Avoid_: workspace, folder (folder = any directory in the folder browser)
 **Worktree**:
 A linked git worktree of a project's repository, identified by its directory. The repository's own checkout is the main worktree. Its sessions show under the project without adding it.
 _Avoid_: workspace, sandbox
+
+**Nested repository**:
+A git repository below a project's folder that is not the project's own repository: a submodule (listed in its parent's `.gitmodules` and checked out) or an independent repository with its own `.git`. Found as VS Code finds them (Settings › Git); shown in the repository selector and the file tree marks. Not a Project, not a Worktree.
+_Avoid_: subrepo, child repo, workspace repo
+
+**Selected repository**:
+The one repository of a project that the Changes and Git graph panes show, picked in the repository selector (a tree: own repository > submodules > nested repositories); remembered per project in the browser. Default: the project's own repository.
+_Avoid_: active repository, current repo
+
+**Branch source**:
+Where a new worktree's branch comes from: a Ticket (new branch named from it), an existing Branch (local or remote, checked out as is) or a free Name (new branch). The three tabs of the Create worktree modal.
+_Avoid_: worktree type, origin
+
+**Ticket**:
+A Jira work item a new worktree's branch is named from.
+_Avoid_: issue, work item, story
+
+**Created branch**:
+A branch claude-ui created for a new worktree, marked `branch.<name>.claudeUiCreated = true` in git config (ADR 0005). Deleting the worktree deletes it; any other branch stays unless the user asks.
+_Avoid_: owned branch, temp branch
 
 **Turn**:
 One user prompt and everything it causes, ending with a turn result or an interrupt. Waiting for a permission request is part of the running turn.
@@ -71,7 +103,7 @@ Sending a user message while a turn runs; it is injected into the running turn i
 _Avoid_: queueing (different behavior)
 
 **Queued message**:
-A message held by the daemon and sent as a new turn when the session is next idle.
+A message or bash mode command held by the daemon and sent (run) when the session is next idle.
 _Avoid_: followup, pending prompt
 
 **Checkpoint**:
@@ -105,12 +137,20 @@ The session setting that decides what happens before a tool runs: ask (default),
 _Avoid_: approval mode, auto-approve
 
 **Coordinator**:
-A session that started a worker. While orchestration is on in Settings, every session but a worker gets the daemon's `worker_*` tools to start and drive worker sessions.
+A session that started a worker; a worker that starts a worker is also a coordinator. While orchestration is on in Settings, every session gets the daemon's `worker_*` tools to start and drive worker sessions. **Root coordinator**: a coordinator that is not a worker.
 _Avoid_: orchestrator, manager, parent session
 
 **Worker**:
-A session a coordinator started with `worker_start`, linked to it by name in `sessions.json`. A normal session in every other way.
+A session a coordinator started with `worker_start`, linked to it by name in `sessions.json`. A normal session in every other way. May start workers of its own (**Worker tree**).
 _Avoid_: child session, subagent (different thing: a subagent run lives inside one session)
+
+**Agent type**:
+A named role (system prompt, model, tool limits) a session runs as: a project, user or plugin agent; plugin agents are `plugin:agent`. `worker_start {agent}` starts a worker as one.
+_Avoid_: persona, role session. Not a Subagent run.
+
+**Worker tree**:
+A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
+_Avoid_: hierarchy, manager chain
 
 **Escalation**:
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
@@ -119,9 +159,48 @@ A coordinator hands a worker's pending question or permission request to the use
 The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question, and every session that needs a look (error, usage limit, quiet, finished unread), across all projects; answers requests in place.
 _Avoid_: inbox, queue page
 
+**Side panel**:
+The dock area on the right or left of the session view; its tabs are panes (Changes, Files, Git graph, Plan, Terminal).
+_Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
+
+**Pane**:
+Something of one session that the user can show and place: a kind, an owner session. Plan, Files and Git graph can also be main-area tabs (`plan:<session>`, `files:<session>`, `graph:<session>`).
+_Avoid_: view, panel (a panel is a dock area), widget, document
+
+**Owner session**:
+The session a pane belongs to; a session pane owns itself. It is fixed. Closing the owner's tab does not close its other panes.
+
+**Kind home**:
+Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph and Plan can be main; Changes never.
+
+**Pane identity**:
+What "already open" compares: the owner's folder for Files and Git graph (one tab per project folder), the owner session for Plan.
+_Avoid_: instance
+
+**Main area**:
+The tab strip and the area under it (one tab, or two splits).
+
+**Current session**:
+The owner of the active main tab. The dock areas, Changes, Files, Terminal and the commands follow it; the New session tab and Focus keep the rule they had.
+
+**Item**:
+A single file or artifact shown as its own tab ("Open in tab"). Not in this slice.
+
+**Files tab**:
+The pane with the file tree and the editor tabs (side panel by default, or a main-area tab "Files · <project>").
+_Avoid_: explorer
+
+**Changes tab**:
+The side-panel pane that reviews the session's file changes as diffs.
+_Avoid_: review panel
+
+**File dialog**:
+The large modal that shows the Files tab (tree, tabs, editor) over the same editor state. Pop out opens it; Read cards and file references in the timeline open it at a line. Not the popup viewer (the dialog for a diff, a plan or the Changes view).
+_Avoid_: popup viewer, file popup
+
 **Split view**:
-The session area showing two session tabs at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip).
-_Avoid_: group, pane (a pane is a side-panel view), editor group
+The session area showing a session and one more pane (another session, or one of its panes) at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip). A plan tab is never in a split yet.
+_Avoid_: group, editor group
 
 **In-app notification**:
 A notice card in the open page about another session that needs input or finished; one per session, acted on in place (Allow once or Deny for a low-tier read) or in Focus. Per browser, on by default (Settings › Notifications).

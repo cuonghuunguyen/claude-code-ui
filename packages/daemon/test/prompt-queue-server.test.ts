@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import type { Part, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
+import { Session } from "../src/session.ts";
 import { createSettings } from "../src/settings.ts";
 import { clearQuery, clearState, closedQueries, fakeQuery, interruptQuery, limitQuery, limitState, permissionQuery } from "./fake-query.ts";
 
@@ -36,7 +37,7 @@ async function harness(query: unknown, extra: Partial<Parameters<typeof createDa
   type C = Awaited<ReturnType<typeof client>>;
   const parts = (c: C, id: string) => c.inbox.filter((m: any) => m.type === "event" && m.sessionId === id).map((m: any) => m.part as Part);
   const texts = (c: C, id: string) => parts(c, id).filter((p) => p.type === "user_text").map((p: any) => p.text as string);
-  const queue = (c: C, id: string) => parts(c, id).filter((p) => p.type === "prompt_queue").map((p: any) => p as { items: { id: string; text: string; imageCount: number }[]; held?: { reason: string; until?: number } });
+  const queue = (c: C, id: string) => parts(c, id).filter((p) => p.type === "prompt_queue").map((p: any) => p as { items: { id: string; text: string; imageCount: number; bash?: true; error?: string }[]; held?: { reason: string; until?: number } });
   const lastQueue = (c: C, id: string) => queue(c, id).at(-1);
   async function session(c: C, dir2 = dir) {
     const id = ((await c.request({ type: "session.create", cwd: dir2 })).result as any).session.id as string;
@@ -294,6 +295,171 @@ describe("queued messages in the daemon", { timeout: 20_000 }, () => {
     await sleep(200);
     expect(at()).toEqual(expect.any(Number));
     expect(h.lastQueue(c, id)?.items.map((i) => i.text)).toEqual(["later"]);
+    c.ws.close();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("queued bash commands", { timeout: 20_000 }, () => {
+  const bashParts = (h: Awaited<ReturnType<typeof harness>>, c: any, id: string) => h.parts(c, id).filter((p) => p.type === "bash") as any[];
+  async function busy(h: Awaited<ReturnType<typeof harness>>, c: any, id: string) {
+    await c.request({ type: "session.prompt", sessionId: id, text: "first" });
+    const req = await vi.waitFor(() => c.inbox.find((m: any) => m.type === "event" && m.part.type === "permission_request") ?? Promise.reject(new Error("no request")), { timeout: 5000 });
+    return () => c.request({ type: "permission.respond", requestId: (req as any).part.requestId, decision: "allow" });
+  }
+
+  it("session.bash during a turn is queued (itemId, bash chip), runs when the turn ends, output as a bash part, chip gone", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    const allow = await busy(h, c, id);
+    const r = await c.request({ type: "session.bash", sessionId: id, command: "echo queued-out" });
+    expect(r.type).toBe("reply");
+    expect(r.result.itemId).toEqual(expect.any(String));
+    expect(h.lastQueue(c, id)!.items.map(({ text, imageCount, bash }) => ({ text, imageCount, bash }))).toEqual([{ text: "echo queued-out", imageCount: 0, bash: true }]);
+    await sleep(300);
+    expect(bashParts(h, c, id)).toEqual([]);
+    await allow();
+    await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.status === "done" && p.stdout === "queued-out\n")).toBe(true), { timeout: 5000 });
+    expect(h.lastQueue(c, id)!.items).toEqual([]);
+    c.ws.close();
+  });
+
+  it("mixed queue prompt, bash, prompt runs in submit order", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await busy(h, c, id);
+    await c.request({ type: "session.enqueue", sessionId: id, text: "p1" });
+    await c.request({ type: "session.bash", sessionId: id, command: "echo b1" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "p2" });
+    // permissionQuery asks again on every prompt: allow each request.
+    const answered = new Set<string>();
+    await vi.waitFor(async () => {
+      for (const m of c.inbox as any[]) {
+        if (m.type === "event" && m.part.type === "permission_request" && !answered.has(m.part.requestId)) {
+          answered.add(m.part.requestId);
+          await c.request({ type: "permission.respond", requestId: m.part.requestId, decision: "allow" });
+        }
+      }
+      expect(h.texts(c, id)).toEqual(["first", "p1", "p2"]);
+      expect(bashParts(h, c, id).some((p) => p.status === "done")).toBe(true);
+    }, { timeout: 8000 });
+    const kinds = h.parts(c, id).flatMap((p: any) => (p.type === "user_text" ? [`t:${p.text}`] : p.type === "bash" && p.status === "running" ? ["b:start"] : p.type === "bash" && p.status === "done" ? ["b:done"] : []));
+    expect(kinds.indexOf("t:p1")).toBeLessThan(kinds.indexOf("b:start"));
+    expect(kinds.indexOf("b:done")).toBeLessThan(kinds.indexOf("t:p2"));
+    c.ws.close();
+  });
+
+  it("dequeue of a bash item returns bash: true", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await busy(h, c, id);
+    await c.request({ type: "session.bash", sessionId: id, command: "ls" });
+    const item = h.lastQueue(c, id)!.items[0]!;
+    expect((await c.request({ type: "session.dequeue", sessionId: id, itemId: item.id })).result).toEqual({ text: "ls", images: [], bash: true });
+    expect(h.lastQueue(c, id)!.items).toEqual([]);
+    c.ws.close();
+  });
+
+  it("Send now of a bash item during a turn: session_busy, item stays", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await busy(h, c, id);
+    await c.request({ type: "session.bash", sessionId: id, command: "echo x" });
+    const item = h.lastQueue(c, id)!.items[0]!;
+    expect(await c.request({ type: "session.sendQueued", sessionId: id, itemId: item.id })).toMatchObject({ type: "error", code: "session_busy" });
+    expect(h.lastQueue(c, id)!.items.map((i) => i.text)).toEqual(["echo x"]);
+    expect(bashParts(h, c, id)).toEqual([]);
+    c.ws.close();
+  });
+
+  it("Send now of a bash item on an idle session (a held queue) runs it at once and does not release a usage-limit pause", async () => {
+    limitState.repeatEvent = true;
+    limitState.continueHits = false;
+    limitState.inSeconds = 60;
+    limitState.resetsAt = 0;
+    const h = await harness(limitQuery);
+    const c = await h.client();
+    const id = await h.session(c);
+    await c.request({ type: "session.prompt", sessionId: id, text: "limit" });
+    await c.request({ type: "session.enqueue", sessionId: id, text: "later" });
+    await vi.waitFor(() => expect(h.lastQueue(c, id)?.held).toMatchObject({ reason: "usage_limit" }), { timeout: 5000 });
+    // A running command makes the next one queue (the hold keeps it queued after the first ends).
+    await c.request({ type: "session.bash", sessionId: id, command: "sleep 1" });
+    expect((await c.request({ type: "session.bash", sessionId: id, command: "echo held-out" })).result.itemId).toEqual(expect.any(String));
+    await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.command === "sleep 1" && p.status === "done")).toBe(true), { timeout: 5000 });
+    await sleep(200);
+    expect(bashParts(h, c, id).some((p) => p.command === "echo held-out")).toBe(false);
+    const item = h.lastQueue(c, id)!.items.find((i) => i.bash)!;
+    expect(item).toBeDefined();
+    expect((await c.request({ type: "session.sendQueued", sessionId: id, itemId: item.id })).type).toBe("reply");
+    await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.status === "done" && p.stdout === "held-out\n")).toBe(true), { timeout: 5000 });
+    expect(h.lastQueue(c, id)!.held).toMatchObject({ reason: "usage_limit" });
+    expect(h.lastQueue(c, id)!.items.map((i) => i.text)).toEqual(["later"]);
+    await sleep(300);
+    expect(h.texts(c, id)).toEqual(["limit"]);
+    c.ws.close();
+  });
+
+  it("session.bash failures other than busy still fail: empty => bad_command; folder outside roots => cwd_not_allowed; nothing queued", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const gone = join(h.dir, "gone");
+    mkdirSync(gone);
+    const id = await h.session(c, gone);
+    await busy(h, c, id);
+    expect(await c.request({ type: "session.bash", sessionId: id, command: "  " })).toMatchObject({ type: "error", code: "bad_command" });
+    rmSync(gone, { recursive: true });
+    expect(await c.request({ type: "session.bash", sessionId: id, command: "echo hi" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+    expect(h.lastQueue(c, id)?.items ?? []).toEqual([]);
+    c.ws.close();
+  });
+
+  it("session.bash while the queue sends a prompt (sync pending) queues behind it, in submit order", async () => {
+    const gates: (() => void)[] = [];
+    const real = Session.prototype.sync;
+    let gated = false;
+    const spy = vi.spyOn(Session.prototype, "sync").mockImplementation(async function (this: Session) {
+      if (gated) await new Promise<void>((r) => gates.push(r));
+      return real.call(this);
+    });
+    try {
+      const h = await harness(fakeQuery);
+      const c = await h.client();
+      const id = await h.session(c);
+      gated = true;
+      await c.request({ type: "session.enqueue", sessionId: id, text: "p1" });
+      await vi.waitFor(() => expect(gates.length).toBe(1));
+      const bash = c.request({ type: "session.bash", sessionId: id, command: "echo b1" });
+      await sleep(150);
+      // Release the newest wait first: without the fix the command's own sync would win the race.
+      while (gates.length) gates.pop()!();
+      gated = false;
+      const r = await bash;
+      expect(r.result.itemId).toEqual(expect.any(String));
+      await vi.waitFor(() => expect(bashParts(h, c, id).some((p) => p.status === "done" && p.stdout === "b1\n")).toBe(true), { timeout: 5000 });
+      const kinds = h.parts(c, id).flatMap((p: any) => (p.type === "user_text" ? ["t"] : p.type === "bash" && p.status === "running" ? ["b"] : []));
+      // A running command re-emits its part with partial output: count the command once.
+      expect(kinds.filter((k, i) => k !== kinds[i - 1])).toEqual(["t", "b"]);
+      c.ws.close();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a queued bash item that fails stays at the head with its error on the chip", async () => {
+    const h = await harness(permissionQuery);
+    const c = await h.client();
+    const gone = join(h.dir, "gone2");
+    mkdirSync(gone);
+    const id = await h.session(c, gone);
+    const allow = await busy(h, c, id);
+    expect((await c.request({ type: "session.bash", sessionId: id, command: "echo x" })).result.itemId).toEqual(expect.any(String));
+    rmSync(gone, { recursive: true });
+    await allow();
+    await vi.waitFor(() => expect(h.lastQueue(c, id)!.items[0]).toMatchObject({ text: "echo x", bash: true, error: expect.stringContaining("allowlisted") }), { timeout: 5000 });
     c.ws.close();
   });
 });

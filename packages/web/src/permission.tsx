@@ -1,12 +1,12 @@
 // Permission panel (replaces the prompt box) and its timeline marker (docs/spec.md "Permission bridge").
 import { use, useState, type FormEvent, type ReactNode } from "react";
 import type { PermissionUpdate } from "@claude-ui/protocol";
-import { FileDiffIcon, ListTodoIcon, Maximize2Icon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
+import { FileDiffIcon, ListTodoIcon, Maximize2Icon, PanelsTopLeftIcon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { PermissionRequest } from "./store.ts";
 import { InputDiff } from "./tool-card.tsx";
-import { ViewerContext } from "./viewer.ts";
+import { PlanTabContext, ViewerContext } from "./viewer.ts";
 
 export type PermissionAnswer = {
   decision: "allow" | "allow_always" | "deny";
@@ -52,8 +52,10 @@ const inputText = (input: unknown) => {
 
 /** ExitPlanMode's plan (markdown), shown with Claude Code's plan approval options. */
 const planOf = (part: PermissionRequest) => {
-  const plan = part.tool === "ExitPlanMode" ? (part.input as { plan?: unknown } | null)?.plan : undefined;
-  return typeof plan === "string" ? plan : undefined;
+  if (part.tool !== "ExitPlanMode") return undefined;
+  // The daemon's `plan` is display data (the plan file folded as the Plan pane does: planOfCall); the CLI's input has none or a plan read before an Edit of the same message ran.
+  const plan = part.plan || (part.input as { plan?: unknown } | null)?.plan;
+  return typeof plan === "string" && plan ? plan : undefined;
 };
 
 /** Dock tray (OpenCode DockTray): actions right-aligned under the dock body. */
@@ -69,6 +71,8 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
   const plan = planOf(part);
   // Absent outside a session tab (the Focus page): no popup button there.
   const openViewer = use(ViewerContext);
+  // Absent on the Focus page: no "Open in tab" there.
+  const showPlan = use(PlanTabContext);
   const deny = (e: FormEvent) => {
     e.preventDefault();
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
@@ -84,6 +88,11 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
             {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
             {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
           </p>
+          {plan && showPlan && (
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Open plan in tab" title="Open in tab" data-testid="plan-open-tab" onClick={() => showPlan()}>
+              <PanelsTopLeftIcon aria-hidden className="size-4" />
+            </Button>
+          )}
           {plan && openViewer && (
             <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Open plan in popup" title="Open in popup" data-testid="plan-open" onClick={(e) => openViewer({ kind: "plan", plan }, e.currentTarget)}>
               <Maximize2Icon aria-hidden className="size-4" />

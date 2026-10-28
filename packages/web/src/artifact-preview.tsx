@@ -12,12 +12,15 @@ export const ArtifactConnectedContext = createContext(true);
 // ponytail: part ids whose preview the user opened, kept outside React like `expanded` in tool-card.tsx so a remount keeps it open (the URL is requested again).
 const opened = new Set<string>();
 
-type State = "idle" | "loading" | { url: string; n: number } | { error: string; retry?: boolean };
+type State = "idle" | "loading" | { url: string; n: number; unavailable: string[] } | { error: string; retry?: boolean };
 
 const btn = "min-h-11 md:min-h-0";
 
+/** "2 supporting files not loaded: a.css, b.js": the first three names, then an ellipsis. */
+const notLoaded = (names: string[]) => `${names.length} supporting ${names.length === 1 ? "file" : "files"} not loaded: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}`;
+
 /** Collapsed "Show preview" of a local Artifact page; open: the page in a sandboxed iframe (no same-origin, scripts only, the daemon's CSP allows no network). */
-export function ArtifactPreview({ partId, title, files }: { partId: string; title: string; files: number }): ReactNode {
+export function ArtifactPreview({ partId, title }: { partId: string; title: string }): ReactNode {
   const load = use(ArtifactPreviewContext);
   const [state, setState] = useState<State>("idle");
   const connected = use(ArtifactConnectedContext);
@@ -28,7 +31,7 @@ export function ArtifactPreview({ partId, title, files }: { partId: string; titl
     opened.add(partId);
     setState("loading");
     loader(partId).then(
-      (r) => mine === run.current && setState({ url: r.url, n: ++frame.current }),
+      (r) => mine === run.current && setState({ url: r.url, n: ++frame.current, unavailable: r.unavailable ?? [] }),
       (e: { code?: string; message?: string }) => mine === run.current && setState({ error: `Preview not available: ${e?.code === "not_found" ? "file is gone" : (e?.message ?? "unknown error")}`, retry: e?.message === "disconnected" }),
     );
   };
@@ -69,7 +72,9 @@ export function ArtifactPreview({ partId, title, files }: { partId: string; titl
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.</p>
-      {files > 0 && <p className="text-muted-foreground text-xs">{`Main page only: ${files} supporting ${files === 1 ? "file" : "files"} not loaded.`}</p>}
+      {typeof state === "object" && "url" in state && state.unavailable.length > 0 && (
+        <p className="text-muted-foreground text-xs break-all">{notLoaded(state.unavailable)}</p>
+      )}
       {state === "loading" && (
         <p aria-live="polite" className="text-muted-foreground text-xs">
           Loading preview…

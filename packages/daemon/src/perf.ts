@@ -8,7 +8,7 @@ import { newHistogram, percentile, record, summarize, type Histogram, type PerfD
 
 /** Every ClientMessage type (perf.test.ts checks it against wire.ts); any other request type is counted as "other". */
 export const KNOWN_TYPES: ReadonlySet<string> = new Set([
-  "artifact.preview", "event", "fs.create", "fs.delete", "fs.duplicate", "fs.list", "fs.media", "fs.read", "fs.rename", "fs.search", "fs.upload", "fs.watch", "fs.write", "git.branch", "git.commit", "git.diff", "git.fetch", "git.fileAt", "git.log", "git.pull", "git.push", "git.refs", "git.status",
+  "artifact.preview", "event", "fs.create", "fs.delete", "fs.duplicate", "fs.list", "fs.media", "fs.read", "fs.rename", "fs.search", "fs.upload", "fs.watch", "fs.write", "git.branch", "git.commit", "git.diff", "git.fetch", "git.fileAt", "git.log", "git.pull", "git.push", "git.refs", "git.repos", "git.status", "jira.search", "jira.test", "jira.token",
   "marketplace.add", "marketplace.list", "marketplace.remove", "marketplace.update", "mcp.add", "mcp.authenticate", "mcp.clearAuth", "mcp.list", "mcp.oauthCallback",
   "mcp.reconnect", "mcp.remove", "mcp.toggle", "media.read", "models.list", "perf.clear", "perf.report", "permission.respond", "ping", "plugins.install", "plugins.list", "plugins.reload",
   "plugins.restart", "plugins.setEnabled", "plugins.uninstall", "plugins.update", "project.open", "project.remove", "push.focus", "push.key", "push.subscribe",
@@ -16,7 +16,7 @@ export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "session.edits", "session.ids", "session.interrupt", "session.list", "session.media", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
   "session.setModel", "session.setPermissionMode", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
   "side.check", "side.start", "skills.list", "skills.setState", "terminal.attach", "terminal.close", "terminal.create", "terminal.detach", "terminal.input", "terminal.list",
-  "terminal.resize", "update.install", "update.restart", "worker.close", "worker.remove", "worktree.create", "worktree.remove", "worktree.status",
+  "terminal.resize", "update.install", "update.restart", "worker.close", "worker.remove", "worktree.branches", "worktree.create", "worktree.pr", "worktree.remove", "worktree.status",
 ]);
 const CMDS = new Set(["git", "claude", "node", "docker", "wsl", "powershell", "tailscale", "npm", "sh", "bash", "cmd", "taskkill", "osascript", "notify-send"]);
 export const GIT_SUBS = ["status", "log", "show", "diff", "diff-tree", "rev-parse", "worktree", "for-each-ref", "branch", "cat-file", "ls-files", "symbolic-ref", "merge-base", "rev-list", "config", "check-ignore", "grep"] as const;

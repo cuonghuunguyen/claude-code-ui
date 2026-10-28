@@ -19,12 +19,15 @@ ci:          none
 base:        main
 branch:      GH-<n>-<slug>   (a prefix added by a worktree tool is fine)
 scratch:     <main checkout>/development-docs/GH-<n>/   ignored by: .gitignore
-acceptance:  playwright
+acceptance:  playwright-bdd
 
 ## Commands
 install:     npm ci
 test:        npm test        scoped: npx vitest run <files>
 typecheck:   npm run typecheck
+e2e:         E2E_PORT=<port> E2E_SCRATCH=<scratch>/e2e E2E_EVIDENCE_DIR=<scratch>/evidence npm run e2e -- <feature> [-g "<scenario>"]
+             (packages/e2e: Cucumber via playwright-bdd, real Claude on Haiku, own isolated daemon; see its README)
+             steps: npm run e2e:steps   (lists every step, from `bddgen export`)
 app:         mkdir -p <scratch>/ui-config; env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN XDG_CONFIG_HOME=<scratch>/ui-config PORT=<port> nohup npm start > <scratch>/app.log 2>&1 & echo $! > <scratch>/app.pid
              (the pairing URL is in the log: #token=...)   stop: kill that PID's process tree
 ports:       one per worker, assigned by the coordinator; never the user's own daemon port
@@ -60,24 +63,57 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
   44px touch targets below `md`, focus, no horizontal scroll at 390px). Focused checks:
   `python3 .claude/skills/ui-ux-pro-max/scripts/search.py "<query>" --domain ux`.
 - Update `docs/spec.md` when behaviour or the wire/part model changes.
-- Finish: `npm run typecheck` and `npm test` (record pass/fail/skip); commit the fix only as
-  `GH-<n>: <what the user now sees>`; `git rebase main`, resolve, `npm ci`, re-run both.
-- `notes.md`: design decisions, files, per acceptance criterion the evidence (test name or
-  screenshot), start command and port, manual steps for a UI tester, out-of-scope findings
-  (report, do not fix).
+- While building: the scoped command on the touched test files. Finish: `npm run typecheck`
+  and one full `npm test` (record pass/fail/skip); commit the fix only as
+  `GH-<n>: <what the user now sees>`; `git rebase main`, resolve, `npm ci`, re-run the
+  typecheck and the scoped tests.
+- A full-suite failure outside your diff: check the batch BASELINE, then re-run that file
+  alone (see orchestrate-tickets › worker-specs). Known Windows load flakes: daemon git and
+  server tests timing out, `AttachConsole failed`, `files-panel` breadcrumb, the orchestration
+  `worker_wait`/permission timing tests. Never set up a base worktree just to compare.
+- **Don't edit `CHANGELOG.md` on a ticket branch.** The PR title (`GH-<n>: <what the user now
+  sees>`) is the changelog line; the release step writes `## Unreleased` from the merged PRs.
+  Every parallel branch adding a bullet at the same spot conflicted on every merge.
+- `notes.md`: design decisions, files, per acceptance criterion the evidence (test name,
+  scenario name or screenshot), start command and port, manual steps for a UI tester,
+  out-of-scope findings (report, do not fix).
 - Do not merge into main, do not comment on GitHub, do not push unless the user asks.
 
 ## Acceptance
-- Start the app on the assigned port only (Commands › app) with the isolated config and record the PID.
-  Check `daemon.json` appears under `<scratch>/ui-config/claude-ui`, not `~/.config/claude-ui`.
-- Drive it with `playwright-cli -s=w<port>` (a named session only). Create a session in a
-  scratch project under the scratch folder, let Claude run real turns, answer permission
-  requests.
-- Per visible acceptance criterion: a claude-ui screenshot next to the OpenCode one
-  (`<nn>-<what>-claudeui.png` / `-opencode.png`). Check 1440×900 and 390×844
-  (`scrollWidth` = 390). Restart the daemon once to check the restored-transcript path.
-- Stop: `playwright-cli -s=w<port> close`, then kill your own process tree by PID
-  (`ps --forest -g <sid>`).
+Scripted: each visible acceptance criterion is a Cucumber scenario in `packages/e2e/features`,
+run against a real daemon and real Claude (Commands › e2e). The run starts its own daemon on
+`E2E_PORT` with `XDG_CONFIG_HOME=<run>/ui-config` and the API key variables unset, stops it by
+PID, and fails if anything of the run landed in the real config dir.
+
+1. Write or extend the `.feature` scenario for each visible acceptance criterion. Reuse steps
+   (`npm run e2e:steps`); add a step only when none fits. Assert structure (reply shown, card
+   shown, turn stopped), never reply wording. End each scenario with `Then I capture "<name>"`;
+   cover 1440×900 and 390×844 (`scrollWidth` = viewport width) for layout criteria, and the
+   daemon-restart step for the restored-transcript path.
+2. Run it: Commands › e2e with `-- <feature>`.
+3. Green: look at every captured screenshot in `<scratch>/evidence` and record them per
+   criterion in `notes.md`. For OpenCode parity, put each next to its OpenCode screenshot
+   (`<nn>-<what>-claudeui.png` / `-opencode.png`).
+4. Red, or a new step is needed: re-run that one scenario in the background with
+   `-g "<scenario>" --debug=cli`, wait for `Debugging Instructions`, then
+   `playwright-cli attach tw-XXXX` and `playwright-cli -s=tw-XXXX pause-at <file>.steps.ts:<line>`
+   (bare file name: a path never matches on Windows). Drive the page from the failing step,
+   copy the printed Playwright code into the step or fix the app, stop the run by killing the
+   runner's PID tree (`close` only detaches, and a debug run never times out), go to 2.
+   Stop it with `npm run e2e:stop -- <absolute run folder>`: it kills the runner's tree by the PID in
+   `<run>/runner.pid`, then any live daemon of that run (`daemon-w*.pid`, checked against the run
+   folder in its command line). The run folder is printed as `e2e run folder:` at the top of the
+   log (`<E2E_SCRATCH>/<stamp>-<pid>`). Never use `$!` from Git Bash (an MSYS PID, not a Windows
+   one). Manual fallback only: `MSYS_NO_PATHCONV=1 taskkill /T /F /PID <pid from runner.pid>`.
+5. Clean up: every background run stopped (`npm run e2e:stop -- <run>` for each run folder under
+   `<scratch>/e2e`), `<scratch>/e2e` deleted. Evidence stays.
+
+Hand-driving `playwright-cli -s=w<port> open` against Commands › app is only for a check a
+scenario cannot express; say why in `notes.md`, and stop it by PID the same way.
+
+Under the coordinator this loop is the stage-2 worker's: it edits and commits only
+`packages/e2e/features`, `packages/e2e/steps` and `packages/e2e/support`, never the app; a
+broken app is a failed case that goes back to the implementer.
 
 ## Traps
 1. **Never `pkill -f` or `killall`.** Other workers run the same command line; kill by PID.
@@ -85,8 +121,12 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
    `ANTHROPIC_AUTH_TOKEN` (subscription login only, ADR 0002).
 3. **`getSessionMessages()` strips `tool_use_result`.** Types are not enough for SDK
    behaviour; probe it.
-4. **Never run a test app on the real config dir (`~/.config/claude-ui`):** it adds test projects and
-   sessions to the user's install. Always `XDG_CONFIG_HOME=<scratch>/ui-config`.
+4. **Never run a test app on the real config dir** (`%APPDATA%\claude-ui` on Windows,
+   `~/.config/claude-ui` elsewhere): it adds test projects and sessions to the user's install.
+   Always `XDG_CONFIG_HOME=<scratch>/ui-config` (the e2e run does this itself).
+
+## Handoff
+A stage role of the `orchestration` plugin (`orchestration:planner|implementer|ui-tester|reviewer`, skill `orchestration:orchestrate-tickets`) reads this playbook for its repo-specific steps. Its prompt is a HANDOFF block: `report-dir` is the scratch folder `development-docs/GH-<n>/` above; use the one port the handoff sender gave you.
 
 ## Without a coordinator
 Working an issue by hand: run the stages yourself in order (plan when the skip rules in

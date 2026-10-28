@@ -2,9 +2,10 @@
 import type { GitDiff, GitStatus, Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
+import { getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { connect } from "./client.ts";
 import { saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
@@ -63,7 +64,7 @@ afterEach(() => {
 });
 
 /** `git`: git.status (default: not a repository), git.diff (a reply or an error), git.fileAt by "hash:path". */
-type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
+type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; diffs?: Record<string, GitDiff | Error>; statuses?: Record<string, GitStatus | null>; statusDefer?: (cwd: string) => Promise<void> | undefined; defer?: (cwd: string) => Promise<void> | undefined; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
 function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
   const request = vi.fn(async (m: { type: string; path: string; hash?: string; cwd?: string }) => {
     if (m.type === "fs.media") {
@@ -71,11 +72,16 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
       if (r instanceof Error) throw r;
       return r ?? { url: `/media/${m.hash ? "old" : "new"}/${m.path}`, mime: "image/png", size: 2048, mtime: 1 };
     }
-    if (m.type === "git.status") return { status: git.status ?? null };
+    if (m.type === "git.status") {
+      await git.statusDefer?.(m.cwd!);
+      return { status: (git.statuses && m.cwd! in git.statuses ? git.statuses[m.cwd!] : git.status) ?? null };
+    }
     if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
     if (m.type === "git.diff") {
-      if (git.diff instanceof Error) throw git.diff;
-      return { diff: git.diff ?? null };
+      await git.defer?.(m.cwd!);
+      const d = git.diffs?.[m.cwd!] ?? git.diff;
+      if (d instanceof Error) throw d;
+      return { diff: d ?? null };
     }
     if (m.type === "git.fileAt") {
       const k = `${m.hash}:${m.path}`;
@@ -957,4 +963,449 @@ it("GH-360 reveal switches to Uncommitted and selects the file (narrow: opens it
   await act(async () => root.render(panel(client, { reveal: { path: "/p/src/b.ts", seq: 2 } })));
   await flush();
   expect(current()).toBe("/p/src/b.ts");
+});
+
+it("AC3: emptyText replaces the session empty message; git modes keep theirs", async () => {
+  const text = "No changes yet. Claude's edits appear here.";
+  await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([])} cwd="/p" onOpen={() => {}} sessionId="new" emptyText={text} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe(text);
+  await act(async () => root.render(null));
+  await act(async () => root.render(<ChangesPanel client={fakeClient({})} view={view([])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No changes in this session yet.");
+  await act(async () => root.render(null));
+  saveDiffMode("uncommitted");
+  await act(async () => root.render(<ChangesPanel client={fakeClient({}, { status: REPO, diff: D([]) })} view={view([])} cwd="/p" onOpen={() => {}} emptyText={text} />));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-empty]")!.textContent).toBe("No uncommitted changes.");
+});
+
+// ---- Submodule rows (GH-388) ----
+describe("a moved submodule", () => {
+  const SHA = "c".repeat(40);
+  const setup = () => ({
+    status: REPO,
+    diff: D([{ status: "M", path: "libs/lib", submodule: { from: SHA } }, { status: "M", path: "s.txt", added: 1, removed: 0 }]),
+    at: { [`${BASE}:s.txt`]: "s\n" },
+  });
+  const reqs = (c: { calls: ReturnType<typeof vi.fn> }) => c.calls.mock.calls.map((a) => a[0] as { type: string; path?: string });
+  const noSubmoduleRead = (c: { calls: ReturnType<typeof vi.fn> }) => reqs(c).filter((m) => ["fs.read", "fs.media", "git.fileAt"].includes(m.type) && (m.path === "/p/libs/lib" || m.path === "libs/lib"));
+
+  it("Uncommitted: shows a submodule badge, no +N -N, the recorded commit in HEAD, and reads no file", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({ "/p/s.txt": "s\nx\n" }, setup());
+    await act(async () => root.render(panel(client)));
+    await flush();
+    expect(rows()).toContain("Modified libs/lib, submodule");
+    const row = [...el.querySelectorAll("[data-testid=changed-file]")].find((b) => b.getAttribute("data-path") === "/p/libs/lib")!;
+    expect(row.querySelector("[data-testid=submodule-badge]")).not.toBeNull();
+    expect(row.querySelector("[data-testid=change-stats]")).toBeNull();
+    await act(async () => (row as HTMLElement).click());
+    await flush();
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toBe(`Submodule libs/lib: ${SHA.slice(0, 7)} in HEAD`);
+    expect(noSubmoduleRead(client)).toEqual([]);
+    expect(el.querySelector("[data-testid=open-in-editor]")).toBeNull();
+    expect(el.querySelector("[data-testid=file-diff-header] [data-testid=change-stats]")).toBeNull();
+  });
+
+  it("Against branch: the submodule detail names the merge base", async () => {
+    saveDiffMode("branch");
+    const client = fakeClient({ "/p/s.txt": "s\nx\n" }, setup());
+    await act(async () => root.render(panel(client)));
+    await flush();
+    const row = [...el.querySelectorAll("[data-testid=changed-file]")].find((b) => b.getAttribute("data-path") === "/p/libs/lib")!;
+    await act(async () => (row as HTMLElement).click());
+    await flush();
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toBe(`Submodule libs/lib: ${SHA.slice(0, 7)} at the merge base`);
+  });
+
+  it("an added submodule says added", async () => {
+    saveDiffMode("uncommitted");
+    const git = { status: REPO, diff: D([{ status: "A", path: "libs/lib", submodule: {} }]) };
+    await act(async () => root.render(panel(fakeClient({}, git))));
+    await flush();
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toBe("Submodule libs/lib: added");
+  });
+
+  it("narrow: the accordion row has the badge and no stats; expanding reads no file", async () => {
+    narrow = true;
+    saveDiffMode("uncommitted");
+    const client = fakeClient({ "/p/s.txt": "s\nx\n" }, setup());
+    await act(async () => root.render(panel(client)));
+    await flush();
+    const row = [...el.querySelectorAll("[data-testid=changed-file]")].find((b) => b.getAttribute("data-path") === "/p/libs/lib")!;
+    expect(row.querySelector("[data-testid=submodule-badge]")).not.toBeNull();
+    expect(row.querySelector("[data-testid=change-stats]")).toBeNull();
+    await act(async () => (row as HTMLElement).click());
+    await flush();
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toContain(SHA.slice(0, 7));
+    expect(noSubmoduleRead(client)).toEqual([]);
+  });
+});
+
+// Repository selector (GH-390): `git.repos` entries and the list prop of the panel.
+import type { GitRepo } from "@claude-ui/protocol";
+const own = (path: string): GitRepo => ({ path, rel: "", kind: "main", branch: "main" });
+const nested = (top: string, rel: string, parent: string, extra: Partial<GitRepo> = {}): GitRepo => ({ path: `${top}/${rel}`, rel, kind: "nested", parent, branch: "dev", ...extra });
+const submodule = (top: string, rel: string, extra: Partial<GitRepo> = {}): GitRepo => ({ ...nested(top, rel, top), kind: "submodule", ...extra });
+const R = (list: GitRepo[] | null, projectKey = "/p"): React.ComponentProps<typeof ChangesPanel>["repos"] => ({ list, projectKey });
+const selector = () => el.querySelector<HTMLElement>("[data-testid=repo-selector]");
+const pickRepo = async (rel: string) => {
+  await act(async () => selector()!.click());
+  await flush();
+  await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
+  await flush();
+};
+
+it("with a repo, git requests go to repo.path with exact and rows lie under repo.dir; no git.status", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: null, diff: D([{ status: "M", path: "x.ts", added: 1, removed: 1 }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:x.ts`]: "a\n", [`${BASE}:o.ts`]: "same\n" } };
+  const client = fakeClient({ "/p/ws/api/x.ts": "b\n", "/p/ws/api/n.ts": "same\n" }, git);
+  setRepoChoice("/p/ws", "api");
+  await act(async () => root.render(panel(client, { cwd: "/p/ws", repos: R([own("/real/ws"), nested("/real/ws", "api", "/real/ws")], "/p/ws") })));
+  await flush();
+  expect(rows()).toEqual(["Renamed api/n.ts, +0 -0", "Modified api/x.ts, +1 -1"]);
+  expect(gitCalls(client, "git.status")).toEqual([]);
+  expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/real/ws/api", exact: true, base: "head" }]);
+  expect(gitCalls(client, "git.fileAt")).toContainEqual({ type: "git.fileAt", cwd: "/real/ws/api", exact: true, hash: BASE, path: "o.ts" });
+  expect(client.calls.mock.calls.map((a) => (a[0] as { path?: string }).path)).toContain("/p/ws/api/n.ts");
+});
+
+it("with a repo, the branch mode log and image reads carry exact", async () => {
+  saveDiffMode("branch");
+  const git = { diff: D([{ status: "M", path: "pic.png", added: 0, removed: 0 }], { ref: "refs/heads/main" }) };
+  const client = fakeClient({}, git);
+  setRepoChoice("/p/ws", "api");
+  await act(async () => root.render(panel(client, { cwd: "/p/ws", repos: R([own("/p/ws"), nested("/p/ws", "api", "/p/ws")], "/p/ws") })));
+  await flush();
+  const media = gitCalls(client, "fs.media").find((m) => m.hash);
+  expect(media).toMatchObject({ cwd: "/p/ws/api", exact: true, hash: BASE });
+});
+
+it("repo null shows only Session changes", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, { status: REPO });
+  await act(async () => root.render(panel(client, { repos: R([]) })));
+  await flush();
+  expect(el.querySelector("[data-testid=changes-not-git]")).not.toBeNull();
+  expect(gitCalls(client, "git.diff")).toEqual([]);
+  expect(gitCalls(client, "git.status")).toEqual([]);
+});
+
+it("Reload from disk calls onReload", async () => {
+  const client = fakeClient({});
+  const onReload = vi.fn();
+  await act(async () => root.render(panel(client, { onReload })));
+  await flush();
+  await act(async () => (el.querySelector<HTMLButtonElement>("button[aria-label='Reload from disk']")!.click(), undefined));
+  expect(onReload).toHaveBeenCalledTimes(1);
+});
+
+describe("repository selector", () => {
+  const two = [own("/p"), submodule("/p", "libs/lib")];
+  const diffs = {
+    "/p": D([{ status: "M", path: "x.ts", added: 1, removed: 1 }]),
+    "/p/libs/lib": D([{ status: "M", path: "a.txt", added: 1, removed: 1 }, { status: "M", path: "pic.png" }], { branches: ["refs/heads/main", "refs/heads/dev"] }),
+  };
+  const at = { [`${BASE}:x.ts`]: "a\n", [`${BASE}:a.txt`]: "a\n" };
+  const files = { "/p/x.ts": "b\n", "/p/libs/lib/a.txt": "b\n" };
+
+  it("no selector for a list of only the own repository; selector in Uncommitted and Against branch for 2+ repositories; hidden in Session changes", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient(files, { diffs, at });
+    await act(async () => root.render(panel(client, { repos: R([own("/p")]) })));
+    await flush();
+    expect(selector()).toBeNull();
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(selector()!.getAttribute("aria-label")).toBe("Repository: p, branch main");
+    saveDiffMode("branch");
+    await act(async () => root.render(panel(client, { repos: R(two), sessionId: "other" })));
+    await flush();
+    expect(selector()).not.toBeNull();
+    saveDiffMode("session");
+    await act(async () => root.render(panel(client, { repos: R(two), sessionId: "third" })));
+    await flush();
+    expect(selector()).toBeNull();
+  });
+
+  it("selector shows when the own repository is not listed and the first root is read", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({}, { diffs: { "/p/api": D([]) } });
+    await act(async () => root.render(panel(client, { repos: R([nested("/p", "api", "/p")]) })));
+    await flush();
+    expect(selector()!.getAttribute("aria-label")).toBe("Repository: api, branch dev");
+    expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/p/api", exact: true, base: "head" }]);
+  });
+
+  it("picking libs/lib sends git.diff, git.fileAt and fs.media with the submodule's top and exact, rows relative to the session cwd", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient(files, { diffs, at });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified x.ts, +1 -1"]);
+    await pickRepo("libs/lib");
+    expect(getRepoChoice("/p")).toBe("libs/lib");
+    expect(gitCalls(client, "git.diff").at(-1)).toEqual({ type: "git.diff", cwd: "/p/libs/lib", exact: true, base: "head" });
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1", "Modified libs/lib/pic.png"]);
+    expect(gitCalls(client, "git.fileAt")).toContainEqual({ type: "git.fileAt", cwd: "/p/libs/lib", exact: true, hash: BASE, path: "a.txt" });
+    await act(async () => el.querySelectorAll<HTMLElement>("[data-testid=changed-file]")[1]!.click());
+    await flush();
+    expect(gitCalls(client, "fs.media").find((m) => m.hash)).toMatchObject({ cwd: "/p/libs/lib", exact: true, hash: BASE, path: "pic.png" });
+  });
+
+  it("Against branch after a switch drops the previous ref and lists the new repository's branches", async () => {
+    saveDiffMode("branch");
+    sessionDiffChoice.set("s", { mode: "branch", ref: "refs/heads/feature", refRepo: "/p" });
+    const client = fakeClient(files, { diffs: { "/p": D([], { ref: "refs/heads/feature", branches: ["refs/heads/feature"] }), "/p/libs/lib": diffs["/p/libs/lib"] }, at });
+    await act(async () => root.render(panel(client, { repos: R(two), sessionId: "s" })));
+    await flush();
+    expect(gitCalls(client, "git.diff")[0]).toMatchObject({ cwd: "/p", ref: "refs/heads/feature" });
+    await pickRepo("libs/lib");
+    const last = gitCalls(client, "git.diff").at(-1)!;
+    expect(last).toMatchObject({ cwd: "/p/libs/lib", base: "branch" });
+    expect(last.ref).toBeUndefined();
+    expect(el.querySelector("[data-testid=diff-mode]")!.textContent).toContain("Against branch");
+    await openSelect("diff-branch");
+    expect([...document.querySelectorAll("[data-testid^=diff-branch-]")].map((o) => o.getAttribute("data-testid"))).toEqual(["diff-branch-refs/heads/main", "diff-branch-refs/heads/dev"]);
+  });
+
+  it("a stored choice applies on mount and in a second panel of the same project; a panel of another project keeps its own", async () => {
+    saveDiffMode("uncommitted");
+    setRepoChoice("/p", "libs/lib");
+    const client = fakeClient(files, { diffs, at });
+    const el2 = document.createElement("div");
+    document.body.append(el2);
+    const root2 = createRoot(el2);
+    const el3 = document.createElement("div");
+    document.body.append(el3);
+    const root3 = createRoot(el3);
+    await act(async () => {
+      root.render(panel(client, { repos: R(two) }));
+      root2.render(panel(client, { repos: R(two), sessionId: "b" }));
+      root3.render(panel(client, { repos: R(two, "/other"), sessionId: "c" }));
+    });
+    await flush();
+    const label = (e: HTMLElement) => e.querySelector("[data-testid=repo-selector]")!.getAttribute("aria-label");
+    expect([label(el), label(el2), label(el3)]).toEqual(["Repository: lib, branch dev", "Repository: lib, branch dev", "Repository: p, branch main"]);
+    await act(async () => setRepoChoice("/p", ""));
+    expect([label(el), label(el2), label(el3)]).toEqual(["Repository: p, branch main", "Repository: p, branch main", "Repository: p, branch main"]);
+    await act(async () => (root2.unmount(), root3.unmount()));
+    el2.remove();
+    el3.remove();
+  });
+
+  it("a linked worktree session uses the choice of its project", async () => {
+    saveDiffMode("uncommitted");
+    setRepoChoice("/p", "libs/lib");
+    const client = fakeClient({}, { diffs: { "/wt/libs/lib": D([{ status: "M", path: "a.txt", added: 1, removed: 0 }]) }, at });
+    await act(async () => root.render(panel(client, { cwd: "/wt", repos: R([own("/wt"), submodule("/wt", "libs/lib")], "/p") })));
+    await flush();
+    expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/wt/libs/lib", exact: true, base: "head" }]);
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -0"]);
+  });
+
+  it("rows of the previous repository are not shown while the new repository's reply is pending", async () => {
+    saveDiffMode("uncommitted");
+    let release = () => {};
+    const slow = new Promise<void>((r) => (release = r));
+    const client = fakeClient(files, { diffs, at, defer: (cwd) => (cwd === "/p/libs/lib" ? slow : undefined) });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified x.ts, +1 -1"]);
+    await pickRepo("libs/lib");
+    expect(rows()).toEqual([]);
+    expect(el.querySelector("[data-testid=changes-loading]")).not.toBeNull();
+    await act(async () => release());
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1", "Modified libs/lib/pic.png"]);
+  });
+
+  it("a reply for the previous repository is dropped after a switch", async () => {
+    saveDiffMode("uncommitted");
+    let release = () => {};
+    const slow = new Promise<void>((r) => (release = r));
+    const client = fakeClient(files, { diffs, at, defer: (cwd) => (cwd === "/p" ? slow : undefined) });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await pickRepo("libs/lib");
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1", "Modified libs/lib/pic.png"]);
+    await act(async () => release());
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1", "Modified libs/lib/pic.png"]);
+  });
+});
+
+describe("submodule and nested repository rows", () => {
+  const two = [own("/p"), submodule("/p", "libs/lib")];
+  const FROM = "c".repeat(40);
+  const dirtyStatus = (files: number): GitStatus => ({ branch: "main", added: 1, removed: 0, files });
+  const click = async (i = 0) => {
+    await act(async () => el.querySelectorAll<HTMLElement>("[data-testid=changed-file]")[i]!.click());
+    await flush();
+  };
+
+  it("a dirty submodule gets a modified content row from git.status {cwd: sub, exact: true}", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(2) } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(gitCalls(client, "git.status")).toEqual([{ type: "git.status", cwd: "/p/libs/lib", exact: true }]);
+    expect(rows()).toEqual(["Modified libs/lib, submodule, modified content"]);
+    expect(el.textContent).toContain("1 Changed file");
+    expect(el.querySelector("[data-testid=change-stats]")).toBeNull();
+    expect(el.querySelector("[data-testid=submodule-badge]")).not.toBeNull();
+    expect(el.querySelector("[data-testid=submodule-dirty]")!.textContent).toBe(": modified content (2 files)");
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toBe("Submodule libs/lib: modified content (2 files)");
+  });
+
+  it("a failing submodule probe clears its previous modified content row", async () => {
+    saveDiffMode("uncommitted");
+    let n = 0;
+    const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(3) }, statusDefer: () => (++n > 1 ? Promise.reject(new Error("not_git")) : undefined) });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib, submodule, modified content"]);
+    await act(async () => el.querySelector<HTMLElement>('[aria-label="Reload from disk"]')!.click());
+    await flush();
+    expect(gitCalls(client, "git.status")).toHaveLength(2);
+    expect(rows()).toEqual([]);
+  });
+
+  it("a clean submodule (files 0 or no status) gets no row", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(0) } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual([]);
+  });
+
+  it("a moved and dirty submodule shows one row with both lines", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({}, { diff: D([{ status: "M", path: "libs/lib", submodule: { from: FROM } }]), statuses: { "/p/libs/lib": dirtyStatus(1) } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified libs/lib, submodule, modified content"]);
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toContain(FROM.slice(0, 7));
+    expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toContain("in HEAD · modified content (1 file)");
+  });
+
+  it("submodule probes: at most 10, at most 4 in flight, only direct submodules of the selected repository, again on Reload", async () => {
+    saveDiffMode("uncommitted");
+    const subsList = Array.from({ length: 12 }, (_, i) => submodule("/p", `s${i}`));
+    const deep = { ...submodule("/p", "x/deep"), parent: "/p/s0" };
+    let inFlight = 0;
+    let peak = 0;
+    const waiting: (() => void)[] = [];
+    const client = fakeClient({}, {
+      diff: D([]),
+      statusDefer: () => {
+        peak = Math.max(peak, ++inFlight);
+        return new Promise<void>((r) => waiting.push(() => (inFlight--, r())));
+      },
+    });
+    await act(async () => root.render(panel(client, { repos: R([own("/p"), ...subsList, deep]) })));
+    const drain = async () => {
+      for (let i = 0; i < 20; i++) {
+        await flush();
+        while (waiting.length) waiting.shift()!();
+      }
+    };
+    await drain();
+    const probed = () => gitCalls(client, "git.status").map((m) => m.cwd);
+    expect(probed()).toEqual(subsList.slice(0, 10).map((r) => r.path));
+    expect(peak).toBe(4);
+    await act(async () => el.querySelector<HTMLElement>('[aria-label="Reload from disk"]')!.click());
+    await drain();
+    expect(probed()).toHaveLength(20);
+  });
+
+  it("ignoreSubmodules: no git.status probe and no dirty row", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(2) } });
+    await act(async () => root.render(panel(client, { repos: R(two), ignoreSubmodules: true })));
+    await flush();
+    expect(gitCalls(client, "git.status")).toEqual([]);
+    expect(rows()).toEqual([]);
+  });
+
+  it("an untracked nested repository folder shows a repository row, counted, no line count, no U", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({ "/p/n.ts": "x\n" }, { diff: D([{ status: "A", path: "inner/", untracked: true }, { status: "A", path: "n.ts", untracked: true, added: 1, removed: 0 }]) });
+    await act(async () => root.render(panel(client, { repos: R([own("/p"), nested("/p", "inner", "/p")]) })));
+    await flush();
+    expect(rows()).toEqual(["Repository inner", "Added n.ts, +1 -0"]);
+    expect(el.textContent).toContain("2 Changed files");
+    const row = el.querySelectorAll("[data-testid=changed-file]")[0]!;
+    expect(row.querySelector("[data-testid=repo-badge]")!.textContent).toBe("repository");
+    expect(row.querySelector("[data-testid=change-badge]")).toBeNull();
+    expect(row.querySelector("[data-testid=change-stats]")).toBeNull();
+    await click(0);
+    expect(el.querySelector("[data-testid=nested-detail]")!.textContent).toBe("Nested repository inner (dev)");
+    expect(gitCalls(client, "fs.read")).toEqual([]);
+    expect(gitCalls(client, "git.fileAt")).toEqual([]);
+  });
+
+  it("Show changes in libs/lib switches the selector, keeps the mode and reloads", async () => {
+    saveDiffMode("uncommitted");
+    const client = fakeClient({ "/p/libs/lib/a.txt": "b\n" }, { diff: D([{ status: "M", path: "libs/lib", submodule: { from: FROM } }]), diffs: { "/p/libs/lib": D([{ status: "M", path: "a.txt", added: 1, removed: 1 }]) }, at: { [`${BASE}:a.txt`]: "a\n" } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    await click(0);
+    const btn = el.querySelector<HTMLElement>("[data-testid=show-repo-changes]")!;
+    expect(btn.textContent).toBe("Show changes in libs/lib");
+    await act(async () => btn.click());
+    await flush();
+    expect(getRepoChoice("/p")).toBe("libs/lib");
+    expect(gitCalls(client, "git.diff").at(-1)).toEqual({ type: "git.diff", cwd: "/p/libs/lib", exact: true, base: "head" });
+    expect(rows()).toEqual(["Modified libs/lib/a.txt, +1 -1"]);
+    expect(selector()!.getAttribute("aria-label")).toBe("Repository: lib, branch dev");
+  });
+
+  it("Show changes in Against branch falls back to the default branch", async () => {
+    saveDiffMode("branch");
+    sessionDiffChoice.set("s", { mode: "branch", ref: "refs/heads/feature", refRepo: "/p" });
+    const client = fakeClient({}, { diff: D([{ status: "M", path: "libs/lib", submodule: { from: FROM } }], { ref: "refs/heads/feature" }), diffs: { "/p/libs/lib": D([], { ref: "refs/heads/main" }) } });
+    await act(async () => root.render(panel(client, { repos: R(two), sessionId: "s" })));
+    await flush();
+    await click(0);
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=show-repo-changes]")!.click());
+    await flush();
+    const last = gitCalls(client, "git.diff").at(-1)!;
+    expect(last).toEqual({ type: "git.diff", cwd: "/p/libs/lib", exact: true, base: "branch" });
+  });
+
+  it("no Show changes button for an outsideRoots or unlisted submodule", async () => {
+    saveDiffMode("uncommitted");
+    const diff = D([{ status: "M", path: "libs/lib", submodule: { from: FROM } }, { status: "M", path: "libs/other", submodule: { from: FROM } }, { status: "M", path: "libs/gone", submodule: { from: FROM } }]);
+    const client = fakeClient({}, { diff });
+    await act(async () => root.render(panel(client, { repos: R([own("/p"), submodule("/p", "libs/lib", { outsideRoots: true }), submodule("/p", "libs/other")]) })));
+    await flush();
+    const names = rows();
+    expect(names).toHaveLength(3);
+    const order = [...el.querySelectorAll("[data-testid=changed-file]")].map((b) => b.getAttribute("data-path")!);
+    const results: Record<string, boolean> = {};
+    for (let i = 0; i < order.length; i++) {
+      await click(i);
+      results[order[i]!] = el.querySelector("[data-testid=show-repo-changes]") !== null;
+    }
+    expect(results).toEqual({ "/p/libs/gone": false, "/p/libs/lib": false, "/p/libs/other": true });
+  });
+
+  it("GH-392 a repository choice and a reveal in the same act: the new repository's list shows with the revealed file selected", async () => {
+    saveDiffMode("uncommitted");
+    const two = [own("/p"), submodule("/p", "libs/lib")];
+    const diffs = { "/p": D([{ status: "M", path: "x.ts", added: 1, removed: 1 }]), "/p/libs/lib": D([{ status: "M", path: "a.txt", added: 1, removed: 1 }]) };
+    const client = fakeClient({ "/p/x.ts": "b\n", "/p/libs/lib/a.txt": "b\n" }, { diffs, at: { [`${BASE}:x.ts`]: "a\n", [`${BASE}:a.txt`]: "a\n" } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified x.ts, +1 -1"]);
+    await act(async () => {
+      setRepoChoice("/p", "libs/lib");
+      root.render(panel(client, { repos: R(two), reveal: { path: "/p/libs/lib/a.txt", seq: 1 } }));
+    });
+    await flush();
+    expect(selector()!.getAttribute("aria-label")).toContain("lib");
+    expect(el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path")).toBe("/p/libs/lib/a.txt");
+  });
 });

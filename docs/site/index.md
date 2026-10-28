@@ -1,5 +1,8 @@
 ---
 layout: home
+title: claude-code-ui · A web UI and GUI for Claude Code
+titleTemplate: false
+description: Open-source web UI and GUI for Claude Code. Run, watch and steer many Claude Code sessions from your browser or phone. Local, no cloud, no telemetry.
 
 hero:
   name: claude-code-ui

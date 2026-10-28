@@ -424,7 +424,7 @@ describe("popup viewer button", () => {
   });
 
   it("a Read, Edit and ExitPlanMode card get an open button named after its content", () => {
-    expect(html(make("Read", { file_path: "/w/src/a.ts" }))).toContain('aria-label="Open a.ts in popup"');
+    expect(html(make("Read", { file_path: "/w/src/a.ts" }))).toContain('aria-label="Open a.ts in file dialog"');
     expect(html(make("Edit", { file_path: "/w/src/a.ts", old_string: "a", new_string: "b" }))).toContain('aria-label="Open diff of a.ts (+1 -1) in popup"');
     expect(html(make("ExitPlanMode", { plan: "# P" }))).toContain('aria-label="Open plan in popup"');
     expect(html(make("Bash", { command: "ls" }))).not.toContain('data-testid="viewer-open"');

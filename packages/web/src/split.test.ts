@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { FOCUS_TAB, NEW_TAB } from "./tabs.ts";
-import { type Split, switchRuns, canSplit, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { type Split, isSession, switchRuns, canSplit, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 
 const sp = (o: Partial<Split> = {}): Split => ({ dir: "row", ids: ["a", "b"], at: 1, ratio: 0.5, ...o });
 afterEach(() => (saveSplit(undefined), vi.restoreAllMocks()));
@@ -32,6 +32,16 @@ it("followSplit: a closed tab ends the split; the New session tab and Focus page
 it("followSplit drops runs of tabs that left", () => {
   const s = sp({ runs: { a: "r1", b: "r2" } });
   expect(followSplit(s, "c", ["a", "b", "c"])?.runs).toEqual({ a: "r1" });
+});
+
+it("isSession is false for a plan ref; parseSplit drops it; followSplit suspends while a plan tab is active", () => {
+  const ref = "plan:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  expect(isSession(ref)).toBe(false);
+  expect(parseSplit(JSON.stringify({ ids: ["a", ref] }))).toBeUndefined();
+  const s = sp();
+  expect(followSplit(s, ref, ["a", "b", ref])).toBe(s);
+  expect(canSplit(["a", ref])).toBe(false);
+  expect(splitTo(undefined, ["a", "b", ref], "a", ref, "row")).toBeUndefined();
 });
 
 it("canSplit counts session tabs only", () => {
@@ -101,4 +111,20 @@ it("switchRuns takes the target's view out and keeps the previous active tab's",
   expect(switchRuns({ b: "r1" }, "a", "r0", "b")).toEqual({ runs: { a: "r0" }, run: "r1" });
   expect(switchRuns({ b: "r1" }, "a", undefined, "b")).toEqual({ runs: undefined, run: "r1" });
   expect(switchRuns(undefined, "a", undefined, "b")).toEqual({ runs: undefined, run: undefined });
+});
+
+it("GH-396 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const ref = `graph:${U}`;
+  const s = sp();
+  const tabs = ["a", "b", ref];
+  expect(followSplit(s, ref, tabs)).toBe(s);
+  expect(followSplit(s, "b", tabs)?.ids).toEqual(s.ids);
+  expect(isSession(`files:${U}`)).toBe(false);
+});
+
+it("GH-396 parseSplit drops files and graph refs; splitTo refuses a graph ref", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  for (const k of ["files", "graph"]) expect(parseSplit(JSON.stringify({ ids: ["a", `${k}:${U}`] }))).toBeUndefined();
+  expect(splitTo(undefined, ["a", "b", `graph:${U}`], "a", `graph:${U}`, "row")).toBeUndefined();
 });

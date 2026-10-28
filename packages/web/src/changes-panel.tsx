@@ -1,9 +1,9 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitStatusResult } from "@claude-ui/protocol";
+import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -14,11 +14,15 @@ import { useDark } from "./theme.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
+import { pathKey } from "./file-tree-model.ts";
+import { repoDir } from "./repos.ts";
 import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
-import { gitEol, gitRows } from "./git-changes.ts";
+import { eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
+import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
+import { selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 export type DiffStyle = "unified" | "split";
@@ -27,10 +31,21 @@ type Disk = { content?: string; deleted?: boolean; error?: string; notice?: bool
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
 /** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
 type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
+  /** A gitlink row (git modes): no file to read or diff. */
+  submodule?: { from?: string; to?: string };
+  /** A submodule with uncommitted changes in tracked files (`git.status` of it): the files; `dirtyOnly`: its gitlink did not move, so the row exists for this. */
+  dirty?: number;
+  dirtyOnly?: boolean;
+  /** An untracked folder that is a listed nested repository: one row, no files. */
+  nested?: GitRepo;
+  /** The listed, readable repository this row stands for (submodule or nested), `rel` relative to the session cwd: "Show changes in". */
+  repoRel?: string;
   /** A changed image (git modes): shown as images, not a text diff. */
   image?: { before?: ImagePane; after?: ImagePane };
 };
 export type Kind = "A" | "D" | "M" | "R";
+const SUB_PROBES = 10;
+const SUB_PARALLEL = 4;
 const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified", R: "Renamed" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
 
@@ -53,25 +68,37 @@ export function saveStyle(s: DiffStyle) {
 
 // File sidebar width after a drag, per browser; unset: OpenCode's 240px (200px in a narrow panel).
 const LIST_WIDTH_KEY = "claude-ui.changesListWidth";
-function loadListWidth(): number | undefined {
+export function loadListWidth(key = LIST_WIDTH_KEY): number | undefined {
   try {
-    const n = Number(localStorage.getItem(LIST_WIDTH_KEY));
+    const n = Number(localStorage.getItem(key));
     return n > 0 ? n : undefined;
   } catch {
     return undefined;
   }
 }
-function saveListWidth(w: number | undefined) {
+export function saveListWidth(w: number | undefined, key = LIST_WIDTH_KEY) {
   try {
-    if (w) localStorage.setItem(LIST_WIDTH_KEY, String(w));
-    else localStorage.removeItem(LIST_WIDTH_KEY);
+    if (w) localStorage.setItem(key, String(w));
+    else localStorage.removeItem(key);
   } catch {
     // Storage blocked: the width lasts while the panel is open.
   }
 }
 
 /** Drag handle (or arrow keys) between the file sidebar and the diff; double click restores the default width. */
-function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement | null>; width: number | undefined; onResize: (w: number | undefined) => void }) {
+export function ListResizer({
+  list,
+  width,
+  onResize,
+  label = "Resize file list",
+  testId = "changes-list-resizer",
+}: {
+  list: RefObject<HTMLDivElement | null>;
+  width: number | undefined;
+  onResize: (w: number | undefined) => void;
+  label?: string;
+  testId?: string;
+}) {
   // 160px up to the panel width less 240px for the diff.
   const clamp = (w: number) => {
     const room = list.current?.parentElement?.clientWidth || Infinity;
@@ -82,11 +109,11 @@ function ListResizer({ list, width, onResize }: { list: RefObject<HTMLDivElement
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize file list"
+      aria-label={label}
       aria-valuenow={now()}
       tabIndex={0}
       className="-ml-1 w-1 shrink-0 cursor-col-resize touch-none hover:bg-primary/30 focus-visible:bg-primary/30"
-      data-testid="changes-list-resizer"
+      data-testid={testId}
       onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
       onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && list.current && onResize(clamp(e.clientX - list.current.getBoundingClientRect().left))}
       onDoubleClick={() => onResize(undefined)}
@@ -176,6 +203,10 @@ export function ChangesPanel({
   initialChoice,
   onPopOut,
   reveal,
+  emptyText,
+  repos,
+  ignoreSubmodules,
+  onReload,
 }: {
   client: Client;
   view: SessionView;
@@ -186,11 +217,22 @@ export function ChangesPanel({
   /** Keys the panel's own diff mode choice (kept in memory while the page lives). */
   sessionId?: string;
   /** The starting mode choice when the session has none (the popup copies the side panel's without writing it back). */
-  initialChoice?: { mode: DiffMode; ref?: string };
+  initialChoice?: { mode: DiffMode; ref?: string; refRepo?: string };
   /** Shows the "Open in popup" button. */
   onPopOut?: () => void;
   /** File tree "Show changes": switches to Uncommitted (the tree's git marks) and selects the file; a new `seq` repeats it. */
   reveal?: { path: string; seq: number };
+  /** Replaces "No changes in this session yet." in session mode (the new-session tab has no session yet). */
+  emptyText?: string;
+  /**
+   * `git.repos` of the pane's cwd (App) and the key of the remembered choice. The selected repository (selector, remembered per project) is where git requests
+   * go (`exact`), rows lie under its top as `cwd` spells it; an empty list: no repository (Session changes only); undefined or `list` unknown: the cwd's own repository (`git.status` check), as before.
+   */
+  repos?: RepoList;
+  /** Settings › Git › ignoreSubmodules: no "modified content" probes of submodules. */
+  ignoreSubmodules?: boolean;
+  /** Reload from disk also asks `git.repos` again. */
+  onReload?: () => void;
 }) {
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
@@ -224,28 +266,37 @@ export function ChangesPanel({
 
   // The mode: the Settings default until this session's panel picked one.
   const def = useDefaultDiffMode();
-  const [choice, setChoice] = useState(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined) ?? initialChoice);
+  const [choice, setChoice] = useState<{ mode: DiffMode; ref?: string; refRepo?: string } | undefined>(() => (sessionId ? sessionDiffChoice.get(sessionId) : undefined) ?? initialChoice);
   const mode: DiffMode = choice?.mode ?? def;
+  // The repository a mode choice's branch belongs to: after a switch the new repository's default branch applies.
+  const { repo: selectedRepo, target: repo, choose: chooseRepo } = useSelectedRepo(repos, cwd);
+  const gitCwd = repo?.path ?? cwd;
+  const refChoice = choice?.refRepo === undefined || choice.refRepo === gitCwd ? choice?.ref : undefined;
   const pick = (m: DiffMode, ref?: string) => {
-    const c = { mode: m, ...((ref ?? choice?.ref) && { ref: ref ?? choice?.ref }) };
+    const r = ref ?? refChoice;
+    const c = { mode: m, ...(r && { ref: r, refRepo: gitCwd }) };
     setChoice(c);
     if (sessionId) sessionDiffChoice.set(sessionId, c);
   };
   // undefined while unknown: the git modes stay selectable until the daemon says otherwise.
-  const [git, setGit] = useState<boolean>();
+  const [probed, setGit] = useState<boolean>();
+  const git = repo !== undefined ? repo !== null : probed;
+  const known = repo !== undefined;
   useEffect(() => {
+    if (known) return;
     let live = true;
     client.request<GitStatusResult>({ type: "git.status", cwd }).then(
       (r) => live && setGit(r.status !== null),
       () => {},
     );
     return () => void (live = false);
-  }, [client, cwd]);
+  }, [client, cwd, known]);
+  const ex = repo ? { exact: true as const } : {};
+  const dir = repo?.dir ?? cwd;
   const effective: DiffMode = git === false ? "session" : mode;
   const gitMode = effective !== "session";
-  const refChoice = choice?.ref;
   const diffSeq = useRef(0);
-  const [gd, setGd] = useState<{ mode?: DiffMode; diff?: GitDiff; error?: string }>({});
+  const [gd, setGd] = useState<{ mode?: DiffMode; repo?: string; diff?: GitDiff; error?: string }>({});
   const [branches, setBranches] = useState<string[]>([]);
   // Bumped by every git.diff reply: the before/after sides of the files on screen are read again.
   const [gen, setGen] = useState(0);
@@ -254,38 +305,99 @@ export function ChangesPanel({
     if (!gitMode || hidden) return;
     let live = true;
     const seq = ++diffSeq.current;
-    client.request<GitDiffResult>({ type: "git.diff", cwd, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
+    client.request<GitDiffResult>({ type: "git.diff", cwd: gitCwd, ...ex, base: effective === "uncommitted" ? "head" : "branch", ...(refChoice && { ref: refChoice }) }).then(
       (r) => {
         // A reply of an older read (another mode, branch or reload since) is dropped.
         if (!live || seq !== diffSeq.current) return;
-        if (r.diff === null) return setGit(false);
-        setGd({ mode: effective, diff: r.diff });
+        if (r.diff === null) return known ? setGd({ mode: effective, repo: gitCwd, error: "Not a repository" }) : setGit(false);
+        setGd({ mode: effective, repo: gitCwd, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);
       },
       (e: Error) => {
         if (!live || seq !== diffSeq.current) return;
-        setGd({ mode: effective, error: e.message });
+        setGd({ mode: effective, repo: gitCwd, error: e.message });
         // No branch list without a diff ("No default branch: pick one"): the graph's first page has it.
-        if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
+        if (effective === "branch") client.request<GitLogResult>({ type: "git.log", cwd: gitCwd, ...ex, limit: 1 }).then((l) => live && l.log?.branches && setBranches(l.log.branches), () => {});
       },
     );
     return () => void (live = false);
-  }, [client, cwd, effective, refChoice, reload, view.state, key, hidden]);
-  const gitDiff = gd.mode === effective ? gd.diff : undefined;
-  const gitError = gitMode && gd.mode === effective ? gd.error : undefined;
-  const gitLoading = gitMode && gd.mode !== effective;
-  const gitList = useMemo(() => (gitDiff ? gitRows(gitDiff, cwd) : []), [gitDiff, cwd]);
+  }, [client, gitCwd, known, effective, refChoice, reload, view.state, key, hidden]);
+  const gdNow = gd.mode === effective && gd.repo === gitCwd;
+  const gitDiff = gdNow ? gd.diff : undefined;
+  const gitError = gitMode && gdNow ? gd.error : undefined;
+  const gitLoading = gitMode && !gdNow;
+  // Submodules of the selected repository with uncommitted changes in tracked files: `git.status` of each (git.diff of the superproject does not list them).
+  const subs = useMemo(
+    () => (repos?.list && selectedRepo ? repos.list.filter((r) => r.kind === "submodule" && r.parent === selectedRepo.path && !r.outsideRoots).slice(0, SUB_PROBES) : []),
+    [repos?.list, selectedRepo],
+  );
+  const subsKey = subs.map((r) => r.path).join("\n");
+  const [dirty, setDirty] = useState<{ repo: string; files: Record<string, number> }>({ repo: "", files: {} });
+  const probeSeq = useRef(0);
+  useEffect(() => {
+    if (!gitMode || hidden || ignoreSubmodules || !subs.length) return;
+    let live = true;
+    const seq = ++probeSeq.current;
+    void eachLimited(subs, SUB_PARALLEL, (sub) =>
+      client.request<GitStatusResult>({ type: "git.status", cwd: sub.path, exact: true }).then(
+        (r) => {
+          if (!live || seq !== probeSeq.current) return;
+          const n = r.status?.files ?? 0;
+          setDirty((d) => ({ repo: gitCwd, files: { ...(d.repo === gitCwd ? d.files : {}), [sub.path]: n } }));
+        },
+        // The submodule cannot be read now (deinitialised, refused): its earlier count is stale.
+        () => {
+          if (live && seq === probeSeq.current) setDirty((d) => ({ repo: gitCwd, files: { ...(d.repo === gitCwd ? d.files : {}), [sub.path]: 0 } }));
+        },
+      ),
+    );
+    return () => void (live = false);
+  }, [client, gitCwd, gitMode, hidden, ignoreSubmodules, subsKey, effective, refChoice, reload, view.state, key]);
+  const gitList = useMemo<(GitRow & { dirty?: number; dirtyOnly?: boolean; repoRel?: string })[]>(() => {
+    if (!gitDiff) return [];
+    const list = repos?.list;
+    const base: (GitRow & { dirty?: number; dirtyOnly?: boolean; repoRel?: string })[] = gitRows(gitDiff, dir, list ? { top: gitCwd, repos: list } : undefined);
+    if (!list) return base;
+    const listedAt = (path: string) => list.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(path));
+    const out = base.map((r) => {
+      const repo = r.nested ?? (r.submodule ? listedAt(joinPath(gitCwd, r.rel)) : undefined);
+      return repo && !repo.outsideRoots ? { ...r, repoRel: repo.rel } : r;
+    });
+    if (ignoreSubmodules || dirty.repo !== gitCwd) return out;
+    for (const sub of subs) {
+      const n = dirty.files[sub.path] ?? 0;
+      if (n <= 0) continue;
+      const path = repoDir(cwd, sub.rel);
+      const at = out.findIndex((r) => r.submodule && pathKey(r.path) === pathKey(path));
+      if (at >= 0) out[at] = { ...out[at]!, dirty: n };
+      else {
+        const top = selectedRepo?.rel ?? "";
+        out.push({ path, rel: top && sub.rel.startsWith(`${top}/`) ? sub.rel.slice(top.length + 1) : sub.rel, kind: "M", submodule: {}, dirty: n, dirtyOnly: true, repoRel: sub.rel });
+      }
+    }
+    return out;
+  }, [gitDiff, dir, gitCwd, repos?.list, subs, dirty, ignoreSubmodules, cwd, selectedRepo]);
 
   // Sides of the git modes, read for the files on screen only: the before side from the base commit, the after side from the disk.
   type Side = { base?: string; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; image?: { before?: ImagePane; after?: ImagePane } };
   const [sides, setSides] = useState<Record<string, Side>>({});
   const asked = useRef(new Set<string>());
+  // Another repository: nothing of the previous one (branches, file sides, selection) stays.
+  const lastRepo = useRef(gitCwd);
+  useEffect(() => {
+    if (lastRepo.current === gitCwd) return;
+    lastRepo.current = gitCwd;
+    setBranches([]);
+    setSides({});
+    asked.current.clear();
+    setSelected(undefined);
+  }, [gitCwd]);
   const [scope, setScope] = useState<DiffScope>(loadDiffScope);
   const chooseScope = (s: DiffScope) => (setScope(s), saveDiffScope(s));
   const sessionShown = useMemo(() => (scope === "project" ? sessionRows.filter((r) => inDir(r.path, cwd)) : sessionRows), [sessionRows, scope, cwd]);
   const gitFull = useMemo<Row[]>(() => {
-    const root = gitDiff ? repoRoot(cwd, gitDiff.prefix) : cwd;
+    const root = gitDiff ? repoRoot(dir, gitDiff.prefix) : dir;
     return gitList.map((r) => {
       const s = sides[r.path];
       const ok = s && s.base === gitDiff?.base;
@@ -293,11 +405,16 @@ export function ChangesPanel({
         path: r.path,
         kind: r.kind,
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
-        stats: r.stats ?? (ok ? s.stats : undefined),
-        ...(ok && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
+        ...(r.submodule && { submodule: r.submodule }),
+        ...(r.nested && { nested: r.nested }),
+        ...(r.dirty && { dirty: r.dirty }),
+        ...(r.dirtyOnly && { dirtyOnly: true }),
+        ...(r.repoRel !== undefined && { repoRel: r.repoRel }),
+        stats: r.stats ?? (ok && !r.submodule && !r.nested ? s.stats : undefined),
+        ...(ok && !r.submodule && !r.nested && { before: s.before, after: s.after, error: s.error, notice: s.notice, image: s.image }),
       };
     });
-  }, [gitList, sides, gitDiff, cwd]);
+  }, [gitList, sides, gitDiff, cwd, dir]);
   const rows = gitMode ? gitFull : sessionShown;
   const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
@@ -340,6 +457,7 @@ export function ChangesPanel({
     if (!gitDiff) return;
     const d = gitDiff;
     for (const r of gitList) {
+      if (r.submodule || r.nested) continue;
       const id = `${gen}\n${d.base}\n${r.path}`;
       if (!wantedKey.split("\n").includes(r.path) || asked.current.has(id)) continue;
       asked.current.add(id);
@@ -350,12 +468,12 @@ export function ChangesPanel({
             (e: RequestError): ImagePane => ({ error: readFailure(e).text, notice: readFailure(e).notice }),
           );
         Promise.all([
-          r.kind === "A" || !d.base ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", cwd, hash: d.base, path: r.oldPath ?? r.rel })),
+          r.kind === "A" || !d.base ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", cwd: gitCwd, ...ex, hash: d.base, path: r.oldPath ?? r.rel })),
           r.kind === "D" ? undefined : pane(client.request<FsMediaResult>({ type: "fs.media", path: r.path })),
         ]).then(([before, after]) => setSides((x) => ({ ...x, [r.path]: { base: d.base, image: { before, after } } })));
         continue;
       }
-      const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, hash, path }).then((x) => x.content);
+      const fileAt = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd: gitCwd, ...ex, hash, path }).then((x) => x.content);
       Promise.all([
         r.kind === "A" || !d.base ? "" : fileAt(d.base, r.oldPath ?? r.rel),
         r.kind === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: r.path }).then((x) => x.content),
@@ -372,7 +490,7 @@ export function ChangesPanel({
         },
       );
     }
-  }, [client, cwd, gitDiff, gitList, wantedKey, gen]);
+  }, [client, gitCwd, gitDiff, gitList, wantedKey, gen]);
   // A listed file changed on disk (Bash, another tool): the list and the sides are read again.
   useEffect(() => (gitMode ? client.onFsChanged((m) => gitList.some((r) => r.path === m.path) && setReload((n) => n + 1)) : undefined), [client, gitMode, gitList]);
   // Previous/next file like OpenCode's review toolbar: cycles the listed files, also on ←/→ while focus is not in a text field.
@@ -392,7 +510,7 @@ export function ChangesPanel({
       if (modal && !modal.contains(listRef.current)) return;
       const t = e.target;
       // Text fields keep their caret keys; widgets with their own arrow keys (tabs, the panel resizer, menus) keep theirs.
-      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=radiogroup]"))) return;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=tab], [role=separator], [role=menu], [role=listbox], [role=tree], [role=radiogroup]"))) return;
       e.preventDefault();
       cycleRef.current(e.key === "ArrowLeft" ? -1 : 1);
     };
@@ -400,7 +518,11 @@ export function ChangesPanel({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const label = (r: Row) => `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const label = (r: Row) =>
+    r.nested
+      ? `Repository ${relPath(r.path, cwd)}`
+      : `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.submodule ? `, submodule${r.dirty ? ", modified content" : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+  const rowIcon = (r: Row) => (r.nested ? <RepoIcon kind="nested" /> : r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />);
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
   const pad = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
@@ -434,10 +556,12 @@ export function ChangesPanel({
             data-testid="changed-file"
             data-path={r.path}
           >
-            <FileIcon path={r.path} className="size-4 shrink-0" />
+            {rowIcon(r)}
             <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
+            {r.submodule && <SubmoduleBadge />}
+            {r.nested && <RepoBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
-            {r.kind !== "M" && <KindBadge kind={r.kind} />}
+            {r.kind !== "M" && !r.nested && <KindBadge kind={r.kind} />}
           </button>
         </li>
       ))}
@@ -457,7 +581,7 @@ export function ChangesPanel({
       : `No changes against ${gitRef ? short(gitRef) : "the branch"}.`
     : scope === "project" && sessionRows.length
       ? "No changes inside this project."
-      : "No changes in this session yet.";
+      : (emptyText ?? "No changes in this session yet.");
   const message = gitError ? (
     <p role="alert" className="p-3 text-destructive" data-testid="changes-error">
       {gitError}
@@ -490,6 +614,8 @@ export function ChangesPanel({
       </SelectContent>
     </Select>
   );
+  const selectorShown = gitMode && !!repos?.list && selectorVisible(repos.list);
+  const repoSelect = selectorShown && repos?.list && <RepoSelector list={repos.list} truncated={repos.truncated} selected={selectedRepo} onSelect={chooseRepo} />;
   const branchList = gitRef && !branches.includes(gitRef) ? [gitRef, ...branches] : branches;
   const branchSelect = effective === "branch" && (
     <Select value={gitRef ?? null} onValueChange={(v) => v && pick("branch", v)} disabled={!branchList.length}>
@@ -563,11 +689,12 @@ export function ChangesPanel({
                   <Maximize2Icon />
                 </Button>
               )}
-              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
                 <RotateCwIcon />
               </Button>
             </div>
           </div>
+          {repoSelect && <div className="flex min-h-11 items-center border-t px-3" data-testid="repo-row">{repoSelect}</div>}
           {branchSelect && <div className="flex min-h-11 items-center border-t px-3" data-testid="branch-row">{branchSelect}</div>}
           {(rows.length > 0 || scopeGroup) && (
             <div className="flex min-h-11 items-center gap-2 border-t px-3">
@@ -580,6 +707,7 @@ export function ChangesPanel({
       ) : (
         <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1">
           {modeSelect}
+          {repoSelect}
           {branchSelect}
           {counts}
           <div className="ml-auto flex items-center gap-1" data-testid="changes-actions">
@@ -599,7 +727,7 @@ export function ChangesPanel({
                 <Maximize2Icon />
               </Button>
             )}
-            <Button size="icon-sm" variant="ghost" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+            <Button size="icon-sm" variant="ghost" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
               <RotateCwIcon />
             </Button>
             <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
@@ -648,16 +776,18 @@ export function ChangesPanel({
                     data-testid="changed-file"
                     data-path={path}
                   >
-                    <FileIcon path={path} className="size-4 shrink-0" />
+                    {rowIcon(r)}
                     <span className="min-w-0 flex-1 truncate">
                       {dir && <span className="text-muted-foreground">{dir.replace(/\/$/, "")}/</span>}
                       {name}
                     </span>
-                    {r.kind !== "M" && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
+                    {r.submodule && <SubmoduleBadge />}
+                    {r.nested && <RepoBadge />}
+                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} />}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
                 </li>
               );
             })}
@@ -693,7 +823,7 @@ export function ChangesPanel({
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
-          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
         </div>
       )}
     </div>
@@ -709,6 +839,22 @@ export function StatsText({ stats }: { stats: Stats }) {
   );
 }
 
+export function SubmoduleBadge() {
+  return (
+    <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="submodule-badge">
+      submodule
+    </span>
+  );
+}
+
+export function RepoBadge() {
+  return (
+    <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="repo-badge">
+      repository
+    </span>
+  );
+}
+
 export function KindBadge({ kind }: { kind: Kind }) {
   return (
     <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
@@ -718,7 +864,7 @@ export function KindBadge({ kind }: { kind: Kind }) {
 }
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean }) {
+function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
   const { path } = row;
   const dark = useDark();
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
@@ -733,10 +879,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
     [path, row.oldPath, row.before, row.after],
   );
   const same = files !== undefined && row.before === row.after;
+  const sub = row.submodule;
+  const nested = row.nested;
+  const dirtyText = row.dirty ? `modified content (${row.dirty} ${row.dirty === 1 ? "file" : "files"})` : "";
   return (
     <div className={inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col"} data-testid="file-diff" data-diff-style={style}>
       {inline ? (
-        inDir(path, cwd) && (
+        !sub && !nested && inDir(path, cwd) && (
           <div className="flex justify-end px-2 pt-1">
             <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
@@ -745,14 +894,16 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
         )
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
-          <KindBadge kind={row.kind} />
-          <FileIcon path={path} className="size-4 shrink-0" />
+          {!nested && <KindBadge kind={row.kind} />}
+          {nested ? <RepoIcon kind="nested" /> : sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
             {row.oldShown ? `${row.oldShown} → ${relPath(path, cwd)}` : relPath(path, cwd)}
           </span>
+          {sub && <SubmoduleBadge />}
+          {nested && <RepoBadge />}
           {row.stats && <StatsText stats={row.stats} />}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
-          {inDir(path, cwd) && (
+          {!sub && !nested && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> Open in editor
             </Button>
@@ -760,8 +911,40 @@ function FileDiff({ row, cwd, style, onOpen, inline, git }: { row: Row; cwd: str
         </div>
       )}
       <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
-        {row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
-        {!row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
+        {sub && (
+          <p className="p-2 text-muted-foreground" data-testid="submodule-detail">
+            {row.dirtyOnly ? (
+              <>Submodule {relPath(path, cwd)}</>
+            ) : sub.from ? (
+              <>
+                Submodule {relPath(path, cwd)}: <span className="font-mono">{sub.from.slice(0, 7)}</span> {branchMode ? "at the merge base" : "in HEAD"}
+              </>
+            ) : (
+              <>Submodule {relPath(path, cwd)}: added</>
+            )}
+            {dirtyText && (
+              <span data-testid="submodule-dirty">
+                {row.dirtyOnly ? ": " : " · "}
+                {dirtyText}
+              </span>
+            )}
+          </p>
+        )}
+        {nested && (
+          <p className="p-2 text-muted-foreground" data-testid="nested-detail">
+            Nested repository {relPath(path, cwd)}
+            {nested.branch ? ` (${nested.branch})` : ""}
+          </p>
+        )}
+        {row.repoRel !== undefined && onShowRepo && (
+          <div className="px-2 pb-2">
+            <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(row.repoRel!)} data-testid="show-repo-changes">
+              Show changes in {row.repoRel}
+            </Button>
+          </div>
+        )}
+        {!sub && !nested && row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
+        {!sub && !nested && !row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
             Loading diff…
           </p>

@@ -1,30 +1,44 @@
 // File tree and CodeMirror editor tabs (docs/spec.md "Layout", "Editor"). Files are read and saved through the daemon.
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { styleTags, tags as t } from "@lezer/highlight";
-import { languages } from "@codemirror/language-data";
-import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, RotateCwIcon } from "lucide-react";
+import { syntaxHighlighting } from "@codemirror/language";
+import type { FsMediaResult } from "@claude-ui/protocol";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { connect, ConnectionStatus, RequestError } from "./client.ts";
+import { useContainerWidth } from "@/lib/use-container-width.ts";
+import { cn } from "@/lib/utils";
+import { trapTab } from "./focus-trap.ts";
+import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
+import { loadLanguage, syntaxStyle } from "./code-theme.ts";
 import { baseName, inDir, relPath } from "./paths.ts";
+import type { RepoList } from "./repo-choice.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
-import { FileTree, type FileTreeHandle, type OpenOptions } from "./file-tree.tsx";
-import { diskChanged, docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, opened, openedMedia, pin, placeTab, reload, readFailure, dropTabs, fileMention, movedPath, moveTabs, replaceDoc, saveBase, saved, saveMdView, selectionMention, type MdView, type Tab } from "./files.ts";
+import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
+import { docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
+import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
 type Client = ReturnType<typeof connect>;
 
+/** Panel width from which the tree sits beside the editor (Tailwind's `@2xl`, the Changes tab's list rule); below it the tree is a drawer. */
+export const TREE_BESIDE_PX = 672;
+const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
+
+/** The one editor sync of the shared store (disk watch, reload on change) for every Files view. */
+export function EditorSync({ store, client, status, watch }: { store: EditorStore; client: Client; status: ConnectionStatus; watch: string[] }) {
+  useEditorSync(store, client, status, watch, true);
+  return null;
+}
 
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
@@ -39,6 +53,8 @@ export function FilesPanel({
   onCopy,
   onViewer,
   onShowChanges,
+  repos,
+  onShowGraph,
   openPath,
   openLine,
   onOpened,
@@ -47,6 +63,13 @@ export function FilesPanel({
   onToggleTree,
   gitStamp,
   visible = true,
+  editors,
+  surface = "panel",
+  suspended,
+  onPopOut,
+  onOpenInFiles,
+  headerEnd,
+  sync = true,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -54,10 +77,14 @@ export function FilesPanel({
   onSend: (mention: string) => void;
   /** File tree menu: Copy path / Copy relative path. */
   onCopy?: (text: string, what: string) => void;
-  /** File tree menu: Open in popup viewer. */
+  /** File tree menu: Open in file dialog. */
   onViewer?: (path: string) => void;
   /** File tree menu: Show changes. */
   onShowChanges?: (path: string) => void;
+  /** The repositories of the cwd: the tree marks each file with its own repository's status. */
+  repos?: RepoList;
+  /** Show graph on a repository folder (the tree sets the repository selector first). */
+  onShowGraph?: () => void;
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
@@ -70,89 +97,34 @@ export function FilesPanel({
   gitStamp?: string;
   /** The panel is on screen (the tree reads git marks only then). */
   visible?: boolean;
+  /** The shared editor state (tabs, drafts, cursor); App owns one so the Files tab and the file dialog show the same. Default: the panel's own. */
+  editors?: EditorStore;
+  /** "dialog": the file dialog's body (lists tabs of files outside `cwd` too, no sync, no Pop out). */
+  surface?: "panel" | "dialog";
+  /** The file dialog is open: the tabs show but no editor mounts, so a tab has one EditorView at a time. */
+  suspended?: boolean;
+  /** Pop out: the file dialog opens on the shared state. */
+  onPopOut?: () => void;
+  /** Open in editor (dialog only, for a file inside `cwd`): close the dialog and show the Files tab. */
+  onOpenInFiles?: () => void;
+  headerEnd?: ReactNode;
+  /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
+  sync?: boolean;
 }) {
-  const [tabs, setTabs] = useState<Record<string, Tab>>({});
-  const [activePath, setActivePath] = useState<string>();
+  const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
+  const store = (editors ?? own)!;
+  const { tabs, activePath, gitNudge, sourceOnly, error, loading, goto } = useEditorStore(store);
   const [treeKey, setTreeKey] = useState(0);
-  const [gitNudge, setGitNudge] = useState(0);
   const [filtering, setFiltering] = useState(false);
   const tree = useRef<FileTreeHandle>(undefined);
   const [mdView, setMdView] = useState<MdView>(loadMdView);
-  /** A markdown file opened at a line shows its source for that open, whatever view is chosen (not stored). */
-  const [sourceOnly, setSourceOnly] = useState<string>();
   const narrow = useNarrow();
-  const [error, setError] = useState<string>();
-  /** The file being read for longer than 150 ms. */
-  const [loading, setLoading] = useState<string>();
-  const openSeq = useRef(0);
-  /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
-  const [goto, setGoto] = useState<{ path: string; line: number; key: number }>();
-  const editor = useRef<EditorView>(undefined);
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
-  const update = (path: string, f: (t: Tab) => Tab) => setTabs((ts) => (ts[path] ? { ...ts, [path]: f(ts[path]) } : ts));
-
-  const readTab = async (path: string) =>
-    mediaKind(path) ? openedMedia(path, await client.request<FsMediaResult>({ type: "fs.media", path })) : opened(path, await client.request<FsReadResult>({ type: "fs.read", path }));
-
-  /** SVG: the same file as text (editor) or as image. */
-  async function switchView(path: string, toText: boolean) {
-    try {
-      const tab = toText ? opened(path, await client.request<FsReadResult>({ type: "fs.read", path })) : openedMedia(path, await client.request<FsMediaResult>({ type: "fs.media", path }));
-      setTabs((ts) => (ts[path] ? { ...ts, [path]: tab } : ts));
-    } catch (e) {
-      update(path, (t) => ({ ...t, error: readFailure(e as RequestError).text }));
-    }
-  }
-
-  async function refresh(path: string) {
-    try {
-      if (tabsRef.current[path]?.media) {
-        const m = await client.request<FsMediaResult>({ type: "fs.media", path });
-        return update(path, (t) => ({ ...t, media: m, mtime: m.mtime, error: undefined, notice: undefined }));
-      }
-      const r = await client.request<FsReadResult>({ type: "fs.read", path });
-      update(path, (t) => diskChanged(t, r));
-    } catch (e) {
-      if ((e as Error).message === "disconnected") return;
-      const f = readFailure(e as RequestError);
-      // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
-      update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text, noticeHint: f.hint } : { ...t, error: f.text }));
-    }
-  }
-
-  /** Opens `path` as a preview tab (italic, replaced by the next single-click open) unless `preview` is false. */
-  async function open(path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) {
-    const preview = opts.preview ?? true;
-    const scope = (p: string) => inDir(p, cwd);
-    setError(undefined);
-    // Answers come back in any order: only the latest open may take the preview slot and the focus.
-    const seq = ++openSeq.current;
-    if (!opts.line) setSourceOnly((p) => (p === path ? undefined : p));
-    if (tabsRef.current[path]) setTabs((ts) => (ts[path] ? placeTab(ts, ts[path], preview, scope) : ts));
-    else {
-      const timer = setTimeout(() => setLoading(path), 150);
-      try {
-        const tab = await readTab(path);
-        if (seq !== openSeq.current && preview) return;
-        setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
-      } catch (e) {
-        const f = readFailure(e as RequestError);
-        if (seq !== openSeq.current && preview) return;
-        if (!f.notice) return setError(f.text);
-        // A file that cannot be shown still gets a tab (closable, with its breadcrumb) that says why.
-        setTabs((ts) => placeTab(ts, ts[path] ?? { path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint }, preview, scope));
-        return void setActivePath(path);
-      } finally {
-        clearTimeout(timer);
-        setLoading((l) => (l === path ? undefined : l));
-      }
-    }
-    if (seq === openSeq.current) setActivePath(path);
-    if (opts.line && isMarkdown(path)) setSourceOnly(path);
-    if (opts.line) setGoto((g) => ({ path, line: opts.line!, key: (g?.key ?? 0) + 1 }));
-    if (opts.focusEditor) requestAnimationFrame(() => editor.current?.focus());
-  }
+  const editor = store.view;
+  const dialog = surface === "dialog";
+  const update = store.update;
+  const save = store.save;
+  const close = store.close;
+  const open = (path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) => store.open(path, { cwd, ...opts });
 
   useEffect(() => {
     if (!openPath) return;
@@ -160,96 +132,150 @@ export function FilesPanel({
     onOpened?.();
   }, [openPath]);
 
-  async function save(path: string, overwrite = false) {
-    const t = tabsRef.current[path];
-    if (!t) return;
-    const content = t.draft;
-    try {
-      const r = await client.request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
-      update(path, (t) => pin(saved(t, content, r.mtime)));
-      setGitNudge((n) => n + 1);
-    } catch (e) {
-      update(path, (t) => ({ ...t, error: (e as Error).message }));
-      void refresh(path); // a conflict error means a newer disk version; this shows it as a conflict
-    }
-  }
-
-  function close(path: string) {
-    const t = tabsRef.current[path];
-    if (t && isDirty(t) && !confirm(`Discard unsaved changes to ${baseName(path)}?`)) return;
-    setTabs(({ [path]: _, ...rest }) => rest);
-  }
-
-  // Like an editor: leaving or reloading the page with unsaved edits asks first.
-  const dirty = Object.values(tabs).some(isDirty);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
-
   const paths = Object.keys(tabs);
-  const watchPaths = [...new Set([...paths, ...watch])];
-  const watchKey = watchPaths.join("\n");
-  const watchedRef = useRef(new Set<string>());
-  useEffect(() => {
-    if (status !== "connected") return void watchedRef.current.clear();
-    // Re-read each newly watched path once the watch is armed: a change between the opening read (or while offline) and the watch baseline is not reported.
-    const added = paths.filter((p) => !watchedRef.current.has(p));
-    watchedRef.current = new Set(paths);
-    client
-      .request({ type: "fs.watch", paths: watchPaths })
-      .then(() => added.forEach((p) => void refresh(p)))
-      .catch(() => {});
-  }, [status, watchKey]);
-  useEffect(
-    () =>
-      client.onFsChanged((m) => {
-        if (!tabsRef.current[m.path]) return;
-        void refresh(m.path);
-        setGitNudge((n) => n + 1);
-      }),
-    [client],
-  );
+  useEditorSync(store, client, status, watch, !dialog && sync);
 
   const openRef = useRef(open);
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
   const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
-  const shown = paths.filter((p) => inDir(p, cwd));
-  const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  const shown = paths.filter((p) => inDir(p, cwd) || (dialog && tabs[p]!.outside));
+  // The store has one global activePath: a view whose folder does not own it keeps the file it showed last.
+  const lastShown = useRef<string>(undefined);
+  const active = activePath && shown.includes(activePath) ? tabs[activePath] : lastShown.current && shown.includes(lastShown.current) ? tabs[lastShown.current] : tabs[shown[0]!];
+  lastShown.current = active?.path;
+  // Becoming visible makes the shown file the active one, so Pop out and save act on it.
+  useEffect(() => {
+    if (visible && !dialog && active && store.get().activePath !== active.path) store.setActive(active.path);
+  }, [visible, active?.path]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const treeColumn = useRef<HTMLDivElement>(null);
+  const filesButton = useRef<HTMLButtonElement>(null);
+  const width = useContainerWidth(rootRef);
+  /** Unmeasured counts as wide, like useNarrow without matchMedia. */
+  const wide = width === undefined || width >= TREE_BESIDE_PX;
+  const [treeWidth, setTreeWidth] = useState(() => loadListWidth(TREE_WIDTH_KEY));
+  // Below the threshold the tree is a drawer: open (whatever its state) while no file shows, closed when one appears. The Files button and a change of `showTree` (Toggle file tree, Ctrl+\) flip it; it never writes `showTree`.
+  const [drawer, setDrawer] = useState(false);
+  const lastShowTree = useRef(showTree);
+  const undoing = useRef(false);
+  useEffect(() => {
+    if (lastShowTree.current === showTree) return;
+    lastShowTree.current = showTree;
+    if (undoing.current) return void (undoing.current = false);
+    if (wide) return;
+    setDrawer((d) => !d);
+    // The app flipped its kept "tree shown" setting, which is the beside layout's: flip it back (the drawer has its own state).
+    undoing.current = true;
+    onToggleTree();
+  }, [showTree]);
+  // Back to the beside layout: the drawer starts closed the next time the panel is narrow.
+  useEffect(() => {
+    if (wide) setDrawer(false);
+  }, [wide]);
   const md = !!active && !active.media && isMarkdown(active.path);
   /** Split needs room: below md it shows Preview. */
   const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
   const previewDoc = useDeferredValue(active?.draft ?? "");
   const previewBase = useMemo(() => ({ base: active ? active.path.slice(0, Math.max(active.path.length - baseName(active.path).length - 1, 1)) : cwd, root: cwd }), [active?.path, cwd]);
   useEffect(() => editor.current?.requestMeasure(), [view]);
+  /** Pop out in the Files tab, Open in editor in the file dialog (for a file inside `cwd`): the file view's way to the other place. */
+  const placeButton = !active ? null : dialog ? (
+    inDir(active.path, cwd) && onOpenInFiles && (
+      <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
+        <SquareArrowOutUpRightIcon /> Open in editor
+      </Button>
+    )
+  ) : (
+    onPopOut && (
+      <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
+        <Maximize2Icon />
+      </Button>
+    )
+  );
   const refused = active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined;
-  // No file open: the tree takes the whole panel; with a file, at most 40% above the editor.
+  // No file open: the tree takes the whole panel (both layouts); with a file it is beside the editor, or a drawer over it when narrow.
   const empty = !refused && !active;
+  const treeShown = wide ? showTree : drawer || empty;
+  const overlay = treeShown && !wide && !empty;
+  const closeDrawer = (refocus?: boolean) => {
+    setDrawer(false);
+    if (refocus) filesButton.current?.focus();
+  };
+  const drawerRef = useRef<HTMLDivElement>(null);
+  /** A breadcrumb folder opened the drawer: the tree reveals that folder, not the active file. */
+  const folderReveal = useRef(false);
+  // The first file to show (opened from anywhere) puts the drawer away: it is open on its own only while no file shows.
+  useEffect(() => {
+    if (!empty) setDrawer(false);
+  }, [empty]);
+  useEffect(() => {
+    if (!overlay) return;
+    drawerRef.current?.focus();
+    if (folderReveal.current) folderReveal.current = false;
+    else if (activePath) void tree.current?.reveal(activePath, true);
+  }, [overlay]);
+  const toggleTree = () => (wide ? onToggleTree() : setDrawer((d) => !d));
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
   function revealFolder(dir: string) {
-    if (!showTree) onToggleTree();
+    if (!wide) {
+      folderReveal.current = true;
+      setDrawer(true);
+    } else if (!showTree) onToggleTree();
     requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
   }
 
+  const treeNav = (
+    <nav
+          className="flex min-h-0 flex-1 flex-col overflow-auto py-1 font-mono text-xs"
+          id="file-tree"
+          data-testid="file-tree"
+          aria-label="File tree"
+        >
+          <FileTree
+            key={cwd}
+            client={client}
+            cwd={cwd}
+            activePath={active?.path}
+            reloadKey={treeKey}
+            gitStamp={gitStamp}
+            visible={visible && !suspended && treeShown}
+            gitNudge={gitNudge}
+            handleRef={tree}
+            onFilter={setFiltering}
+            onCopy={onCopy}
+            onViewer={dialog ? undefined : onViewer}
+            onShowChanges={onShowChanges}
+            repos={repos}
+            onShowGraph={onShowGraph}
+            onMention={(p) => onSend(fileMention(p, cwd))}
+            onReload={() => setTreeKey((k) => k + 1)}
+            onChanged={store.nudge}
+            onMoved={store.moved}
+            onDeleted={store.deleted}
+            dirtyUnder={(path) => Object.values(store.get().tabs).filter((t) => isDirty(t) && inDir(t.path, path)).length}
+            onOpen={(path, o) => (overlay && setDrawer(false), void open(path, { preview: !o.pinned, focusEditor: o.focusEditor }))}
+          />
+        </nav>
+  );
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="files-panel">
+    <div ref={rootRef} className="@container flex min-h-0 flex-1 flex-col" data-testid="files-panel" data-layout={wide ? "beside" : "drawer"}>
       <div className="flex items-center gap-1 border-b px-2 py-1 text-xs">
         <Button
+          ref={filesButton}
           size="xs"
           variant="ghost"
-          onClick={onToggleTree}
+          onClick={toggleTree}
           className="max-md:h-11 pointer-coarse:h-11"
-          aria-expanded={showTree}
+          aria-expanded={treeShown}
           aria-controls="file-tree"
           data-testid="toggle-tree"
         >
-          {showTree ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
+          {treeShown ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
         </Button>
-        {showTree && (
+        {treeShown && (
           <>
             <Button
               size="xs"
@@ -280,48 +306,52 @@ export function FilesPanel({
         <Button
           size="xs"
           variant="ghost"
-          className={`${showTree ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
+          className={`${treeShown ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
           onClick={() => setTreeKey((k) => k + 1)}
           title="Reload the file tree"
           aria-label="Reload the file tree"
         >
           <RotateCwIcon />
         </Button>
+        {headerEnd}
       </div>
-      {showTree && (
-        <nav
-          className={`flex flex-col overflow-auto py-1 font-mono text-xs ${empty ? "min-h-0 flex-1" : "max-h-[40%] shrink-0 border-b"}`}
-          id="file-tree"
-          data-testid="file-tree"
-          aria-label="File tree"
-        >
-          <FileTree
-            key={cwd}
-            client={client}
-            cwd={cwd}
-            activePath={active?.path}
-            reloadKey={treeKey}
-            gitStamp={gitStamp}
-            visible={visible}
-            gitNudge={gitNudge}
-            handleRef={tree}
-            onFilter={setFiltering}
-            onCopy={onCopy}
-            onViewer={onViewer}
-            onShowChanges={onShowChanges}
-            onMention={(p) => onSend(fileMention(p, cwd))}
-            onReload={() => setTreeKey((k) => k + 1)}
-            onChanged={() => setGitNudge((n) => n + 1)}
-            onMoved={(from, to) => (setTabs((ts) => moveTabs(ts, from, to)), setActivePath((p) => p && movedPath(p, from, to)), setGoto((g) => g && { ...g, path: movedPath(g.path, from, to) }))}
-            onDeleted={(path) => setTabs((ts) => dropTabs(ts, path))}
-            dirtyUnder={(path) => Object.values(tabsRef.current).filter((t) => isDirty(t) && inDir(t.path, path)).length}
-            onOpen={(path, o) => void open(path, { preview: !o.pinned, focusEditor: o.focusEditor })}
-          />
-        </nav>
-      )}
       {error && <p className="px-2 py-1 text-destructive text-xs">{error}</p>}
+      <div className={cn("relative flex min-h-0 flex-1", empty && treeShown ? "flex-col" : "flex-row")}>
+      {wide && treeShown && (
+        <div
+          ref={treeColumn}
+          className={cn("flex min-h-0 flex-col", empty ? "flex-1" : cn("shrink-0 border-r", !treeWidth && "w-50 @2xl:w-60"))}
+          style={!empty && treeWidth ? { width: `min(${treeWidth}px, calc(100% - 240px))` } : undefined}
+        >
+          {treeNav}
+        </div>
+      )}
+      {wide && treeShown && !empty && (
+        <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label="Resize file tree" testId="files-tree-resizer" />
+      )}
+      {overlay && <div className="absolute inset-0 z-10 bg-overlay/40" onClick={() => closeDrawer(true)} data-testid="file-tree-scrim" />}
+      {/* Narrow: one container, so the tree keeps its folders and filter while the drawer is closed (hidden, not unmounted) or no file is open (it then fills the panel). */}
+      {!wide && (
+        <div
+          ref={drawerRef}
+          hidden={!treeShown}
+          tabIndex={empty ? undefined : -1}
+          role={empty ? undefined : "region"}
+          aria-label={empty ? undefined : "File tree"}
+          className={cn("flex flex-col outline-none", empty ? "min-h-0 flex-1" : "absolute inset-y-0 left-0 z-20 w-[min(320px,85%)] border-r bg-card shadow-floating")}
+          data-testid={empty ? undefined : "file-tree-drawer"}
+          onKeyDown={(e) => {
+            if (!overlay) return;
+            if (e.key === "Escape" && !e.defaultPrevented) return (e.preventDefault(), closeDrawer(true));
+            trapTab(e);
+          }}
+        >
+          {treeNav}
+        </div>
+      )}
+      <div inert={overlay} className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>
       {shown.length > 0 && (
-        <div className="flex shrink-0 overflow-x-auto border-b text-xs" role="tablist" aria-label="Editor tabs">
+        <div className="flex h-9 shrink-0 overflow-x-auto border-b bg-card text-xs max-md:h-auto" role="tablist" aria-label="Editor tabs">
           {shown.map((p) => {
             const t = tabs[p]!;
             return (
@@ -330,22 +360,25 @@ export function FilesPanel({
                 role="tab"
                 aria-selected={t === active}
                 data-testid="editor-tab"
-                className={`flex shrink-0 items-center gap-1 border-r pl-2 ${t === active ? "bg-muted" : ""}`}
+                className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
                 title={p}
               >
                 <button
-                  className={`py-1.5 max-md:min-h-11 ${t.preview ? "italic" : ""}`}
+                  className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
                   aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
-                  onClick={() => setActivePath(p)}
+                  onClick={() => store.setActive(p)}
                   onDoubleClick={() => update(p, pin)}
                   onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
                 >
-                  {baseName(p)}
-                  {isDirty(t) && <span aria-label="unsaved"> ●</span>}
-                  {t.conflict && <span className="text-warning"> !</span>}
+                  <FileIcon path={p} className="size-4 shrink-0" />
+                  <span>
+                    {baseName(p)}
+                    {isDirty(t) && <span aria-label="unsaved"> ●</span>}
+                    {t.conflict && <span className="text-warning"> !</span>}
+                  </span>
                 </button>
                 <button
-                  className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground max-md:min-w-11 max-md:min-h-11"
+                  className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
                   onClick={() => close(p)}
                   aria-label={`Close ${baseName(p)}`}
                 >
@@ -362,11 +395,17 @@ export function FilesPanel({
           Loading file…
         </p>
       )}
-      {loading && !active ? (
+      {suspended ? (
+        <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="files-suspended">
+          Open in the file dialog
+        </p>
+      ) : loading && !active ? (
         <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
           Loading file…
         </p>
       ) : refused ? (
+        <>
+        {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
         <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
           <FileIcon path={refused.path} className="mb-1 size-8" />
           <div className="w-full max-w-full text-xs">
@@ -375,6 +414,7 @@ export function FilesPanel({
           <span className="text-foreground text-sm">{refused.text}</span>
           {refused.hint && <span className="text-muted-foreground text-xs">{refused.hint}</span>}
         </div>
+        </>
       ) : active ? (
         <div className="flex min-h-0 flex-1 flex-col">
           {active.conflict && (
@@ -384,25 +424,28 @@ export function FilesPanel({
               data-testid="editor-conflict"
             >
               <span className="flex-1">Changed on disk while you have unsaved edits.</span>
-              <Button size="xs" variant="outline" onClick={() => update(active.path, reload)}>
+              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => store.reload(active.path)}>
                 Reload from disk
               </Button>
-              <Button size="xs" variant="outline" onClick={() => void save(active.path, true)}>
+              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => void save(active.path, true)}>
                 Overwrite with mine
               </Button>
             </div>
           )}
           {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
           {active.media ? (
-            <MediaView
-              key={active.media.url}
-              path={active.path}
-              media={active.media}
-              onShowSource={mediaKind(active.path) === "svg" ? () => void switchView(active.path, true) : undefined}
-            />
+            <>
+              {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
+              <MediaView
+                key={active.media.url}
+                path={active.path}
+                media={active.media}
+                onShowSource={mediaKind(active.path) === "svg" ? () => void store.switchView(active.path, true) : undefined}
+              />
+            </>
           ) : (
             <>
-          <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1 text-xs">
+          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1 text-xs" data-testid="file-path-header">
             <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
             {md && (
               <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
@@ -413,7 +456,7 @@ export function FilesPanel({
                     variant="ghost"
                     aria-pressed={view === m}
                     className={`max-md:h-11 pointer-coarse:h-11 ${view === m ? "bg-card shadow-xs hover:bg-card" : ""}`}
-                    onClick={() => (setSourceOnly(undefined), setMdView(m), saveMdView(m))}
+                    onClick={() => (store.setSourceOnly(undefined), setMdView(m), saveMdView(m))}
                     data-testid={`md-view-${m}`}
                   >
                     {m === "source" ? "Source" : m === "preview" ? "Preview" : "Split"}
@@ -422,7 +465,7 @@ export function FilesPanel({
               </div>
             )}
             {mediaKind(active.path) === "svg" && (
-              <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
+              <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void store.switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 Show preview
               </Button>
             )}
@@ -441,18 +484,20 @@ export function FilesPanel({
             <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
               Save
             </Button>
+            {placeButton}
           </div>
           <div className="flex min-h-0 flex-1">
             <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
           <CodeEditor
             key={active.path}
+            store={store}
             path={active.path}
             doc={active.draft}
             viewRef={editor}
             onSend={(state) => onSend(selectionMention(state, active.path, cwd))}
             onChange={(draft) => update(active.path, (t) => ({ ...pin(t), draft }))}
             goto={goto?.path === active.path ? goto : undefined}
-            onGoto={() => setGoto(undefined)}
+            onGoto={store.clearGoto}
             onSave={() => void save(active.path)}
           />
             </div>
@@ -479,8 +524,10 @@ export function FilesPanel({
           )}
         </div>
       ) : (
-        !showTree && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
+        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
       )}
+      </div>
+      </div>
     </div>
   );
 }
@@ -544,33 +591,16 @@ export const editorKeys = ({ onSave, onSend }: { onSave: () => void; onSend: (st
   { key: "Ctrl-g", preventDefault: true, run: gotoLine },
 ];
 
-/** Uncontrolled CodeMirror view: `doc` replaces the content only when it is not what the editor itself reported. */
-/** Syntax colors: the --syntax-* tokens (index.css), so light and dark switch with `.dark`. Scopes follow OpenCode's Shiki theme (marked-theme.tsx). */
-export const syntaxStyle = HighlightStyle.define([
-  { tag: t.comment, color: "var(--syntax-comment)" },
-  { tag: [t.keyword, t.modifier, t.function(t.variableName), t.function(t.propertyName), t.standard(t.name)], color: "var(--syntax-keyword)" },
-  { tag: [t.string, t.special(t.string), t.tagName], color: "var(--syntax-string)" },
-  { tag: [t.propertyName, t.attributeName], color: "var(--syntax-property)" },
-  { tag: [t.typeName, t.className, t.namespace, t.definition(t.variableName)], color: "var(--syntax-type)" },
-  { tag: [t.number, t.bool, t.null, t.atom, t.constant(t.name), t.self, t.escape], color: "var(--syntax-constant)" },
-  { tag: t.invalid, color: "var(--syntax-critical)" },
-  // Markdown: OpenCode markup.heading/markup.quote are --syntax-info (= our --syntax-constant in dark, near it in light); marks are punctuation (muted).
-  { tag: t.heading, color: "var(--syntax-constant)", fontWeight: "bold" },
-  { tag: t.quote, color: "var(--syntax-constant)" },
-  { tag: [t.processingInstruction, t.contentSeparator], color: "var(--syntax-comment)" },
-  { tag: t.strong, fontWeight: "bold" },
-  { tag: t.emphasis, fontStyle: "italic" },
-  { tag: t.link, textDecoration: "underline" },
-  { tag: t.strikethrough, textDecoration: "line-through" },
-]);
-
 /** Editor chrome on the app tokens (the panel is a card); `darkTheme` still drives CodeMirror's base theme for what is not listed here (search matches). */
 export const chromeTheme = {
   "&": { height: "100%", color: "var(--foreground)", backgroundColor: "var(--card)" },
-  ".cm-scroller": { fontFamily: "var(--font-mono, monospace)" },
-  ".cm-content": { caretColor: "var(--foreground)" },
+  // The diff's text metrics (@pierre/diffs: 13px mono on 20px lines, 8px above and below, tab size 2). Below lg 16px / 24px stays: iOS zooms into smaller focused text.
+  ".cm-scroller": { fontFamily: "var(--font-mono, monospace)", lineHeight: "20px" },
+  ".cm-content": { caretColor: "var(--foreground)", padding: "8px 0", tabSize: "2" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--foreground)" },
-  ".cm-gutters": { backgroundColor: "var(--card)", color: "var(--muted-foreground)", borderRight: "1px solid var(--border)" },
+  // Gutter like the diff's: no rule, line numbers in --diffs-fg-number's mix, numbers 1ch apart from the code and at least 3ch wide.
+  ".cm-gutters": { backgroundColor: "var(--card)", color: "color-mix(in lab, var(--foreground) 65%, var(--card))", borderRight: "none" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 1ch", minWidth: "3ch" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--accent)" },
   ".cm-activeLineGutter": { color: "var(--foreground)" },
   // Autocomplete and other tooltips: the look of the prompt's command picker (bg-popover, border, shadow-md, rounded rows). Selected row: OpenCode's raised-hover background as --secondary plus a --foreground left bar, so keyboard selection reaches 3:1.
@@ -605,6 +635,7 @@ export const chromeTheme = {
   ".cm-button": { backgroundImage: "none", backgroundColor: "var(--secondary)", color: "var(--secondary-foreground)", border: "1px solid var(--border)", borderRadius: "4px" },
   // Go to line (Ctrl+G) dialog.
   ".cm-dialog": { backgroundColor: "var(--card)", color: "var(--foreground)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" },
+  "@media (width < 64rem)": { ".cm-scroller": { lineHeight: "24px" } },
   // Touch: 44px targets (the repo's pointer-coarse rule). The close button joins the options row instead of narrowing the search field.
   "@media (pointer: coarse)": {
     ".cm-tooltip.cm-tooltip-autocomplete > ul": { maxHeight: "calc(5 * 44px + 8px)" },
@@ -624,14 +655,9 @@ const chrome = [
   syntaxHighlighting(syntaxStyle),
 ];
 
-/** Language of a file by name. language-data's Markdown is plain CommonMark; OpenCode (Shiki) shows GFM with fenced code in its own language. */
-export function loadLanguage(path: string) {
-  const lang = LanguageDescription.matchFilename(languages, baseName(path));
-  if (lang?.name !== "Markdown") return lang?.load();
-  // GFM tags table headers as headings and pipes as marks; OpenCode's theme has no table scope, so both keep the text color.
-  const table = { props: [styleTags({ "TableHeader/...": t.content, TableDelimiter: t.content })] };
-  return import("@codemirror/lang-markdown").then((m) => m.markdown({ base: m.markdownLanguage, codeLanguages: languages, extensions: table }));
-}
+const languageC = new Compartment();
+const darkC = new Compartment();
+const wiringC = new Compartment();
 
 /** `readOnly`, `tabbable` (content reachable by Tab) and `line` (first line shown) serve the popup viewer; the files tab sets none. */
 export function CodeEditor({
@@ -646,9 +672,12 @@ export function CodeEditor({
   line,
   goto,
   onGoto,
+  store,
 }: {
   path: string;
   doc: string;
+  /** The shared editor store: the view parks its state (cursor, undo history) here on unmount and takes it back on mount. */
+  store?: EditorStore;
   viewRef: RefObject<EditorView | undefined>;
   onChange: (doc: string) => void;
   onSave: () => void;
@@ -667,38 +696,49 @@ export function CodeEditor({
   cb.current = { onChange, onSave, onSend };
 
   const dark = useDark();
-  const darkTheme = useRef(new Compartment()).current;
 
   useEffect(() => {
-    const language = new Compartment();
+    // One state per tab outlives its views: Files tab and file dialog share it through the store. The compartments are module-level
+    // because a parked state holds them; the wiring (keys, change listener) is reconfigured to this mount's callbacks.
+    const wiring = () => [
+      Prec.high(keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) }))),
+      EditorView.updateListener.of((u) => {
+        if (!u.docChanged) return;
+        reported.current = docText(u.state);
+        cb.current.onChange(reported.current);
+      }),
+    ];
+    const parkedState = readOnly ? undefined : store?.takeParked(path);
     const v = new EditorView({
       parent: host.current!,
-      doc,
-      extensions: [
-        basicSetup,
-        lineBreaks(doc),
-        Prec.high(keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) }))),
-        language.of([]),
-        chrome,
-        darkTheme.of(EditorView.darkTheme.of(dark)),
-        readOnly ? EditorState.readOnly.of(true) : [],
-        tabbable ? EditorView.contentAttributes.of({ tabindex: "0", "aria-label": `${baseName(path)}, read-only` }) : [],
-        EditorView.updateListener.of((u) => {
-          if (!u.docChanged) return;
-          reported.current = docText(u.state);
-          cb.current.onChange(reported.current);
-        }),
-      ],
+      ...(parkedState
+        ? { state: parkedState }
+        : {
+            doc,
+            extensions: [
+              basicSetup,
+              lineBreaks(doc),
+              wiringC.of(wiring()),
+              languageC.of([]),
+              chrome,
+              darkC.of(EditorView.darkTheme.of(dark)),
+              readOnly ? EditorState.readOnly.of(true) : [],
+              tabbable ? EditorView.contentAttributes.of({ tabindex: "0", "aria-label": `${baseName(path)}, read-only` }) : [],
+            ],
+          }),
     });
+    // The restored view starts at line 1: scroll to the restored cursor.
+    if (parkedState) v.dispatch({ effects: [wiringC.reconfigure(wiring()), darkC.reconfigure(EditorView.darkTheme.of(dark)), EditorView.scrollIntoView(v.state.selection.main.head, { y: "center" })] });
     view.current = viewRef.current = v;
-    if (line) {
+    if (line && !parkedState) {
       const l = v.state.doc.line(Math.min(line, v.state.doc.lines));
       v.dispatch({ selection: { anchor: l.from }, effects: EditorView.scrollIntoView(l.from, { y: "start" }) });
     }
     let live = true;
-    loadLanguage(path)?.then((l) => live && v.dispatch({ effects: language.reconfigure(l) }));
+    loadLanguage(path)?.then((l) => live && v.dispatch({ effects: languageC.reconfigure(l) }));
     return () => {
       live = false;
+      if (!readOnly) store?.park(path, v.state);
       v.destroy();
       if (viewRef.current === v) viewRef.current = undefined;
     };
@@ -713,7 +753,7 @@ export function CodeEditor({
     onGoto?.();
   }, [goto?.key]);
 
-  useEffect(() => view.current?.dispatch({ effects: darkTheme.reconfigure(EditorView.darkTheme.of(dark)) }), [dark]);
+  useEffect(() => view.current?.dispatch({ effects: darkC.reconfigure(EditorView.darkTheme.of(dark)) }), [dark]);
 
   // A reload from disk (clean tab or "Reload from disk").
   useEffect(() => {

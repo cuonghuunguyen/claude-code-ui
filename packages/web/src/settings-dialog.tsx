@@ -26,6 +26,8 @@ import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
+import { ListSetting } from "./list-setting.tsx";
+import { JiraSection } from "./jira-settings.tsx";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
 const loadGroup = () => {
@@ -35,7 +37,8 @@ const loadGroup = () => {
     return undefined;
   }
 };
-const saveGroup = (id: string) => {
+/** Settings opens at this group next time (also the Create worktree modal's "Open Settings › Jira"). */
+export const saveGroup = (id: string) => {
   try {
     localStorage.setItem(GROUP_KEY, id);
   } catch {
@@ -157,14 +160,16 @@ function ScreenSection() {
   );
 }
 
-type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "select"; options: { value: string; label: string }[] });
+type Row = { key: string; label: string; hint: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label: string }[]; parse?: (v: string) => unknown });
 const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
   {
     id: "orchestration",
     title: "Orchestration",
     rows: [
-      { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session (except workers) may start and supervise worker sessions. Applies at a session's next start." },
+      { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session may start and supervise worker sessions, workers too (up to Maximum tree depth). Applies at a session's next start." },
       { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers", hint: "Worker sessions running at the same time (1 to 20)." },
+      { key: "maxDepth", kind: "number", min: 1, max: 5, label: "Maximum tree depth", hint: "How deep workers may start workers of their own: 1 = only you start workers; 2 = a worker may start its own (e.g. a tester and a reviewer)." },
+      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers still counts every worker." },
       {
         key: "workerMode",
         kind: "select",
@@ -178,6 +183,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
           { value: "auto", label: "Auto" },
         ],
       },
+      { key: "workerNotifications", kind: "switch", label: "Notifications from workers", hint: "Push, desktop and in-app notifications when a worker finishes, needs input or stops with an error. Off: only its coordinator hears about it; a request the coordinator escalates to you still notifies." },
       { key: "coordinatorPermissions", kind: "switch", label: "Coordinator may answer permission requests", hint: "Allows the coordinator to approve or deny, once, reads and file edits inside the worker folder, reads of the repository's main checkout and agent docs (.claude/skills, CLAUDE.md), and read-only git commands (status, log, diff, show). Other commands and everything else wait for you; no permission rule is saved. Edits can change code that commands you approve later will run." },
     ],
   },
@@ -195,6 +201,21 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
       { key: "monitor", kind: "switch", label: "Performance monitor", hint: "Measures responsiveness on this computer. Durations and counts only; nothing leaves this computer. Off stops all measuring." },
     ],
   },
+  {
+    id: "git",
+    title: "Git",
+    rows: [
+      { key: "autoRepositoryDetection", kind: "select", label: "Auto repository detection", hint: "Configures when repositories should be automatically detected. true: Scan for both subfolders of the current opened folder and parent folders of open files. subFolders: Scan for subfolders of the currently opened folder. openEditors: Scan for parent folders of open files. false: Disable automatic repository scanning.", options: ["true", "false", "subFolders", "openEditors"].map((v) => ({ value: v, label: v })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
+      { key: "repositoryScanMaxDepth", kind: "number", min: -1, max: 10, label: "Repository scan max depth", hint: "Controls the depth used when scanning workspace folders for Git repositories when Auto repository detection is set to true or subFolders. Can be set to -1 for no limit." },
+      { key: "repositoryScanIgnoredFolders", kind: "list", label: "Repository scan ignored folders", hint: "List of folders that are ignored while scanning for Git repositories when Auto repository detection is set to true or subFolders." },
+      { key: "scanRepositories", kind: "list", label: "Scan repositories", hint: "List of paths to search for Git repositories in. Relative to the project folder." },
+      { key: "ignoredRepositories", kind: "list", label: "Ignored repositories", hint: "List of Git repositories to ignore." },
+      { key: "detectSubmodules", kind: "switch", label: "Detect submodules", hint: "Controls whether to automatically detect Git submodules." },
+      { key: "detectSubmodulesLimit", kind: "number", min: 0, max: 100, label: "Detect submodules limit", hint: "Controls the limit of Git submodules detected." },
+      { key: "ignoreSubmodules", kind: "switch", label: "Ignore submodules", hint: "Ignore modifications to submodules in the file tree." },
+      { key: "openRepositoryInParentFolders", kind: "select", label: "Open repository in parent folders", hint: "Control whether a repository in parent folders of workspaces or open files should be opened. Default always (VS Code: prompt); prompt behaves as always here until a prompt exists.", options: ["always", "never", "prompt"].map((v) => ({ value: v, label: v })) },
+    ],
+  },
 ];
 
 /** This browser's Web Push switch (App owns the subscription: it needs the daemon connection). */
@@ -206,6 +227,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
+  const [jiraToken, setJiraToken] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
   const [layout, setLayout] = useState(() => loadSidebarView().layout);
@@ -236,28 +258,32 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
   }, [open, changed]);
 
-  const save = async (patch: SettingsPatch, field?: string) => {
+  const save = async (patch: SettingsPatch, field?: string, rethrow = false) => {
     setSaving(true);
     try {
       const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
       setSettings(r.settings);
       setDaemon(r.daemon);
+      setJiraToken(!!r.jiraToken);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
       setError((e as Error).message);
+      if (rethrow) throw e;
     } finally {
       setSaving(false);
     }
   };
 
   const [pick, setPick] = useState(loadGroup);
+  // Every way of opening Settings shows the stored group (one set while it was closed included).
+  useEffect(() => void (open && setPick(loadGroup())), [open]);
   // Below md: false shows the list of groups, true the settings of the selected group.
   const [drilled, setDrilled] = useState(false);
   useEffect(() => void (open && setDrilled(false)), [open]);
@@ -271,10 +297,16 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       <h3 id={`settings-${sec.id}`} className="pb-1 font-medium text-[13px] text-muted-foreground">
         {sec.title}
       </h3>
+      {sec.id === "git" && (
+        <p className="pb-1 text-muted-foreground text-xs" data-testid="settings-git-intro">
+          Same settings as VS Code's Git extension; they apply to every project.
+        </p>
+      )}
       {sec.rows.map((row) => {
         const id = `settings-${sec.id}-${row.key}`;
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        if (row.kind === "list") return <ListSetting key={row.key} id={id} label={row.label} hint={row.hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
           <div key={row.key} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
             <div className="min-w-0 flex-1">
@@ -284,7 +316,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             {row.kind === "switch" ? (
               <Switch on={value === true} label={row.label} held={saving} onToggle={(on) => void save(patch(on))} title={row.label} describedBy={`${id}-hint`} testId={id} />
             ) : row.kind === "select" ? (
-              <Select value={String(value)} onValueChange={(v) => v && void save(patch(v))}>
+              <Select value={String(value)} onValueChange={(v) => v && void save(patch(row.parse ? row.parse(v) : v))}>
                 <SelectTrigger id={id} aria-describedby={`${id}-hint`} aria-label={row.label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
                   <SelectValue>{(v: string) => row.options.find((o) => o.value === v)?.label ?? v}</SelectValue>
                 </SelectTrigger>
@@ -570,6 +602,10 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(onRestartGuide ? [{ id: "guide", title: "Guide", body: <GuideSection onRestart={onRestartGuide} /> }] : []),
     // A section the daemon does not know (an older daemon lacks `performance`) is left out.
     ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
+    // GH-447: an older daemon has no `jira` settings: no group.
+    ...(settings?.jira
+      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setError(undefined))} onError={setError} /> }]
+      : []),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;
@@ -622,7 +658,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             </button>
           ))}
         </div>
-        <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
+        <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto pr-3 pl-0.5 ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
           <button ref={backRef} type="button" onClick={back} className="flex h-11 items-center gap-1 self-start rounded-md pr-3 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden" data-testid="settings-back">
             <ChevronLeftIcon className="size-4" />
             Settings

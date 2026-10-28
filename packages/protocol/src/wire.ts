@@ -60,11 +60,11 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
   /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
   | { type: "session.media"; sessionId: string; partId: string; index: number }
-  /** URL of the local page an Artifact publish part of the session names (GH-175); reply ArtifactPreviewResult. */
+  /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
-  /** Bash mode: runs `command` with the user's shell in the session cwd (idle only); output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. */
+  /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
   | { type: "session.bash"; sessionId: string; command: string }
   | { type: "session.setModel"; sessionId: string; model: string }
   /** Applies from the next turn on (`setPermissionMode()`); the session's start option before its query runs. */
@@ -84,9 +84,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.cancelContinue"; sessionId: string }
   /** Queues a message: sent as a prompt when the session is next idle (docs/spec.md "Queued messages"). Reply `{ itemId }`; errors bad_prompt, bad_images, queue_full, session_not_live. */
   | { type: "session.enqueue"; sessionId: string; text: string; images?: string[] }
-  /** Removes a queued message (Delete, Edit); reply `{ text, images }`; error unknown_item. */
+  /** Removes a queued message (Delete, Edit); reply `{ text, images, bash? }`; error unknown_item. */
   | { type: "session.dequeue"; sessionId: string; itemId: string }
-  /** Send now: removes the item and sends it like session.prompt (steers a running turn); reply `{}`; errors unknown_item and the session.prompt codes (the item stays queued on failure). */
+  /** Send now: removes the item and sends it like session.prompt (steers a running turn); reply `{}`; errors unknown_item and the session.prompt codes (the item stays queued on failure). A bash item while busy: error `session_busy`. */
   | { type: "session.sendQueued"; sessionId: string; itemId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
@@ -117,6 +117,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.get" }
   /** Sets only the fields in `patch`; reply `{settings}`, error `bad_settings` for an invalid value. Broadcasts `settings_changed`. */
   | { type: "settings.set"; patch: SettingsPatch }
+  /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
+  | { type: "jira.token"; token: string | null }
+  /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
+  | { type: "jira.test" }
+  /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). Reply JiraSearchResult; errors as `jira.test`. */
+  | { type: "jira.search"; text?: string }
   /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
   | { type: "perf.report" }
   /** Empties the performance store; reply {}. */
@@ -126,9 +132,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.archive"; sessionId: string; archived: boolean }
   /** Removes the transcript. Refused while a turn runs or input is pending: stop it first. */
   | { type: "session.delete"; sessionId: string }
-  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout. */
+  /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout, has_workers. */
   | { type: "worker.close"; sessionId: string }
-  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, delete_failed. Broadcasts `sessions.changed`. */
+  /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, has_workers, delete_failed. Broadcasts `sessions.changed`. */
   | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
   | { type: "fs.list"; path?: string }
@@ -159,10 +165,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
-  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB. A side's file or commit is served by the hub (bytes read with media.read). */
-  | { type: "fs.media"; path: string; cwd?: string; hash?: string }
+  /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). With `hash` (and `cwd`): the file at that commit, `path` relative to the repository top as in git.fileAt, at most 32 MiB (a gitlink path: `bad_request` "Submodule: open its repository"; `exact` applies with `hash` only). A side's file or commit is served by the hub (bytes read with media.read). */
+  | { type: "fs.media"; path: string; cwd?: string; hash?: string; exact?: true }
   /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
-  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number }
+  | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number; exact?: true }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
@@ -187,32 +193,46 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   /** Kills the shell. */
   | { type: "terminal.close"; terminalId: string }
-  /** Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots). */
-  | { type: "git.status"; cwd: string }
+  /**
+   * Status bar: branch and diff size of `cwd` (a session's cwd, inside the roots).
+   * `exact` (every git.* message below and `fs.media` / `media.read` with `hash`): refused with `not_git` "Not a repository top" unless `cwd` is its repository's top (an uninitialised submodule folder would answer for the superproject).
+   */
+  | { type: "git.status"; cwd: string; exact?: true }
   /** The refs stamp of `cwd`'s repository (as `GitStatus.refs`), from file stats only (no git process, never waits for a graph read). Reply GitRefsResult. */
-  | { type: "git.refs"; cwd: string }
+  | { type: "git.refs"; cwd: string; exact?: true }
+  /** Repository list of `cwd` (docs/spec.md "git.repos"): own repository, nested repositories and submodules found as VS Code finds them (Settings › Git), file system only (no git process). `openFiles`: absolute paths of open editor tabs (at most 50). `fresh`: skip the 10 s cache. Reply GitReposResult. */
+  | { type: "git.repos"; cwd: string; openFiles?: string[]; fresh?: true }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
-  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean }
+  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true }
   /** Reply GitCommitResult. */
-  | { type: "git.commit"; cwd: string; hash: string }
-  /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent. Reply `{ content }`. */
-  | { type: "git.fileAt"; cwd: string; hash: string; path: string }
+  | { type: "git.commit"; cwd: string; hash: string; exact?: true }
+  /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent, `bad_request` "Submodule: open its repository" for a gitlink (submodule) path. Reply `{ content }`. */
+  | { type: "git.fileAt"; cwd: string; hash: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
-  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string }
+  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
-  | { type: "git.fetch"; cwd: string }
+  | { type: "git.fetch"; cwd: string; exact?: true }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
-  | { type: "git.branch"; cwd: string; ref: string }
+  | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
-  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string }
+  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; exact?: true }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
-  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[] }
-  /** Creates `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>` (docs/spec.md "Worktrees"); no `name`: a generated one. Reply WorktreeCreateResult. Broadcasts `sessions.changed`. */
-  | { type: "worktree.create"; cwd: string; name?: string }
+  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; exact?: true }
+  /**
+   * Creates a worktree in `<repo>/.claude/worktrees/` (docs/spec.md "Worktrees"). `name` only: folder `<name>` on branch `worktree-<name>`; nothing: a generated
+   * name. `branch` (GH-447, may contain `/`): a new Created branch, folder = `branch` with `/` → `-`; `base`: its start point (a commit-ish, the Base picker
+   * sends a full ref), default the "Worktrees" base rule. `checkout`: an existing branch (`refs/heads/x`, or `refs/remotes/<remote>/x` as a new local
+   * `x` tracking it), not marked; no name, branch or base with it. Reply WorktreeCreateResult. Broadcasts `sessions.changed`.
+   */
+  | { type: "worktree.create"; cwd: string; name?: string; branch?: string; base?: string; checkout?: string }
+  /** Local and remote branches for the Create worktree modal (GH-447); `fetch`: `git fetch --prune origin` first. Reply WorktreeBranchesResult. */
+  | { type: "worktree.branches"; cwd: string; fetch?: boolean }
+  /** A pasted pull request link (GitHub, GitLab, Bitbucket Server) of `cwd`'s origin: the origin branches at its head commit. Reply PullRequestBranchesResult; errors pr_other_repo, pr_not_found, pr_unsupported, git_failed. */
+  | { type: "worktree.pr"; cwd: string; url: string }
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
   | { type: "worktree.status"; cwd: string; path: string }
   /**
-   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a `worktree-*` branch,
+   * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a Created branch (git config `branch.<name>.claudeUiCreated`, or legacy `worktree-*`; ADR 0005),
    * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
    * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
    */
@@ -330,7 +350,7 @@ export type ServerMessage =
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
   /** To every connection of this daemon after `settings.set`. */
-  | { type: "settings_changed"; settings: Settings }
+  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
   /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
@@ -365,7 +385,8 @@ export type CreateResult = { session: SessionInfo };
  * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.
  */
 /** `title`: as `session.list` titles the session, for a tab opened before (or without) the list. */
-export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot };
+/** `planDirs`: the folders the session's CLI keeps plan files in (absolute), to find the plan of an ExitPlanMode call written there. */
+export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
 /** session.defaultMode. */
@@ -420,16 +441,28 @@ export type ListResult = {
  */
 export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true };
 export type WorktreeCreateResult = { path: string; branch: string };
+/** One branch name of `worktree.branches`: `local` (refs/heads), `remote` (full ref, `origin` preferred), `worktree`: the path it is checked out in. */
+export type BranchRow = { name: string; local: boolean; remote?: string; worktree?: string };
+/**
+ * `defaultBase`: the start point a new branch gets without a base, as text (`origin/main`, `HEAD`). `fetched`: the fetch ran;
+ * `fetchError`: it failed (offline), the list holds the local refs.
+ */
+/** `worktree.pr`: the pull request number and the origin branch names at its head (empty: merged and deleted, or pushed over). */
+export type PullRequestBranchesResult = { number: number; branches: string[] };
+export type WorktreeBranchesResult = { branches: BranchRow[]; defaultBase: string; fetched?: boolean; fetchError?: string };
+/** A Jira ticket row of the Ticket tab. */
+export type JiraTicket = { key: string; type: string; summary: string; status: string };
+export type JiraSearchResult = { tickets: JiraTicket[] };
 /** Why a worktree cannot be removed now. */
 export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
 /**
  * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
- * (or detached HEAD) holds, 0 when the branch is kept (not `worktree-*`); `ahead`: commits of HEAD in neither the base branch nor the upstream
- * (nor a same-name remote branch); `branchMerged`: a kept branch (not `worktree-*`, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
+ * (or detached HEAD) holds, 0 when the branch is kept (not a Created branch); `ahead`: commits of HEAD in neither the base branch nor the upstream
+ * (nor a same-name remote branch); `branchMerged`: a kept branch (not a Created branch, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
  * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
  * "has_work" when `uncommitted` or `ahead`, else "safe".
  */
-export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock };
+export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
 /** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
 export type WorktreeRemoveResult = { branchKept?: string };
 /** Claude Code's worktree name rule; undefined when `name` is valid. */
@@ -442,17 +475,27 @@ export function worktreeNameError(name: string): string | undefined {
  * One Claude Code install the daemon reaches: its own (`local`), a WSL distro (`wsl:<distro>`) or a running Docker container (`docker:<name>`), each with its own login,
  * transcripts, settings, MCP servers and plugins. `off`: not started yet (side.start sets it up); `error`: `message` says what to do.
  */
-export type SideInfo = { id: string; label: string; state: "off" | "starting" | "ready" | "error"; message?: string; phase?: SidePhase };
-/** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). */
-export type SidePhase = "packing" | "copying" | "installing" | "starting";
+export type SideInfo = {
+  id: string;
+  label: string;
+  state: "off" | "starting" | "ready" | "error";
+  message?: string;
+  phase?: SidePhase;
+  /** Docker, while starting: the install uses the host-assembled bundle (no npm in the container). */
+  bundle?: boolean;
+  /** Docker, while starting or after a failed start: why the install uses npm in the container instead of the bundle. */
+  fallback?: string;
+};
+/** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). `downloading`: the hub fetches bundle parts. */
+export type SidePhase = "downloading" | "packing" | "copying" | "installing" | "starting";
 /** The Docker engine as the hub sees it (`ListResult.docker`). */
 export type DockerState = "ok" | "down" | "empty";
 /** `side.start` setup mode: run only what is installed, install when needed (default), install again. */
 export type SideSetup = "never" | "needed" | "force";
 /** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
 export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
-/** Why a check is blocked. `not_logged_in` is soft: no credentials file, but a login by environment variable cannot be seen, so a setup may still work. */
-export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "not_logged_in" | "no_writable_path" | "check_failed";
+/** Why a check is blocked. */
+export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "no_writable_path" | "check_failed";
 export type SideCheckFacts = {
   reachable: boolean;
   running?: boolean;
@@ -460,12 +503,21 @@ export type SideCheckFacts = {
   node?: string;
   nodeOk?: boolean;
   buildTools?: { make: boolean; python3: boolean; cxx: boolean };
-  credentialsFile?: boolean;
   /** This build (`current`), another build (`other`, named by `installedKey`) or nothing. */
   installed: "current" | "other" | "none";
   installedKey?: string;
   /** Docker: the writable folders among /tmp, /dev/shm and the home folder. */
   writable?: string[];
+  /** Docker or WSL: the container's or distro's CPU (`uname -m`), C library and glibc version. */
+  target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string };
+  /** Docker or WSL: how an install gets claude-ui in: the host-assembled bundle, or npm in the container or distro (`reason`: why not the bundle). */
+  install?: { method: "bundle" | "npm"; reason?: string };
+  /** Docker or WSL: tools and libraries found (each item of "What this container needs"). */
+  tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
+  /** Docker: false when the container has no network (`--network none`). */
+  network?: boolean;
+  /** Docker or WSL: the installed build carries its own Node.js (a bundle install). */
+  bundled?: boolean;
 };
 /** Reply of `side.check`. `message`: the user's next step in plain words (blocked, install, update). `key`: this claude-ui build. */
 export type SideCheck = { verdict: SideCheckVerdict; reason?: SideCheckReason; message?: string; key: string; facts: SideCheckFacts; phase?: SidePhase };
@@ -481,7 +533,8 @@ export type RewindPreview = { filesChanged: string[]; insertions: number; deleti
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
-export type ArtifactPreviewResult = { url: string; size: number; mtime: number };
+/** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */
+export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[] };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
@@ -502,9 +555,26 @@ export const MAX_TERMINAL_INPUT_BYTES = 64 * 1024;
 /**
  * `branch`: short commit hash on a detached HEAD. `added`/`removed`: lines changed in tracked files against HEAD.
  * `refs`: opaque stamp of the repository's refs (file stats of HEAD, packed-refs, refs folders, worktree HEADs); changes when a branch, tag, HEAD or packed refs change. Compare for equality only.
+ * `files`: tracked files changed against HEAD (binary and moved submodules included; a submodule with only uncommitted changes is not counted). `added`/`removed` leave submodules out.
  */
-export type GitStatus = { branch: string; added: number; removed: number; refs?: string };
+export type GitStatus = { branch: string; added: number; removed: number; files?: number; refs?: string };
 /** `refs` null outside a git work tree. */
+/** A repository of `git.repos`. */
+export type GitRepo = {
+  /** Canonical top. */
+  path: string;
+  /** `path` relative to the request's canonical cwd, `/` separated; "" = the cwd itself, ".." segments above it. */
+  rel: string;
+  /** main: the cwd's own repository; submodule: listed in its parent's `.gitmodules` and checked out; nested: any other repository found by the scan, `scanRepositories` or an open file. */
+  kind: "main" | "submodule" | "nested";
+  /** The listed repository that contains it (the superproject for a submodule). */
+  parent?: string;
+  /** Branch name, or 7 hex characters of a detached HEAD; read from files. */
+  branch?: string;
+  /** Its git dir, alternates or top lie outside the allowed roots: listed, never read or used. */
+  outsideRoots?: true;
+};
+export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" | "time" | "count"; submodules?: { repo: string; count: number }[] } };
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
@@ -517,8 +587,8 @@ export type GitCommit = { hash: string; parents: string[]; author: string; email
 export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[]; refs?: string; head?: string };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
-/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). */
-export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean };
+/** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). `submodule`: a gitlink (mode 160000) row; `from`/`to`: full commit recorded on the before/after side (absent: not a gitlink there, or unknown: the working-tree side). Such rows have no `added`/`removed`. */
+export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean; submodule?: { from?: string; to?: string } };
 /** `message`: full message. `refs`: always `[]` from `git.commit` (no decoration: slow with thousands of refs); the client shows the refs of the commit from `git.log`. `truncated`: more than 3000 files changed, list cut. */
 export type GitCommitDetail = GitCommit & { message: string; committer: string; committerTime: number; files: GitFileChange[]; truncated?: boolean };
 export type GitCommitResult = { commit: GitCommitDetail };
@@ -563,13 +633,35 @@ export type ConfigScope = "local" | "user" | "project";
 /** `orchestration.workerMode`: the permission mode of a new worker when the coordinator names none; `coordinator` = the coordinator's own mode. */
 export const WORKER_MODES = ["coordinator", "default", "acceptEdits", "plan", "auto"] as const;
 export type WorkerModeSetting = (typeof WORKER_MODES)[number];
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+/** `git.autoRepositoryDetection` values (VS Code's git extension). */
+export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditors"] as const;
+/** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
+export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
+export type Settings = { orchestration: { enabled: boolean; workerCap: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
+  /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
+  jira: { url: string; email: string; template: string; /** Ticket filter: the JQL of the Ticket tab's list and text search; "" = my open tickets. */ jql: string };
+  /** Settings › Git (VS Code's git extension settings, same names and values; openRepositoryInParentFolders defaults to always and prompt behaves as always). */
+  git: {
+    autoRepositoryDetection: boolean | "subFolders" | "openEditors";
+    /** -1..10, -1 = no limit. */
+    repositoryScanMaxDepth: number;
+    repositoryScanIgnoredFolders: string[];
+    /** Relative to the project cwd. */
+    scanRepositories: string[];
+    /** Absolute, or relative to the project cwd. */
+    ignoredRepositories: string[];
+    detectSubmodules: boolean;
+    /** 0..100. */
+    detectSubmodulesLimit: number;
+    ignoreSubmodules: boolean;
+    openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+  };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true } };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */

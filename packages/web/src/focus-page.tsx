@@ -3,13 +3,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
 import { keyLabels } from "./shortcuts.ts";
 import { useKeymap } from "./keymap.ts";
 import { timeAgo, worktreeName } from "./sessions.ts";
+import { summarizePasted } from "./pasted-text.ts";
 import { awaitingPermission, timeline, type SessionView } from "./store.ts";
 import { Mark, statusText } from "./todo-dock.tsx";
 import { ProjectAvatar } from "./tabs-bar.tsx";
@@ -49,7 +50,7 @@ function RecentContext({ view }: { view: SessionView }) {
         if (item.kind === "fold") return <li key={item.id} className="font-mono text-muted-foreground text-xs">{foldLabel(item.calls)}</li>;
         if (item.kind !== "part") return null;
         const { part } = item;
-        if (part.type === "user_text") return <li key={part.id} className="line-clamp-2 w-fit max-w-full rounded-lg bg-secondary px-2.5 py-1 text-sm [overflow-wrap:anywhere]">{part.text}</li>;
+        if (part.type === "user_text") return <li key={part.id} className="line-clamp-2 w-fit max-w-full rounded-lg bg-secondary px-2.5 py-1 text-sm [overflow-wrap:anywhere]">{summarizePasted(part.text)}</li>;
         if (part.type === "assistant_text") return <li key={part.id} className="line-clamp-4 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">{part.text}</li>;
         if (part.type === "tool_call") return <li key={part.id} className="truncate font-mono text-destructive text-xs">{part.tool} {toolSummary(part.input)} · {part.status}</li>;
         return part.type === "notice" ? <li key={part.id} className="text-muted-foreground text-xs">{part.text}</li> : null;
@@ -327,7 +328,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                 <section className="flex flex-col gap-1.5" aria-label="Request">
                   <p className="flex items-center gap-1.5 text-warning text-xs" data-testid="focus-waiting">
                     <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden />
-                    waiting {waitLabel(now - req.since)} · {requestSummary(req.part, session.cwd)}
+                    waiting {waitLabel(now - req.since)}
                   </p>
                   <div ref={card}>
                     {req.part.type === "permission_request" ? (

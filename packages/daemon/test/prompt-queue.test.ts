@@ -4,12 +4,12 @@ import { createPromptQueue, MAX_QUEUED } from "../src/prompt-queue.ts";
 type Err = { code: string; message: string } | undefined;
 function setup() {
   const st = { ready: true, result: undefined as Err };
-  const sent: { id: string; text: string }[] = [];
-  const shown: { id: string; texts: string[]; held: unknown }[] = [];
+  const sent: { id: string; text: string; bash?: true }[] = [];
+  const shown: { id: string; texts: string[]; held: unknown; items: { text: string; bash?: true; error?: string }[] }[] = [];
   const q = createPromptQueue({
     ready: () => st.ready,
-    send: async (id, item) => (sent.push({ id, text: item.text }), st.result),
-    show: (id, items, held) => shown.push({ id, texts: items.map((i) => i.text), held }),
+    send: async (id, item) => (sent.push({ id, text: item.text, ...(item.bash && { bash: true as const }) }), st.result),
+    show: (id, items, held) => shown.push({ id, texts: items.map((i) => i.text), held, items: items.map((i) => ({ text: i.text, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })) }),
   });
   return { q, st, sent, shown };
 }
@@ -21,12 +21,52 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("prompt queue", () => {
+  it("sending() is true while a send or a Send now is in flight", async () => {
+    let done!: () => void;
+    const q = createPromptQueue({ ready: () => true, send: () => new Promise((r) => (done = () => r(undefined))), show: () => {} });
+    expect(q.sending("s")).toBe(false);
+    q.enqueue("s", { text: "a", images: [] });
+    await flush();
+    expect(q.sending("s")).toBe(true);
+    done();
+    await flush();
+    expect(q.sending("s")).toBe(false);
+  });
+
+  it("a failed bash item carries the reason as item.error; a retryable refusal does not", async () => {
+    const { q, st, shown } = setup();
+    st.result = { code: "cwd_not_allowed", message: "outside the allowlisted roots: /x" };
+    q.enqueue("s", { text: "ls", images: [], bash: true });
+    await flush();
+    expect(q.items("s")[0]).toMatchObject({ text: "ls", bash: true, error: "outside the allowlisted roots: /x" });
+    expect(shown.at(-1)!.items[0]).toMatchObject({ error: "outside the allowlisted roots: /x" });
+    const { q: q2, st: st2 } = setup();
+    st2.result = { code: "external_turn", message: "x" };
+    q2.enqueue("s", { text: "ls", images: [], bash: true });
+    await flush();
+    expect(q2.items("s")[0]!.error).toBeUndefined();
+  });
+
+  it("a bash item keeps its flag through enqueue, show, take and send", async () => {
+    const { q, st, sent, shown } = setup();
+    st.ready = false;
+    q.enqueue("s", { text: "ls", images: [], bash: true });
+    const second = q.enqueue("s", { text: "echo hi", images: [], bash: true }) as string;
+    q.enqueue("s", { text: "prompt", images: [] });
+    expect(shown.at(-1)!.items).toEqual([{ text: "ls", bash: true }, { text: "echo hi", bash: true }, { text: "prompt" }]);
+    expect(q.take("s", second)).toMatchObject({ text: "echo hi", bash: true });
+    st.ready = true;
+    q.kick("s");
+    await flush();
+    expect(sent).toEqual([{ id: "s", text: "ls", bash: true }]);
+  });
+
   it("enqueue while ready sends once and empties the list", async () => {
     const { q, sent, shown } = setup();
     q.enqueue("s", { text: "a", images: [] });
     await flush();
     expect(sent).toEqual([{ id: "s", text: "a" }]);
-    expect(shown.at(-1)).toEqual({ id: "s", texts: [], held: undefined });
+    expect(shown.at(-1)).toMatchObject({ id: "s", texts: [], held: undefined });
   });
 
   it("not ready: nothing; each kick sends only the first item", async () => {
@@ -73,7 +113,7 @@ describe("prompt queue", () => {
     st.result = { code: "session_not_live", message: "x" };
     q.enqueue("s", { text: "a", images: [] });
     await flush();
-    expect(shown.at(-1)).toEqual({ id: "s", texts: ["a"], held: { reason: "not_live" } });
+    expect(shown.at(-1)).toMatchObject({ id: "s", texts: ["a"], held: { reason: "not_live" } });
     st.result = undefined;
     q.kick("s");
     await flush();

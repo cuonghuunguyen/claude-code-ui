@@ -1252,3 +1252,80 @@ it("GH-378 phone: after the menu was opened, Enter on the close button closes th
   await act(async () => x.click());
   expect(onClose).toHaveBeenCalledWith("c");
 });
+
+// GH-395: pane tabs.
+const PLAN_ID = "plan:0f8e7d6c-1234-4abc-8def-0123456789ab";
+const withPlan = (id: string) => (id === PLAN_ID ? { title: "Plan · Fix login", kind: "plan" as const, cwd: "/home/u/web", worktree: "web · feature-x", unread: false, transcript: false } : INFO[id]!);
+
+it("a plan tab shows the plan icon, \"Plan · <title>\" and its project line in the phone switcher", async () => {
+  const { tab, el } = await render({ tabs: ["a", PLAN_ID, "c"], info: withPlan, activeId: PLAN_ID });
+  expect(tab(PLAN_ID).textContent).toContain("Plan · Fix login");
+  expect(tab(PLAN_ID).querySelector(".lucide-list-todo")).not.toBeNull();
+  expect(tab(PLAN_ID).querySelector("[data-dot]")).toBeNull();
+  expect(tab(PLAN_ID).title).toBe("Plan · Fix login\nweb · feature-x\n/home/u/web");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  const rows = swipeRows();
+  expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Fix login"), expect.stringContaining("Plan · Fix login"), expect.stringContaining("Refactor")]);
+  expect(rows[1]!.querySelector(".lucide-list-todo")).not.toBeNull();
+  expect(rows[1]!.textContent).toContain("web · feature-x");
+});
+
+it("a plan tab's context menu is the pane menu; double click does not rename", async () => {
+  const onCommand = vi.fn();
+  const { tab, onAction } = await render({ tabs: ["a", PLAN_ID], info: withPlan, activeId: "a", onTabCommand: onCommand, canSplit: true });
+  await act(async () => void tab(PLAN_ID).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
+  const ids = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((x) => x.dataset.testid);
+  expect(ids).toContain("tab-menu-moveSide");
+  expect(ids).toContain("tab-menu-goToSession");
+  expect(ids).not.toContain("tab-menu-copyId");
+  expect(document.querySelector('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveBottom"]')!.click());
+  expect(onCommand).toHaveBeenCalledWith(PLAN_ID, "moveBottom");
+  await act(async () => void tab(PLAN_ID).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+it("SwipeRow registers touchmove only during a gesture (GH-242)", async () => {
+  const added: unknown[] = [];
+  const removed: string[] = [];
+  const addOrig = EventTarget.prototype.addEventListener;
+  const remOrig = EventTarget.prototype.removeEventListener;
+  const add = vi.spyOn(EventTarget.prototype, "addEventListener").mockImplementation(function (this: EventTarget, ...a: Parameters<typeof addOrig>) {
+    // React's own touch listeners are passive; the swipe's is the only non-passive one.
+    if (a[0] === "touchmove" && (a[2] as AddEventListenerOptions | undefined)?.passive === false && this instanceof HTMLElement && this.getAttribute("role") === "option") added.push(a[2]);
+    return addOrig.apply(this, a);
+  });
+  const rem = vi.spyOn(EventTarget.prototype, "removeEventListener").mockImplementation(function (this: EventTarget, ...a: Parameters<typeof remOrig>) {
+    if (a[0] === "touchmove" && (a[2] as AddEventListenerOptions | undefined)?.passive === undefined && this instanceof HTMLElement && this.getAttribute("role") === "option") removed.push("touchmove");
+    return remOrig.apply(this, a);
+  });
+  try {
+    await openList({ onSwipeClose: vi.fn() });
+    expect(added).toEqual([]);
+    const row = swipeRows()[1]!;
+    tick(1000);
+    await touch(row, "pointerdown", 0);
+    expect(added).toEqual([{ passive: false }]);
+    expect(removed).toEqual([]);
+    await touch(row, "pointerup", 0);
+    expect(removed).toEqual(["touchmove"]);
+  } finally {
+    add.mockRestore();
+    rem.mockRestore();
+  }
+});
+
+it("GH-396 files and graph tabs show the folder and git-graph icons and their labels in the phone switcher", async () => {
+  const F = "files:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const G = "graph:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const info = (id: string) => (id === F ? { title: "Files · web", kind: "files" as const, cwd: "/home/u/web", unread: false, transcript: false } : id === G ? { title: "Git graph · web", kind: "graph" as const, cwd: "/home/u/web", unread: false, transcript: false } : INFO[id]!);
+  const { tab, el } = await render({ tabs: ["a", F, G], info, activeId: F });
+  expect(tab(F).textContent).toContain("Files · web");
+  expect(tab(F).querySelector(".lucide-folder")).not.toBeNull();
+  expect(tab(G).querySelector(".lucide-git-graph")).not.toBeNull();
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  const rows = swipeRows();
+  expect(rows[1]!.textContent).toContain("Files · web");
+  expect(rows[1]!.querySelector(".lucide-folder")).not.toBeNull();
+  expect(rows[2]!.querySelector(".lucide-git-graph")).not.toBeNull();
+});

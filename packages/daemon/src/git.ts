@@ -1,13 +1,17 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
-import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { GIT_LOG_MAX_LIMIT, worktreeNameError, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult } from "@claude-ui/protocol";
+import { constants, appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
+import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import ignore from "ignore";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
 
 // Read-only calls on a repository's own config: no fsmonitor hook (a program from .git/config), no transport (a partial clone's lazy fetch runs core.sshCommand), on any git version.
 const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
+/** Parent reads never start git inside a submodule (`git status` there runs unpinned with the submodule's own config); a moved gitlink still shows. `git.ignoreSubmodules` on: `--ignore-submodules` (a moved gitlink is hidden too). */
+const NO_SUBMODULE_STATUS = "--ignore-submodules=dirty";
+const submoduleFlag = (ignore?: boolean) => (ignore ? "--ignore-submodules" : NO_SUBMODULE_STATUS);
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
 /** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones. */
 export function limiter(n: number) {
@@ -41,7 +45,13 @@ type Repo = { top: string; own: string; common: string; alternates: string[] };
 async function repoOf0(cwd: string): Promise<Repo | null> {
   const top = await gitTopOf(cwd);
   if (!top) return null;
-  const dirs = await gitDirsOfAsync(top);
+  const r = await repoRead(top);
+  return r === "foreign" ? null : r;
+}
+/** `"foreign"`: a pointer to another UNC share or a device path, never followed; null: no readable `.git`. */
+async function repoRead(top: string): Promise<Repo | "foreign" | null> {
+  const dirs = await readDotGit(top);
+  if (dirs === "foreign") return dirs;
   if (!dirs) return null;
   const own = await realAsync(dirs.own);
   const common = await realAsync(dirs.common);
@@ -52,7 +62,7 @@ async function repoOf0(cwd: string): Promise<Repo | null> {
       const t = l.trim().replace(/^"(.*)"$/, "$1");
       if (!t || t.startsWith("#")) continue;
       // A UNC alternate to another share, or a device path: no file call (NTLM), the repository counts as unresolved.
-      if (foreignPointer(t, objects)) return null;
+      if (foreignPointer(t, objects)) return "foreign";
       alternates.push(await realAsync(resolve(objects, t)));
     }
   } catch {
@@ -117,18 +127,18 @@ export function gitDirsOf(cwd: string): { own: string; common: string } | undefi
   }
 }
 
-async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: string } | undefined> {
+async function readDotGit(cwd: string): Promise<{ own: string; common: string } | "foreign" | undefined> {
   const dotGit = join(cwd, ".git");
   try {
     if ((await stat(dotGit)).isDirectory()) return { own: dotGit, common: dotGit };
     const gitdir = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, "utf8"))?.[1];
     if (!gitdir) return undefined;
     // A pointer to another UNC share or a device path is never followed (an SMB lookup sends the NTLM hash).
-    if (foreignPointer(gitdir.trim(), cwd)) return undefined;
+    if (foreignPointer(gitdir.trim(), cwd)) return "foreign";
     const own = resolve(cwd, gitdir.trim());
     try {
       const common = (await readFile(join(own, "commondir"), "utf8")).trim();
-      if (foreignPointer(common, own)) return undefined;
+      if (foreignPointer(common, own)) return "foreign";
       return { own, common: resolve(own, common) };
     } catch {
       return { own, common: own };
@@ -136,6 +146,10 @@ async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: strin
   } catch {
     return undefined;
   }
+}
+async function gitDirsOfAsync(cwd: string): Promise<{ own: string; common: string } | undefined> {
+  const r = await readDotGit(cwd);
+  return r === "foreign" ? undefined : r;
 }
 
 const statOf = async (p: string) => {
@@ -227,7 +241,7 @@ const lru = <V>(max: number) => {
 const lastStatus = new Map<string, GitStatus>();
 
 /** null outside a git work tree. Lines added/removed: staged and unstaged changes of tracked files against HEAD (the empty tree before the first commit). */
-export async function gitStatus(cwd: string): Promise<GitStatus | null> {
+export async function gitStatus(cwd: string, o: { ignoreSubmodules?: boolean } = {}): Promise<GitStatus | null> {
   if (graphActive) {
     const last = lastStatus.get(cwd);
     if (last) return { ...last, refs: await refsStamp(cwd) };
@@ -243,13 +257,15 @@ export async function gitStatus(cwd: string): Promise<GitStatus | null> {
   const base = await git(cwd, "rev-parse", "--verify", "-q", "HEAD").catch(() => git(cwd, "hash-object", "-t", "tree", "/dev/null"));
   let added = 0;
   let removed = 0;
-  // Binary files count "-": no lines.
-  for (const line of (await git(cwd, "diff", "--no-ext-diff", "--no-textconv", "--numstat", base).catch(() => "")).split("\n")) {
-    const [a, r] = line.split("\t");
-    added += Number(a) || 0;
-    removed += Number(r) || 0;
+  // Binary files have no counts; a gitlink row has none either.
+  const { files, stats } = parseRawNumstat(await git(cwd, "diff", "--no-ext-diff", "--no-textconv", submoduleFlag(o.ignoreSubmodules), "--no-abbrev", "-z", "--raw", "--numstat", base).catch(() => ""));
+  for (const f of files) {
+    if (f.submodule) continue;
+    const c = stats.get(f.path);
+    added += c?.added ?? 0;
+    removed += c?.removed ?? 0;
   }
-  const s = { branch, added, removed, refs: await refsStamp(cwd) };
+  const s = { branch, added, removed, files: files.length, refs: await refsStamp(cwd) };
   lastStatus.set(cwd, s);
   return s;
 }
@@ -288,7 +304,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);
@@ -350,6 +366,185 @@ type Listed = Worktree & { raw: string };
 /** `<main>/.claude/worktrees`, the folder this app creates worktrees in. */
 const worktreesDir = (main: string) => join(main, ".claude", "worktrees");
 
+/** `.worktreeinclude` copy budget per create (Orca's numbers): files that do not fit are skipped with a warning. Test seam. */
+export const worktreeIncludeLimits = { maxBytes: 2 * 1024 ** 3, maxFiles: 50_000 };
+/** Test seam: the source path resolver (a Windows junction or a WSL link that `lstat` does not report). */
+export const worktreeIncludeIo = { realpath };
+
+/** git with NUL-separated output (and optional stdin): the path list; a nested repository (`dir/`) is dropped unless `dirs` keeps the folders. `check-ignore` exit 1 = nothing ignored. */
+async function gitPaths(cwd: string, args: string[], input?: string, dirs = false): Promise<string[]> {
+  let stdout: Buffer;
+  try {
+    stdout = (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], input, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 30_000 }))).stdout;
+  } catch (e) {
+    const err = e as { killed?: boolean; code?: unknown; stderr?: string; message: string };
+    if (args[0] === "check-ignore" && err.code === 1) return [];
+    const why = err.killed ? "timed out" : err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "output buffer exceeded (too many files)" : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message);
+    throw new Error(`git ${args[0]} ${why}`);
+  }
+  return stdout.toString("utf8").split("\0").filter((x) => x && (dirs || !x.endsWith("/")));
+}
+
+/** Glob of one `.gitignore` name (`*`, `?`) as a regular expression; other characters are literal. */
+const nameGlob = (name: string) => new RegExp("^" + name.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$");
+
+/**
+ * Claude Code's rule for a folder ignored as a whole (code.claude.com/docs/en/worktrees), applied per file: a pattern that starts with `**\/` (or has no
+ * slash, which git matches at any depth: `.env`, `*.json`, `vendor/`) reaches a file inside the folder only when the first name after the `**\/` is one of
+ * the names in the folder's path. A pattern with its own path (`config/secrets.json`, `vendor/**\/x.json`, `cfg/*`) reaches it as usual.
+ */
+function descendRule(text: string): (dir: string, rel: string) => boolean {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  // The pattern without `!` and a trailing slash: no slash left (or a leading `**/`) = matched at any depth.
+  const core = (l: string) => l.replace(/^!/, "").replace(/\/+$/, "");
+  const anyDepth = (l: string) => core(l).startsWith("**/") || !core(l).includes("/");
+  const global = lines.filter(anyDepth);
+  const anchored = ignore().add(lines.filter((l) => !anyDepth(l)));
+  const wide = ignore().add(global);
+  const names = global
+    .filter((l) => !l.startsWith("!"))
+    .map((l) => core(l).replace(/^\*\*\//, "").split("/")[0]!)
+    .filter(Boolean)
+    .map(nameGlob);
+  return (dir, rel) => anchored.ignores(rel) || (wide.ignores(rel) && dir.split("/").some((n) => names.some((re) => re.test(n))));
+}
+
+/** True when writing `dst` would land outside `wt` (real path): the first existing ancestor resolves out, or `dst` is itself a link. */
+async function escapesWorktree(dst: string, wt: string): Promise<boolean> {
+  try {
+    if ((await lstat(dst)).isSymbolicLink()) return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return true;
+  }
+  let dir = dirname(dst);
+  for (;;) {
+    try {
+      await lstat(dir);
+      return !inside(wt, await realpath(dir));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return true;
+      const up = dirname(dir);
+      if (up === dir) return true;
+      dir = up;
+    }
+  }
+}
+
+/** Copies one regular file through an open handle (`O_NOFOLLOW`: a file swapped for a link after the checks is refused); never overwrites. Returns the size. */
+async function copyRegular(src: string, dst: string): Promise<number> {
+  const from = await open(src, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = await from.stat();
+    if (!st.isFile()) throw new Error("not a regular file");
+    let to;
+    try {
+      to = await open(dst, "wx", st.mode & 0o777);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new Error("already exists in the worktree");
+      throw e;
+    }
+    try {
+      const buf = Buffer.allocUnsafe(1 << 20);
+      for (;;) {
+        const { bytesRead } = await from.read(buf, 0, buf.length, null);
+        if (!bytesRead) break;
+        for (let at = 0; at < bytesRead; ) at += (await to.write(buf, at, bytesRead - at)).bytesWritten;
+      }
+      await to.chmod(st.mode & 0o777);
+    } catch (e) {
+      await to.close().catch(() => {});
+      await unlink(dst).catch(() => {});
+      throw e;
+    }
+    await to.close();
+    return st.size;
+  } finally {
+    await from.close().catch(() => {});
+  }
+}
+
+/**
+ * Claude Code's `.worktreeinclude`: copy each file of the main checkout that matches `<main>/.worktreeinclude` (`.gitignore` syntax) AND is ignored by git.
+ * Copies only, never links, never over an existing file; every problem is a warning (creation never fails here).
+ */
+async function copyWorktreeInclude(main: string, path: string): Promise<void> {
+  const warn = (m: string) => console.warn(`worktree: .worktreeinclude ${m}`);
+  try {
+    const file = join(main, ".worktreeinclude");
+    let text: string;
+    try {
+      const st = await lstat(file);
+      if (!st.isFile()) return warn("skipped: not a regular file");
+      text = await readFile(file, "utf8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw e;
+    }
+    if (!text.split(/\r?\n/).some((l) => l.trim() && !l.trim().startsWith("#"))) return;
+    const include = ["ls-files", "-z", "--others", "--ignored", "--exclude-from=.worktreeinclude"];
+    const found = await gitPaths(main, include);
+    if (!found.length) return;
+    // Folders ignored as a whole (listed collapsed): their files only count by Claude Code's rule (descendRule).
+    const ignoredDirs = await gitPaths(main, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], undefined, true);
+    // `--directory` also lists a folder that merely holds only ignored entries: keep those the ignore rules name themselves.
+    const listedDirs = ignoredDirs.filter((x) => x.endsWith("/") && !exists(join(main, x, ".git")));
+    const collapsed = listedDirs.length ? (await gitPaths(main, ["check-ignore", "-z", "--stdin"], listedDirs.join("\0") + "\0", true)).map((x) => x.slice(0, -1)) : [];
+    const descend = descendRule(text);
+    const wholly = (rel: string) => collapsed.find((d) => rel.startsWith(d + "/"));
+    const candidates = found.filter((rel) => {
+      if (rel.startsWith(".claude/worktrees/")) return false;
+      const d = wholly(rel);
+      return d === undefined || descend(d, rel);
+    });
+    if (!candidates.length) return;
+    const files = await gitPaths(main, ["check-ignore", "-z", "--stdin"], candidates.join("\0") + "\0");
+    let wt: string;
+    let rmain: string;
+    try {
+      [wt, rmain] = [await realpath(path), await realpath(main)];
+    } catch (e) {
+      return warn(`skipped: ${(e as Error).message}`);
+    }
+    let count = 0;
+    let bytes = 0;
+    let over = 0;
+    const overNames: string[] = [];
+    const skip = (rel: string) => {
+      if (overNames.length < 5) overNames.push(rel);
+      over++;
+    };
+    for (const [i, rel] of files.entries()) {
+      if (count >= worktreeIncludeLimits.maxFiles) {
+        files.slice(i).forEach(skip);
+        break;
+      }
+      try {
+        if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) throw new Error("not a relative path inside the repository");
+        const src = join(main, rel);
+        const st = await lstat(src);
+        if (st.isSymbolicLink()) throw new Error("link, not copied");
+        if (!st.isFile()) throw new Error("not a regular file");
+        if ((await worktreeIncludeIo.realpath(src)) !== join(rmain, rel)) throw new Error("resolves through a link");
+        if (bytes + st.size > worktreeIncludeLimits.maxBytes) {
+          skip(rel);
+          continue;
+        }
+        const dst = join(path, rel);
+        if (await escapesWorktree(dst, wt)) throw new Error("would be written through a link out of the worktree");
+        await mkdir(dirname(dst), { recursive: true });
+        bytes += await copyRegular(src, dst);
+        count++;
+      } catch (e) {
+        warn(`entry ${JSON.stringify(rel)} skipped: ${(e as Error).message}`);
+      }
+    }
+    if (over) warn(`${over} files skipped, over the copy limit of ${worktreeIncludeLimits.maxBytes / 1024 ** 3} GiB / ${worktreeIncludeLimits.maxFiles} files: ${overNames.join(", ")}`);
+    if (count) console.log(`worktree: copied ${count} files from .worktreeinclude`);
+  } catch (e) {
+    warn(`skipped: ${(e as Error).message}`);
+  }
+}
+
 /** `worktree.*` of the Claude settings: local > project (of the main checkout) > user; per key the first file that sets it. */
 function worktreeSettings(claudeDir: string, main: string): { baseRef?: unknown; symlinkDirectories?: unknown } {
   const out: { baseRef?: unknown; symlinkDirectories?: unknown } = {};
@@ -369,10 +564,41 @@ const ADJECTIVES = ["brave", "calm", "clever", "eager", "fancy", "gentle", "happ
 const NOUNS = ["badger", "beacon", "cedar", "comet", "dolphin", "falcon", "forest", "glacier", "harbor", "island", "lantern", "meadow", "otter", "panda", "pebble", "river", "robin", "summit", "tiger", "valley", "willow", "wolf", "yarrow", "zebra"];
 const pick = (l: string[]) => l[Math.floor(Math.random() * l.length)]!;
 
+/** Git config key of the Created branch mark (ADR 0005): a branch claude-ui created for a new worktree; removal deletes it. */
+const createdKey = (branch: string) => `branch.${branch}.claudeUiCreated`;
+const CONFIG_TRIES = 5;
+/**
+ * Marks `branch` a Created branch, right after `git branch` under the repository lock. A held `config.lock` (another git
+ * writing the config) is retried; on failure the create still succeeds without the mark, with a warning.
+ */
+async function markCreated(main: string, branch: string): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      await run(main, ["config", "--type=bool", "--", createdKey(branch), "true"]);
+      return;
+    } catch (e) {
+      if (i < CONFIG_TRIES && /config\.lock|could not lock/i.test((e as Error).message)) {
+        await new Promise((r) => setTimeout(r, 50 * i));
+        continue;
+      }
+      console.warn(`worktree: ${createdKey(branch)} not set, the branch stays when its worktree is deleted: ${(e as Error).message}`);
+      return;
+    }
+  }
+}
+/** A Created branch: marked in git config, or a legacy `worktree-*` branch of a claude-ui before the mark. */
+async function isCreated(main: string, branch: string): Promise<boolean> {
+  if (branch.startsWith("worktree-")) return true;
+  return (await g(main, ["config", "--type=bool", "--get", "--", createdKey(branch)]).catch(() => "")) === "true";
+}
+
 export type CreateWorktreeOptions = {
+  /** The folder; default: `branch` with `/` replaced by `-`, else generated. */
   name?: string;
-  /** Default `worktree-<name>`. GH-79 part 5: an explicit branch name. */
+  /** Default `worktree-<name>`. GH-79 part 5 / GH-447: an explicit new branch name (may contain `/`). */
   branch?: string;
+  /** GH-447 Branch source: check out this existing branch (`refs/heads/x`, or `refs/remotes/<remote>/x` as a new local `x` tracking it); no name, branch or base. */
+  checkout?: string;
   /** Default: origin/<default> after a fetch (see docs/spec.md "Worktrees"). GH-79 part 5: an explicit start point. */
   base?: string;
   /** Roots predicate: the main checkout and the new path must pass it. */
@@ -396,8 +622,10 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
     const rdir = real(dir);
     if (rdir !== dir) throw new WorktreeError("cwd_not_allowed", ".claude/worktrees is a link; refusing to create worktrees through it");
 
+    if (o.checkout !== undefined) return checkoutIn(main, rdir, o);
     const free = async (n: string) => !exists(join(rdir, n)) && !(await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${o.branch ?? `worktree-${n}`}`));
-    let name = o.name;
+    if (o.branch !== undefined && (!o.branch || o.branch.startsWith("-") || o.branch.length > BRANCH_MAX)) throw new WorktreeError("bad_name", `Not a valid branch name: ${o.branch}`);
+    let name = o.name ?? (o.branch !== undefined ? branchFolder(o.branch) : undefined);
     if (name !== undefined) {
       const bad = worktreeNameError(name);
       if (bad) throw new WorktreeError("bad_name", bad);
@@ -443,6 +671,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
       throw e;
     }
+    await markCreated(main, branch);
     try {
       await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
     } catch (e) {
@@ -452,6 +681,12 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
       throw e;
     }
 
+    return finishCreate(main, path, branch, settings, o, true);
+  });
+}
+
+/** After `git worktree add`: `symlinkDirectories`, the `.worktreeinclude` copies, the info/exclude line, the caller's step (rolled back when it throws). */
+async function finishCreate(main: string, path: string, branch: string, settings: ReturnType<typeof worktreeSettings>, o: CreateWorktreeOptions, ours: boolean): Promise<{ path: string; branch: string }> {
     // `worktree.symlinkDirectories`: each entry relative, inside the repository, existing; anything else is skipped with a warning.
     const dirs = Array.isArray(settings.symlinkDirectories) ? settings.symlinkDirectories : [];
     for (const d of dirs) {
@@ -467,6 +702,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
         console.warn(`worktree: symlinkDirectories entry ${JSON.stringify(d)} skipped: ${(e as Error).message}`);
       }
     }
+    await copyWorktreeInclude(main, path);
     // Keep the main checkout's `git add -A` from adding the worktrees as embedded repositories (local only, never committed).
     try {
       const dir = await run(main, ["rev-parse", "--git-common-dir"]);
@@ -486,12 +722,144 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
         o.onCreated({ path, branch });
       } catch (e) {
         await run(main, ["worktree", "remove", "--force", "--", path]).catch((x) => console.warn(`worktree: rollback of ${path} failed: ${x.message}`));
-        await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
+        if (ours) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));
         await run(main, ["worktree", "prune"]).catch(() => {});
         throw e;
       }
     return { path, branch };
-  });
+}
+
+/** Branch source Branch: `git worktree add` of an existing branch; a remote-only one first gets a local branch of the same name tracking it. Never marked. */
+async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions): Promise<{ path: string; branch: string }> {
+  if (o.name !== undefined || o.branch !== undefined || o.base !== undefined) throw bad("checkout takes no name, branch or base");
+  const ref = await checkBranchRef(main, o.checkout);
+  const m = /^refs\/(heads|remotes)\/(.+)$/.exec(ref)!;
+  const remote = m[1] === "remotes";
+  // refs/remotes/<remote>/<x>: the remote is the longest configured remote name the ref starts with.
+  let branch = m[2]!;
+  if (remote) {
+    const remotes = (await run(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+    const r = remotes.find((x) => branch.startsWith(`${x}/`));
+    if (!r) throw bad("Unknown remote branch");
+    branch = branch.slice(r.length + 1);
+    if (!branch || branch === "HEAD") throw bad("Unknown remote branch");
+    if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists locally: pick it from the list`);
+  }
+  const holder = (await repoOf(main)).list.find((w) => w.branch === branch);
+  if (holder) throw new WorktreeError("exists", `Branch ${branch} is checked out in worktree ${basename(holder.path)}`);
+  const name = branchFolder(branch);
+  const bad1 = worktreeNameError(name);
+  if (bad1) throw new WorktreeError("bad_name", `Folder ${name}: ${bad1}`);
+  const path = join(rdir, name);
+  if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+  if (!o.allowed(path)) throw new WorktreeError("cwd_not_allowed", "The new worktree would be outside the allowed roots");
+  const settings = worktreeSettings(o.claudeDir, main);
+  if (remote) {
+    try {
+      await run(main, ["branch", "--track", "--", branch, ref]);
+    } catch (e) {
+      if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
+      throw e;
+    }
+  }
+  try {
+    await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
+  } catch (e) {
+    if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
+    if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
+    throw e;
+  }
+  // A local branch the user had stays on rollback; a tracking branch this call made goes.
+  return finishCreate(main, path, branch, settings, o, remote);
+}
+
+/** The default start point as the Base picker shows it (no fetch): `origin/<default>`, else `HEAD`. */
+async function defaultBaseName(main: string, claudeDir: string): Promise<string> {
+  if (worktreeSettings(claudeDir, main).baseRef === "head") return "HEAD";
+  const head = await g(main, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).catch(() => "");
+  return head ? shortRef(head) : "HEAD";
+}
+
+export type ListBranchesOptions = { allowed: (p: string) => boolean; claudeDir: string; fetch?: boolean };
+/**
+ * Local and remote branches of `cwd`'s repository for the Create worktree modal (newest commit first, one row per name; `origin`
+ * preferred for the remote), each with the worktree it is checked out in. `fetch`: `git fetch --prune origin` first (2 min); a
+ * failure (offline) lists the local refs with `fetchError`.
+ */
+export async function listBranches(cwd: string, o: ListBranchesOptions): Promise<WorktreeBranchesResult> {
+  const { main, list } = await repoOf(cwd);
+  if (!o.allowed(main) || (await gitEscapes(main, o.allowed))) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  let fetchError: string | undefined;
+  let fetched = false;
+  if (o.fetch) {
+    const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n");
+    if (remotes.includes("origin"))
+      try {
+        await run(main, ["fetch", "--quiet", "--prune", "origin"], 120_000);
+        fetched = true;
+      } catch (e) {
+        fetchError = (e as Error).message;
+      }
+  }
+  const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
+  const refs = (await g(main, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `--count=${MAX_BRANCHES}`, "refs/heads", "refs/remotes"])).split("\n").filter(Boolean);
+  const holders = new Map(list.filter((w) => w.branch).map((w) => [w.branch!, w.path] as const));
+  const rows = new Map<string, BranchRow>();
+  for (const ref of refs) {
+    let name: string;
+    if (ref.startsWith("refs/heads/")) name = ref.slice(11);
+    else {
+      const rest = ref.slice(13);
+      const r = remotes.find((x) => rest.startsWith(`${x}/`));
+      if (!r) continue;
+      name = rest.slice(r.length + 1);
+      if (!name || name === "HEAD") continue;
+      const row = rows.get(name);
+      if (row?.remote?.startsWith("refs/remotes/origin/") && r !== "origin") continue;
+      if (row) row.remote = ref;
+      else rows.set(name, { name, local: false, remote: ref });
+      continue;
+    }
+    const row = rows.get(name);
+    if (row) row.local = true;
+    else rows.set(name, { name, local: true });
+  }
+  for (const row of rows.values()) {
+    const at = row.local ? holders.get(row.name) : undefined;
+    if (at) row.worktree = at;
+  }
+  return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
+}
+
+/**
+ * A pasted pull request link: the branches of `origin` whose head is the pull request's head commit. One `git ls-remote origin`
+ * (30 s, git's own credentials, no prompt) reads the host's pull request ref (GitHub `refs/pull/<n>/head`, GitLab
+ * `refs/merge-requests/<n>/head`, Bitbucket Server `refs/pull-requests/<n>/from`) and every branch head. The link must name
+ * `origin`'s repository (its configured URL, before `insteadOf`).
+ */
+export async function pullRequestBranches(cwd: string, text: string, o: { allowed: (p: string) => boolean }): Promise<PullRequestBranchesResult> {
+  const link = pullRequestOf(text);
+  if (!link) throw new WorktreeError("bad_request", "Not a pull request link");
+  const { main } = await repoOf(cwd);
+  if (!o.allowed(main) || (await gitEscapes(main, o.allowed))) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
+  const remote = await g(main, ["config", "--get", "remote.origin.url"]).catch(() => "");
+  if (!remote) throw new WorktreeError("pr_other_repo", "This repository has no origin remote");
+  if (!isRemoteOf(link, remote)) {
+    const r = remoteRepoOf(remote);
+    throw new WorktreeError("pr_other_repo", `Pull request #${link.number} is in ${link.repo} on ${link.host}, not in this repository${r ? ` (${r.path} on ${r.host})` : ""}`);
+  }
+  if (!link.refs.length) throw new WorktreeError("pr_unsupported", `${link.host} publishes no pull request refs: paste the branch name instead`);
+  const out = await run(main, ["ls-remote", "origin", ...link.refs, "refs/heads/*"]);
+  const heads = new Map<string, string[]>();
+  let head: string | undefined;
+  for (const line of out.split("\n")) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (!sha || !ref) continue;
+    if (link.refs.includes(ref)) head = sha;
+    else if (ref.startsWith("refs/heads/")) heads.set(sha, [...(heads.get(sha) ?? []), ref.slice(11)]);
+  }
+  if (!head) throw new WorktreeError("pr_not_found", `origin has no pull request #${link.number}`);
+  return { number: link.number, branches: heads.get(head) ?? [] };
 }
 
 /** The linked worktree `path` (as requested) of `list`; not_worktree for an unknown path or the main worktree. */
@@ -526,7 +894,7 @@ export type RemoveOptions = {
 };
 
 /**
- * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its `worktree-*` branch, then prune.
+ * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its Created branch (marked, or legacy `worktree-*`), then prune.
  * Refused: the main worktree, a locked one, a symlink path, one whose git dirs are outside the roots. `deleteBranch`: a kept branch goes with `-d` (git refuses an unmerged one: `branchKept`).
  */
 export async function removeWorktree(cwd: string, path: string, allowed: (path: string) => boolean, o: RemoveOptions = {}): Promise<WorktreeRemoveResult> {
@@ -553,7 +921,7 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
     const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
     await run(main, ["worktree", "remove", "--force", "--", w.path]);
     let branchKept: string | undefined;
-    if (w.branch?.startsWith("worktree-")) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
+    if (w.branch && !detached && (await isCreated(main, w.branch))) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
     else if (o.deleteBranch && w.branch && !detached) await run(main, ["branch", "-d", "--", w.branch]).catch((e) => void (branchKept = e.message));
     await run(main, ["worktree", "prune"]).catch(() => {});
     return branchKept ? { branchKept } : {};
@@ -601,7 +969,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   // Per file (-uall) and NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
   const { uncommitted, untracked, ignored } = parseStatus(await g(w.path, ["status", "--porcelain", "-z", "--ignored=matching", "-uall"]));
   const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
-  const keeps = !detached && !w.branch?.startsWith("worktree-");
+  const keeps = !detached && !(w.branch && (await isCreated(main, w.branch)));
   let commits = 0;
   if (detached) commits = await count(w.path, ["HEAD", "--not", "--branches", "--remotes"]);
   else if (!keeps) commits = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
@@ -621,7 +989,7 @@ async function statusOf(main: string, w: Listed, requested: string, allowed: (p:
   else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
   const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
   const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }) });
+  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }), ...(!detached && !keeps && { createdBranch: true as const }) });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
@@ -793,25 +1161,15 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
 }
 const optional = <K extends string, V>(k: K, v: V | undefined) => (v === undefined ? {} : ({ [k]: v } as Record<K, V>));
 
-/** `diff -z --name-status` output; a copy counts as a rename. */
-function parseNameStatus(z: string): GitFileChange[] {
-  const n = z.split("\0");
-  const files: GitFileChange[] = [];
-  for (let i = 0; i < n.length && n[i]; ) {
-    const st = n[i++]!;
-    if (st[0] === "R" || st[0] === "C") {
-      files.push({ status: "R", oldPath: n[i++]!, path: n[i++]! });
-    } else files.push({ status: st[0] === "A" || st[0] === "D" ? st[0] : "M", path: n[i++]! });
-  }
-  return files;
-}
 /** `diff -z --numstat` output by (new) path; a binary file has no counts. */
 function parseNumstat(z: string): Map<string, { added?: number; removed?: number }> {
   const stats = new Map<string, { added?: number; removed?: number }>();
   const m = z.split("\0");
   for (let i = 0; i < m.length && m[i]; i++) {
-    const [a, r, p] = m[i]!.split("\t");
-    let path = p!;
+    const [a, r, ...rest] = m[i]!.split("\t");
+    // -z paths are not quoted: a tab in the name stays in the path.
+    const p = rest.join("\t");
+    let path = p;
     if (p === "") {
       i += 2;
       path = m[i]!;
@@ -827,20 +1185,28 @@ function parseRawNumstat(z: string): { files: GitFileChange[]; stats: Map<string
   const files: GitFileChange[] = [];
   let i = 0;
   while (i < t.length && t[i]!.startsWith(":")) {
-    const st = t[i++]!.split(" ").at(-1)![0];
+    const [srcMode, dstMode, srcId, dstId, code] = t[i++]!.slice(1).split(" ") as [string, string, string, string, string];
+    const st = code[0];
+    const zero = (id: string) => /^0+$/.test(id);
+    const from = srcMode === "160000" && !zero(srcId) ? { from: srcId } : {};
+    const to = dstMode === "160000" && !zero(dstId) ? { to: dstId } : {};
+    const submodule = srcMode === "160000" || dstMode === "160000" ? { submodule: { ...from, ...to } } : {};
     if (st === "R" || st === "C") {
-      files.push({ status: "R", oldPath: t[i++]!, path: t[i++]! });
-    } else files.push({ status: st === "A" || st === "D" ? st : "M", path: t[i++]! });
+      files.push({ status: "R", oldPath: t[i++]!, path: t[i++]!, ...submodule });
+    } else files.push({ status: st === "A" || st === "D" ? st : "M", path: t[i++]!, ...submodule });
   }
   return { files, stats: parseNumstat(t.slice(i).join("\0")) };
 }
+
+/** Line counts onto the rows; a gitlink row has none. */
+const withStats = (files: GitFileChange[], stats: Map<string, { added?: number; removed?: number }>): GitFileChange[] => files.map((f) => (f.submodule ? f : { ...f, ...stats.get(f.path) }));
 
 /** Files of a commit against its first parent (a root commit: against nothing); one git process. */
 async function commitFiles(top: string, hash: string, base: string | undefined): Promise<{ files: GitFileChange[]; truncated?: boolean }> {
   const tail = base ? [base, hash] : ["--root", hash];
   const { files, stats } = parseRawNumstat(await g(top, ["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--raw", "--numstat", ...tail]));
   const cut = files.length > MAX_COMMIT_FILES;
-  const list = files.slice(0, MAX_COMMIT_FILES).map((f) => ({ ...f, ...stats.get(f.path) }));
+  const list = withStats(files.slice(0, MAX_COMMIT_FILES), stats);
   return { files: list, ...(cut && { truncated: true }) };
 }
 
@@ -869,6 +1235,12 @@ export async function gitShow(cwd: string, hash: string, allowed: (p: string) =>
   });
 }
 
+const SUBMODULE = () => bad("Submodule: open its repository");
+/** Whether `p` is a gitlink (submodule) at `hash`; asked only after a read found no blob there. */
+async function isGitlink(top: string, hash: string, p: string): Promise<boolean> {
+  return (await g(top, ["ls-tree", "-z", "--full-tree", "--end-of-options", hash, "--", p]).catch(() => "")).startsWith("160000 ");
+}
+
 /** A blob at a commit, checked (hash, path, repository inside `allowed`, exists, is a blob, at most `max`) but not read: its size comes from `git cat-file -s`. */
 export type BlobRef = { top: string; obj: string; size: number; max: number };
 export async function gitBlobRef(cwd: string, hash: string, path: string, allowed: (p: string) => boolean, max: number): Promise<BlobRef> {
@@ -877,8 +1249,14 @@ export async function gitBlobRef(cwd: string, hash: string, path: string, allowe
   const top = await topIn(cwd, allowed);
   if (!top) throw new WorktreeError("not_git", "Not in a git repository");
   const obj = `${hash}:${p}`;
-  if (!(await gok(top, "cat-file", "-e", obj))) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
-  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+  if (!(await gok(top, "cat-file", "-e", obj))) {
+    if (await isGitlink(top, hash, p)) throw SUBMODULE();
+    throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+  }
+  if ((await g(top, ["cat-file", "-t", obj])) !== "blob") {
+    if (await isGitlink(top, hash, p)) throw SUBMODULE();
+    throw new WorktreeError("not_found", `Not a file: ${p}`);
+  }
   const size = Number(await g(top, ["cat-file", "-s", obj]));
   if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
   return { top, obj, size, max };
@@ -912,7 +1290,10 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
       const err = e as { code?: string | number; stdout?: Buffer; stderr?: string; killed?: boolean; message: string };
       const overflow = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
       if (odd && overflow) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`);
-      if (odd && /not a valid object|does not exist|bad object|ambiguous|bad file/i.test(err.stderr ?? "")) throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+      if (odd && /not a valid object|does not exist|bad object|ambiguous|bad file/i.test(err.stderr ?? "")) {
+        if (await isGitlink(top, hash, p)) throw SUBMODULE();
+        throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+      }
       if (odd || !overflow || !err.stdout) throw new WorktreeError("git_failed", err.killed ? "git cat-file timed out" : first(err));
       // Output past the limit: the header is enough to answer too_large.
       stdout = err.stdout;
@@ -920,8 +1301,14 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
     if (odd) return stdout;
     const nl = stdout.indexOf(10);
     const head = stdout.subarray(0, nl < 0 ? stdout.length : nl).toString("utf8").split(" ");
-    if (head.at(-1) === "missing" || head.at(-1) === "ambiguous") throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
-    if (head[1] !== "blob") throw new WorktreeError("not_found", `Not a file: ${p}`);
+    if (head.at(-1) === "missing" || head.at(-1) === "ambiguous") {
+      if (await isGitlink(top, hash, p)) throw SUBMODULE();
+      throw new WorktreeError("not_found", `No such file at that commit: ${p}`);
+    }
+    if (head[1] !== "blob") {
+      if (await isGitlink(top, hash, p)) throw SUBMODULE();
+      throw new WorktreeError("not_found", `Not a file: ${p}`);
+    }
     const size = Number(head[2]);
     if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
     return stdout.subarray(nl + 1, nl + 1 + size);
@@ -971,7 +1358,7 @@ async function untrackedLines(top: string, path: string): Promise<number | undef
   }
 }
 
-export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean };
+export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean; ignoreSubmodules?: boolean };
 /** The working tree (staged, unstaged, untracked) against HEAD or a merge base (docs/spec.md "Layout", changes tab); null outside a git work tree. */
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
   if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
@@ -996,13 +1383,12 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   }
   const target = base ?? (await g(top, ["hash-object", "-t", "tree", "/dev/null"]));
   const pre = ["diff", "-M", "-z", "--no-ext-diff", "--no-textconv", "--no-color"];
-  const [names, nums, others] = await Promise.all([
-    g(top, [...pre, "--name-status", target, "--"]),
-    g(top, [...pre, "--numstat", target, "--"]),
+  const [tracked, others] = await Promise.all([
+    g(top, [...pre, submoduleFlag(o.ignoreSubmodules), "--no-abbrev", "--raw", "--numstat", target, "--"]),
     g(top, ["ls-files", "--others", "--exclude-standard", "-z", "--full-name"]),
   ]);
-  const stats = parseNumstat(nums);
-  const files: GitFileChange[] = parseNameStatus(names).map((f) => ({ ...f, ...stats.get(f.path) }));
+  const parsed = parseRawNumstat(tracked);
+  const files = withStats(parsed.files, parsed.stats);
   const byPath = (x: GitFileChange, y: GitFileChange) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
   files.sort(byPath);
   // Tracked files first: a flood of untracked files is cut before any edit.
@@ -1018,4 +1404,190 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   }
   files.sort(byPath);
   return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }) };
+}
+
+const GITMODULES_MAX = 1024 * 1024;
+const GITMODULES_SECTIONS = 1000;
+function gitConfigValue(raw: string): string {
+  let out = "";
+  let quoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (c === "\\" && i + 1 < raw.length) {
+      const n = raw[++i]!;
+      out += n === "n" ? "\n" : n === "t" ? "\t" : n === "b" ? "\b" : n;
+    } else if (c === '"') quoted = !quoted;
+    else if (!quoted && (c === "#" || c === ";")) break;
+    else out += c;
+  }
+  return out.trim();
+}
+/**
+ * The submodules a `.gitmodules` names, with git's rules where VS Code's regex parser differs: section and key names are
+ * case-insensitive, quoted values take `\"` and `\\`, `#` and `;` start a comment outside quotes, a trailing `\` continues the
+ * line, the last value of a key wins. Only `[submodule "name"]` sections with a path and a url count.
+ */
+export function parseGitmodules(text: string): { name: string; path: string; url: string }[] {
+  const sections = new Map<string, { path?: string; url?: string }>();
+  let cur: { path?: string; url?: string } | undefined;
+  for (const line0 of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    const line = line0.trim();
+    if (!line || line[0] === "#" || line[0] === ";") continue;
+    const head = /^\[\s*([^\s\]"]+)\s*(?:"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
+    if (head) {
+      if (head[1]!.toLowerCase() === "submodule" && head[2] !== undefined) {
+        const name = head[2].replace(/\\(.)/g, "$1");
+        if (!sections.has(name) && sections.size >= GITMODULES_SECTIONS) cur = undefined;
+        else sections.set(name, (cur = sections.get(name) ?? {}));
+      } else cur = undefined;
+      continue;
+    }
+    const kv = /^([A-Za-z][-A-Za-z0-9]*)\s*=\s*(.*)$/.exec(line);
+    if (!kv || !cur) continue;
+    const k = kv[1]!.toLowerCase();
+    if (k === "path" || k === "url") cur[k] = gitConfigValue(kv[2]!);
+  }
+  return [...sections].flatMap(([name, v]) => (v.path && v.url ? [{ name, path: v.path, url: v.url }] : []));
+}
+
+export const REPO_CAPS = { entries: 20_000, ms: 2_000, count: 50 };
+export type ListReposOptions = { settings: Settings["git"]; openFiles?: string[]; allowed: (p: string) => boolean; refused?: (p: string) => boolean; caps?: { entries: number; ms: number; count: number }; now?: () => number };
+const sameName: (a: string, b: string) => boolean = process.platform === "win32" || process.platform === "darwin" ? (a, b) => a.toLowerCase() === b.toLowerCase() : (a, b) => a === b;
+const byBytes = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const submodulePath = (p: string) => !p.includes("\0") && !isAbsolute(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && p.split(/[\\/]/).every((seg) => seg !== ".." && seg.toLowerCase() !== ".git");
+type RepoEntry = { path: string; kind: GitRepo["kind"]; parent?: string; outsideRoots?: true; own?: string };
+
+/**
+ * The repositories of `cwd` as VS Code finds them (docs/spec.md "git.repos"): its own, nested ones from a bounded folder scan,
+ * `scanRepositories`, open files and `.gitmodules`. File system calls only (never a git process); `cwd` is canonical and already allowed.
+ */
+export async function listRepos(cwd: string, o: ListReposOptions): Promise<GitReposResult> {
+  const caps = o.caps ?? REPO_CAPS;
+  const now = o.now ?? Date.now;
+  const cfg = o.settings;
+  const found = new Map<string, RepoEntry>();
+  const truncated: NonNullable<GitReposResult["truncated"]> = {};
+  const ignored = await Promise.all(cfg.ignoredRepositories.map((e) => resolve(cwd, e)).filter((p) => !o.refused?.(p)).map(realAsync));
+  let full = false;
+  const add = async (dir: string, kind: GitRepo["kind"], parent?: string): Promise<void> => {
+    if (full) return;
+    if (!(await lstat(join(dir, ".git")).then(() => true, () => false))) return;
+    const top = await realAsync(dir);
+    const have = found.get(top);
+    if (have) {
+      if (kind === "submodule" && have.kind === "nested") Object.assign(have, { kind, parent });
+      return;
+    }
+    const r = await repoRead(top);
+    if (r === null) return;
+    let outside = r === "foreign";
+    if (r !== "foreign") {
+      if (kind !== "main" && r.own !== r.common) return;
+      outside = escapesRoots(r, o.allowed);
+    }
+    if (ignored.some((i) => sameName(i, top))) return;
+    if (found.size >= caps.count) {
+      full = true;
+      truncated.scan ??= "count";
+      return;
+    }
+    found.set(top, { path: top, kind, ...(parent && { parent }), ...(outside && { outsideRoots: true as const }), ...(r !== "foreign" && { own: r.own }) });
+  };
+
+  const own = await gitTopOf(cwd);
+  if (own && (own === cwd || cfg.openRepositoryInParentFolders !== "never")) await add(own, "main");
+
+  const auto = cfg.autoRepositoryDetection;
+  if (auto === true || auto === "subFolders") {
+    const start = now();
+    let timedOut = false;
+    let seen = 0;
+    const max = cfg.repositoryScanMaxDepth;
+    const queue = [{ dir: cwd, depth: 0 }];
+    for (let i = 0; i < queue.length; i++) {
+      const { dir, depth } = queue[i]!;
+      if (max !== -1 && depth >= max) continue;
+      if (now() - start > caps.ms) {
+        timedOut = true;
+        truncated.scan ??= "time";
+        break;
+      }
+      const list = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
+      if (!list) continue;
+      const room = caps.entries - seen;
+      seen += list.length;
+      if (seen > caps.entries) truncated.scan ??= "entries";
+      for (const e of room >= list.length ? list : list.slice(0, Math.max(room, 0))) {
+        if (now() - start > caps.ms) {
+          timedOut = true;
+          truncated.scan ??= "time";
+        }
+        if (timedOut || full) break;
+        if (!e.isDirectory() || sameName(e.name, ".git") || cfg.repositoryScanIgnoredFolders.some((n) => sameName(n, e.name))) continue;
+        const child = join(dir, e.name);
+        queue.push({ dir: child, depth: depth + 1 });
+        await add(child, "nested");
+      }
+      if (truncated.scan || full) break;
+    }
+    for (const entry of cfg.scanRepositories) {
+      const p = resolve(cwd, entry);
+      if (inside(cwd, p) && inside(cwd, await realAsync(p))) await add(p, "nested");
+    }
+  }
+  if (auto === true || auto === "openEditors") {
+    for (const f of o.openFiles ?? []) {
+      const rf = await realAsync(f);
+      if (!inside(cwd, rf)) continue;
+      const t = await gitTopOf(dirname(rf));
+      if (t && inside(cwd, t)) await add(t, "nested");
+    }
+  }
+
+  if (cfg.detectSubmodules) {
+    const done = new Set<string>();
+    for (;;) {
+      const next = [...found.values()].find((e) => !e.outsideRoots && !done.has(e.path));
+      if (!next) break;
+      done.add(next.path);
+      const file = join(next.path, ".gitmodules");
+      const st = await stat(file).catch(() => undefined);
+      if (!st?.isFile() || st.size > GITMODULES_MAX || !inside(next.path, await realAsync(file))) continue;
+      const subs = parseGitmodules(await readFile(file, "utf8").catch(() => ""));
+      if (subs.length > cfg.detectSubmodulesLimit) (truncated.submodules ??= []).push({ repo: next.path, count: subs.length });
+      for (const sub of subs.slice(0, cfg.detectSubmodulesLimit)) {
+        if (!submodulePath(sub.path)) continue;
+        const abs = resolve(next.path, sub.path);
+        if (!inside(next.path, abs) || !inside(next.path, await realAsync(abs))) continue;
+        await add(abs, "submodule", next.path);
+      }
+    }
+  }
+
+  const all = [...found.values()];
+  for (const e of all) {
+    if (e.parent) continue;
+    let best: RepoEntry | undefined;
+    for (const c of all) if (c !== e && inside(c.path, e.path) && (!best || c.path.length > best.path.length)) best = c;
+    if (best && e.kind !== "main") e.parent = best.path;
+  }
+  const kids = (path: string | undefined) => all.filter((e) => e.parent === path).sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : a.kind === b.kind ? 0 : a.kind === "submodule" ? -1 : 1) || byBytes(a.path, b.path));
+  const ordered: RepoEntry[] = [];
+  const walk = (e: RepoEntry) => {
+    ordered.push(e);
+    for (const c of kids(e.path)) walk(c);
+  };
+  for (const e of all.filter((x) => !x.parent || !found.has(x.parent)).sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : 0) || byBytes(a.path, b.path))) walk(e);
+
+  const repos: GitRepo[] = [];
+  for (const e of ordered) {
+    let branch: string | undefined;
+    if (!e.outsideRoots && e.own) {
+      const head = (await readFile(join(e.own, "HEAD"), "utf8").catch(() => "")).trim();
+      const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head)?.[1];
+      branch = ref ?? (/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ? head.slice(0, 7) : undefined);
+    }
+    repos.push({ path: e.path, rel: relative(cwd, e.path).split(sep).join("/"), kind: e.kind, ...(e.parent && { parent: e.parent }), ...(branch && { branch }), ...(e.outsideRoots && { outsideRoots: true as const }) });
+  }
+  return { repos, ...((truncated.scan || truncated.submodules) && { truncated }) };
 }

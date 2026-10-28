@@ -5,9 +5,11 @@ import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { useDark } from "./theme.ts";
+import { DIFF_THEMES } from "./code-palette.ts";
+import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { Maximize2Icon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -18,9 +20,9 @@ import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
 import { fileSize } from "./files.ts";
-import { ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactPreview } from "./artifact-preview.tsx";
-import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, supportingFiles, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -59,7 +61,7 @@ const text = (output: unknown) =>
 // themeType follows the app theme (`.dark` on <html>), not the OS: "system" would ignore the theme toggle.
 export const DIFF_OPTIONS: FileDiffOptions<undefined, undefined> = {
   diffStyle: "unified",
-  theme: { light: "pierre-light", dark: "pierre-dark" },
+  theme: DIFF_THEMES,
   overflow: "wrap",
 };
 
@@ -83,7 +85,7 @@ export function useExpanded(id: string, force = false) {
 
 /** `awaiting`: the call waits for a permission answer, so the card is held open; except an Edit/Write with a diff,
  *  which stays collapsed because the permission panel shows that diff (GH-86); a click still expands it. */
-export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: ToolResult; awaiting?: boolean }) {
+export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; result?: ToolResult; awaiting?: boolean; /** An ExitPlanMode call's plan (planOfPart); absent: its `input.plan`. */ plan?: string }) {
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   const artifact = ARTIFACT_TOOLS.has(call.tool);
@@ -92,7 +94,8 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
   const openViewer = use(ViewerContext);
   const cwd = use(CwdContext);
-  const target = openViewer && cardTarget(call);
+  const target = openViewer && cardTarget(call, plan);
+  const showPlan = use(PlanTabContext);
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
   const header = (
     <ToolHeader
@@ -120,6 +123,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
       {target ? (
         <div className="group/head flex items-center gap-1">
           {header}
+          {call.tool === "ExitPlanMode" && target?.kind === "plan" && showPlan && <PlanTabButton onOpen={showPlan} />}
           <OpenButton target={target} onOpen={openViewer!} label={openLabel(target, stats, cwd)} />
         </div>
       ) : (
@@ -132,7 +136,7 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
             <span className="font-medium">{decided}:</span> {call.coordinator!.reason}
           </p>
         )}
-        <ToolBody call={call} result={result} />
+        <ToolBody call={call} result={result} plan={plan} />
       </ToolContent>
     </Tool>
   );
@@ -141,8 +145,20 @@ export function ToolCard({ call, result, awaiting }: { call: ToolCall; result?: 
 const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
   if (t.kind === "plan") return "Open plan in popup";
   const name = t.kind === "file" ? filePath(t.path, cwd).name : t.kind === "diff" ? filePath(field(t.call.input, "file_path"), cwd).name : "";
-  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : `Open ${name} in popup`;
+  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : t.kind === "file" ? `Open ${name} in file dialog` : `Open ${name} in popup`;
 };
+
+const OPEN_CLASS =
+  "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100";
+
+/** "Open in tab" of the plan card (GH-395): same reveal rules as OpenButton. */
+function PlanTabButton({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button type="button" aria-label="Open plan in tab" title="Open in tab" data-testid="plan-open-tab" onClick={onOpen} className={OPEN_CLASS}>
+      <PanelsTopLeftIcon aria-hidden className="size-4" />
+    </button>
+  );
+}
 
 /** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
 function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: OpenViewer; label: string }) {
@@ -150,10 +166,10 @@ function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: O
     <button
       type="button"
       aria-label={label}
-      title="Open in popup"
+      title={target.kind === "file" ? "Open in file dialog" : "Open in popup"}
       data-testid="viewer-open"
       onClick={(e) => onOpen(target, e.currentTarget)}
-      className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100"
+      className={OPEN_CLASS}
     >
       <Maximize2Icon aria-hidden className="size-4" />
     </button>
@@ -197,7 +213,7 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
   return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
-export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
+export function ToolBody({ call, result, plan: folded }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string }) {
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
   switch (call.tool) {
     case "Bash":
@@ -282,7 +298,7 @@ export function ToolBody({ call, result }: { call: ToolCall; result?: ToolResult
       return <ArtifactBody call={call} result={result} />;
     case "ExitPlanMode": {
       // The plan as the approval panel shows it; the JSON view until the input has streamed in.
-      const plan = field(call.input, "plan");
+      const plan = folded || field(call.input, "plan");
       if (!plan) break;
       return (
         <div className="space-y-2">
@@ -370,7 +386,7 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
               {file}
             </div>
           )}
-          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={title || file.split(/[\\/]/).pop() || file} files={supportingFiles(call.input)} />}
+          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={title || file.split(/[\\/]/).pop() || file} />}
         </div>
         {output}
       </div>

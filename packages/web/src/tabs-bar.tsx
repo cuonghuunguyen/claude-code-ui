@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -19,6 +19,7 @@ import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -37,6 +38,8 @@ export type TabInfo = {
   transcript?: boolean;
   /** Prompted but the SDK title is not there yet (GH-133): the title shows a skeleton. */
   titleLoading?: boolean;
+  /** A pane tab (GH-395: `plan:<session>`): its kind's icon, no session state, a pane tab menu. */
+  kind?: PaneKind;
 };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
@@ -66,7 +69,10 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
   );
 }
 
-function TabIcon({ s, cwd }: { s: TabStatus; cwd?: string }) {
+function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind }) {
+  if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
   // Needs input gets its own shape, not only another dot colour than unread.
@@ -323,7 +329,7 @@ export function TabsBar({
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
     <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
       {onHome && (
-        <IconButton className="w-9! max-md:hidden aria-pressed:bg-transparent aria-pressed:shadow-none aria-pressed:text-faint aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground" label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
+        <IconButton className={`w-9! max-md:hidden ${QUIET_PRESSED}`} label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
           <PanelLeftIcon />
         </IconButton>
       )}
@@ -391,7 +397,10 @@ export function TabsBar({
         <div className="flex h-7 min-w-0 flex-1 max-md:h-11 md:hidden">
           <Select
             value={activeId ?? null}
-            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : v && onSelect(v))}
+            // GH-417: only a picked row (tap, click, Enter/Space: "item-press") switches tabs. base-ui also changes the value when the
+            // rows change and the active tab has no row yet (a New session tab becoming its session, a /clear): it falls back to the
+            // tab the switcher mounted with, which must not be opened.
+            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : d.reason === "item-press" && v && onSelect(v))}
             onOpenChange={(o, d) => (o ? d.reason === "trigger-press" : d.reason === "item-press") && justSwiped(swiped) && d.cancel()}
           >
             <SelectTrigger
@@ -402,7 +411,7 @@ export function TabsBar({
               className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground`}
               {...trigger.props}
             >
-              {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} /> : null}
+              {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} kind={active.kind} /> : null}
               <span className="flex min-w-0 flex-col text-left" style={trigger.style}>
                 <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
@@ -425,7 +434,7 @@ export function TabsBar({
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
                   <SwipeRow key={id} id={id} swiped={swiped} onClose={onSwipeClose ?? onClose}>
-                    <TabIcon s={status(id, t)} cwd={t.cwd} />
+                    <TabIcon s={status(id, t)} cwd={t.cwd} kind={t.kind} />
                     <span className="flex min-w-0 flex-1 flex-col">
                       {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
                       {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
@@ -478,6 +487,40 @@ function GroupCleanup({ X, count: read, onRun }: { X: typeof ContextMenu.Item; c
       <span className="flex-1">Clean up group</span>
       <span className="ml-4 text-muted-foreground tabular-nums">{count}</span>
     </X>
+  );
+}
+
+type ItemC = typeof ContextMenu.Item;
+type GroupActionProps = { X: ItemC; cleanupCount?: () => number; onCleanup?: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; onCloseGroup: () => void };
+
+/** Move group left / right (chip context menus). */
+function GroupMoveItems({ X, move }: { X: ItemC; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void } }) {
+  return (
+    <>
+      <X className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
+        Move group left
+      </X>
+      <X className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
+        Move group right
+      </X>
+    </>
+  );
+}
+
+/** Clean up group, Close other groups, Close group: the group actions of every chip menu that has them (GH-359, GH-378). */
+function GroupActionItems({ X, cleanupCount, onCleanup, onCloseOthers, canCloseOthers, onCloseGroup }: GroupActionProps) {
+  return (
+    <>
+      {onCleanup && <GroupCleanup X={X} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
+      {onCloseOthers && (
+        <X className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
+          Close other groups
+        </X>
+      )}
+      <X className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
+        Close group
+      </X>
+    </>
   );
 }
 
@@ -589,6 +632,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     const before = state.current;
     const next = swipe(before, { type, p: { x: e.clientX, y: e.clientY, t: performance.now() } }, cfg.current, box.current.width);
     state.current = next;
+    listen(next.phase === "pending" || next.phase === "dragging");
     if (next.phase === "dragging") {
       swiped.current = performance.now();
       if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -602,11 +646,23 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
     }
   };
   // touch-action pan-y already keeps the horizontal pan from the browser; this is the backup once the swipe is ours (never while the list scrolls).
+  // GH-242 M3: the non-passive listener exists only during a gesture (a touch pointer down to its end), not on every row at mount: a non-passive touchmove listener makes the browser wait for the script on every scroll.
+  const rowEl = useRef<HTMLElement | null>(null);
+  const cancel = useRef((e: TouchEvent) => void (state.current.phase === "dragging" && e.cancelable && e.preventDefault()));
+  const listening = useRef(false);
+  const listen = (on: boolean) => {
+    const el = rowEl.current;
+    if (!el || on === listening.current) return;
+    if (on) el.addEventListener("touchmove", cancel.current, { passive: false });
+    else el.removeEventListener("touchmove", cancel.current);
+    listening.current = on;
+  };
   const itemRef = useCallback((el: HTMLElement | null) => {
-    if (!el) return;
-    const cancel = (e: TouchEvent) => state.current.phase === "dragging" && e.cancelable && e.preventDefault();
-    el.addEventListener("touchmove", cancel, { passive: false });
-    return () => el.removeEventListener("touchmove", cancel);
+    rowEl.current = el;
+    return () => {
+      if (listening.current) el?.removeEventListener("touchmove", cancel.current);
+      listening.current = false;
+    };
   }, []);
   const active = (e: ReactPointerEvent<HTMLElement>) => e.pointerId === pointer.current && (state.current.phase === "pending" || state.current.phase === "dragging");
   const reveal = view.stage !== "idle" && Math.sign(view.offset) === view.sign;
@@ -643,10 +699,12 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
           feed(e, "up");
           // Done: later moves (a mouse, a pen above the screen) must not run the outcome again.
           state.current = { phase: "idle" };
+          listen(false);
         }}
         onPointerCancel={(e) => {
           if (!active(e)) return;
           state.current = { phase: "idle" };
+          listen(false);
           if (view.stage === "drag") settle();
         }}
         onClickCapture={(e) => {
@@ -781,7 +839,7 @@ type TabRowsProps = { activeId?: string; onSelect: (id: string) => void; onClose
 
 /** The tab rows of a group chip menu (compact dropdown and chip context menu): a select item and a close item per tab (GH-277). */
 function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) => TabInfo; rows: TabRowsProps }) {
-  // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group.
+  // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group (non-compact context menu only).
   // After the row left the list (setTimeout), as in SwitcherRow: earlier leaves the list's highlight index off by one.
   const close = (id: string, e: { currentTarget: HTMLElement }) => {
     const popup = e.currentTarget.closest<HTMLElement>('[data-testid="tab-group-menu"]');
@@ -810,7 +868,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
             rows.onClose(id);
           }}
         >
-          <TabIcon s={s} cwd={t.cwd} />
+          <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
           {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === rows.activeId && "font-medium")}>{t.title}</span>}
           {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
         </Menu.Item>
@@ -840,6 +898,8 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const pathId = useId();
   const shown = collapsed || compact;
   const [open, setOpen] = useState(false);
+  // Compact chip: its context menu is open (the hover menu stays closed meanwhile).
+  const [ctxOpen, setCtxOpen] = useState(false);
   const keyOpenedAt = useRef(-Infinity);
   const coarse = useTouchPrimary();
   const props = {
@@ -884,12 +944,13 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
       {shown && urgent === "unread" && <span data-dot="unread" className="size-1.5 shrink-0 rounded-full bg-info" aria-hidden />}
     </>
   );
-  if (compact)
+  if (compact) {
     // Compact: a menu button (click, Enter, Space, ArrowDown; hover, at once). A path tooltip would fight the hover menu, so the menu header carries name and path.
-    return (
+    // The menu lists the tabs only; the group actions are in the chip's context menu (GH-431). The chip strip shows from md up only (`hidden md:flex`; below md the switcher shows), so there is no phone variant.
+    const menu = (
       // Not modal: a modal menu opened by the press puts a backdrop over the other chips, and a chip drag could not drop. A drag start closes the menu.
-      <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
-        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS}>
+      <Menu.Root modal={false} open={open && !ctxOpen} onOpenChange={(o) => !ctxOpen && setOpen(o)}>
+        <Menu.Trigger {...props} openOnHover delay={CHIP_HOVER_DELAY_MS} onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}>
           {body}
         </Menu.Trigger>
         <span id={pathId} hidden>{cwd}</span>
@@ -901,21 +962,28 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
                 <span className="truncate text-muted-foreground">{cwd}</span>
               </div>
               <GroupTabRows ids={ids} info={info} rows={rows} />
-              <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
-              {onCleanup && <GroupCleanup X={Menu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
-              {onCloseOthers && (
-                <Menu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
-                  Close other groups
-                </Menu.Item>
-              )}
-              <Menu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
-                Close group
-              </Menu.Item>
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
     );
+    return (
+      <ContextMenu.Root onOpenChange={(o) => { setCtxOpen(o); if (o) setOpen(false); }}>
+        <ContextMenu.Trigger className="contents" onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}>
+          {menu}
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Positioner className="z-50">
+            <ContextMenu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-context-menu">
+              <GroupMoveItems X={ContextMenu.Item} move={move} />
+              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+              <GroupActionItems X={ContextMenu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+    );
+  }
   return (
     // Right click (long press on touch): the menu the compact chip has, for a chip whose click collapses.
     <ContextMenu.Root>
@@ -937,24 +1005,11 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
             <ContextMenu.Item className={ITEM} onClick={onToggle}>
               {collapsed ? "Expand group" : "Collapse group"}
             </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
-              Move group left
-            </ContextMenu.Item>
-            <ContextMenu.Item className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
-              Move group right
-            </ContextMenu.Item>
+            <GroupMoveItems X={ContextMenu.Item} move={move} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
             <GroupTabRows ids={ids} info={info} rows={rows} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-            {onCleanup && <GroupCleanup X={ContextMenu.Item} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
-            {onCloseOthers && (
-              <ContextMenu.Item className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
-                Close other groups
-              </ContextMenu.Item>
-            )}
-            <ContextMenu.Item className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
-              Close group
-            </ContextMenu.Item>
+            <GroupActionItems X={ContextMenu.Item} cleanupCount={cleanupCount} onCleanup={onCleanup} onCloseOthers={onCloseOthers} canCloseOthers={canCloseOthers} onCloseGroup={onCloseGroup} />
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>
@@ -1037,7 +1092,7 @@ function Tab({
   onRenamed: (title: string | undefined) => void;
 }) {
   const s = status(id, t);
-  const session = id !== NEW_TAB;
+  const session = id !== NEW_TAB && !t.kind;
   const dragOver = (e: DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
     e.preventDefault();
@@ -1091,7 +1146,7 @@ function Tab({
       >
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-            <TabIcon s={s} cwd={t.cwd} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
             <RenameInput title={t.title} onDone={onRenamed} fromMenu={menuRename} />
           </div>
         ) : (
@@ -1111,7 +1166,7 @@ function Tab({
             // OpenCode: double click on the title renames.
             onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}
           >
-            <TabIcon s={s} cwd={t.cwd} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
             {splitDir && !pinned && (splitDir === "row" ? <Columns2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" /> : <Rows2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" />)}
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}
           </button>
@@ -1135,7 +1190,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session, pinned: session ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind] } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit && !t.kind } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)
@@ -1190,6 +1245,10 @@ function Tab({
 /** The look of an icon button; `aria-disabled` keeps it focusable and its tooltip readable. */
 export const ICON_BUTTON =
   "grid size-7 shrink-0 cursor-pointer place-items-center max-md:size-11 pointer-coarse:size-11 rounded-md text-faint outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-secondary aria-pressed:text-foreground aria-pressed:shadow-[inset_0_-2px_0_var(--foreground)] aria-expanded:bg-secondary aria-expanded:text-foreground aria-expanded:shadow-[inset_0_-2px_0_var(--foreground)] [&_svg]:size-4 aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-faint";
+
+/** Quiet pressed state of the aria-pressed toggles (sidebar, titlebar terminal, side panel header terminal; not the aria-expanded side panel toggle): no fill, no shadow, faint icon; hover shows the accent. */
+export const QUIET_PRESSED =
+  "aria-pressed:bg-transparent aria-pressed:text-faint aria-pressed:shadow-none aria-pressed:hover:bg-accent aria-pressed:hover:text-foreground";
 
 export function IconButton({
   label,

@@ -37,8 +37,10 @@ const storage = {
 };
 
 /**
- * Mounted when the user opens the panel: then, with none running, it starts one. A project switch (`cwd`) or a reconnect
- * to an empty list starts none. `onEmpty`: the last terminal was closed or its shell exited; the panel should hide.
+ * Shows the folder's running shells. It starts one only while `ensure` is set (an active open: Toggle terminal, New terminal,
+ * a click on the Terminal pane tab; GH-430) and the list has loaded empty; a page load, a tab or project switch (`cwd`) or a
+ * reconnect to an empty list starts none. `onEnsured`: the request is settled (a shell exists or was started).
+ * `onTerminals`: the number of shells changed after the list loaded. `onEmpty`: the last terminal was closed or its shell exited.
  */
 /** `newTick`: bumped by the New terminal shortcut; each bump adds a terminal. */
 export function TerminalPanel({
@@ -50,6 +52,9 @@ export function TerminalPanel({
   shown = true,
   focusReq = 0,
   quiet = false,
+  ensure = false,
+  onEnsured,
+  onTerminals,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -62,17 +67,23 @@ export function TerminalPanel({
   focusReq?: number;
   /** True from a pane move until the user's next input: a mount or show then leaves the focus where it is (the moved pane's tab). */
   quiet?: boolean;
+  /** Start a shell when the folder has none (once the list loaded); a level, so a request made before this mounted is not lost. */
+  ensure?: boolean;
+  onEnsured?: () => void;
+  onTerminals?: (n: number) => void;
 }) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
   const [shownCwd, setShownCwd] = useState(cwd);
+  // The list of this cwd has been answered.
+  const [loaded, setLoaded] = useState(false);
   if (cwd !== shownCwd) {
     setShownCwd(cwd);
+    setLoaded(false);
     setTerminals([]);
     setError(undefined);
   }
-  const spawn = useRef(true);
   // A tab selected with a click (or a new terminal) focuses its shell; one selected with the arrow keys keeps the focus.
   const focusShell = useRef(!quiet);
   // Bumped by a click on the tab already selected: its shell takes the focus again.
@@ -141,14 +152,20 @@ export function TerminalPanel({
         setTerminals(r.terminals);
         const has = (id?: string) => r.terminals.some((t) => t.id === id);
         setActiveId((a) => (has(a) ? a : has(storage.get()) ? storage.get() : r.terminals[0]?.id));
-        // The first shell, spawned on open, takes the focus as the panel would (none when it opened quietly).
-        if (!r.terminals.length && spawn.current) void create(focusShell.current);
-        spawn.current = false;
+        setLoaded(true);
       },
       (e: Error) => !stale && e.message !== "disconnected" && setError(e.message),
     );
     return () => void (stale = true);
   }, [client, status, cwd]);
+
+  // The requested first shell takes the focus as the panel would (none when it opened quietly).
+  useEffect(() => {
+    if (!ensure || !loaded) return;
+    if (!terminals.length) void create(focusShell.current);
+    onEnsured?.();
+  }, [ensure, loaded]);
+  useEffect(() => void (loaded && onTerminals?.(terminals.length)), [loaded, terminals.length]);
 
   useEffect(() => void (activeId && storage.set(activeId)), [activeId]);
 

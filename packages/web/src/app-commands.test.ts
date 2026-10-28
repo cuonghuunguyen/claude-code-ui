@@ -16,6 +16,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
     { value: "sonnet", displayName: "Sonnet", description: "" },
   ],
   canQuickOpen: true,
+  panels: true,
   newSession: vi.fn(),
   selectTab: vi.fn(),
   closeTab: vi.fn(),
@@ -100,7 +101,17 @@ it("Toggle file tree runs toggleFileTree and also finds it by Ctrl+\\; not on th
   run(c, "filetree.toggle");
   expect(c.toggleFileTree).toHaveBeenCalledOnce();
   expect(shortcutFor(appCommands(c), ev("\\", { ctrlKey: true }))?.id).toBe("filetree.toggle");
-  expect(appCommands(ctx({ session: { ...ctx().session!, draft: true } })).find((i) => i.id === "filetree.toggle")).toBeUndefined();
+  expect(appCommands(ctx({ session: { ...ctx().session!, draft: true }, panels: false })).find((i) => i.id === "filetree.toggle")).toBeUndefined();
+});
+
+it("AC5: panel and terminal commands follow c.panels (draft with panels lists them; viewer.changes still not on the draft)", () => {
+  const ids = (c: CommandContext) => appCommands(c).map((i) => i.id);
+  const draft = { ...ctx().session!, draft: true };
+  const panelIds = ["panel.toggle", "filetree.toggle", "pane.files", "pane.changes", "terminal.toggle", "terminal.new", "panel.flip"];
+  expect(ids(ctx({ session: draft, panels: true, viewChanges: vi.fn(), isGit: true }))).toEqual(expect.arrayContaining([...panelIds, "pane.graph"]));
+  expect(ids(ctx({ session: draft, panels: true, viewChanges: vi.fn() }))).not.toContain("viewer.changes");
+  for (const id of panelIds) expect(ids(ctx({ session: draft, panels: false })), id).not.toContain(id);
+  expect(ids(ctx({ panels: true, viewChanges: vi.fn() }))).toContain("viewer.changes");
 });
 
 it("a tab switch from a shortcut or the palette puts focus in the new tab's prompt", () => {
@@ -146,7 +157,7 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 });
 
 it("without a shown session only the app-level commands remain", () => {
-  const items = appCommands(ctx({ session: undefined, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
+  const items = appCommands(ctx({ session: undefined, panels: false, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
   expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle", "layout.reset"]);
 });
 
@@ -371,7 +382,7 @@ it("Reset layout is always listed; the side flip names the other side and needs 
   expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "layout.reset")).toBe("Reset layout");
   expect(title(ctx(), "panel.flip")).toBe("Move side panel to left");
   expect(title(ctx({ side: "left" }), "panel.flip")).toBe("Move side panel to right");
-  expect(title(ctx({ session: undefined, activeId: undefined, tabs: [] }), "panel.flip")).toBeUndefined();
+  expect(title(ctx({ session: undefined, panels: false, activeId: undefined, tabs: [] }), "panel.flip")).toBeUndefined();
 });
 
 it("GH-359 tab.closeOthers / closeRight / closeAll are listed only when given, have no default key, run their handler and take a user binding", () => {
@@ -447,4 +458,33 @@ it("GH-356 split commands are listed only when given, run their handler; Focus n
   expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined, "mod+alt+arrowup", undefined, undefined]);
   ids.forEach((id) => run(ctx(over), id));
   expect(Object.values(over).map((f) => f.mock.calls.length)).toEqual([1, 1, 1, 1, 1]);
+});
+
+it("GH-395 Show plan is listed only with showPlan; move commands list the two other homes", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id);
+  expect(ids(ctx())).not.toContain("plan.show");
+  expect(ids(ctx())).not.toContain("plan.move.main");
+  const showPlan = vi.fn();
+  const c = ctx({ showPlan, homes: { plan: "side" }, moveKind: vi.fn() });
+  expect(appCommands(c).find((x) => x.id === "plan.show")).toMatchObject({ title: "Show plan", keys: undefined });
+  run(c, "plan.show");
+  expect(showPlan).toHaveBeenCalledOnce();
+  expect(ids(c).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.main", "plan.move.bottom"]);
+  expect(appCommands(c).find((x) => x.id === "plan.move.main")).toMatchObject({ title: "Move plan to main area" });
+  run(c, "plan.move.bottom");
+  expect(c.moveKind).toHaveBeenCalledWith("plan", "bottom");
+  expect(ids(ctx({ homes: { plan: "main" }, moveKind: vi.fn() })).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.side", "plan.move.bottom"]);
+});
+
+it("GH-396 move rows per kind list the two other homes: files, graph (git only) and plan; none for changes", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.includes(".move."));
+  const homes = { plan: "side", files: "side", graph: "main" } as const;
+  const c = ctx({ homes, moveKind: vi.fn(), isGit: true });
+  expect(ids(c)).toEqual(["plan.move.main", "plan.move.bottom", "files.move.main", "files.move.bottom", "graph.move.side", "graph.move.bottom"]);
+  expect(appCommands(c).find((x) => x.id === "files.move.main")).toMatchObject({ title: "Move files to main area" });
+  expect(appCommands(c).find((x) => x.id === "graph.move.side")).toMatchObject({ title: "Move git graph to side panel" });
+  run(c, "files.move.main");
+  expect(c.moveKind).toHaveBeenCalledWith("files", "main");
+  expect(ids(c).some((i) => i.startsWith("changes."))).toBe(false);
+  expect(ids(ctx({ homes, moveKind: vi.fn() })).some((i) => i.startsWith("graph."))).toBe(false);
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -323,6 +323,39 @@ describe("Session", () => {
     const before = closed;
     expect(s.releaseQuery()).toBe(false);
     expect(closed).toBe(before);
+  });
+
+  it("an async permission card: the request waits for it and shows its title", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const permissionCard = () => gate.then(() => ({ input: { x: 1 }, title: "Card title" }));
+    const s = new Session("/tmp", { query: permissionQuery as never, permissionCard });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("run");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    release();
+    await until(events, (e) => e.part.type === "permission_request");
+    expect(events.find((e) => e.part.type === "permission_request")!.part).toMatchObject({ title: "Card title", input: { x: 1 } });
+  });
+
+  it("an abort while the permission card resolves denies without a pending request", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const permissionCard = () => gate.then(() => ({ input: {}, title: "late" }));
+    const s = new Session("/tmp", { query: permissionQuery as never, permissionCard });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const before = aborts.length;
+    s.prompt("run");
+    await until(events, (e) => e.part.type === "tool_call");
+    await new Promise((r) => setTimeout(r, 30));
+    aborts[before]!.abort();
+    release();
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    expect(permissionResults.at(-1)).toMatchObject({ behavior: "deny", message: "Request cancelled" });
   });
 
   it("session-scoped grants are re-applied when the query resumes; saved rules are not", async () => {
@@ -841,6 +874,69 @@ describe("Session questions", () => {
     expect(req).toMatchObject({ tool: "ExitPlanMode", input: plan, suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] });
     s.respond(req.requestId, { decision: "allow_always" });
     await vi.waitFor(() => expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "acceptEdits" }] }));
+  });
+
+  describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in a plan file)", () => {
+    const recorded = () => readFileSync(new URL("../../protocol/test/fixtures/plan-file-exit.jsonl", import.meta.url), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const asking = async (extra: unknown[] = [], input: object = {}) => {
+      const messages = [...recorded().slice(0, 2), ...extra, recorded()[2]];
+      const query = ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { canUseTool: Function } }) =>
+        Object.assign(
+          (async function* () {
+            for await (const _ of prompt) {
+              yield* messages;
+              permissionResults.push(await options.canUseTool("ExitPlanMode", input, { signal: new AbortController().signal, toolUseID: "toolu_plan_exit", requestId: "r" }));
+            }
+          })(),
+          { supportedCommands: async () => [] },
+        );
+      const s = new Session("/tmp", { query: query as never });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("go");
+      await until(events, (e) => e.part.type === "permission_request");
+      const req = events.find((e) => e.part.type === "permission_request")!.part as Extract<Event["part"], { type: "permission_request" }>;
+      return { s, req, events };
+    };
+
+    it("asks with the plan the model wrote as display data; the request input stays what the CLI sent", async () => {
+      const { req } = await asking();
+      expect(req.plan).toContain("1. Create hello.txt with the content hi.");
+      expect(req.input).toEqual({});
+    });
+
+    it("the plan is the plan file after the model revised it with Edit", async () => {
+      const edit = { type: "assistant", message: { role: "assistant", id: "msg_e", type: "message", content: [{ type: "tool_use", id: "toolu_plan_edit", name: "Edit", input: { file_path: "/home/user/.claude/plans/plan-only-write-a-quiet-fox.md", old_string: "2. Check the file.", new_string: "2. Check the file.\n3. Delete nothing." } }] }, parent_tool_use_id: null, session_id: "x", uuid: randomUUID() };
+      const done = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_plan_edit", content: "ok" }] }, parent_tool_use_id: null, session_id: "x", uuid: randomUUID() };
+      const { req } = await asking([edit, done]);
+      expect(req.plan).toContain("3. Delete nothing.");
+    });
+
+    it("the plan the CLI read from its file when the call ran wins over the fold (an Edit of the same message whose result has not streamed in yet)", async () => {
+      const edit = { type: "assistant", message: { role: "assistant", id: "msg_e", type: "message", content: [{ type: "tool_use", id: "toolu_plan_edit", name: "Edit", input: { file_path: "/home/user/.claude/plans/plan-only-write-a-quiet-fox.md", old_string: "2. Check the file.", new_string: "2. ZEBRA-7731." } }] }, parent_tool_use_id: null, session_id: "x", uuid: randomUUID() };
+      const input = { plan: "# Plan\n\n1. Create hello.txt with the content hi.\n2. ZEBRA-7731.", planFilePath: "/home/user/.claude/plans/plan-only-write-a-quiet-fox.md" };
+      const { req } = await asking([edit], input);
+      expect(req.plan).toBe(input.plan);
+      expect(req.input).toEqual(input);
+    });
+
+    it("Approve sends the original input back, not the displayed plan (the CLI would rewrite its plan file)", async () => {
+      const { s, req } = await asking();
+      const before = permissionResults.length;
+      s.respond(req.requestId, { decision: "allow" });
+      await vi.waitFor(() => expect(permissionResults.length).toBeGreaterThan(before));
+      expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow", updatedInput: {} });
+      expect((permissionResults.at(-1) as { updatedInput: object }).updatedInput).toEqual({});
+    });
+
+    it("a coordinator settle sends the original input back too (a plan request is high tier, so this is the settle step itself)", async () => {
+      const { s, req } = await asking();
+      const before = permissionResults.length;
+      (s as unknown as { coordinatorSettle: (id: string, part: unknown, a: unknown) => boolean }).coordinatorSettle(req.requestId, req, { decision: "allow", message: "ok" });
+      await vi.waitFor(() => expect(permissionResults.length).toBeGreaterThan(before));
+      expect(permissionResults.at(-1)).toMatchObject({ behavior: "allow" });
+      expect((permissionResults.at(-1) as { updatedInput: object }).updatedInput).toEqual({});
+    });
   });
 
   // Review round 2: the CLI restores the mode active before plan mode unless told otherwise, so each answer names its mode.

@@ -51,6 +51,7 @@ const REJECTED = "The user doesn't want to proceed with this tool use. The tool 
 const SETTLE_READS = 5;
 // Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
 const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
+type PermissionCard = { input: Record<string, unknown>; title?: string; onAllow?: () => void };
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
@@ -84,10 +85,14 @@ type SessionOpts = Partial<SessionSettings> & {
   readTranscript?: (id: string, cwd: string) => Promise<Transcript>;
   /** Whether a terminal CLI process still runs a turn of this session (its own report): the quiet time then ends no external turn. */
   cliTurnRunning?: (id: string) => boolean;
+  /** The folders the CLI keeps plan files in for a session in `cwd` (plan-dirs.ts); absent: `.claude/plans`. */
+  planDirs?: (cwd: string) => string[];
   /** The transcript's size and last main-chain record, read cheaply for the stale-turn check (GH-239). */
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
   mcpServers?: (id: string) => Options["mcpServers"];
+  /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
+  agent?: (id: string) => string | undefined;
   /**
    * Host policy for a tool call (orchestration.ts, by MCP server source): "allow" runs it without a permission request,
    * "no_rules" asks without "don't ask again" suggestions; none = a normal request.
@@ -100,7 +105,9 @@ type SessionOpts = Partial<SessionSettings> & {
   tier?: typeof tierAsync;
   /** Whether the session is a worker (linked to a coordinator): its CLI runs with the shell cwd pinned, which lets read-only git be `low` (risk-tier.ts). */
   worker?: (id: string) => boolean;
-  permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => { input: Record<string, unknown>; title?: string; onAllow?: () => void } | undefined;
+  /** The message when a tool call is refused before any card (orchestration.ts preflight); the call then runs and the tool returns its own error. */
+  preflight?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => string | undefined;
+  permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
 export type Transcript = {
@@ -274,6 +281,7 @@ export class Session {
     this.backgroundLevel = new Set();
     this.ambientTasks.clear();
     const up = this.opts.uploadDir?.(this.id);
+    const agent = this.opts.agent?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
@@ -312,6 +320,7 @@ export class Session {
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
         mcpServers: this.opts.mcpServers?.(this.id),
+        ...(agent && { agent }),
       },
     }));
     this.resumeAt = undefined;
@@ -349,7 +358,7 @@ export class Session {
   /** The paged subscribe snapshot at the current seq (synchronous: subscribe with this seq right after, no event falls between). */
   snapshot(from?: string): { seq: number; snapshot: Snapshot } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
-    const aux = page.older ? this.index.aux(page.older.pos) : [];
+    const aux = page.older ? this.index.aux(page.older.pos, this.planDirs()) : [];
     return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
   }
 
@@ -788,8 +797,8 @@ export class Session {
   }
 
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
-  setQueue(items: { id: string; text: string; images: string[] }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
-    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length })), ...(held && { held }) };
+  setQueue(items: { id: string; text: string; images: string[]; bash?: true; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
+    const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };
     if (JSON.stringify(next) === JSON.stringify(this.queueShown)) return;
     this.queueShown = next;
     this.emit({ type: "prompt_queue", id: "prompt_queue", ...next });
@@ -821,7 +830,7 @@ export class Session {
   }
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
-  private readonly canUseTool: CanUseTool = (tool, input, opts) => {
+  private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
     const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
@@ -829,7 +838,12 @@ export class Session {
     const policy = this.opts.toolPolicy?.(tool, mcpServer);
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
-    const card = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
+    // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
+    if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
+    const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
+    const card = made instanceof Promise ? await made : made;
+    // The SDK may abort while the card's git read runs.
+    if (made instanceof Promise && signal.aborted) return { behavior: "deny", message: "Request cancelled" };
     const title = card?.title ?? sdkTitle;
     return new Promise((resolve) => {
       const requestId = randomUUID();
@@ -843,6 +857,7 @@ export class Session {
               toolUseId: toolUseID,
               tool,
               input: card?.input ?? input,
+              ...this.planField(tool, toolUseID, input),
               ...(title ? { title } : {}),
               suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
               settled: false,
@@ -855,6 +870,24 @@ export class Session {
       signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
+
+  /** The plan folders of this session's CLI. */
+  planDirs(): string[] | undefined {
+    return this.opts.planDirs?.(this.cwd);
+  }
+
+  /**
+   * The plan the approval request shows (display data `plan`; the Plan pane and the plan card use it for this call). The CLI fills `input.plan` from its plan
+   * file when the call runs, so after an Edit of the same message ran: that wins. Without it (Claude Code 2.1.294 also asks with an empty input) the plan-file
+   * fold (planOfCall), which may miss an Edit whose result has not streamed in yet. `input` stays what the CLI sent, as it is what goes back on Approve (a
+   * changed plan input would make the CLI rewrite its plan file).
+   */
+  private planField(tool: string, toolUseId: string, input: unknown): { plan?: string } {
+    if (tool !== "ExitPlanMode") return {};
+    const own = (input as { plan?: unknown } | null)?.plan;
+    const plan = typeof own === "string" && own ? own : this.index.planOf(toolUseId, this.planDirs());
+    return plan ? { plan } : {};
+  }
 
   /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
   private markLowTier(requestId: string) {

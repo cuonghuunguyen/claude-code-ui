@@ -5,3 +5,7 @@ export { imageBlock, isPromptImage, MEDIA_INLINE_MAX, omitMedia, omittedImage, p
 export * from "./wsl-path.ts";
 export * from "./histogram.ts";
 export * from "./file-name.ts";
+export * from "./branch-name.ts";
+export * from "./pull-request.ts";
+export * from "./plan.ts";
+export * from "./repo-tree.ts";

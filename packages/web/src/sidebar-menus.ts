@@ -69,12 +69,15 @@ export function confirmNames(names: string[], max = 10) {
 export function groupEntries(o: {
   prefix: string;
   newSession?: () => void;
-  newWorktree?: (named: boolean) => void;
+  /** `quick`: "New worktree", at once with a generated name; else "Create worktree…", the modal. */
+  newWorktree?: (quick: boolean) => void;
   archivedView: boolean;
   onlyActive: boolean;
   setOnlyActive: (on: boolean) => void;
   archiveCount: (days: number) => number;
   onArchive: (days: number) => void;
+  /** Copy path (GH-456): the folder path as its side sees it, the row tooltip. */
+  copyPath?: () => void;
   /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
   cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
@@ -85,8 +88,9 @@ export function groupEntries(o: {
   if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: "New session", onSelect: o.newSession });
   if (o.newWorktree) {
     const nw = o.newWorktree;
-    e.push({ kind: "item", id: `${p}new-worktree`, label: "New worktree", onSelect: () => nw(false) }, { kind: "item", id: `${p}new-worktree-named`, label: "New worktree (named)…", onSelect: () => nw(true) });
+    e.push({ kind: "item", id: `${p}new-worktree`, label: "New worktree", onSelect: () => nw(true) }, { kind: "item", id: `${p}create-worktree`, label: "Create worktree…", onSelect: () => nw(false) });
   }
+  if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: "Copy path", onSelect: o.copyPath });
   if (!o.archivedView) {
     e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: "Hide inactive sessions", checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: "Archive idle sessions older than" });
     for (const d of ARCHIVE_DAYS) {

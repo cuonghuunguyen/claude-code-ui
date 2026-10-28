@@ -1,6 +1,7 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import type { PaletteItem } from "./palette.tsx";
+import { HOME_LABEL, PANE_LABEL, type Area } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
@@ -21,9 +22,11 @@ export type CommandContext = {
     running: boolean;
     /** User prompts, oldest first: the rewind targets. */
     prompts: { id: string; text: string }[];
-    /** The new-session tab's draft: no side panel or terminal yet. */
+    /** The new-session tab's draft: no session to view changes or a plan of yet. */
     draft?: boolean;
   };
+  /** The side and bottom panel show for the current tab: a session, or the new-session tab on wide screens (GH-430). */
+  panels: boolean;
   models: ModelInfo[];
   canQuickOpen: boolean;
   newSession: () => void;
@@ -74,6 +77,11 @@ export type CommandContext = {
   viewChanges?: () => void;
   /** Opens the newest plan of the shown session in the popup viewer; none while it has no plan. */
   viewPlan?: () => void;
+  /** GH-395: reveals the current session's plan (its tab in the main area, or the dock Plan pane). Absent without a plan. */
+  showPlan?: () => void;
+  /** Where the Plan, Files and Git graph panes live, and the move to another home; absent: no move rows. Changes never moves. */
+  homes?: Partial<Record<"plan" | "files" | "graph", Area>>;
+  moveKind?: (p: "plan" | "files" | "graph", to: Area) => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -160,19 +168,21 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("guide.start", "Show guide", c.startGuide),
     cmd("tips.reset", "Reset shortcut tips", c.resetKeyTips),
     cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
-    s && !s.draft && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel),
-    s && !s.draft && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree),
-    s && !s.draft && cmd("pane.files", "Show files", () => c.showPane("files")),
-    s && !s.draft && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
-    s && !s.draft && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
+    c.panels && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel),
+    c.panels && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree),
+    c.panels && cmd("pane.files", "Show files", () => c.showPane("files")),
+    c.panels && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
+    c.panels && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
     s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
-    s && !s.draft && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
+    c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
+    c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
-    s && !s.draft && cmd("terminal.new", "New terminal", c.newTerminal),
+    c.panels && cmd("terminal.new", "New terminal", c.newTerminal),
     cmd("layout.reset", "Reset layout", c.resetLayout),
-    s && !s.draft && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
+    c.panels && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     s &&
       c.models.length > 0 &&

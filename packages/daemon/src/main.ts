@@ -8,12 +8,15 @@ import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { HELP, PHONE_HINT, USAGE_HINT, autoOpen, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
+import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
+import { sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
+import { prepareWslSide } from "./wsl-side.ts";
 import { checkWslSide, createSides, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
@@ -77,7 +80,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }) };
+const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
 
 if (side) {
   // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none.
@@ -96,11 +99,16 @@ if (side) {
   const sidePackage = sidePackageDir();
   const sideKey = () => sideKeyOf(sidePackage);
   const docker = dockerCli();
-  /** Docker side: the container must run and gets this package, then `docker exec -i <name> sh -c <setup script>`. */
-  const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void): Promise<SideProcess> => {
+  /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
+  const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void): Promise<SideProcess> => {
     const key = sideKey();
-    const tgz = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, onPhase });
-    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(tgz, key, "docker", setup)), { stdio: "pipe", windowsHide: true }));
+    const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", setup, sent.bundle)), { stdio: "pipe", windowsHide: true }));
+  };
+  /** WSL side: a covered distro installs from the host's verified cached parts read through /mnt (no npm, network or compile in the distro), else from npm. */
+  const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void): Promise<SideProcess> => {
+    const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", setup, bundle)), { stdio: "pipe", windowsHide: true }));
   };
   let dockerState: DockerState | undefined;
   const sides =
@@ -118,7 +126,7 @@ if (side) {
             dockerState: () => dockerState,
           }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id, { setup, phase }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase) : sideChild(spawn("wsl.exe", wslArgs(id.slice("wsl:".length), setupScript(sidePackage, sideKey(), "wsl", setup)), { stdio: "pipe", windowsHide: true }))),
+          spawn: (id, { setup, phase, install }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install) : spawnWsl(id.slice("wsl:".length), setup, phase, install)),
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),

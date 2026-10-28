@@ -37,6 +37,8 @@ const LIST = [
   item("d", "/home/u/api", "Refactor", 3000, "idle"),
 ];
 
+const EXPANDED = "claude-ui.expandedWorkers";
+const openWorkers = (...keys: string[]) => localStorage.setItem(EXPANDED, JSON.stringify(keys));
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   root?.unmount();
@@ -454,10 +456,10 @@ describe("worktrees", () => {
     expect(el.querySelector('[data-path="/home/u/orca/web/fix"] [data-testid="worktree-outside"]')).toBeNull();
   });
 
-  it("a git project has New worktree: click creates with a generated name, Shift+click asks for a name; a non-git project has none", async () => {
+  it("a git project has Create worktree: click opens the modal (quick false), Shift+click creates at once (quick true); a non-git project has none", async () => {
     const { el, onNewWorktree } = await render(props);
     const btn = () => el.querySelector<HTMLElement>('[data-testid="session-group"][data-cwd="/home/u/web"] [data-testid="project-new-worktree"]')!;
-    expect(btn().getAttribute("aria-label")).toBe("New worktree in web (Shift+click to name it)");
+    expect(btn().getAttribute("aria-label")).toBe("Create worktree in web (Shift+click: new worktree with a generated name)");
     await act(async () => btn().click());
     expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => void btn().dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true })));
@@ -568,6 +570,7 @@ describe("workers", () => {
   const gtoggle = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-testid="worker-group-toggle"]')!;
 
   it("workers show under their coordinator, not in their own project group; each row shows name, place and state as text", async () => {
+    openWorkers("coordinator:c");
     const { el, groups } = await render(base);
     const [web, api] = groups();
     expect(web!.querySelectorAll("[data-worker]")).toHaveLength(2);
@@ -579,21 +582,47 @@ describe("workers", () => {
     expect(rows[0]!.getAttribute("aria-label")).toBe("w1, worker, running, api");
   });
 
-  it("the workers row collapses and stays collapsed after a reload; a worker needing input shows on the collapsed row as text", async () => {
+  it("the workers row starts collapsed, expands and stays expanded after a reload; collapsing again is remembered; a worker needing input shows on the collapsed row as text", async () => {
     const list = [coord, wk("w1", "w1", "/home/u/api", "needs_input")];
     let r = await render({ list });
-    await act(async () => gtoggle(r.el).click());
     expect(gtoggle(r.el).getAttribute("aria-expanded")).toBe("false");
     expect(workerRows(r.el)).toHaveLength(0);
-    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain("coordinator:c");
     expect(gtoggle(r.el).dataset.needsInput).toBe("true");
     expect(gtoggle(r.el).textContent).toContain("needs input");
+    await act(async () => gtoggle(r.el).click());
+    expect(gtoggle(r.el).getAttribute("aria-expanded")).toBe("true");
+    expect(workerRows(r.el)).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual(["coordinator:c"]);
+    expect(localStorage.getItem("claude-ui.collapsed")).toBeNull();
+    root!.unmount();
+    r = await render({ list });
+    expect(gtoggle(r.el).getAttribute("aria-expanded")).toBe("true");
+    await act(async () => gtoggle(r.el).click());
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual([]);
     root!.unmount();
     r = await render({ list });
     expect(gtoggle(r.el).getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("a nested worker tree (a worker with its own workers) starts collapsed under its root coordinator and lists every level once expanded", async () => {
+    const sub = { ...wk("w1", "w1", "/home/u/api", "idle"), coordinator: true as const };
+    const leaf = { ...item("l1", "/home/u/api", "leaf title", 3, "idle"), coordinatorId: "w1", workerName: "leaf" };
+    const { el } = await render({ list: [coord, sub, leaf] });
+    expect(gtoggle(el).getAttribute("aria-expanded")).toBe("false");
+    expect(workerRows(el)).toHaveLength(0);
+    await act(async () => gtoggle(el).click());
+    expect(workerRows(el).map((r) => r.dataset.worker)).toEqual(["w1", "w1 › leaf"]);
+  });
+
+  it("stored collapsed keys of projects stay valid; a legacy stored worker key does not expand the workers", async () => {
+    localStorage.setItem("claude-ui.collapsed", JSON.stringify(["/home/u/api", "coordinator:c"]));
+    const { el, groups } = await render({ ...base, projects: ["/home/u/web", "/home/u/api"] });
+    expect(groups().map((g) => g.querySelector("[data-testid=group-toggle]")!.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
+    expect(gtoggle(el).getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("clicking a worker row opens its session; worker rows and the workers toggle are 44px below md", async () => {
+    openWorkers("coordinator:c");
     const { el, onOpen } = await render(base);
     const row = workerRows(el)[0]!;
     expect(row.tagName).toBe("BUTTON");
@@ -614,6 +643,7 @@ describe("workers", () => {
       { path: "/home/u/web", branch: "main", main: true },
       { path: "/home/u/orca/web/fix", branch: "fix", main: false },
     ];
+    openWorkers("coordinator:c");
     const { el } = await render({ list: [{ ...coord, cwd: "/home/u/orca/web/fix" }, wk("w1", "w1", "/home/u/api", "idle")], projects: ["/home/u/web", "/home/u/api"], worktrees: { "/home/u/web": wts } });
     expect(el.querySelector("[data-worker]")!.className).toContain("pl-17");
     expect(el.querySelector<HTMLElement>('[data-session-id="c"]')!.className).toContain("pl-12");
@@ -645,10 +675,10 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-new-worktree"]')!.click());
-    expect(onNewWorktree).toHaveBeenCalledWith("/home/u/web", false);
+    expect(onNewWorktree).toHaveBeenCalledWith("/home/u/web", true);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-new-worktree-named"]')!.click());
-    expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", true);
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-create-worktree"]')!.click());
+    expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-remove"]')!.click());
     expect(onRemove).toHaveBeenCalledWith("/home/u/web");
@@ -815,12 +845,14 @@ describe("sidebar header actions (GH-152)", () => {
     await render(base);
     await act(async () => q("sidebar-collapse-all").click());
     expect(expanded('[data-testid="group-toggle"]')).toEqual(["false", "false"]);
-    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual(["/home/u/web", "worktree:/home/u/web", `worktree:${WT}`, "/home/u/api", "coordinator:co"]);
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual(["/home/u/web", "worktree:/home/u/web", `worktree:${WT}`, "/home/u/api"]);
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual([]);
     await act(async () => q("sidebar-expand-all").click());
     expect(expanded('[data-testid="group-toggle"]')).toEqual(["true", "true"]);
     expect(expanded('[data-testid="worktree-toggle"]')).toEqual(["true", "true"]);
     expect(expanded('[data-testid="worker-group-toggle"]')).toEqual(["true"]);
     expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual(["coordinator:co"]);
   });
 
   it("Expand all and Collapse all are disabled while the search has text", async () => {
@@ -937,9 +969,9 @@ describe("sidebar header actions (GH-152)", () => {
       ...[1, 2, 3, 4, 5, 6].map((n) => item(`n${n}`, "/home/u/api", `New ${n}`, n)),
     ];
     await render({ list: many, projects: ["/home/u/api"], activeId: "wk" });
-    expect(document.querySelector('[data-session-id="wk"]')).not.toBeNull();
-    await act(async () => q("sidebar-collapse-all").click());
+    expect(document.querySelector('[data-session-id="wk"]')).toBeNull();
     await act(async () => q("sidebar-select-active").click());
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual(["coordinator:co"]);
     expect(document.activeElement).toBe(document.querySelector('[data-session-id="wk"]'));
   });
 
@@ -964,6 +996,7 @@ describe("sidebar header actions (GH-152)", () => {
       { ...item("w2", "/home/u/api", "W2", 5), coordinatorId: "co", workerName: "idle" },
       item("x", "/home/u/web", "Idle", 9),
     ];
+    openWorkers("coordinator:co");
     const r = await render({ ...base, list: l, activeId: "none" });
     const m = await open();
     await act(async () => m("sidebar-opt-only-active").click());
@@ -989,11 +1022,13 @@ describe("sidebar header actions (GH-152)", () => {
     expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
   });
 
-  it("Expand all keeps the other view's worker group keys", async () => {
-    localStorage.setItem("claude-ui.collapsed", JSON.stringify(["/home/u/web", "coordinator:co", "archived:coordinator:zz"]));
+  it("Expand all keeps the other view's expanded worker group keys", async () => {
+    localStorage.setItem("claude-ui.collapsed", JSON.stringify(["/home/u/web"]));
+    openWorkers("archived:coordinator:zz");
     await render(base);
     await act(async () => q("sidebar-expand-all").click());
-    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual(["archived:coordinator:zz"]);
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual(["archived:coordinator:zz", "coordinator:co"]);
   });
 
   it("below md the greyed Expand all item says why", async () => {
@@ -1009,11 +1044,12 @@ describe("sidebar header actions (GH-152)", () => {
       item("co", "/home/u/api", "Coord", 3, "running"),
       { ...item("w2", "/home/u/api", "W2", 5), coordinatorId: "co", workerName: "idle" },
     ];
+    openWorkers("coordinator:co");
     await render({ ...base, list: l, activeId: "none" });
     const m = await open();
     await act(async () => m("sidebar-opt-only-active").click());
     await act(async () => q("sidebar-collapse-all").click());
-    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain("coordinator:co");
+    expect(JSON.parse(localStorage.getItem(EXPANDED)!)).toEqual([]);
   });
 
 });
@@ -1076,6 +1112,7 @@ const WORKERS: SessionListItem[] = [
 ];
 
 it("GH-358 a worker row offers Close worker and Remove worker… (no Delete…); disabled for a closed worker and while it runs", async () => {
+  openWorkers("coordinator:co");
   const { el, onAction } = await render({ list: WORKERS, activeId: null });
   await ctx(row(el, "w1"));
   expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Close worker", "Remove worker…"]);
@@ -1209,6 +1246,7 @@ it("GH-358 below md the kebab of a project row lists the same entries; the old i
 });
 
 it("GH-358 Shift+F10 on a worker row focuses the menu's first enabled item", async () => {
+  openWorkers("coordinator:co");
   const { el } = await render({ list: WORKERS, activeId: null });
   // w2 is closed: Close worker is disabled, so the first enabled item is Rename.
   const t = row(el, "w2");

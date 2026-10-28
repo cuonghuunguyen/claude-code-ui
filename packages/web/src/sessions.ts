@@ -32,13 +32,14 @@ export function externalWorktree(list: Worktree[], w: Worktree) {
   return !(p.startsWith(dir) && p.length > dir.length && !p.slice(dir.length).includes("/"));
 }
 
-/** The branch of the listed worktree `path` stays after removal: not `worktree-*` and not a detached HEAD (listed as the short hash). */
-export function keepsBranch(list: Worktree[] | undefined, path: string) {
+/** The branch of the listed worktree `path` stays after removal: not a Created branch (`st.createdBranch`, legacy `worktree-*`) and not a detached HEAD (listed as the short hash). */
+export function keepsBranch(list: Worktree[] | undefined, path: string, st?: Pick<WorktreeStatusResult, "createdBranch">) {
+  if (st?.createdBranch) return false;
   const b = list?.find((w) => w.path === path)?.branch;
   return !!b && !b.startsWith("worktree-") && !/^[0-9a-f]{7}$/.test(b);
 }
 
-/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not `worktree-*` and stays. */
+/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. */
 export function removeWorktreeText({ uncommitted, commits, branch }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch">, o: { keepsBranch?: boolean } = {}) {
   const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
   const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : "Clean up the worktree directory.";
@@ -131,15 +132,44 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
   });
 }
 
-/** Workers (coordinatorId) of a coordinator listed in the same view (archived flag) by coordinator ID, by name; every other session in `top`. */
+/**
+ * Workers (coordinatorId) of a coordinator listed in the same view (archived flag) by coordinator ID, by name; every other session
+ * in `top`. A worker of a worker (depth 2 and more) is listed under the root coordinator in the list, named `parent › child`.
+ */
 export function nestWorkers(items: SessionListItem[], archived: boolean) {
-  const ids = new Set(items.filter((s) => s.archived === archived).map((s) => s.id));
+  const byId = new Map(items.filter((s) => s.archived === archived).map((s) => [s.id, s]));
+  const nested = (s: SessionListItem) => !!s.coordinatorId && byId.has(s.coordinatorId);
   const top: SessionListItem[] = [];
   const workers = new Map<string, SessionListItem[]>();
-  for (const s of items)
-    if (s.coordinatorId && s.archived === archived && ids.has(s.coordinatorId)) workers.set(s.coordinatorId, [...(workers.get(s.coordinatorId) ?? []), s]);
-    else top.push(s);
-  for (const l of workers.values()) l.sort((a, b) => (a.workerName ?? a.title).localeCompare(b.workerName ?? b.title));
+  /** The name chain of each nested row, to sort by segment: a child stays right under its parent. */
+  const chains = new Map<SessionListItem, string[]>();
+  for (const s of items) {
+    if (s.archived !== archived || !nested(s)) {
+      top.push(s);
+      continue;
+    }
+    // Up to the nearest ancestor that is not nested itself (the one shown in the list); a cycle guard ends the walk.
+    const chain = [s.workerName ?? s.title];
+    let root = byId.get(s.coordinatorId!)!;
+    for (let i = 0; i < 20 && nested(root); i++) {
+      chain.unshift(root.workerName ?? root.title);
+      root = byId.get(root.coordinatorId!)!;
+    }
+    const row = chain.length > 1 ? { ...s, workerName: chain.join(" › ") } : s;
+    chains.set(row, chain);
+    workers.set(root.id, [...(workers.get(root.id) ?? []), row]);
+  }
+  // Segment by segment; a prefix (the parent) first.
+  const bySegments = (a: SessionListItem, b: SessionListItem) => {
+    const x = chains.get(a)!;
+    const y = chains.get(b)!;
+    for (let i = 0; i < Math.min(x.length, y.length); i++) {
+      const d = x[i]!.localeCompare(y[i]!);
+      if (d) return d;
+    }
+    return x.length - y.length;
+  };
+  for (const l of workers.values()) l.sort(bySegments);
   return { top, workers };
 }
 
@@ -208,6 +238,29 @@ export function saveCollapsed(cwds: Set<string>) {
     // Storage blocked: collapsing still works for this page.
   }
 }
+
+const WORKERS_KEY = "claude-ui.expandedWorkers";
+
+/** Worker group keys (`workerKey`) the user expanded in this browser: worker groups start collapsed. */
+export function loadExpandedWorkers(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(WORKERS_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((c): c is string => typeof c === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveExpandedWorkers(keys: Set<string>) {
+  try {
+    localStorage.setItem(WORKERS_KEY, JSON.stringify([...keys]));
+  } catch {
+    // Storage blocked: expanding still works for this page.
+  }
+}
+
+/** Whether `key` is a worker group key (expanded set) and not a project or worktree key (collapsed set). */
+export const isWorkerKey = (key: string) => /^(archived:)?coordinator:/.test(key);
 
 /** A worktree row's collapse key: not its path alone, which is also the project's key for the main checkout. */
 export const rowKey = (path: string) => `worktree:${path}`;

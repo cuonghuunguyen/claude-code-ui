@@ -4,7 +4,7 @@ Open **Settings** with <kbd>Ctrl</kbd>+<kbd>,</kbd> (<kbd>⌘</kbd> <kbd>,</kbd>
 
 ![The Settings dialog](/screenshots/settings.png)
 
-Most settings are **kept in this browser** only. Orchestration, Usage limits (except the ring) and desktop notifications are saved in the daemon and apply to every browser.
+Most settings are **kept in this browser** only. Orchestration, Usage limits (except the ring), Jira and desktop notifications are saved in the daemon and apply to every browser.
 
 ## Timeline
 
@@ -28,6 +28,13 @@ Most settings are **kept in this browser** only. Orchestration, Usage limits (ex
 
 See [Notifications](../features/notifications).
 
+## Screen
+
+| Setting | Does |
+| --- | --- |
+| Keep screen awake | Holds the screen on while claude-ui is open. See [Keep screen awake](../features/keep-awake). |
+| Only while a session is running | Holds it only while a session runs or waits for you. |
+
 ## Changes
 
 | Setting | Options |
@@ -48,6 +55,12 @@ See [Notifications](../features/notifications).
 | Tab grouping | By project, By worktree, or None |
 | Compact tabs | Shows each group as one chip. Open its tabs from the chip. Needs a tab grouping. |
 
+## Terminal
+
+| Setting | Does |
+| --- | --- |
+| Terminal position | **Bottom** (default) or **Side panel**. See [Panes & layout](../features/panes). |
+
 ## Keyboard
 
 Opens the [Keyboard shortcuts](shortcuts) dialog, where you can rebind every shortcut.
@@ -58,7 +71,7 @@ Opens the [Keyboard shortcuts](shortcuts) dialog, where you can rebind every sho
 
 ## Orchestration
 
-Lets a session start and steer worker sessions. Off by default. Every setting is described on the [Orchestration](../features/orchestration#settings) page.
+Lets a session start and steer worker sessions. Off by default. **Notifications from workers** turns notifications for worker sessions on or off. Every setting is described on the [Orchestration](../features/orchestration#settings) page.
 
 ## Usage limits
 
@@ -66,6 +79,19 @@ Lets a session start and steer worker sessions. Off by default. Every setting is
 | --- | --- |
 | Continue automatically after a usage limit resets | Sends "continue" to a session that the plan limit stopped, once the limit resets. |
 | Usage ring shows | Highest usage, Session (5 h) or Weekly. Kept in this browser. |
+
+## Jira
+
+One Jira connection for the **Ticket** tab of [Create worktree](../features/projects#create-a-worktree).
+
+| Setting | Does |
+| --- | --- |
+| Jira URL | Cloud: `https://<site>.atlassian.net`. Data Center or Server: the address of your Jira. |
+| Email | Your Atlassian account email. Only for Jira Cloud. |
+| API token / Personal access token | Cloud: an API token from id.atlassian.com › Security › API tokens. Data Center or Server: a personal access token from your Jira profile. Saved on the daemon's computer only (`secrets.json`), never shown again: the row then says **Token set**, with **Replace** and **Clear**. |
+| Branch template | How a ticket names its branch. Default `{type}/{key}-{summary}`: `{type}` is `bugfix` for a Bug, `feature` for a Story, Task or New Feature, else empty; `{key}` is the ticket key; `{summary}` is the summary, shortened. |
+| Ticket filter (JQL) | The tickets the Ticket tab lists, e.g. `project = ABC AND statusCategory != Done`. Typed text searches inside it; a key or ticket URL ignores it. Empty: your open tickets. |
+| Test connection | Shows "Connected as *your name*" or the error. |
 
 ## About
 

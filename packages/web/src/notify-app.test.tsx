@@ -37,11 +37,13 @@ const replies: Record<string, unknown> = {
 vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
+let emitSettings: (m: unknown) => void = () => {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+  connect: (opts: { onEvent: (e: unknown) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     emit = opts.onEvent;
+    emitSettings = (m) => opts.onSettingsChanged?.(m);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {
       request: async (m: { type: string; sessionId?: string }) => {
@@ -260,3 +262,54 @@ it("GH-356 a session shown in the other split makes no card", async () => {
   await settle();
   expect(cards()).toHaveLength(0);
 });
+
+// GH-387: Settings › Orchestration › Notifications from workers.
+const W = "33333333-2222-3333-4444-555555555555";
+const orch = (workerNotifications: boolean) => ({ orchestration: { enabled: true, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications } });
+const withWorker = async (workerNotifications: boolean, run: () => Promise<void>) => {
+  sessions.push({ ...mk(W, "Worker one"), coordinatorId: A } as SessionListItem);
+  replies["settings.get"] = { settings: orch(workerNotifications) };
+  try {
+    await run();
+  } finally {
+    sessions.pop();
+    delete replies["settings.get"];
+  }
+};
+const idleTurn = async (id: string) => {
+  const state = (st: string): Part => ({ type: "session_state", id: "st", state: st }) as Part;
+  await live(id, state("running"));
+  await live(id, { type: "assistant_text", id: "m", text: "All done here.", streaming: false });
+  await live(id, state("idle"));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 1600))));
+};
+
+it("Notifications from workers off: a worker's finished turn and request make no card; an escalated request does (GH-387)", async () => {
+  await withWorker(false, async () => {
+    await mount(`#${A}`);
+    await idleTurn(W);
+    expect(cards()).toHaveLength(0);
+    await live(W, perm("r1"));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 3300))));
+    expect(cards()).toHaveLength(0);
+    await live(W, perm("r2", { escalated: true, reason: "blocked" }));
+    await settle();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.textContent).toContain("Worker one");
+    // A plain session still gets its card.
+    await idleTurn(B);
+    expect(cards().some((c) => c.textContent?.includes("Fix login redirect"))).toBe(true);
+  });
+}, 15000);
+
+it("settings_changed turning worker notifications on applies to the next event without reload (GH-387)", async () => {
+  await withWorker(false, async () => {
+    await mount(`#${A}`);
+    await idleTurn(W);
+    expect(cards()).toHaveLength(0);
+    await act(async () => emitSettings({ type: "settings_changed", settings: orch(true) }));
+    await idleTurn(W);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.textContent).toContain("Finished");
+  });
+}, 15000);

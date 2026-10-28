@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import type { SessionGroup, WorktreeRow } from "./sessions.ts";
 import { confirmNames, groupEntries, groupSessions, idleTargets, tidy, workerCounts, workerEntries, type MenuEntry } from "./sidebar-menus.ts";
@@ -52,8 +52,9 @@ describe("groupEntries", () => {
   const base = { prefix: "g-", archivedView: false, onlyActive: false, setOnlyActive: () => {}, archiveCount: (d: number) => (d === 1 ? 0 : d), onArchive: () => {} };
   const ids = (e: MenuEntry[]) => e.map((x) => (x.kind === "sep" ? "-" : x.kind === "label" ? "label" : x.id));
   it("project: new, worktree, hide, archive, remove", () => {
-    const e = groupEntries({ ...base, newSession: () => {}, newWorktree: () => {}, tail: { id: "g-remove", label: "Remove from list (files stay)", onSelect: () => {} } });
-    expect(ids(e)).toEqual(["g-new-session", "g-new-worktree", "g-new-worktree-named", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);
+    const e = groupEntries({ ...base, newSession: () => {}, newWorktree: () => {}, copyPath: () => {}, tail: { id: "g-remove", label: "Remove from list (files stay)", onSelect: () => {} } });
+    expect(ids(e)).toEqual(["g-new-session", "g-new-worktree", "g-create-worktree", "-", "g-copy-path", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);
+    expect(e.find((x) => x.kind === "item" && x.id === "g-copy-path")).toMatchObject({ label: "Copy path" });
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-1")).toMatchObject({ disabled: true, label: "1 day (0)…" });
     expect(e.find((x) => x.kind === "item" && x.id === "g-archive-7")).toMatchObject({ disabled: false, label: "7 days (7)…" });
   });
@@ -72,6 +73,15 @@ describe("groupEntries", () => {
     const e = groupEntries({ ...base, archivedView: true, newSession: () => {}, tail: { id: "g-remove", label: "x", onSelect: () => {} } });
     expect(ids(e)).toEqual(["g-new-session", "-", "g-remove"]);
     expect(ids(groupEntries({ ...base, archivedView: true }))).toEqual([]);
+  });
+  it("GH-456 Copy path: own section near the top, runs copyPath", () => {
+    const copyPath = vi.fn();
+    const e = groupEntries({ ...base, copyPath });
+    expect(ids(e).slice(0, 3)).toEqual(["g-copy-path", "-", "g-hide-inactive"]);
+    (e.find((x) => x.kind === "item" && x.id === "g-copy-path") as { onSelect: () => void }).onSelect();
+    expect(copyPath).toHaveBeenCalledTimes(1);
+    expect(ids(groupEntries({ ...base, archivedView: true, newSession: () => {}, copyPath, tail: { id: "g-remove", label: "x", onSelect: () => {} } }))).toEqual(["g-new-session", "-", "g-copy-path", "-", "g-remove"]);
+    expect(ids(groupEntries(base)).includes("g-copy-path")).toBe(false);
   });
   it("outside the roots: no new session, starts at Hide", () => {
     expect(ids(groupEntries(base))[0]).toBe("g-hide-inactive");

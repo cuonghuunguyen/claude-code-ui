@@ -11,12 +11,12 @@ document.body.append(el);
 const root = createRoot(el);
 let n = 0;
 const ok = () => vi.fn<ArtifactPreviewLoader>(async () => ({ url: `/artifact/${"a".repeat(32)}/p.html?v=${++n}`, size: 1, mtime: n }));
-const mount = async (loader: ArtifactPreviewLoader | undefined, files = 0, partId = `toolu_${n++}`, connected = true) => {
+const mount = async (loader: ArtifactPreviewLoader | undefined, _unused = 0, partId = `toolu_${n++}`, connected = true) => {
   await act(async () =>
     root.render(
       <ArtifactConnectedContext value={connected}>
         <ArtifactPreviewContext value={loader}>
-          <ArtifactPreview partId={partId} title="T" files={files} />
+          <ArtifactPreview partId={partId} title="T" />
         </ArtifactPreviewContext>
       </ArtifactConnectedContext>,
     ),
@@ -72,11 +72,27 @@ describe("ArtifactPreview", () => {
     expect(button("Show preview")).toBeDefined();
   });
 
-  it("a multi-file publish says only the main page is shown", async () => {
-    await mount(ok(), 2);
+  it("names the supporting files the preview cannot load", async () => {
+    await mount(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, unavailable: ["a.css", "img/b.png"] })));
     await click("Show preview");
-    expect(el.textContent).toContain("Main page only: 2 supporting files not loaded.");
+    expect(el.textContent).toContain("2 supporting files not loaded: a.css, img/b.png");
     expect(el.textContent).toContain("Local file, shown offline");
+  });
+
+  it("names one file in the singular and shortens a long list to three names", async () => {
+    await mount(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, unavailable: ["only.css"] })));
+    await click("Show preview");
+    expect(el.textContent).toContain("1 supporting file not loaded: only.css");
+    await click("Hide preview");
+    await mount(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, unavailable: ["a", "b", "c", "d", "e"] })));
+    await click("Show preview");
+    expect(el.textContent).toContain("5 supporting files not loaded: a, b, c, …");
+  });
+
+  it("no note when every supporting file loads", async () => {
+    await mount(ok());
+    await click("Show preview");
+    expect(el.textContent).not.toContain("not loaded");
   });
 
   it("without the context nothing renders", async () => {

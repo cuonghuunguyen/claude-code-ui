@@ -9,7 +9,7 @@ import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protoco
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, loadCollapsed, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -135,6 +135,7 @@ export function SessionList({
   reveal: revealSeq,
   openTabs,
   onWorkers,
+  onCopy,
   onArchiveIdle,
 }: {
   list: SessionListItem[];
@@ -153,8 +154,8 @@ export function SessionList({
   onNew: (cwd: string) => void;
   /** Removes the project from the list; files stay. */
   onRemove: (cwd: string) => void;
-  /** New worktree in the project's repository; `named`: Shift+click, ask for a name. */
-  onNewWorktree?: (cwd: string, named: boolean) => void;
+  /** New worktree in the project's repository: the Create worktree modal; `quick`: Shift+click or menu "New worktree", at once with a generated name. */
+  onNewWorktree?: (cwd: string, quick: boolean) => void;
   /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
   onRemoveWorktree?: (project: string, path: string) => void;
   /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
@@ -175,6 +176,8 @@ export function SessionList({
   openTabs?: ReadonlySet<string>;
   /** Close finished / Remove closed workers of a coordinator: the worker ids (the app confirms removals). */
   onWorkers?: (ids: string[], action: "close" | "remove", coordinator: { id: string; title: string }) => void;
+  /** Copy path of a project or worktree row; the app copies and toasts. */
+  onCopy?: (text: string, what: string) => void;
   /** Archive idle sessions older than `days` in `where` (a project or worktree name); the app confirms first. */
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
@@ -207,13 +210,15 @@ export function SessionList({
     return () => window.removeEventListener(VIEW_EVENT, sync);
   }, []);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
-  const toggle = (cwd: string) =>
-    setCollapsed((c) => {
-      const next = new Set(c);
-      if (!next.delete(cwd)) next.add(cwd);
-      saveCollapsed(next);
-      return next;
-    });
+  // Worker groups start collapsed: their keys live in an expanded set; projects and worktree rows in `collapsed`.
+  const [expandedW, setExpandedW] = useState(loadExpandedWorkers);
+  const toggle = (cwd: string) => {
+    const [set, setSet, save] = isWorkerKey(cwd) ? ([expandedW, setExpandedW, saveExpandedWorkers] as const) : ([collapsed, setCollapsed, saveCollapsed] as const);
+    const next = new Set(set);
+    if (!next.delete(cwd)) next.add(cwd);
+    save(next);
+    setSet(next);
+  };
 
   // Sessions shown per group or row key (not persisted); a row's id to focus once "Load more" has shown it.
   const [limits, setLimits] = useState<Record<string, number>>({});
@@ -269,7 +274,8 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
-      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (named) => onNewWorktree(g.cwd, named) : undefined,
+      copyPath: onCopy && (() => onCopy(g.cwd, "path")),
+      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
     });
@@ -278,6 +284,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots ? undefined : () => onNew(r.path),
+      copyPath: onCopy && (() => onCopy(r.path, "path")),
       tail: onRemoveWorktree && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
     });
   const activeSession = list.find((s) => s.id === activeId);
@@ -301,6 +308,11 @@ export function SessionList({
       const next = new Set(c);
       for (const k of keys) next.delete(k);
       saveCollapsed(next);
+      return next;
+    });
+    setExpandedW((c) => {
+      const next = new Set([...c, ...keys.filter(isWorkerKey)]);
+      saveExpandedWorkers(next);
       return next;
     });
     setReveal({ id: activeSession.id, focus });
@@ -332,10 +344,23 @@ export function SessionList({
     });
   // The other view's worker group keys stay as they are.
   const otherView = (k: string) => (archived ? k.startsWith("coordinator:") : k.startsWith("archived:"));
-  const expandAll = () => setAll((c) => [...c].filter(otherView));
-  const collapseAll = () => setAll((c) => [...c, ...collapseKeys(groups, nested.workers, archived)]);
+  const setWorkers = (update: (c: Set<string>) => Iterable<string>) =>
+    setExpandedW((c) => {
+      const next = new Set(update(c));
+      saveExpandedWorkers(next);
+      return next;
+    });
+  const allKeys = collapseKeys(groups, nested.workers, archived);
+  const expandAll = () => {
+    setAll(() => []);
+    setWorkers((c) => [...c, ...allKeys.filter(isWorkerKey)]);
+  };
+  const collapseAll = () => {
+    setAll((c) => [...c, ...allKeys.filter((k) => !isWorkerKey(k))]);
+    setWorkers((c) => [...c].filter(otherView));
+  };
   // While searching every match shows, also in collapsed groups and rows.
-  const isOpen = (key: string) => searching || !collapsed.has(key);
+  const isOpen = (key: string) => searching || (isWorkerKey(key) ? expandedW.has(key) : !collapsed.has(key));
   const days = (all: SessionListItem[], depth: 0 | 1, key: string, name: string) => {
     key = archived ? `archived:${key}` : key;
     // While searching every match shows; the active, running and needs-input sessions always do.
@@ -552,7 +577,7 @@ export function SessionList({
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
                 <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
                   {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
-                    <IconButton label={`New worktree in ${projectName(g.cwd)} (Shift+click to name it)`} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
+                    <IconButton label={`Create worktree in ${projectName(g.cwd)} (Shift+click: new worktree with a generated name)`} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
                       <GitBranchPlusIcon />
                     </IconButton>
                   )}

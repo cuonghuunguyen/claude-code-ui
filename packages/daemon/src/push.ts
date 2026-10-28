@@ -23,7 +23,7 @@ export type PushExtra = { tag?: string; silent?: boolean; replace?: boolean; tit
 
 /**
  * Turns session events into pushes: "needs input" at once, "finished" (an error counts) 1.5 s after the turn ends unless
- * work resumes or background tasks still run, at most one per session per 5 s (an escalated request pushes at once), none while `suppressed` (a focused, visible tab shows the session).
+ * work resumes or background tasks still run, at most one per session per 5 s (an escalated request pushes at once), none while `suppressed` (a focused, visible tab shows the session) and none for a `quiet` session except an escalated request.
  * An escalated request that settles (answered, stopped, cancelled) calls `replace` once, at once, also while `suppressed`: its notification must not stay.
  */
 export function createNotifier(opts: {
@@ -33,6 +33,8 @@ export function createNotifier(opts: {
   replace?: (sessionId: string, body: string, tag?: string) => void;
   /** The coordinator of a worker session, undefined for any other: workers of one coordinator blocked on the same request group (GH-163). */
   group?: (sessionId: string) => string | undefined;
+  /** A worker whose notifications are off (Settings › Orchestration, GH-387): no push but an escalated request's (forced) one and its settle. Read per push. */
+  quiet?: (sessionId: string) => boolean;
 }) {
   const sessions = new Map<string, Tracked>();
   const groups = new Map<string, Group>();
@@ -42,6 +44,8 @@ export function createNotifier(opts: {
   function fireGrouped(id: string, t: Tracked, body: string, force: boolean) {
     const coordinator = opts.group?.(id);
     if (coordinator === undefined || !t.request) return fire(id, t, body, force);
+    // A quiet worker (not escalated) never joins: it would be counted in, and replaced or re-announced, by a notification it never took part in.
+    if (!force && opts.quiet?.(id)) return false;
     const key = `${coordinator}\u0000${describe(t.request)}`;
     let g = groups.get(key);
     if (!g) groups.set(key, (g = { tag: `req-${createHash("sha1").update(key).digest("hex").slice(0, 16)}`, what: describe(t.request), members: new Set(), shown: false, title: coordinator }));
@@ -49,11 +53,10 @@ export function createNotifier(opts: {
     g.members.add(id);
     t.group = key;
     if ((had && !force) || opts.suppressed(id)) return false;
-    const n = g.members.size;
-    // The first push keeps the 5 s gap; a later one only changes the count of the notification already there.
-    if (n === 1 && !force && Date.now() - t.lastSent < MIN_GAP_MS) return false;
+    // The first push keeps the 5 s gap; a later one only changes the count of a notification that was really shown.
+    if (!g.shown && !force && Date.now() - t.lastSent < MIN_GAP_MS) return false;
     t.lastSent = Date.now();
-    opts.push(id, n === 1 ? body : countBody(g), { tag: g.tag, titleSession: g.title, ...(n > 1 && { silent: true, replace: true }) });
+    opts.push(id, g.shown ? countBody(g) : body, { tag: g.tag, titleSession: g.title, ...(g.shown && { silent: true, replace: true }) });
     g.shown = true;
     return true;
   }
@@ -74,7 +77,7 @@ export function createNotifier(opts: {
 
   /** True when a push went out. */
   function fire(id: string, t: Tracked, body: string, force = false) {
-    if (opts.suppressed(id) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return false;
+    if (opts.suppressed(id) || (!force && opts.quiet?.(id)) || (!force && Date.now() - t.lastSent < MIN_GAP_MS)) return false;
     t.lastSent = Date.now();
     opts.push(id, body);
     return true;

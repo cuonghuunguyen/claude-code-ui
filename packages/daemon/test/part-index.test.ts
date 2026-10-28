@@ -179,6 +179,59 @@ describe("PartIndex", () => {
     expect(index.edits(cursor.pos).map((x) => x.part.id)).toEqual(["e1", "e1:result", "w1"]);
   });
 
+  it("aux carries the newest ExitPlanMode call before the cursor, at most one", () => {
+    const { index } = build([
+      user(1),
+      call("p1", "ExitPlanMode", { plan: "old plan" }),
+      subagent("sa"),
+      call("p2", "ExitPlanMode", { plan: "new plan" }),
+      ...turns(12, 2),
+    ]);
+    const cursor = index.lastPage().older!;
+    const ids = index.aux(cursor.pos).map((x) => x.part.id);
+    expect(ids.filter((id) => !id.startsWith("r"))).toEqual(["sa", "p2"]);
+  });
+
+  it("aux carries the newest ExitPlanMode call whatever its input, and the newest plan-file Write; not calls inside the page", () => {
+    const file = (id: string, content: string) => call(id, "Write", { file_path: "/home/user/.claude/plans/p.md", content });
+    const { index } = build([user(1), file("w0", "old"), file("w1", "# File plan"), call("w2", "Write", { file_path: "/p/a.txt", content: "x" }), call("p1", "ExitPlanMode", {}), ...turns(12, 2), call("p3", "ExitPlanMode", { plan: "inside page" })]);
+    const cursor = index.lastPage().older!;
+    const ids = index.aux(cursor.pos).map((x) => x.part.id);
+    expect(ids.filter((id) => !id.startsWith("r"))).toEqual(["w1", "p1"]);
+  });
+
+  it("aux carries the Edit and MultiEdit calls of the plan file after its newest Write, in the session's plan folders only", () => {
+    const f = "/cfg/plans/p.md";
+    const { index } = build([
+      user(1),
+      call("w0", "Write", { file_path: f, content: "old" }),
+      call("w1", "Write", { file_path: f, content: "# Plan\n1. a" }),
+      call("e1", "Edit", { file_path: f, old_string: "1. a", new_string: "1. b" }),
+      call("e2", "MultiEdit", { file_path: f, edits: [{ old_string: "1. b", new_string: "1. c" }] }),
+      call("e3", "Edit", { file_path: "/other/plans/q.md", old_string: "x", new_string: "y" }),
+      call("e4", "Edit", { file_path: f, old_string: "1. c", new_string: "1. failed" }, "running"),
+      call("p1", "ExitPlanMode", {}),
+      ...turns(12, 2),
+    ]);
+    const cursor = index.lastPage().older!;
+    const ids = index.aux(cursor.pos, ["/cfg/plans"]).map((x) => x.part.id).filter((id) => !id.startsWith("r"));
+    expect(ids).toEqual(["w1", "e1", "e2", "p1"]);
+    expect(index.planOf("p1", ["/cfg/plans"])).toBe("# Plan\n1. c");
+    // Folders the session does not use: no plan file at all.
+    expect(index.planOf("p1", ["/nowhere"])).toBeUndefined();
+  });
+
+  it("planOf: the newest plan-file Write before the call, else the call's own plan; an empty-input call without a file has none", () => {
+    const file = (id: string, content: string) => call(id, "Write", { file_path: "C:\\Users\\u\\.claude\\plans\\p.md", content });
+    const { index } = build([user(1), file("w0", "old"), file("w1", "# File plan"), call("p1", "ExitPlanMode", {}), call("p2", "ExitPlanMode", { plan: "own" }), file("w2", "later")]);
+    expect(index.planOf("p1")).toBe("# File plan");
+    // The file wins: the CLI filled `plan` from the file before an Edit of the same message ran.
+    expect(index.planOf("p2")).toBe("# File plan");
+    expect(build([user(1), call("p2", "ExitPlanMode", { plan: "own" })]).index.planOf("p2")).toBe("own");
+    expect(index.planOf("not-yet")).toBe("later");
+    expect(build([user(1), call("p1", "ExitPlanMode", {})]).index.planOf("p1")).toBeUndefined();
+  });
+
   it("pageFrom starts at the turn of the given id; over the cap or unknown gives undefined", () => {
     const { index } = build(turns(25));
     const from = index.pageFrom("c20", 3000)!;

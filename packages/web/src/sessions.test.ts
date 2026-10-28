@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -259,6 +259,27 @@ describe("workers", () => {
     expect(top.map((x) => x.id)).toEqual(["c", "orphan", "arch"]);
   });
 
+  it("nestWorkers lists a worker's worker under the root coordinator as parent › child", () => {
+    const coord = { ...item("c1", "/p/web", 9), coordinator: true as const };
+    const wk1 = { ...w("w1", "c1", "fix-a"), coordinator: true as const };
+    const wk2 = w("g1", "w1", "rev");
+    const wk3 = w("g2", "g1", "deep");
+    const { top, workers } = nestWorkers([coord, wk1, wk2, wk3], false);
+    expect(workers.get("c1")!.map((x) => x.workerName)).toEqual(["fix-a", "fix-a › rev", "fix-a › rev › deep"]);
+    expect(workers.has("w1")).toBe(false);
+    expect(top.map((x) => x.id)).toEqual(["c1"]);
+  });
+
+  it("nestWorkers keeps a worker's workers right under it, whatever the sibling names sort like", () => {
+    const coord = { ...item("c1", "/p/web", 9), coordinator: true as const };
+    const a = { ...w("w1", "c1", "a"), coordinator: true as const };
+    const ay = w("w2", "c1", "a ");
+    const kid = w("g1", "w1", "z");
+    const { workers } = nestWorkers([coord, ay, kid, a], false);
+    // Compared as one string, "a " sorts between "a" and "a › z" (collation order of the separator is locale dependent).
+    expect(workers.get("c1")!.map((x) => x.workerName)).toEqual(["a", "a › z", "a "]);
+  });
+
   it("groupByCwd keeps a coordinator whose worker's name or title matches the search", () => {
     const coord = { ...item("c", "/p/web", 9, "Plan"), coordinator: true as const };
     const wk = w("w1", "c", "builder");
@@ -290,6 +311,18 @@ describe("sidebar actions (GH-152)", () => {
     const { groups, workers } = view();
     expect(collapseKeys(groups, workers, false)).toEqual(["/r", "worktree:/r", "worktree:/r/.claude/worktrees/wt", "/zeta", "coordinator:c1"]);
     expect(collapseKeys(groups, workers, true).at(-1)).toBe("archived:coordinator:c1");
+  });
+
+  it("isWorkerKey tells worker group keys from project and worktree keys; expanded workers persist apart from the collapsed set", () => {
+    expect(["coordinator:c1", "archived:coordinator:c1"].map(isWorkerKey)).toEqual([true, true]);
+    expect(["/r", "worktree:/r", "/home/coordinator:x"].map(isWorkerKey)).toEqual([false, false, false]);
+    expect(loadExpandedWorkers().size).toBe(0);
+    saveExpandedWorkers(new Set(["coordinator:c1"]));
+    expect([...loadExpandedWorkers()]).toEqual(["coordinator:c1"]);
+    expect(localStorage.getItem("claude-ui.collapsed")).toBeNull();
+    localStorage.setItem("claude-ui.expandedWorkers", "{bad");
+    expect(loadExpandedWorkers().size).toBe(0);
+    localStorage.clear();
   });
 
   it("revealKeys: the keys that hide a session, undefined for an unknown one", () => {
@@ -369,4 +402,6 @@ it("removeWorktreeText adds 'Branch <b> stays.' for a kept branch; keepsBranch t
   expect(removeWorktreeText({ uncommitted: 1, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("You have 1 uncommitted file on feat. All will be lost if you remove. Branch feat stays.");
   const l = [{ path: "/a", branch: "feat", main: false }, { path: "/b", branch: "worktree-b", main: false }, { path: "/c", branch: "abc1234", main: false }];
   expect([keepsBranch(l, "/a"), keepsBranch(l, "/b"), keepsBranch(l, "/c"), keepsBranch(undefined, "/a")]).toEqual([true, false, false, false]);
+  // A Created branch (GH-447) of any name goes with its worktree.
+  expect(keepsBranch(l, "/a", { createdBranch: true })).toBe(false);
 });

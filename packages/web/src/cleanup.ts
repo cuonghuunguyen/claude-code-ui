@@ -6,7 +6,7 @@ const DAY = 86_400_000;
 
 export type CleanupScope = { kind: "all" } | { kind: "project"; cwd: string } | { kind: "coordinator"; id: string; title: string };
 export type WorktreeCandidate = { key: string; project: string; path: string; branch?: string; external: boolean; outsideRoots: boolean; locked: boolean; sessions: number; lastActivity?: number };
-export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** Path of its linked worktree candidate. */ worktree?: string };
+export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** The session that started it (a worker of a worker has a worker here). */ coordinatorId?: string; /** Path of its linked worktree candidate. */ worktree?: string };
 
 export const BLOCK_TEXT: Record<WorktreeBlock, string> = {
   locked: "Locked (git worktree lock)",
@@ -58,7 +58,7 @@ export function cleanupCandidates(
   };
   const workers = workerSessions
     .filter((s) => inProject(s.cwd))
-    .map((s): WorkerCandidate => ({ key: `wk:${s.id}`, id: s.id, name: s.workerName ?? s.title, cwd: s.cwd, state: state(s), lastActivity: s.lastActivity, ...(paths.has(s.cwd) && { worktree: s.cwd }) }));
+    .map((s): WorkerCandidate => ({ key: `wk:${s.id}`, id: s.id, name: s.workerName ?? s.title, cwd: s.cwd, state: state(s), lastActivity: s.lastActivity, ...(s.coordinatorId && { coordinatorId: s.coordinatorId }), ...(paths.has(s.cwd) && { worktree: s.cwd }) }));
   return { worktrees: wts, workers };
 }
 
@@ -136,7 +136,14 @@ export const rowLabel = (r: Row) => (r.kind === "worker" ? r.name : (r.branch ??
 /** Workers first (their sessions leave the worktree), then worktrees. */
 export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteBranch: Set<string> }, request: <T>(m: { type: "worker.remove"; sessionId: string } | { type: "worktree.remove"; cwd: string; path: string; expectSafe: boolean; expect: { uncommitted: number; ahead: number; ignored: number }; deleteBranch: boolean }) => Promise<T>): Item[] {
   const ticked = rows.filter((r) => selected.has(r.key));
-  const workers = ticked.flatMap((r): Item[] => (r.kind === "worker" ? [{ key: r.key, label: r.name, run: () => request({ type: "worker.remove", sessionId: r.id }) }] : []));
+  // A worker with workers below it is refused by the daemon: remove the deepest first (depth along coordinatorId among the rows).
+  const up = new Map(rows.flatMap((r) => (r.kind === "worker" && r.coordinatorId ? [[r.id, r.coordinatorId] as const] : [])));
+  const depth = (id: string) => {
+    let d = 0;
+    for (let cur = id; up.has(cur) && d < 20; d++) cur = up.get(cur)!;
+    return d;
+  };
+  const workers = [...ticked].sort((a, b) => (b.kind === "worker" ? depth(b.id) : 0) - (a.kind === "worker" ? depth(a.id) : 0)).flatMap((r): Item[] => (r.kind === "worker" ? [{ key: r.key, label: r.name, run: () => request({ type: "worker.remove", sessionId: r.id }) }] : []));
   const wts = ticked.flatMap((r): Item[] =>
     r.kind === "worktree"
       ? [{ key: r.key, label: rowLabel(r), run: () => request({ type: "worktree.remove", cwd: r.project, path: r.path, expectSafe: r.status?.safety === "safe", expect: { uncommitted: r.status?.uncommitted ?? 0, ahead: r.status?.ahead ?? 0, ignored: r.status?.ignored ?? 0 }, deleteBranch: opts.deleteBranch.has(r.key) && !!r.status?.branchMerged }) }]

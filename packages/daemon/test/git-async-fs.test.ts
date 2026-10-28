@@ -1,6 +1,6 @@
 // GH-298: refs stamp and repository top never read the file system synchronously (UNC over 9P on the main thread).
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ vi.mock("node:fs", async (orig) => {
   const m = { ...fs, statSync: wrap("statSync"), lstatSync: wrap("lstatSync"), readdirSync: wrap("readdirSync"), readFileSync: wrap("readFileSync"), existsSync: wrap("existsSync"), realpathSync };
   return { ...m, default: m };
 });
-const { gitRefs, gitStatus } = await import("../src/git.ts");
+const { gitRefs, gitStatus, listRepos } = await import("../src/git.ts");
 
 const repo = () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "gh298f-")));
@@ -45,6 +45,18 @@ describe("GH-298 refs stamp and repository top without sync fs", () => {
     const dir = repo();
     const s = await during(() => gitStatus(dir));
     expect(s).toMatchObject({ branch: "main" });
+    expect(seen.names).toEqual([]);
+  });
+});
+
+describe("listRepos without sync fs", () => {
+  it("listRepos reads the file system only asynchronously", async () => {
+    const dir = repo();
+    mkdirSync(join(dir, "nested/.git"), { recursive: true });
+    writeFileSync(join(dir, ".gitmodules"), '[submodule "n"]\n\tpath = nested\n\turl = u\n');
+    const { DEFAULTS } = await import("../src/settings.ts");
+    const r = await during(() => listRepos(dir, { settings: DEFAULTS.git, allowed: () => true }));
+    expect(r.repos.map((x) => x.rel)).toEqual(["", "nested"]);
     expect(seen.names).toEqual([]);
   });
 });

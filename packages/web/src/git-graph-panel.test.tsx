@@ -4,8 +4,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
-import { GraphPanel } from "./git-graph-panel.tsx";
-import { noteRefs } from "./git-refs.ts";
+import { GraphPane, GraphPanel } from "./git-graph-panel.tsx";
+import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
+import type { GitRepo } from "@claude-ui/protocol";
+import { forgetRemoteOps } from "./git-remote-ops.ts";
+import { noteRefs, refsOf } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
 
 vi.mock("@pierre/diffs/react", () => ({ MultiFileDiff: () => <div data-testid="pierre-diff" /> }));
@@ -15,7 +18,9 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as never;
-window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as never;
+let narrowNow = false;
+const setNarrow = (n: boolean) => void (narrowNow = n);
+window.matchMedia = ((query: string) => ({ get matches() { return narrowNow && query.includes("48rem"); }, media: query, addEventListener() {}, removeEventListener() {} })) as never;
 Element.prototype.scrollTo = function (this: Element, o?: ScrollToOptions | number) {
   this.scrollTop = typeof o === "object" ? (o.top ?? 0) : 0;
   this.dispatchEvent(new Event("scroll"));
@@ -56,11 +61,15 @@ afterEach(() => {
   stampValue = "s1";
   noStamp = false;
   branchCount = 2;
+  forgetRemoteOps();
+  forgetRepoChoices();
+  localStorage.removeItem("claude-ui.repoChoice");
+  setNarrow(false);
   return act(() => root.render(null));
 });
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 
-type Req = { type: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
+type Req = { type: string; cwd?: string; skip?: number; hash?: string; path?: string; text?: string; ref?: string };
 let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: null } });
 const MAIN_ARGV = "refs/heads/main:refs/heads/main";
 const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
@@ -203,6 +212,19 @@ it("a rename reads the parent side from the old path; an unchanged rename shows 
   await act(async () => fileBtn(0).click());
   await flush();
   expect(c.sent.filter((m) => m.type === "git.fileAt").map((m) => `${m.hash === hash(3) ? "commit" : "parent"}:${m.path}`)).toEqual(["parent:old.ts", "commit:moved.ts"]);
+});
+
+it("a submodule entry in commit details reads \"Submodule <path> → <short>\" and requests no diff", async () => {
+  const c = fake(history(3), [{ status: "M", path: "libs/lib", submodule: { from: hash(1), to: hash(2) } }, { status: "M", path: "src/m.ts", added: 1, removed: 1 }]);
+  await mount(c);
+  await select(0);
+  const sub = el.querySelector<HTMLElement>("[data-testid=commit-submodule]")!;
+  expect(sub.textContent).toContain(`Submodule libs/lib → ${hash(2).slice(0, 7)}`);
+  expect(el.querySelector("button[data-testid=commit-submodule]")).toBeNull();
+  expect(el.querySelectorAll("[data-testid=commit-file]")).toHaveLength(1);
+  await act(async () => sub.click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.fileAt")).toEqual([]);
 });
 
 it("an unchanged rename shows a notice instead of a diff", async () => {
@@ -522,6 +544,222 @@ it("a failed fetch shows git's message, still reloads, and Dismiss removes it", 
   fetchReply = async () => ({ remote: { output: "", refs: null } });
 });
 
+const mountNamed = async (c: ReturnType<typeof fake>, cwd: string, repoName?: string) => {
+  await act(async () => root.render(<GraphPanel key={cwd} client={c} cwd={cwd} repoName={repoName} />));
+  await flush();
+};
+const fetchBtn = () => el.querySelector<HTMLButtonElement>("[data-testid=graph-fetch]")!;
+const resultText = () => el.querySelector("[data-testid=graph-remote-result] [role=status]")?.textContent;
+
+it("Fetch of a named repository says \"Fetched all remotes of libs/lib\"; without a name today's text", async () => {
+  const c = fake(history(3));
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  fetchReply = () => new Promise(() => {});
+  await act(async () => fetchBtn().click());
+  expect(el.querySelector(".sr-only[role=status]")!.textContent).toBe("Fetching all remotes of libs/lib…");
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+  forgetRemoteOps();
+  await mountNamed(c, "/p", undefined);
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes");
+});
+
+it("a result line and a running fetch stay with their repository across a remount; Dismiss clears that repository only", async () => {
+  const c = fake(history(3));
+  let done!: (v: unknown) => void;
+  fetchReply = () => new Promise((r) => (done = r));
+  await mountNamed(c, "/p", "p");
+  await act(async () => fetchBtn().click());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  expect(fetchBtn().getAttribute("aria-busy")).not.toBe("true");
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await act(async () => done({ remote: { output: "", refs: null } }));
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await mountNamed(c, "/p", "p");
+  expect(resultText()).toBe("Fetched all remotes of p");
+  expect(c.sent.filter((m) => m.type === "git.fetch" && m.cwd === "/p")).toHaveLength(1);
+  await act(async () => el.querySelector<HTMLButtonElement>("button[aria-label=Dismiss]")!.click());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+});
+
+it("a finished operation reloads the mounted panel of its repository with fresh", async () => {
+  const c = fake(history(3));
+  await mountNamed(c, "/p", "p");
+  c.sent.length = 0;
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(c.sent.at(-1)).toMatchObject({ type: "git.log", cwd: "/p", fresh: true });
+});
+
+it("Push and Pull results name the repository", async () => {
+  const c = fake(withRefs());
+  await mountNamed(c, "/p/libs/lib", "libs/lib");
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-push").click());
+  await act(async () => byId("git-push-confirm").click());
+  await flush();
+  expect(resultText()).toBe("Pushed main of libs/lib to origin");
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-pull").click());
+  await act(async () => byId("git-pull-confirm").click());
+  await flush();
+  expect(resultText()).toBe("Pulled main of libs/lib");
+});
+
+// ---- GraphPane: the selected repository ----
+const own: GitRepo = { path: "/p", rel: "", kind: "main", branch: "main" };
+const lib: GitRepo = { path: "/p/libs/lib", rel: "libs/lib", kind: "submodule", parent: "/p", branch: "a4a3b80" };
+const out: GitRepo = { path: "/p/web", rel: "web", kind: "nested", parent: "/p", outsideRoots: true };
+const mountPane = async (c: ReturnType<typeof fake>, list: GitRepo[], hidden = false) => {
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" hidden={hidden} repos={{ list, projectKey: "/p" }} />));
+  await flush();
+};
+const pickRepo = (rel: string) => act(async () => setRepoChoice("/p", rel));
+const selectorEl = () => el.querySelector<HTMLElement>("[data-testid=repo-selector]");
+
+it("GraphPane: no selector for only the own repository; with 2+ the filter row starts with it", async () => {
+  const c = fake(history(3));
+  await mountPane(c, [own]);
+  expect(selectorEl()).toBeNull();
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p", exact: true });
+  await mountPane(c, [own, lib]);
+  expect(selectorEl()).not.toBeNull();
+  expect(el.querySelector("[data-testid=graph-filter-text]")!.closest("div")!.firstElementChild).toBe(selectorEl());
+});
+
+it("GraphPane: without a repository list yet it says Loading graph… and reads nothing; null (an older daemon) reads the cwd without exact", async () => {
+  const c = fake(history(3));
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" />));
+  await flush();
+  expect(el.textContent).toContain("Loading graph…");
+  expect(c.sent).toEqual([]);
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" repos={null} />));
+  await flush();
+  expect(el.textContent).not.toContain("Loading graph…");
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p" });
+  expect(logs(c)[0]).not.toHaveProperty("exact");
+});
+
+it("GraphPane: picking libs/lib remounts the panel for it: git.log of lib, branch filter back to HEAD", async () => {
+  const c = fake(history(3));
+  await mountPane(c, [own, lib]);
+  expect(selectorEl()!.getAttribute("aria-label")).toBe("Repository: p, branch main");
+  c.sent.length = 0;
+  await pickRepo("libs/lib");
+  await flush();
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p/libs/lib", exact: true, ref: "HEAD", skip: 0 });
+  expect(selectorEl()!.getAttribute("aria-label")).toBe("Repository: lib, branch a4a3b80");
+});
+
+it("GraphPane: a stored outsideRoots choice falls back to the own repository", async () => {
+  setRepoChoice("/p", "web");
+  const c = fake(history(3));
+  await mountPane(c, [own, out]);
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p", exact: true });
+});
+
+it("GraphPane: Fetch names the repository while the selector shows; a running fetch stays with it", async () => {
+  const c = fake(history(3));
+  let done!: (v: unknown) => void;
+  fetchReply = () => new Promise((r) => (done = r));
+  await mountPane(c, [own, lib]);
+  await act(async () => fetchBtn().click());
+  expect(el.querySelector(".sr-only[role=status]")!.textContent).toBe("Fetching all remotes of p…");
+  await pickRepo("libs/lib");
+  await flush();
+  expect(fetchBtn().getAttribute("aria-busy")).not.toBe("true");
+  fetchReply = async () => ({ remote: { output: "", refs: null } });
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.fetch").map((m) => m.cwd)).toEqual(["/p", "/p/libs/lib"]);
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await act(async () => done({ remote: { output: "", refs: null } }));
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of libs/lib");
+  await pickRepo("");
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes of p");
+  await mountPane(c, [own]);
+  await act(async () => fetchBtn().click());
+  await flush();
+  expect(resultText()).toBe("Fetched all remotes");
+});
+
+it("GraphPane: a switch while the Graph is hidden sends no git.log until it shows; then git.refs of the repository", async () => {
+  const c = fake(history(3));
+  await mountPane(c, [own, lib]);
+  await mountPane(c, [own, lib], true);
+  c.sent.length = 0;
+  await pickRepo("libs/lib");
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.log")).toEqual([]);
+  await mountPane(c, [own, lib], false);
+  expect(c.sent.find((m) => m.type === "git.refs")).toMatchObject({ cwd: "/p/libs/lib", exact: true });
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p/libs/lib", exact: true });
+});
+
+it("GraphPane: refs stamps are noted under the repository path", async () => {
+  noteRefs("/p", "old");
+  stampValue = "s7";
+  const c = fake(history(3));
+  await mountPane(c, [own, lib]);
+  await pickRepo("libs/lib");
+  await flush();
+  expect(refsOf("/p/libs/lib")).toBe("s7");
+  expect(refsOf("/p")).toBe("s7");
+  stampValue = "s8";
+  await pickRepo("");
+  await mountPane(c, [own, lib], true);
+  await mountPane(c, [own, lib], false);
+  expect(refsOf("/p/libs/lib")).toBe("s7");
+});
+
+const SUBS: GitCommitDetail["files"] = [
+  { status: "M", path: "libs/lib", submodule: { to: "a".repeat(40) } },
+  { status: "M", path: "vendor/x", submodule: { to: "b".repeat(40) } },
+  { status: "M", path: "web", submodule: { to: "c".repeat(40) } },
+];
+const showBtns = () => [...el.querySelectorAll<HTMLElement>("[data-testid=show-repo-graph]")];
+
+it("GraphPane: Show graph of libs/lib on a listed submodule entry selects it; unlisted and outsideRoots entries have no button", async () => {
+  const c = fake(history(3), SUBS);
+  await mountPane(c, [own, lib, out]);
+  await select(0);
+  expect(showBtns().map((b) => b.textContent)).toEqual(["Show graph of libs/lib"]);
+  expect(showBtns()[0]!.className).toContain("max-md:h-11");
+  c.sent.length = 0;
+  await act(async () => showBtns()[0]!.click());
+  await flush();
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  expect(logs(c)[0]).toMatchObject({ cwd: "/p/libs/lib", exact: true });
+  expect(c.sent.some((m) => m.type === "git.fileAt")).toBe(false);
+});
+
+it("GraphPane: below md the selector has its own full-width line", async () => {
+  setNarrow(true);
+  const c = fake(history(3));
+  await mountPane(c, [own, lib]);
+  expect(selectorEl()!.className).toContain("h-11");
+  expect(selectorEl()!.className).toContain("w-full");
+});
+
+it("GraphPane: coming back to the hidden Graph checks git.refs of the selected repository with exact", async () => {
+  setRepoChoice("/p", "libs/lib");
+  const c = fake(history(3));
+  await mountPane(c, [own, lib]);
+  await mountPane(c, [own, lib], true);
+  c.sent.length = 0;
+  await mountPane(c, [own, lib], false);
+  expect(c.sent.find((m) => m.type === "git.refs")).toMatchObject({ cwd: "/p/libs/lib", exact: true });
+  expect(logs(c)).toEqual([]);
+});
+
 // ---- Branch menu (right click, long press, Shift+F10): push, force push, pull ----
 const menuAt = async (target: Element) => {
   await act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
@@ -746,4 +984,31 @@ it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", a
   expect(cls).not.toContain("break-all");
   await act(async () => byId("git-push-cancel").click());
   await flush();
+});
+
+it("exact: every git request carries exact: true, and Refresh calls onRefresh", async () => {
+  const c = fake(withRefs(), FILES);
+  const onRefresh = vi.fn();
+  await act(async () => root.render(<GraphPanel client={c} cwd="/p/api" exact onRefresh={onRefresh} />));
+  await flush();
+  await select(0);
+  await act(async () => fileBtn(2).click());
+  await flush();
+  await menuAt(chip("refs/heads/feat"));
+  await act(async () => byId("branch-fetch").click());
+  await flush();
+  await act(async () => el.querySelector<HTMLElement>("button[aria-label=Refresh]")!.click());
+  await flush();
+  const types = new Set(c.sent.map((m) => m.type));
+  for (const t of ["git.log", "git.commit", "git.fileAt", "git.fetch", "git.branch"]) expect(types.has(t)).toBe(true);
+  const refs = c.sent.filter((m) => m.type.startsWith("git.") && m.type !== "git.status");
+  expect(refs.length).toBeGreaterThan(5);
+  for (const m of refs) expect(m).toMatchObject({ cwd: "/p/api", exact: true });
+  expect(onRefresh).toHaveBeenCalledTimes(1);
+});
+
+it("without exact no request carries it", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(c.sent.some((m) => "exact" in m)).toBe(false);
 });

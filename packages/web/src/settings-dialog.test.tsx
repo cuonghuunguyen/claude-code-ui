@@ -29,18 +29,23 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, coordinatorPermissions: true, workerMode: "coordinator" }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let refuse: string | undefined;
   const calls: Request[] = [];
+  let jiraToken = false;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
     if (msg.type === "settings.set") {
+      if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
-    return { settings, ...(daemon && { daemon }) };
+    if (msg.type === "jira.token") jiraToken = msg.token !== null;
+    if (msg.type === "jira.test") return { user: "Ann Example" };
+    return { settings, ...(daemon && { daemon }), jiraToken };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -82,7 +87,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
+  return { refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -99,7 +104,18 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
   expect(desc("settings-orchestration-workerCap")).toContain("1 to 20");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-label")).toBe("Notifications from workers");
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("true");
+  expect(desc("settings-orchestration-workerNotifications")).toContain("a request the coordinator escalates to you still notifies");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("Edits can change code that commands you approve later will run.");
+});
+
+it("Notifications from workers is on by default and its switch sends a patch of that field (GH-387)", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  await act(async () => q("settings-orchestration-workerNotifications")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerNotifications: false } } });
+  expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("false");
 });
 
 it("a switch sends a patch of its field only", async () => {
@@ -108,6 +124,22 @@ it("a switch sends a patch of its field only", async () => {
   await act(async () => q("settings-orchestration-enabled")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { enabled: true } } });
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("true");
+});
+
+it("Orchestration shows Maximum tree depth and Maximum workers per coordinator and saves them", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  expect((q("settings-orchestration-maxDepth") as HTMLInputElement).value).toBe("2");
+  expect((q("settings-orchestration-maxChildren") as HTMLInputElement).value).toBe("4");
+  expect(document.querySelector('label[for="settings-orchestration-maxDepth"]')?.textContent).toBe("Maximum tree depth");
+  expect(document.querySelector('label[for="settings-orchestration-maxChildren"]')?.textContent).toBe("Maximum workers per coordinator");
+  const input = q("settings-orchestration-maxDepth") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "3");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
 });
 
 it("an out-of-range cap shows the daemon's error in a Banner", async () => {
@@ -263,7 +295,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "About"]);
+  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Git", "Jira", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -276,6 +308,47 @@ it("lists Performance after Usage limits and before About: a switch sends its pa
   expect(q("perf-section")).toBeTruthy();
   await act(async () => sw.click());
   expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { performance: { monitor: false } } });
+});
+
+it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only with Token set, Replace and Clear; Test connection names the user", async () => {
+  const { q, pick, calls } = await render();
+  await pick("jira");
+  const set = async (id: string, v: string) => {
+    const input = (q(id) as HTMLInputElement);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  };
+  expect(q("settings-jira-email")).toBeNull();
+  expect((q("settings-jira-test") as HTMLButtonElement).disabled).toBe(true);
+  await set("settings-jira-url", "https://acme.atlassian.net");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" } } });
+  expect(q("settings-jira-email")).not.toBeNull();
+  await set("settings-jira-email", "ann@example.com");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toMatchObject({ patch: { jira: { email: "ann@example.com" } } });
+  expect((q("settings-jira-jql") as HTMLInputElement).placeholder).toBe("assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC");
+  await set("settings-jira-jql", " project = ABC ");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { jira: { jql: "project = ABC" } } });
+  const token = (q("settings-jira-token") as HTMLInputElement);
+  expect(token.type).toBe("password");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(token, "tok-123");
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("settings-jira-token-save")!.click());
+  expect(calls.find((c) => c.type === "jira.token")).toEqual({ type: "jira.token", token: "tok-123" });
+  expect(q("settings-jira-token-set")!.textContent).toBe("Token set");
+  expect(q("settings-jira")!.textContent).not.toContain("tok-123");
+  await act(async () => q("settings-jira-token-replace")!.click());
+  expect(q("settings-jira-token")).not.toBeNull();
+  await act(async () => q("settings-jira-token-cancel")!.click());
+  await act(async () => q("settings-jira-test")!.click());
+  expect(q("settings-jira-test-result")!.textContent).toBe("Connected as Ann Example");
+  await act(async () => q("settings-jira-token-clear")!.click());
+  expect(calls.filter((c) => c.type === "jira.token").at(-1)).toEqual({ type: "jira.token", token: null });
+  expect(q("settings-jira-token-set")).toBeNull();
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
@@ -560,4 +633,94 @@ it("Screen switches write the store; the sub-switch is held while the main one i
     Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
     localStorage.removeItem("claude-ui.keepAwake");
   }
+});
+
+it("Settings › Git shows the nine settings with VS Code's labels and defaults; the parent-folders hint names the difference", async () => {
+  const { q, pick } = await render();
+  await pick("git");
+  expect(q("settings-git-intro")?.textContent).toContain("Same settings as VS Code's Git extension");
+  const label = (k: string) => document.querySelector(`label[for="settings-git-${k}"]`)?.textContent ?? q(`settings-git-${k}`)?.querySelector("[id$=-label]")?.textContent;
+  expect(["autoRepositoryDetection", "repositoryScanMaxDepth", "repositoryScanIgnoredFolders", "scanRepositories", "ignoredRepositories", "detectSubmodules", "detectSubmodulesLimit", "ignoreSubmodules", "openRepositoryInParentFolders"].map(label)).toEqual(["Auto repository detection", "Repository scan max depth", "Repository scan ignored folders", "Scan repositories", "Ignored repositories", "Detect submodules", "Detect submodules limit", "Ignore submodules", "Open repository in parent folders"]);
+  expect(q("settings-git-autoRepositoryDetection")?.textContent).toContain("true");
+  expect((q("settings-git-repositoryScanMaxDepth") as HTMLInputElement).value).toBe("1");
+  expect(q("settings-git-repositoryScanIgnoredFolders")?.querySelectorAll('[data-testid$="-item"]')).toHaveLength(1);
+  expect(q("settings-git-repositoryScanIgnoredFolders")?.textContent).toContain("node_modules");
+  expect(q("settings-git-scanRepositories")?.querySelectorAll('[data-testid$="-item"]')).toHaveLength(0);
+  expect(q("settings-git-detectSubmodules")?.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-git-ignoreSubmodules")?.getAttribute("aria-checked")).toBe("false");
+  expect((q("settings-git-detectSubmodulesLimit") as HTMLInputElement).value).toBe("10");
+  expect(q("settings-git-openRepositoryInParentFolders")?.textContent).toContain("always");
+  expect(document.getElementById("settings-git-openRepositoryInParentFolders-hint")?.textContent).toContain("VS Code: prompt");
+});
+
+it("Auto repository detection saves true/false as booleans and subFolders as a string", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const choose = async (v: string) => {
+    await act(async () => q("settings-git-autoRepositoryDetection")!.click());
+    await act(async () => document.querySelector<HTMLElement>(`[data-testid="settings-git-autoRepositoryDetection-${v}"]`)!.click());
+    return calls.filter((c) => c.type === "settings.set").at(-1);
+  };
+  expect(await choose("false")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: false } } });
+  expect(await choose("subFolders")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: "subFolders" } } });
+  expect(await choose("true")).toEqual({ type: "settings.set", patch: { git: { autoRepositoryDetection: true } } });
+});
+
+const typeInto = async (el: HTMLInputElement, v: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const key = async (el: HTMLElement, k: string) => void (await act(async () => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }))));
+
+it("a list setting adds, edits and removes an item, saving the whole array each time", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const id = "settings-git-repositoryScanIgnoredFolders";
+  const sets = () => calls.filter((c) => c.type === "settings.set");
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "dist");
+  await key(q(`${id}-input`)!, "Enter");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { repositoryScanIgnoredFolders: ["node_modules", "dist"] } } });
+  expect(q(`${id}-input`)).toBeNull();
+  await act(async () => q(`${id}`)!.querySelectorAll<HTMLElement>(`[data-testid="${id}-edit"]`)[0]!.click());
+  expect((q(`${id}-input`) as HTMLInputElement).value).toBe("node_modules");
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "vendor");
+  await act(async () => q(`${id}-ok`)!.click());
+  expect(sets().at(-1)).toMatchObject({ patch: { git: { repositoryScanIgnoredFolders: ["vendor", "dist"] } } });
+  await act(async () => q(`${id}`)!.querySelectorAll<HTMLElement>(`[data-testid="${id}-remove"]`)[0]!.click());
+  expect(sets().at(-1)).toMatchObject({ patch: { git: { repositoryScanIgnoredFolders: ["dist"] } } });
+  const n = sets().length;
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "zzz");
+  await key(q(`${id}-input`)!, "Escape");
+  expect(q(`${id}-input`)).toBeNull();
+  await act(async () => q(`${id}-add`)!.click());
+  await act(async () => q(`${id}-cancel`)!.click());
+  expect(sets()).toHaveLength(n);
+});
+
+it("a refused list entry keeps the input open and shows the daemon's message", async () => {
+  const { q, pick, refuse } = await render();
+  await pick("git");
+  const id = "settings-git-scanRepositories";
+  refuse("Scan repositories must be at most 50 relative paths without .. or .git, of at most 260 characters");
+  await act(async () => q(`${id}-add`)!.click());
+  await typeInto(q(`${id}-input`) as HTMLInputElement, "../x");
+  await act(async () => q(`${id}-ok`)!.click());
+  expect(q(`${id}-input`)).not.toBeNull();
+  expect(q("settings-dialog")?.textContent).toContain("Scan repositories must be");
+});
+
+it("list buttons are 44px below md", async () => {
+  const { q, pick } = await render();
+  await pick("git");
+  const id = "settings-git-repositoryScanIgnoredFolders";
+  expect(q(`${id}-edit`)!.className).toContain("max-md:size-11");
+  expect(q(`${id}-remove`)!.className).toContain("max-md:size-11");
+  expect(q(`${id}-add`)!.className).toContain("max-md:h-11");
+  await act(async () => q(`${id}-add`)!.click());
+  expect(q(`${id}-ok`)!.className).toContain("max-md:h-11");
+  expect(q(`${id}-input`)!.className).toContain("max-md:h-11");
 });
