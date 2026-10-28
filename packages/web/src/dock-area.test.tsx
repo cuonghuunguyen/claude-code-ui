@@ -209,3 +209,26 @@ it("GH-395 the area menu offers Move Plan to main area only while Plan is the ac
   await act(async () => doc("dock-move-main").click());
   expect(fns.onMove).toHaveBeenCalledWith("plan", "main");
 });
+
+it("GH-396 Files and Git graph tab menus offer Move to main area; the Changes tab menu and the area menu with Changes active do not", async () => {
+  const { fns, render } = h("side", { panes: ["changes", "files", "graph"] as PaneId[] });
+  await render();
+  const open = (pane: string) => act(async () => void el.querySelector(`[data-pane-tab="${pane}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
+  const close = () => act(async () => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await open("changes");
+  expect(document.querySelectorAll('[data-testid="pane-move-main"]').length).toBe(0);
+  await close();
+  for (const p of ["files", "graph"]) {
+    await open(p);
+    expect(document.querySelectorAll('[data-testid="pane-move-main"]').length).toBe(1);
+    await act(async () => doc("pane-move-main").click());
+    expect(fns.onMove).toHaveBeenLastCalledWith(p, "main");
+  }
+});
+
+it("GH-396 the area menu has no Move to main area while Changes is the active pane", async () => {
+  const { render } = h("side", { panes: ["changes", "files"] as PaneId[], active: "changes" });
+  await render();
+  await act(async () => doc("dock-menu-side").click());
+  expect(document.querySelectorAll('[data-testid="dock-move-main"]').length).toBe(0);
+});

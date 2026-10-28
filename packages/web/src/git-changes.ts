@@ -48,6 +48,34 @@ export async function eachLimited<T>(items: T[], limit: number, fn: (x: T) => Pr
 }
 
 /**
+ * One limiter for jobs of many runs: at most `limit` jobs run at once; a queued job whose `live()` is false when its turn comes is skipped.
+ */
+export function createLimiter(limit: number): (live: () => boolean, fn: () => Promise<void>) => Promise<void> {
+  let active = 0;
+  const queue: { live: () => boolean; fn: () => Promise<void>; done: () => void }[] = [];
+  const pump = (): void => {
+    while (active < limit && queue.length) {
+      const job = queue.shift()!;
+      if (!job.live()) {
+        job.done();
+        continue;
+      }
+      active++;
+      void job.fn().catch(() => {}).finally(() => {
+        active--;
+        job.done();
+        pump();
+      });
+    }
+  };
+  return (live, fn) =>
+    new Promise<void>((done) => {
+      queue.push({ live, fn, done });
+      pump();
+    });
+}
+
+/**
  * The after side as git sees it: the repository stores LF (core.autocrlf, .gitattributes), the disk has CRLF, so every line would differ.
  * A before side without any CR (or none at all) means the repository's text is LF: the disk's CRLF becomes LF.
  */
