@@ -8,6 +8,7 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
 import { loadSendMode, saveSendMode } from "./send-mode.ts";
 import { QuestionPanel } from "./question.tsx";
+import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -1198,7 +1199,6 @@ it("GH-443: the bash placeholder while busy is accurate (no Esc to exit: Esc sto
 });
 
 // ---- Pasted text (GH-441) ----
-import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
 const lines200 = Array.from({ length: 200 }, (_, i) => `line-${i + 1}`).join("\n");
 const paste = (box: HTMLTextAreaElement, text: string) => {
@@ -1330,4 +1330,82 @@ it("rewind puts the prompt back with its chip", async () => {
   await vi.waitFor(() => expect(d.box.value).toBe("Fix this[Pasted text #1 +199 lines]please"));
   expect(chips(d.el)).toHaveLength(1);
   expect(collapsePasted(tagged).pastes[1]).toBe(lines200);
+});
+
+// Review fixes (GH-441): token kept across cut / paste back / undo, soft-keyboard deletion, "!" with a token.
+const setSel = (box: HTMLTextAreaElement, a: number, b = a) => box.setSelectionRange(a, b);
+const sentOf = (f: { mock: { calls: unknown[][] } }) => f.mock.calls[0]![0] as string;
+
+it("cut the token, paste its text back, send: the pasted block is sent, not the literal token", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const d = await render({ onPrompt });
+  await type(d.box, "intro ");
+  paste(d.box, lines200);
+  const token = "[Pasted text #1 +199 lines]";
+  expect(d.box.value).toBe(`intro ${token}`);
+  await type(d.box, "intro "); // cut
+  expect(chips(d.el)).toHaveLength(0);
+  const e = paste(d.box, token); // 27 chars: plain insert by the browser
+  expect(e.defaultPrevented).toBe(false);
+  await type(d.box, `intro ${token}`);
+  expect(chips(d.el)).toHaveLength(1);
+  await key(d.box, { key: "Enter" });
+  const segs = splitPasted(sentOf(onPrompt));
+  expect(segs.some((x) => x.kind === "paste" && x.body === lines200)).toBe(true);
+  expect(sentOf(onPrompt)).not.toContain(token);
+});
+
+it("undo / redo of a token (text back to the same string) keeps the paste", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const d = await render({ onPrompt });
+  paste(d.box, lines200);
+  await type(d.box, "");
+  await type(d.box, "[Pasted text #1 +199 lines]");
+  await key(d.box, { key: "Enter" });
+  expect(splitPasted(sentOf(onPrompt)).some((x) => x.kind === "paste")).toBe(true);
+});
+
+it("a new paste after the token was removed gets a fresh id and sends both", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const d = await render({ onPrompt });
+  paste(d.box, lines200);
+  await type(d.box, "");
+  paste(d.box, "x\ny\nz\nw");
+  expect(d.box.value).toBe("[Pasted text #2 +3 lines]");
+  await key(d.box, { key: "Enter" });
+  const segs = splitPasted(sentOf(onPrompt));
+  expect(segs.filter((x) => x.kind === "paste")).toHaveLength(1);
+  expect((segs.find((x) => x.kind === "paste") as { body: string }).body).toBe("x\ny\nz\nw");
+});
+
+it("a soft keyboard Backspace (keyCode 229, one character of the token deleted) removes the whole token", async () => {
+  const d = await render();
+  await type(d.box, "a ");
+  paste(d.box, lines200);
+  const full = d.box.value;
+  await key(d.box, { key: "Unidentified", keyCode: 229 });
+  setSel(d.box, full.length);
+  await type(d.box, full.slice(0, -1)); // the keyboard deleted "]" only
+  expect(d.box.value).toBe("a ");
+  expect(chips(d.el)).toHaveLength(0);
+});
+
+it("Delete before a token removes the whole token", async () => {
+  const d = await render();
+  paste(d.box, lines200);
+  await type(d.box, `a ${d.box.value}`);
+  setSel(d.box, 2);
+  await key(d.box, { key: "Delete" });
+  expect(d.box.value).toBe("a ");
+});
+
+it("typing ! in a box that holds a token does not open shell mode", async () => {
+  const onBash = vi.fn(async () => {});
+  const d = await render({ onBash });
+  paste(d.box, lines200);
+  setSel(d.box, 0);
+  const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "!" });
+  await act(async () => void d.box.dispatchEvent(ev));
+  expect(ev.defaultPrevented).toBe(false);
+  expect(d.box.placeholder).not.toMatch(/shell/i);
 });

@@ -56,7 +56,7 @@ import { QueueChips } from "./queue-chips.tsx";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, PasteChips } from "./pasted-text.tsx";
-import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
+import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
@@ -4231,8 +4231,7 @@ function PromptBox({
   const [bash, setBash] = useState(false);
   const stored = useMemo(() => expandPastes(text, prunePastes(text, pastes), "0000"), [text, pastes]);
   const dropDraft = useDraft(draftKey, stored, bash, initialText);
-  // A token that was deleted, cut or edited by hand drops its paste.
-  useEffect(() => setPastes((p) => prunePastes(text, p)), [text]);
+  // Pastes stay while the box lives: a token that is cut, pasted back or undone must still find its text. Only a draft save and a send leave out the ones without a token; a send clears all.
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -4368,7 +4367,7 @@ function PromptBox({
     const dialog = onDialog && dialogOf(t, commands);
     if (dialog && (!images.length || dialog === "resume")) {
       const arg = dialogArg(t);
-      return arg ? onDialog(dialog, arg) : onDialog(dialog), edit("");
+      return arg ? onDialog(dialog, arg) : onDialog(dialog), setPastes({}), edit("");
     }
     if (how === "queue" && onQueue) {
       // The queue waits for the idle session, also behind a terminal CLI turn or a running /clear.
@@ -4381,6 +4380,7 @@ function PromptBox({
       });
       dropDraft();
       edit("");
+      setPastes({});
       setImages([]);
       return;
     }
@@ -4397,6 +4397,7 @@ function PromptBox({
     });
     dropDraft();
     edit("");
+    setPastes({});
     setImages([]);
   };
   const pick = (i: number) => {
@@ -4465,7 +4466,7 @@ function PromptBox({
     // Ctrl/Cmd+B, I, E format the selection; defaultPrevented keeps Ctrl+B from toggling the sidebar here. Not in bash mode.
     if (!bash && formatShortcut(e)) return;
     // OpenCode shell mode: `!` typed at the start of an empty caret switches modes and is not inserted.
-    if (onBash && !bash && e.key === "!" && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+    if (onBash && !bash && !pasteRefs(text).length && e.key === "!" && !e.ctrlKey && !e.metaKey && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
       e.preventDefault();
       return setBash(true);
     }
@@ -4622,10 +4623,13 @@ function PromptBox({
         onChange={(e) => {
           const v = e.target.value;
           // Soft keyboards send no key for "!": the box was empty-caret-at-0 before, and now starts with it.
-          if (!composing.current && onBash && !bash && v.startsWith("!") && v.length === text.length + 1 && e.target.selectionStart === 1 && !text.startsWith("!")) {
+          if (!composing.current && onBash && !bash && !pasteRefs(text).length && v.startsWith("!") && v.length === text.length + 1 && e.target.selectionStart === 1 && !text.startsWith("!")) {
             setBash(true);
             return edit(v.slice(1), 0);
           }
+          // A soft keyboard deletes one character (no usable Backspace key): a token it cut into goes whole.
+          const healed = bash ? undefined : healDeletion(text, v, e.target.selectionStart);
+          if (healed) return edit(healed.text, healed.caret);
           typed(v, e.target.selectionStart);
         }}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}

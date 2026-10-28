@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   backspaceToken,
   healDeletion,
+  cleanSnippet,
   cleanTitle,
   collapsePasted,
   deleteToken,
@@ -207,5 +208,13 @@ describe("healDeletion", () => {
     expect(healDeletion(t, t.slice(0, s - 1) + t.slice(s), s - 1)).toBeUndefined();
     expect(healDeletion(t, t.slice(0, s) + t.slice(e), s)).toBeUndefined();
     expect(healDeletion(t, t + "x", t.length)).toBeUndefined();
+  });
+});
+
+describe("cleanSnippet", () => {
+  it("removes pasted_content tags, also a cut one", () => {
+    expect(cleanSnippet('a <pasted_content id="9f3a">\nb\n</pasted_content id="9f3a"> c')).toBe("a b\n c");
+    expect(cleanSnippet('x <pasted_content id="9f')).toBe("x ");
+    expect(cleanSnippet("plain")).toBe("plain");
   });
 });

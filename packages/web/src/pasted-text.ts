@@ -183,3 +183,8 @@ export function healDeletion(old: string, next: string, caret: number): Edit | u
   }
   return from === caret && to === caret + n ? undefined : { text: old.slice(0, from) + old.slice(to), caret: from };
 }
+
+/** A search snippet (a fragment of the raw transcript text) without pasted_content tags, also a cut one. */
+export function cleanSnippet(snippet: string): string {
+  return snippet.replace(/<\/?pasted_content(?: id="[0-9a-f]{0,4}"?)?>?\n?/gi, "");
+}
