@@ -6,7 +6,7 @@ const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
 describe("pane refs", () => {
   it("parseRef reads plan:<uuid> and rejects sessions, new, focus, other kinds and bad uuids", () => {
     expect(parseRef(`plan:${U}`)).toEqual({ kind: "plan", owner: U });
-    for (const id of [U.toUpperCase().replace("PLAN", "plan"), `plan:${U.toUpperCase()}`, U, "new", "focus", `changes:${U}`, `terminal:${U}`, `files:${U.toUpperCase()}`, "plan:abc", `plan:${U}x`, "", undefined]) expect(parseRef(id)).toBeUndefined();
+    for (const id of [U.toUpperCase().replace("PLAN", "plan"), `plan:${U.toUpperCase()}`, U, "new", "focus", `changes:${U}`, `files:${U.toUpperCase()}`, "plan:abc", `plan:${U}x`, "", undefined]) expect(parseRef(id)).toBeUndefined();
     expect(isPaneRef(`plan:${U}`)).toBe(true);
     expect(isPaneRef(U)).toBe(false);
     expect(isPaneRef(undefined)).toBe(false);
@@ -30,6 +30,14 @@ describe("pane refs", () => {
   it("parseRef reads files:<uuid> and graph:<uuid>", () => {
     expect(parseRef(`files:${U}`)).toEqual({ kind: "files", owner: U });
     expect(parseRef(`graph:${U}`)).toEqual({ kind: "graph", owner: U });
+  });
+  it("terminal refs parse and are one per folder", () => {
+    const V = U.replace("0f8e", "1f8e");
+    const W = U.replace("0f8e", "2f8e");
+    const cwd = (o: string) => (o === W ? "/p/other" : "/p/demo");
+    expect(parseRef(`terminal:${U}`)).toEqual({ kind: "terminal", owner: U });
+    expect(paneTabFor([`terminal:${U}`], "terminal", V, cwd)).toBe(`terminal:${U}`);
+    expect(paneTabFor([`terminal:${U}`], "terminal", W, cwd)).toBe(`terminal:${W}`);
   });
   it("identityOf is <kind>@<cwd> for files and graph, the ref for plan and for an unknown cwd", () => {
     const cwd = (o: string) => (o === U ? "/p/demo" : undefined);

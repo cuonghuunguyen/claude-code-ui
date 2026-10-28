@@ -488,3 +488,9 @@ it("GH-396 move rows per kind list the two other homes: files, graph (git only) 
   expect(ids(c).some((i) => i.startsWith("changes."))).toBe(false);
   expect(ids(ctx({ homes, moveKind: vi.fn() })).some((i) => i.startsWith("graph."))).toBe(false);
 });
+
+it("palette moves the terminal between its homes (GH-397)", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.startsWith("terminal.move"));
+  expect(ids(ctx({ homes: { terminal: "bottom" }, moveKind: vi.fn() }))).toEqual(["terminal.move.main", "terminal.move.side"]);
+  expect(ids(ctx({ homes: { terminal: "main" }, moveKind: vi.fn() }))).toEqual(["terminal.move.side", "terminal.move.bottom"]);
+});

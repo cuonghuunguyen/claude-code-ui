@@ -249,6 +249,17 @@ it("Terminal position: Bottom by default, Side panel saved per browser", async (
   localStorage.removeItem("claude-ui.layout");
 });
 
+it("Terminal position offers Main area (GH-397)", async () => {
+  localStorage.removeItem("claude-ui.layout");
+  const { q, pick } = await render();
+  await pick("terminal");
+  await act(async () => q("settings-terminal-position")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
+  expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
+  expect(q("settings-terminal-position")?.textContent).toContain("Main area");
+  localStorage.removeItem("claude-ui.layout");
+});
+
 it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
   localStorage.clear();
   const { q, pick } = await render();

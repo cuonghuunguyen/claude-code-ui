@@ -14,12 +14,13 @@ export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "
 export const AREA_LABEL: Record<DockArea, string> = { side: "Side panel", bottom: "Bottom panel" };
 export const HOME_LABEL: Record<Area, string> = { side: "Side panel", bottom: "Bottom panel", main: "Main area" };
 export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } };
-/** Panes that may have the main area as their home (Changes never; the terminal in 3/8). */
-export const MAIN_KINDS: PaneId[] = ["plan", "files", "graph"];
+/** Panes that may have the main area as their home (Changes never). */
+export const MAIN_KINDS: PaneId[] = ["plan", "files", "graph", "terminal"];
 export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
-export const TERMINAL_DOCKS: { value: DockArea; label: string }[] = [
+export const TERMINAL_DOCKS: { value: Area; label: string }[] = [
   { value: "bottom", label: "Bottom" },
   { value: "side", label: "Side panel" },
+  { value: "main", label: "Main area" },
 ];
 
 const LAYOUT_KEY = "claude-ui.layout";
@@ -173,10 +174,9 @@ function subscribe(l: () => void) {
 export const useLayout = (): Layout => useSyncExternalStore(subscribe, loadLayout, () => DEFAULT_LAYOUT);
 
 // Terminal position (Settings › Terminal) = the dock area of the terminal pane.
-// The terminal is never in the main area in this slice (`canMain("terminal")` is false), so `as DockArea` is safe.
-export const loadTerminalDock = (): DockArea => areaOf(loadLayout(), "terminal") as DockArea;
-export const saveTerminalDock = (d: DockArea) => saveLayout(movePane(loadLayout(), "terminal", d));
-export const useTerminalDock = (): DockArea => areaOf(useLayout(), "terminal") as DockArea;
+export const loadTerminalDock = (): Area => areaOf(loadLayout(), "terminal");
+export const saveTerminalDock = (d: Area) => saveLayout(movePane(loadLayout(), "terminal", d));
+export const useTerminalDock = (): Area => areaOf(useLayout(), "terminal");
 
 /** True while the viewport is at least `px` wide; follows resizes. */
 export function useMinWidth(px: number): boolean {

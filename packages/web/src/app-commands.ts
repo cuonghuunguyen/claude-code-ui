@@ -62,7 +62,7 @@ export type CommandContext = {
   toggleTerminal: () => void;
   /** Shows the side panel pane (files, changes, git graph); where it already shows, focus goes back to the prompt. */
   showPane: (pane: "files" | "changes" | "graph") => void;
-  /** Adds a terminal to the terminal panel (opens the panel first). */
+  /** Adds a terminal to the terminal panel (opens the panel or the terminal tab first). */
   newTerminal: () => void;
   resetLayout: () => void;
   /** Moves the side panel to the other side of the session view. */
@@ -80,8 +80,8 @@ export type CommandContext = {
   /** GH-395: reveals the current session's plan (its tab in the main area, or the dock Plan pane). Absent without a plan. */
   showPlan?: () => void;
   /** Where the Plan, Files and Git graph panes live, and the move to another home; absent: no move rows. Changes never moves. */
-  homes?: Partial<Record<"plan" | "files" | "graph", Area>>;
-  moveKind?: (p: "plan" | "files" | "graph", to: Area) => void;
+  homes?: Partial<Record<"plan" | "files" | "graph" | "terminal", Area>>;
+  moveKind?: (p: "plan" | "files" | "graph" | "terminal", to: Area) => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -176,7 +176,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
-    ...(c.moveKind && c.homes ? (["plan", "files", "graph"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
     c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
