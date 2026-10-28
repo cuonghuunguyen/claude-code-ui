@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   backspaceToken,
+  healDeletion,
   cleanTitle,
   collapsePasted,
   deleteToken,
@@ -69,7 +70,7 @@ describe("expandPastes", () => {
       'see \n\n<pasted_content id="abcd">\na\nb\nc\n</pasted_content id="abcd">\n\n now',
     );
     expect(expandPastes("[Pasted text #1 +1 lines]", { 1: "a\n" }, "abcd")).toBe(
-      '\n\n<pasted_content id="abcd">\na\n</pasted_content id="abcd">\n',
+      '\n\n<pasted_content id="abcd">\na\n\n</pasted_content id="abcd">\n',
     );
   });
   it("a token without an entry stays literal; no token -> same string", () => {
@@ -94,7 +95,7 @@ describe("splitPasted", () => {
       { kind: "text", text: "one " },
       { kind: "paste", body: c1 },
       { kind: "text", text: " two " },
-      { kind: "paste", body: "e\nf\ng\nh" },
+      { kind: "paste", body: c2 },
       { kind: "text", text: " three" },
     ]);
   });
@@ -169,5 +170,42 @@ describe("cleanTitle", () => {
     expect(cleanTitle(`Fix${block("9f3a", "a\nb\nc\nd")}\nplease`)).toBe("Fix[Pasted text +3 lines]please");
     expect(cleanTitle('\n\n<pasted_content id="9f3a">\nline1\nline2\nli')).toBe("[Pasted text]");
     expect(cleanTitle('Why?\n\n<pasted_content id="9f3a">\nline1')).toBe("Why? [Pasted text]");
+  });
+});
+
+describe("round trip of the prompt text", () => {
+  const back = (text: string, pastes: Record<number, string>) => collapsePasted(expandPastes(text, pastes, "abcd"));
+  it("a newline right after a token, text before it, and a paste ending in a newline come back unchanged", () => {
+    const p = { 1: "a\nb\nc\nd\n" };
+    for (const t of ["[Pasted text #1 +4 lines]\nfoo", "x\n[Pasted text #1 +4 lines]\n\nfoo", "x [Pasted text #1 +4 lines] y", "[Pasted text #1 +4 lines]"]) {
+      expect(back(t, p)).toEqual({ text: t, pastes: p });
+    }
+  });
+  it("typed tag-like text keeps its backslashes and never reads back as a block", () => {
+    const typed = ['a <pasted_content id="abcd">\nx\n</pasted_content id="abcd"> b', "<\\pasted_content", "</PASTED_CONTENT"];
+    for (const t of typed) {
+      const out = expandPastes(t, {}, "abcd");
+      expect(splitPasted(out).every((s) => s.kind === "text")).toBe(true);
+      expect(collapsePasted(out)).toEqual({ text: t, pastes: {} });
+      expect(stripPasted(out)).toBe(t);
+    }
+  });
+});
+
+describe("healDeletion", () => {
+  const t = "ab [Pasted text #1 +5 lines] cd";
+  const s = t.indexOf("[");
+  const e = t.indexOf("]") + 1;
+  it("a deletion that cuts into a token removes the whole token", () => {
+    const next = t.slice(0, e - 1) + t.slice(e);
+    expect(healDeletion(t, next, e - 1)).toEqual({ text: "ab  cd", caret: s });
+    const mid = t.slice(0, s + 3) + t.slice(s + 4);
+    expect(healDeletion(t, mid, s + 3)).toEqual({ text: "ab  cd", caret: s });
+  });
+  it("other edits are left alone", () => {
+    expect(healDeletion(t, t.slice(1), 0)).toBeUndefined();
+    expect(healDeletion(t, t.slice(0, s - 1) + t.slice(s), s - 1)).toBeUndefined();
+    expect(healDeletion(t, t.slice(0, s) + t.slice(e), s)).toBeUndefined();
+    expect(healDeletion(t, t + "x", t.length)).toBeUndefined();
   });
 });

@@ -54,28 +54,24 @@ export function pasteTagId(sessionId?: string): string {
     .padStart(4, "0");
 }
 
-const escapeTags = (t: string) => t.replace(/<(?=\/?pasted_content)/gi, "<\\");
-const unescapeTags = (t: string) => t.replace(/<\\(?=\/?pasted_content)/gi, "<");
+// One backslash is added after the "<" of every tag-like start (also of one that already has backslashes) and taken off again on reading: typed text round-trips.
+const escapeTags = (t: string) => t.replace(/<(\\*)(?=\/?pasted_content)/gi, "<\\$1");
+const unescapeTags = (t: string) => t.replace(/<\\(\\*)(?=\/?pasted_content)/gi, "<$1");
 
-/** Replace each token that has an entry by the CLI's pasted_content block. */
+/** Replace each token that has an entry by the CLI's pasted_content block. Typed text is escaped even without a paste, so it never reads back as a block. */
 export function expandPastes(text: string, pastes: Pastes, tagId: string): string {
   const refs = pasteRefs(text).filter((r) => pastes[r.id] !== undefined);
-  if (refs.length === 0) return text;
   let out = "";
   let at = 0;
-  for (const r of refs) {
+  refs.forEach((r, i) => {
     out += escapeTags(text.slice(at, r.index));
-    const body = escapeTags(pastes[r.id]);
-    out += `\n\n<pasted_content id="${tagId}">\n${body}${body.endsWith("\n") ? "" : "\n"}</pasted_content id="${tagId}">\n`;
+    out += `\n\n<pasted_content id="${tagId}">\n${escapeTags(pastes[r.id])}\n</pasted_content id="${tagId}">\n`;
     at = r.index + r.match.length;
-    // Same join rule as the CLI: a newline after the block unless the text already starts with one.
-    const nextNext = refs.find((x) => x.index >= at);
-    const upTo = nextNext ? nextNext.index : text.length;
-    const chunk = text.slice(at, upTo);
-    if (chunk.length > 0 && !chunk.startsWith("\n")) out += "\n";
-  }
-  out += escapeTags(text.slice(at));
-  return out;
+    // A newline after the block when text follows (also when it starts with one: reading eats two, so a typed newline survives).
+    const upTo = refs[i + 1]?.index ?? text.length;
+    if (upTo > at) out += "\n";
+  });
+  return out + escapeTags(text.slice(at));
 }
 
 const OPENER = /<pasted_content id="([0-9a-f]{4})">\n/g;
@@ -83,7 +79,7 @@ const OPENER = /<pasted_content id="([0-9a-f]{4})">\n/g;
 export function splitPasted(text: string): Segment[] {
   const segs: Segment[] = [];
   const pushText = (t: string) => {
-    if (t) segs.push({ kind: "text", text: t });
+    if (t) segs.push({ kind: "text", text: unescapeTags(t) });
   };
   let at = 0;
   let from = 0;
@@ -116,14 +112,12 @@ const hasBlock = (segs: Segment[]) => segs.some((s) => s.kind === "paste");
 /** Blocks replaced by their body (copy, quote). */
 export function stripPasted(text: string): string {
   const segs = splitPasted(text);
-  if (!hasBlock(segs)) return text;
   return segs.map((s) => (s.kind === "text" ? s.text : s.body)).join("");
 }
 
 /** Blocks replaced by `[Pasted text +K lines]` (queue chip, focus page, prompt list). */
 export function summarizePasted(text: string): string {
   const segs = splitPasted(text);
-  if (!hasBlock(segs)) return text;
   return segs
     .map((s) => {
       if (s.kind === "text") return s.text;
@@ -136,7 +130,7 @@ export function summarizePasted(text: string): string {
 /** Reverse of expandPastes: large blocks become tokens again, small ones inline text. */
 export function collapsePasted(text: string, firstId = 1): { text: string; pastes: Pastes } {
   const segs = splitPasted(text);
-  if (!hasBlock(segs)) return { text, pastes: {} };
+  if (!hasBlock(segs)) return { text: segs.map((s) => (s as { text: string }).text).join(""), pastes: {} };
   const pastes: Pastes = {};
   let id = firstId;
   const out = segs
@@ -168,6 +162,24 @@ export function deleteToken(text: string, start: number, end: number): Edit | un
 
 /** A session title taken from a first prompt: pasted blocks as `[Pasted text +K lines]`; a block the title cut off ends it as `[Pasted text]`. */
 export function cleanTitle(title: string): string {
-  const t = summarizePasted(title).replace(/\s*<pasted_content id="[0-9a-f]{4}">[\s\S]*$/, " [Pasted text]");
+  const t = summarizePasted(title)
+    .replace(/\s*<pasted_content id="[0-9a-f]{4}">[\s\S]*$/, " [Pasted text]")
+    .replace(/<\/pasted_content id="[0-9a-f]{4}">\n*/g, "");
   return t === title ? title : t.trim();
+}
+
+/** The text of an edit that only deleted characters, widened so no token is left half deleted (soft keyboards send no usable Backspace key). */
+export function healDeletion(old: string, next: string, caret: number): Edit | undefined {
+  const n = old.length - next.length;
+  if (n <= 0 || old.slice(0, caret) + old.slice(caret + n) !== next) return undefined;
+  let from = caret;
+  let to = caret + n;
+  for (const r of pasteRefs(old)) {
+    const end = r.index + r.match.length;
+    if (r.index < to && end > from && (r.index < from || end > to)) {
+      from = Math.min(from, r.index);
+      to = Math.max(to, end);
+    }
+  }
+  return from === caret && to === caret + n ? undefined : { text: old.slice(0, from) + old.slice(to), caret: from };
 }
