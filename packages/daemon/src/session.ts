@@ -91,6 +91,8 @@ type SessionOpts = Partial<SessionSettings> & {
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
   mcpServers?: (id: string) => Options["mcpServers"];
+  /** Tools removed from session `id`'s CLI (Aside: no edits while read-only, no orchestration tools); read at every query start. */
+  disallowedTools?: (id: string) => string[] | undefined;
   /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
   agent?: (id: string) => string | undefined;
   /**
@@ -284,6 +286,7 @@ export class Session {
     const agent = this.opts.agent?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
+    const disallowed = this.opts.disallowedTools?.(this.id);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
@@ -296,6 +299,8 @@ export class Session {
         cwd: this.cwd,
         additionalDirectories: dirs.length ? dirs : undefined,
         ...(rules.length && { allowedTools: rules }),
+        // Not a canUseTool deny: a user settings allow rule (e.g. Edit) would skip canUseTool.
+        ...(disallowed && { disallowedTools: disallowed }),
         model: this.model === "default" ? undefined : this.model,
         permissionMode: this.permissionMode,
         allowDangerouslySkipPermissions: !!this.opts.allowBypass,
@@ -517,8 +522,8 @@ export class Session {
     });
   }
 
-  /** `images`: data URLs already checked with imageBlock(). */
-  prompt(text: string, images: string[] = []) {
+  /** `images`: data URLs already checked with imageBlock(). Returns the user_text part id. */
+  prompt(text: string, images: string[] = []): string {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.rewinding) throw new Error("session is rewinding");
@@ -535,6 +540,7 @@ export class Session {
       ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
       : text;
     this.input.push({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
+    return uuid;
   }
 
   /** Switches the live query's model; "default" resets to the SDK default. A restored session not yet resumed resumes with it. */

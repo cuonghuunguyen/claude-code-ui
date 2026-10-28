@@ -134,6 +134,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.delete"; sessionId: string }
   /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout, has_workers. */
   | { type: "worker.close"; sessionId: string }
+  /** /btw (docs/spec.md "Aside"): forks the session into an Aside and sends `text` there. Reply AsideOpenResult; errors bad_prompt, unknown_session, aside_unavailable, aside_failed. */
+  | { type: "aside.open"; sessionId: string; text: string }
+  /** Closes the Aside popup: stops its CLI, deletes its transcript and link. Reply `{}`; errors not_an_aside. */
+  | { type: "aside.close"; sessionId: string }
+  /** Keep as session: the Aside becomes a listed Session (link to its owner dropped). Reply `{}`; errors unknown_session, not_an_aside. */
+  | { type: "aside.keep"; sessionId: string }
   /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, has_workers, delete_failed. Broadcasts `sessions.changed`. */
   | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
@@ -380,6 +386,8 @@ export const MIN_SEARCH_CHARS = 2;
 export const MAX_SEARCH_CHARS = 200;
 
 export type CreateResult = { session: SessionInfo };
+/** `from`: the Aside question's user_text part id: the popup subscribes from it (only the Aside's own messages). */
+export type AsideOpenResult = { session: SessionInfo; title: string; from: string };
 /**
  * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
  * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.
