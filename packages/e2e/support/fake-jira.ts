@@ -13,7 +13,7 @@ const fields = (i: FakeIssue) => ({ key: i.key, fields: { summary: i.summary, is
 export async function fakeJira(o: { auth: string; user?: string; issues: FakeIssue[]; status?: number }): Promise<FakeJira> {
   const requests: FakeJira["requests"] = [];
   const server = createServer((req: IncomingMessage, res) => {
-    const url = new URL(req.url ?? "/", "http://x");
+    const url = new URL((req.url ?? "/").replace(/^\/jira\//, "/"), "http://x"); // also served under /jira (a path-only URL change, GH-451)
     requests.push({ path: url.pathname + url.search, auth: req.headers.authorization });
     const json = (code: number, body: unknown) => {
       res.writeHead(code, { "content-type": "application/json" });
