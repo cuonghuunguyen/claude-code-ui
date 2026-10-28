@@ -152,3 +152,25 @@ Feature: The terminal can live in the main area
     Then the Terminal tab has one shell
     And the shell does not have the focus
     And I capture "terminal-phone-row-fast"
+
+  Scenario: A session in a second project folder opens a second Terminal tab
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And I open the terminal with the shortcut
+    Then there is one "Terminal" tab
+    When I open a session in a second project folder with a finished reply
+    And I open the terminal with the shortcut
+    Then there are 2 "Terminal" tabs
+    And the Terminal tabs are labeled with the two project names
+    And the Terminal tab of the second project is the selected tab
+    And I capture "terminal-two-projects"
+
+  Scenario: Ctrl+Backquote with the terminal in the main area focuses the shell once it loads when the user does nothing else
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And the terminal code loads slowly
+    And I open the terminal with the shortcut
+    Then the shell has the focus within 20 seconds
+    And I capture "terminal-shortcut-focus-after-load"

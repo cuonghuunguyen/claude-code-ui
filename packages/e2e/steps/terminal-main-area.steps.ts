@@ -1,4 +1,8 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { expect, type Page } from "@playwright/test";
+import { openProject, REPLY_PROMPT } from "../support/flow.ts";
+import { TURN_MS } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 const tab = (page: Page) => page.locator('[data-testid="tab"][data-tab-id^="terminal:"]');
@@ -119,4 +123,52 @@ Then("the shell title is unchanged", async ({ page }) => {
 When("I pick the first session row in the tab switcher", async ({ page }) => {
   await page.getByRole("option").filter({ hasNotText: "Terminal ·" }).first().click();
   await expect(body(page)).toBeHidden();
+});
+
+When("I open a session in a second project folder with a finished reply", async ({ page, project }) => {
+  const path = `${project.path}-b`;
+  mkdirSync(join(path, ".claude"), { recursive: true });
+  writeFileSync(join(path, ".claude", "settings.json"), JSON.stringify({ permissions: { defaultMode: "default" } }, null, 2));
+  await openProject(page, path);
+  const fresh = page.getByTestId("new-session-tab");
+  await expect(fresh).toBeVisible({ timeout: 60_000 });
+  await expect(fresh.getByTestId("project-chip")).toContainText(basename(path), { timeout: 30_000 });
+  await fresh.getByTestId("session-model").click();
+  await page.getByRole("option", { name: "Haiku" }).click();
+  await expect(fresh.getByTestId("session-model")).toContainText("Haiku");
+  await fresh.getByRole("combobox", { name: "First prompt" }).fill(REPLY_PROMPT);
+  await expect(fresh.getByTestId("send")).toBeEnabled();
+  await fresh.getByTestId("send").click();
+  await expect(page.getByTestId("assistant-text").last()).toHaveText(/\S/, { timeout: TURN_MS });
+  await expect(page.locator('[data-testid="send"][data-state="idle"]').last()).toBeVisible({ timeout: TURN_MS });
+});
+
+Then("there are {int} {string} tabs", async ({ page }, n: number, _kind: string) => {
+  await expect(tab(page)).toHaveCount(n);
+});
+
+Then("the Terminal tabs are labeled with the two project names", async ({ page, project }) => {
+  const labels = await tab(page).allInnerTexts();
+  expect(labels.length).toBe(2);
+  expect(labels.every((l) => l.includes("Terminal ·"))).toBe(true);
+  expect(labels.some((l) => l.includes(project.name))).toBe(true);
+  expect(labels.some((l) => l.includes(`${project.name}-b`))).toBe(true);
+});
+
+When("the terminal code loads slowly", async ({ page }) => {
+  await page.route(/terminal-panel-[^/]*\.js$/, async (route) => {
+    await new Promise((r) => setTimeout(r, 2_500));
+    await route.continue();
+  });
+});
+
+Then("the shell has the focus within {int} seconds", async ({ page }, s: number) => {
+  await expect.poll(() => focused(page), { timeout: s * 1000 }).toBe(true);
+});
+
+Then("the Terminal tab of the second project is the selected tab", async ({ page, project }) => {
+  const second = tab(page).filter({ hasText: `${project.name}-b` });
+  await expect(second).toHaveCount(1);
+  await expect(second.locator('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-pane-tab-body^="terminal:"]:visible')).toHaveCount(1);
 });
