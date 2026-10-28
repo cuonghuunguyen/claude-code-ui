@@ -55,3 +55,14 @@ describe("nameSelection (GH-360)", () => {
     expect(nameSelection("v1.2", true)).toEqual([0, 4]);
   });
 });
+
+describe("GH-392 repository folder items", () => {
+  const repo = { path: "/p/src", rel: "src", kind: "nested" as const };
+  it("a repository folder: Show changes and Show graph first, then the folder items; no Show graph without onShowGraph; a plain folder has neither", () => {
+    const t = { kind: "dir", entry: dir, expanded: true, repo } as const;
+    expect(ids(treeMenuSections(t, false, true, true))[0]).toEqual(["repoChanges", "repoGraph"]);
+    expect(ids(treeMenuSections(t, false, true, true)).slice(1)).toEqual(ids(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false)));
+    expect(ids(treeMenuSections(t, false))[0]).toEqual(["repoChanges"]);
+    expect(ids(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false, true, true)).flat()).not.toContain("repoChanges");
+  });
+});

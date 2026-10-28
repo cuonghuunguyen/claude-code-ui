@@ -1391,4 +1391,21 @@ describe("submodule and nested repository rows", () => {
     }
     expect(results).toEqual({ "/p/libs/gone": false, "/p/libs/lib": false, "/p/libs/other": true });
   });
+
+  it("GH-392 a repository choice and a reveal in the same act: the new repository's list shows with the revealed file selected", async () => {
+    saveDiffMode("uncommitted");
+    const two = [own("/p"), submodule("/p", "libs/lib")];
+    const diffs = { "/p": D([{ status: "M", path: "x.ts", added: 1, removed: 1 }]), "/p/libs/lib": D([{ status: "M", path: "a.txt", added: 1, removed: 1 }]) };
+    const client = fakeClient({ "/p/x.ts": "b\n", "/p/libs/lib/a.txt": "b\n" }, { diffs, at: { [`${BASE}:x.ts`]: "a\n", [`${BASE}:a.txt`]: "a\n" } });
+    await act(async () => root.render(panel(client, { repos: R(two) })));
+    await flush();
+    expect(rows()).toEqual(["Modified x.ts, +1 -1"]);
+    await act(async () => {
+      setRepoChoice("/p", "libs/lib");
+      root.render(panel(client, { repos: R(two), reveal: { path: "/p/libs/lib/a.txt", seq: 1 } }));
+    });
+    await flush();
+    expect(selector()!.getAttribute("aria-label")).toContain("lib");
+    expect(el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path")).toBe("/p/libs/lib/a.txt");
+  });
 });

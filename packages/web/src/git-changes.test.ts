@@ -76,3 +76,20 @@ it("eachLimited runs at most N at once and all items", async () => {
   expect(done.sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
   await eachLimited([], 4, async () => {});
 });
+
+it("createLimiter runs at most N jobs at once across callers and skips queued jobs that are no longer live", async () => {
+  const { createLimiter } = await import("./git-changes.ts");
+  const limit = createLimiter(2);
+  const rel: (() => void)[] = [];
+  const ran: number[] = [];
+  let live = true;
+  const job = (i: number) => async () => void (ran.push(i), await new Promise<void>((r) => rel.push(r)));
+  const all = [limit(() => live, job(1)), limit(() => live, job(2)), limit(() => live, job(3)), limit(() => true, job(4))];
+  expect(ran).toEqual([1, 2]);
+  live = false;
+  rel[0]!();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(ran).toEqual([1, 2, 4]);
+  rel.forEach((r) => r());
+  await Promise.all(all);
+});
