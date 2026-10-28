@@ -110,6 +110,18 @@ describe("cleanup", () => {
     ]);
   });
 
+  it("rowSafety safe with mergedInto gives the merged reason; cleanupItems omits expect.ignored when not counted; runCleanup notes ignoredDeleted", async () => {
+    expect(rowSafety(wt("/m", { status: st({ ahead: 2, mergedInto: "origin/main" }) }))).toEqual({ safety: "safe", reason: "changes already in origin/main (squash/rebase merged)" });
+    expect(rowSafety(wt("/n", { status: st() }))).toEqual({ safety: "safe" });
+    const rows = [wt("/counted", { status: st({ ignored: 3 }) }), wt("/preview", { status: { ...st(), ignored: undefined } })];
+    const sent: { path: string; expect: object }[] = [];
+    const items = cleanupItems(rows, new Set(rows.map((r) => r.key)), { deleteBranch: new Set() }, (async (m: { path: string; expect: object }) => (sent.push(m), m.path === "/preview" ? { ignoredDeleted: 5 } : {})) as never);
+    const r = await runCleanup(items);
+    expect(sent.map((m) => m.expect)).toEqual([{ uncommitted: 0, ahead: 0, ignored: 3 }, { uncommitted: 0, ahead: 0 }]);
+    expect("ignored" in sent[1]!.expect).toBe(false);
+    expect(r.notes).toEqual(["preview: 5 ignored files deleted"]);
+  });
+
   it("runCleanup: sequential, a rejection is skipped with its message, branchKept becomes a note; summaryText 'Removed 2, skipped 1'", async () => {
     const log: string[] = [];
     const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));

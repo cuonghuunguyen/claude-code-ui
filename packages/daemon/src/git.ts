@@ -1,6 +1,7 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
 import { constants, appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import ignore from "ignore";
@@ -13,20 +14,32 @@ const READ_ONLY = ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
 const NO_SUBMODULE_STATUS = "--ignore-submodules=dirty";
 const submoduleFlag = (ignore?: boolean) => (ignore ? "--ignore-submodules" : NO_SUBMODULE_STATUS);
 const readEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" });
-/** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones. */
+/** true = urgent (graph), false = normal (status bar, lists), "low" = Clean up scan and warming. */
+export type Tier = boolean | "low";
+/** Runs `fn`s with at most `n` running at a time, the rest in arrival order; urgent (graph) calls start before queued normal ones, low ones last. An aborted waiter never starts. */
 export function limiter(n: number) {
+  type W = { go: () => void };
   let active = 0;
-  const urgentWaiting: (() => void)[] = [];
-  const waiting: (() => void)[] = [];
-  return async <T>(fn: () => Promise<T>, urgent = false): Promise<T> => {
+  const qs = { urgent: [] as W[], normal: [] as W[], low: [] as W[] };
+  return async <T>(fn: () => Promise<T>, tier: Tier = false, signal?: AbortSignal): Promise<T> => {
+    signal?.throwIfAborted();
     if (active < n) active++;
-    else await new Promise<void>((r) => (urgent ? urgentWaiting : waiting).push(r));
+    else
+      await new Promise<void>((go, drop) => {
+        const q = tier === "low" ? qs.low : tier ? qs.urgent : qs.normal;
+        const w = { go };
+        q.push(w);
+        signal?.addEventListener("abort", () => {
+          const i = q.indexOf(w);
+          if (i >= 0) (q.splice(i, 1), drop(signal.reason));
+        }, { once: true });
+      });
     try {
       return await fn();
     } finally {
       // The slot passes to the next waiter as is.
-      const next = urgentWaiting.shift() ?? waiting.shift();
-      if (next) next();
+      const next = qs.urgent.shift() ?? qs.normal.shift() ?? qs.low.shift();
+      if (next) next.go();
       else active--;
     }
   };
@@ -37,6 +50,14 @@ export function limiter(n: number) {
  * every other reply (a session's transcript, a prompt) for seconds. Spread over ticks, other replies go out between them.
  */
 const gitSlot = limiter(4);
+/** A Clean up scan or a warming read: its git calls queue behind the status bar and stop when the client cancels. */
+const lowTier = new AsyncLocalStorage<AbortSignal>();
+export const lowPriority = <T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> => lowTier.run(signal, fn);
+/** `gitSlot` with the tier and cancel of the running scan, when there is one (it overrides `urgent`). */
+const slot = <T>(fn: () => Promise<T>, urgent = false): Promise<T> => {
+  const sig = lowTier.getStore();
+  return gitSlot(fn, sig ? "low" : urgent, sig);
+};
 /**
  * The repository of `cwd` resolved once: canonical top, own git dir, shared git dir and the object directories its
  * `objects/info/alternates` names. File system only; null outside a work tree or without a readable `.git`.
@@ -99,7 +120,7 @@ export const ceilingEnv = async (cwd: string): Promise<NodeJS.ProcessEnv> => {
 export const pinEnv = ceilingEnv;
 const git = async (cwd: string, ...args: string[]) => {
   const env = { ...readEnv(), ...(await ceilingEnv(cwd)) };
-  return (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env, idempotent: true }))).stdout.toString("utf8").trim();
+  return (await slot(() => runGit({ cwd, args: [...READ_ONLY, ...args], env, idempotent: true }))).stdout.toString("utf8").trim();
 };
 
 /**
@@ -236,6 +257,9 @@ const lru = <V>(max: number) => {
       m.set(k, v);
       if (m.size > max) m.delete(m.keys().next().value!);
     },
+    delete(k: string) {
+      m.delete(k);
+    },
   };
 };
 const lastStatus = new Map<string, GitStatus>();
@@ -304,7 +328,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported" | "cancelled";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);
@@ -314,8 +338,9 @@ export class WorktreeError extends Error {
 /** git with a timeout, no shell; failure becomes a WorktreeError git_failed with the first stderr line. */
 async function run(cwd: string, args: string[], timeout = 30_000, env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }, urgent = false, idempotent = false): Promise<string> {
   try {
-    return (await gitSlot(() => runGit({ cwd, args, timeout, env, idempotent }), urgent)).stdout.toString("utf8").trim();
+    return (await slot(() => runGit({ cwd, args, timeout, env, idempotent }), urgent)).stdout.toString("utf8").trim();
   } catch (e) {
+    if (lowTier.getStore()?.aborted) throw new WorktreeError("cancelled", "cancelled");
     const err = e as { killed?: boolean; stderr?: string; message: string };
     throw new WorktreeError("git_failed", err.killed ? `git ${args[0]} timed out` : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message));
   }
@@ -375,7 +400,7 @@ export const worktreeIncludeIo = { realpath };
 async function gitPaths(cwd: string, args: string[], input?: string, dirs = false): Promise<string[]> {
   let stdout: Buffer;
   try {
-    stdout = (await gitSlot(() => runGit({ cwd, args: [...READ_ONLY, ...args], input, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 30_000 }))).stdout;
+    stdout = (await slot(() => runGit({ cwd, args: [...READ_ONLY, ...args], input, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 30_000 }))).stdout;
   } catch (e) {
     const err = e as { killed?: boolean; code?: unknown; stderr?: string; message: string };
     if (args[0] === "check-ignore" && err.code === 1) return [];
@@ -895,114 +920,180 @@ export type RemoveOptions = {
   /** The caller's session cleanup (refuses with has_sessions_running), run after every check passed. */
   beforeRemove?: () => Promise<void>;
   expectSafe?: boolean;
-  /** Work listed: more uncommitted files, commits ahead or ignored files now is `stale`. */
-  expect?: { uncommitted: number; ahead: number; ignored: number };
+  /** Work listed: more uncommitted files or commits ahead now is `stale`; so are more ignored files when `ignored` is given (the Clean up preview does not count them). */
+  expect?: { uncommitted: number; ahead: number; ignored?: number };
   deleteBranch?: boolean;
 };
 
 /**
  * Removes a linked worktree inside the roots (made by this app, by hand or by another tool): directory, then its Created branch (marked, or legacy `worktree-*`), then prune.
- * Refused: the main worktree, a locked one, a symlink path, one whose git dirs are outside the roots. `deleteBranch`: a kept branch goes with `-d` (git refuses an unmerged one: `branchKept`).
+ * Refused: the main worktree, a locked one, a symlink path, one whose git dirs are outside the roots. `deleteBranch`: a kept branch goes with `-d` (git refuses an unmerged one: `branchKept`),
+ * with `-D` when the fresh check found its changes already in the base (squash or rebase merged). A check (`expect`, `expectSafe`, `deleteBranch`) is the full one: it counts ignored files (`ignoredDeleted`).
  */
 export async function removeWorktree(cwd: string, path: string, allowed: (path: string) => boolean, o: RemoveOptions = {}): Promise<WorktreeRemoveResult> {
   const first = await repoOf(cwd);
   return locked(first.main, async () => {
     // Re-read inside the lock: a concurrent remove may have removed it.
-    const { main, list } = await repoOf(cwd);
+    const { main, list } = await repoFacts(cwd, true);
     const w = linked(list, path);
     const block = await blockOf(w, path, list);
     if (block) throw new WorktreeError("not_removable", BLOCK_ERROR[block]);
     if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) throw new WorktreeError("cwd_not_allowed", "The worktree is outside the allowed roots");
     o.mark?.(w);
     // Checked before anything closes, and again once the sessions and terminals are gone (a shell could write in between).
+    // The type is widened: TS does not see the assignment inside `verify`.
+    let last = undefined as WorktreeStatusResult | undefined;
     const verify = async () => {
-      if (!o.expectSafe && !o.expect) return;
-      const st = await statusOf(main, w, path, allowed, list);
+      if (!o.expectSafe && !o.expect && !o.deleteBranch) return;
+      const st = (last = await statusOf(await repoFacts(main, true), w, path, allowed, true));
       const e = o.expect;
-      if ((o.expectSafe && st.safety !== "safe") || st.blocked || (e && (st.uncommitted > e.uncommitted || st.ahead > e.ahead || st.ignored > e.ignored)))
+      if ((o.expectSafe && st.safety !== "safe") || st.blocked || (e && (st.uncommitted > e.uncommitted || st.ahead > e.ahead || (e.ignored !== undefined && (st.ignored ?? 0) > e.ignored))))
         throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}`);
     };
     await verify();
     await o.beforeRemove?.();
     await verify();
-    const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
+    const created = !!w.branch && !w.detached && (await isCreated(main, w.branch));
+    const keptBranch = !!w.branch && !w.detached && !created && o.deleteBranch === true;
+    // The status needs the checkout: it is read before the directory goes.
+    if (keptBranch && !last) await verify();
+    const force = !!last?.mergedInto;
     await run(main, ["worktree", "remove", "--force", "--", w.path]);
     let branchKept: string | undefined;
-    if (w.branch && !detached && (await isCreated(main, w.branch))) await run(main, ["branch", "-D", "--", w.branch]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
-    else if (o.deleteBranch && w.branch && !detached) await run(main, ["branch", "-d", "--", w.branch]).catch((e) => void (branchKept = e.message));
+    if (created) await run(main, ["branch", "-D", "--", w.branch!]).catch((e) => console.warn(`worktree: branch ${w.branch} kept: ${e.message}`));
+    else if (keptBranch) await run(main, ["branch", force ? "-D" : "-d", "--", w.branch!]).catch((e) => void (branchKept = e.message));
     await run(main, ["worktree", "prune"]).catch(() => {});
-    return branchKept ? { branchKept } : {};
+    const ignoredDeleted = last?.ignored;
+    return { ...(branchKept && { branchKept }), ...(ignoredDeleted && { ignoredDeleted }) };
   });
 }
 
-/** Pure: `safety` of a status without it. */
+/** Pure: `safety` of a status without it. Commits already in the base (`mergedInto`: squash or rebase merged) are no work. */
 export function classify(st: Omit<WorktreeStatusResult, "safety">): WorktreeStatusResult {
-  return { ...st, safety: st.blocked ? "blocked" : st.uncommitted || st.ahead ? "has_work" : "safe" };
+  return { ...st, safety: st.blocked ? "blocked" : st.uncommitted || (st.ahead && !st.mergedInto) ? "has_work" : "safe" };
 }
 
 const count = async (cwd: string, args: string[]) => Number(await g(cwd, ["rev-list", "--count", ...args])) || 0;
 
 /** Counts stop here: a huge untracked tree is "at least this much" (the web app shows `1000+`). */
 export const STATUS_CAP = 1000;
-/** Counts of `git status --porcelain -z --ignored=matching -uall`: changed or untracked files, the untracked part, ignored files (not directories). */
-export function parseStatus(out: string): { uncommitted: number; untracked: number; ignored: number } {
-  const c = { uncommitted: 0, untracked: 0, ignored: 0 };
+/**
+ * Counts of `git status --porcelain=v2 --branch -z` (with `--ignored=matching` for ignored files): changed or untracked files, the untracked part, ignored files (not directories),
+ * and whether HEAD is detached. Entries: `1 `/`u ` changed, `2 ` renamed or copied (its source path is a field of its own), `? ` untracked, `! ` ignored.
+ */
+export function parseStatusV2(out: string): { detached: boolean; uncommitted: number; untracked: number; ignored: number } {
+  const c = { detached: false, uncommitted: 0, untracked: 0, ignored: 0 };
   const f = out.split("\0");
   for (let i = 0; i < f.length; i++) {
-    let e = f[i]!;
-    // The runner trims the output: the first entry of " M file" lost its leading space.
-    if (i === 0 && e[2] !== " ") e = ` ${e}`;
-    if (e.length < 4) continue;
-    const xy = e.slice(0, 2);
-    // A rename or copy is followed by its source path as a field of its own.
-    if (xy[0] === "R" || xy[0] === "C" || xy[1] === "R" || xy[1] === "C") i++;
-    if (xy === "!!") {
-      if (!e.endsWith("/")) c.ignored = Math.min(STATUS_CAP, c.ignored + 1);
-      continue;
-    }
-    c.uncommitted = Math.min(STATUS_CAP, c.uncommitted + 1);
-    if (xy === "??") c.untracked = Math.min(STATUS_CAP, c.untracked + 1);
+    const e = f[i]!;
+    if (e.startsWith("# branch.head ")) c.detached = e === "# branch.head (detached)";
+    else if (e.startsWith("1 ") || e.startsWith("u ")) c.uncommitted = Math.min(STATUS_CAP, c.uncommitted + 1);
+    else if (e.startsWith("2 ")) (c.uncommitted = Math.min(STATUS_CAP, c.uncommitted + 1), i++);
+    else if (e.startsWith("? ")) (c.uncommitted = Math.min(STATUS_CAP, c.uncommitted + 1), (c.untracked = Math.min(STATUS_CAP, c.untracked + 1)));
+    else if (e.startsWith("! ") && !e.endsWith("/")) c.ignored = Math.min(STATUS_CAP, c.ignored + 1);
   }
   return c;
 }
 
-/** What removing `w` loses and whether it may be removed (WorktreeStatusResult); `running` is the caller's to fill. */
-async function statusOf(main: string, w: Listed, requested: string, allowed: (p: string) => boolean, list: Listed[]): Promise<WorktreeStatusResult> {
+// ---- Repo-wide facts, read once per repository ----
+
+type RefRow = { upstream: string; track: string; symref: string; tree: string };
+type Facts = { main: string; list: Listed[]; config: Map<string, string>; refs: Map<string, RefRow>; base?: string; baseTree?: string };
+const facts = lru<{ stamp: string; p: Promise<Facts> }>(32);
+const neverAborted = new AbortController().signal;
+/**
+ * The worktree list, `config --list -z` and one `for-each-ref` of the repository (3 processes), memoized by a file-stat stamp (refs, config, worktree entries):
+ * status requests of a scan share them, also while they are still being read. `fresh` re-reads (removal). Run in the low tier of a scan, but never cancelled: other requests share the read.
+ */
+async function repoFacts(cwd: string, fresh = false): Promise<Facts> {
+  const build = async (): Promise<Facts> => {
+    const { main, list } = await repoOf(cwd);
+    const [cfg, rows] = await Promise.all([g(main, ["config", "--list", "-z"]), g(main, ["for-each-ref", "--format=%(refname)%1f%(upstream)%1f%(upstream:track)%1f%(symref)%1f%(tree)%1e", "refs/heads", "refs/remotes"])]);
+    const config = new Map<string, string>();
+    for (const e of cfg.split("\0")) {
+      const nl = e.indexOf("\n");
+      // git lowercases the section and the key, not the subsection (the branch name). A key without a value is true.
+      if (e) config.set(nl < 0 ? e : e.slice(0, nl), nl < 0 ? "true" : e.slice(nl + 1));
+    }
+    const refs = new Map<string, RefRow>();
+    for (const r of rows.split("\x1e")) {
+      const [name, upstream = "", track = "", symref = "", tree = ""] = r.replace(/^\n/, "").split("\x1f");
+      if (name) refs.set(name, { upstream, track, symref, tree });
+    }
+    // The same rule as `defaultBranch`: origin/HEAD's target, else main, else master (local).
+    const base = [refs.get("refs/remotes/origin/HEAD")?.symref, "refs/heads/main", "refs/heads/master"].find((x): x is string => !!x && refs.has(x));
+    return { main, list, config, refs, ...(base && { base, baseTree: refs.get(base)!.tree }) };
+  };
+  const start = () => (lowTier.getStore() ? lowTier.run(neverAborted, build) : build());
+  const top = (await gitTopOf(cwd)) ?? cwd;
+  const dirs = await gitDirsOfAsync(top);
+  if (!dirs) return start();
+  const stamp = `${await refsStamp(top)}|${await statOf(join(dirs.common, "config"))}|${await statOf(join(dirs.common, "worktrees"))}`;
+  const hit = facts.get(dirs.common);
+  if (hit && hit.stamp === stamp && !fresh) return hit.p;
+  const p = start();
+  facts.set(dirs.common, { stamp, p });
+  p.catch(() => facts.get(dirs.common)?.p === p && facts.delete(dirs.common));
+  return p;
+}
+const boolOf = (v: string | undefined) => (v === undefined ? undefined : /^(true|yes|on|1)$/i.test(v) ? true : /^(false|no|off|0|)$/i.test(v) ? false : undefined);
+/** `isCreated` from the facts: the config mark, else the legacy `worktree-` prefix. */
+const isCreatedIn = (f: Facts, branch: string) => boolOf(f.config.get(`branch.${branch}.claudeuicreated`)) ?? branch.startsWith("worktree-");
+
+/** What removing `w` loses and whether it may be removed (WorktreeStatusResult); `running` is the caller's to fill. `full`: also counts ignored files (removal; the preview leaves `ignored` out). */
+async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: string) => boolean, full: boolean): Promise<WorktreeStatusResult> {
   const name = w.branch ?? basename(w.path);
-  const zero = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: name, branchMerged: false, running: 0 };
+  const zero = { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: name, branchMerged: false, running: 0 };
   // No git runs in a worktree whose git dirs are outside the roots.
-  if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) return classify({ ...zero, blocked: "outside_roots" });
-  const blocked = await blockOf(w, requested, list);
-  // Per file (-uall) and NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
-  const { uncommitted, untracked, ignored } = parseStatus(await g(w.path, ["status", "--porcelain", "-z", "--ignored=matching", "-uall"]));
-  const detached = !(await gok(w.path, "symbolic-ref", "-q", "HEAD"));
-  const keeps = !detached && !(w.branch && (await isCreated(main, w.branch)));
+  if (!allowed(w.path) || (await gitEscapes(w.path, allowed))) return classify({ ...zero, ...(full && { ignored: 0 }), blocked: "outside_roots" });
+  const blocked = await blockOf(w, requested, f.list);
+  // One process: per file (-uall), NUL separated (-z: names needing quotes stay exact). Ignored directories git reports whole (node_modules/, build output) are not counted.
+  const { detached, uncommitted, untracked, ignored } = parseStatusV2(await g(w.path, ["status", "--porcelain=v2", "--branch", "-z", "-uall", ...(full ? ["--ignored=matching"] : [])]));
+  const keeps = !detached && !(w.branch && isCreatedIn(f, w.branch));
   let commits = 0;
   if (detached) commits = await count(w.path, ["HEAD", "--not", "--branches", "--remotes"]);
   else if (!keeps) commits = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
-  // Saved refs: the base branch, the upstream and same-name remote branches.
+  // Saved refs, from the facts: the base branch, the upstream and same-name remote branches.
   const refs: string[] = [];
-  const base = await defaultBranch(main);
-  if (base) refs.push(base);
+  if (f.base) refs.push(f.base);
+  const row = !detached && w.branch ? f.refs.get(`refs/heads/${w.branch}`) : undefined;
   if (!detached && w.branch) {
-    const up = await g(main, ["for-each-ref", "--format=%(upstream)", "--", `refs/heads/${w.branch}`]).catch(() => "");
-    if (up) refs.push(up);
-    const same = await g(main, ["for-each-ref", "--format=%(refname)", "--", `refs/remotes/*/${w.branch}`]).catch(() => "");
-    refs.push(...same.split("\n").filter(Boolean));
+    // A pruned upstream is still configured, its ref is gone.
+    if (row?.upstream && f.refs.has(row.upstream)) refs.push(row.upstream);
+    for (const k of f.refs.keys()) {
+      const m = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(k);
+      if (m && m[2] === w.branch && !refs.includes(k)) refs.push(k);
+    }
   }
   let ahead: number;
   if (refs.length) ahead = await count(w.path, ["HEAD", "--not", ...refs]);
   else if (!keeps) ahead = commits;
   else ahead = await count(w.path, ["HEAD", "--not", `--exclude=${w.branch}`, "--branches", "--remotes"]);
-  const branchMerged = keeps && refs.length > 0 && (await count(w.path, [`refs/heads/${w.branch}`, "--not", ...refs])) === 0;
-  const t = Number(await g(w.path, ["log", "-1", "--format=%ct", "HEAD"]).catch(() => "")) * 1000;
-  return classify({ uncommitted, untracked, commits, ahead, ignored, branch: name, branchMerged, ...(t > 0 && { headTime: t }), running: 0, ...(blocked && { blocked }), ...(!detached && !keeps && { createdBranch: true as const }) });
+  // Squash or rebase merged: merging HEAD into the base changes nothing (the merged tree is the base's tree). Any failure (conflict, git before 2.38) counts as not merged.
+  let mergedInto: string | undefined;
+  if (ahead > 0 && uncommitted === 0 && f.base && f.baseTree) {
+    const merged = await g(w.path, ["merge-tree", "--write-tree", "--no-messages", f.base, "HEAD"]).catch((e) => {
+      if (e instanceof WorktreeError && e.code === "cancelled") throw e;
+      return "";
+    });
+    if (merged.split("\n")[0] === f.baseTree) mergedInto = shortRef(f.base);
+  }
+  // With HEAD attached, no commit outside the saved refs is `ahead === 0`; merged another way counts too.
+  const branchMerged = keeps && refs.length > 0 && (ahead === 0 || !!mergedInto);
+  // The reflog's file time: no `log -1` process.
+  const own = (await gitDirsOfAsync(w.path))?.own;
+  const mtime = async (p: string) => (await stat(p).catch(() => undefined))?.mtimeMs;
+  const t = own ? ((await mtime(join(own, "logs", "HEAD"))) ?? (await mtime(join(own, "HEAD")))) : undefined;
+  return classify({
+    uncommitted, untracked, commits, ahead, ...(full && { ignored }), branch: name, branchMerged, ...(t && t > 0 && { headTime: t }), running: 0,
+    ...(blocked && { blocked }), ...(!detached && !keeps && { createdBranch: true as const }), ...(mergedInto && { mergedInto }), ...(row?.track === "[gone]" && { upstreamGone: true as const }),
+  });
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
 export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
-  const { main, list } = await repoOf(cwd);
-  return statusOf(main, linked(list, path), path, allowed, list);
+  const f = await repoFacts(cwd);
+  return statusOf(f, linked(f.list, path), path, allowed, false);
 }
 
 // ---- Commit graph (docs/spec.md "Layout") ----

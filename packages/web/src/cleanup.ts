@@ -81,6 +81,8 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   if (!st) return { safety: "checking" };
   if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : "Blocked" };
   if (st.safety === "has_work") return { safety: "has_work", reason: `${plural(st.uncommitted, "file")}, ${plural(st.ahead, "commit")}` };
+  // Squash or rebase merged: ahead, but the base already has the changes.
+  if (st.mergedInto) return { safety: "safe", reason: `changes already in ${st.mergedInto} (squash/rebase merged)` };
   return { safety: "safe" };
 }
 
@@ -121,6 +123,7 @@ export async function runCleanup(items: Item[], onProgress: (done: number) => vo
       const r = (await it.run()) as WorktreeRemoveResult;
       out.removed.push(it.label);
       if (r?.branchKept) out.notes.push(`Branch ${it.label} kept: ${r.branchKept}`);
+      if (r?.ignoredDeleted) out.notes.push(`${it.label}: ${plural(r.ignoredDeleted, "ignored file")} deleted`);
     } catch (e) {
       out.skipped.push({ label: it.label, reason: (e as Error).message });
     }
@@ -134,7 +137,7 @@ export const summaryText = (r: CleanupResult) => `Removed ${r.removed.length}, s
 export const rowLabel = (r: Row) => (r.kind === "worker" ? r.name : (r.branch ?? r.path.split(/[\\/]/).filter(Boolean).at(-1) ?? r.path));
 
 /** Workers first (their sessions leave the worktree), then worktrees. */
-export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteBranch: Set<string> }, request: <T>(m: { type: "worker.remove"; sessionId: string } | { type: "worktree.remove"; cwd: string; path: string; expectSafe: boolean; expect: { uncommitted: number; ahead: number; ignored: number }; deleteBranch: boolean }) => Promise<T>): Item[] {
+export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteBranch: Set<string> }, request: <T>(m: { type: "worker.remove"; sessionId: string } | { type: "worktree.remove"; cwd: string; path: string; expectSafe: boolean; expect: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch: boolean }) => Promise<T>): Item[] {
   const ticked = rows.filter((r) => selected.has(r.key));
   // A worker with workers below it is refused by the daemon: remove the deepest first (depth along coordinatorId among the rows).
   const up = new Map(rows.flatMap((r) => (r.kind === "worker" && r.coordinatorId ? [[r.id, r.coordinatorId] as const] : [])));
@@ -146,7 +149,7 @@ export function cleanupItems(rows: Row[], selected: Set<string>, opts: { deleteB
   const workers = [...ticked].sort((a, b) => (b.kind === "worker" ? depth(b.id) : 0) - (a.kind === "worker" ? depth(a.id) : 0)).flatMap((r): Item[] => (r.kind === "worker" ? [{ key: r.key, label: r.name, run: () => request({ type: "worker.remove", sessionId: r.id }) }] : []));
   const wts = ticked.flatMap((r): Item[] =>
     r.kind === "worktree"
-      ? [{ key: r.key, label: rowLabel(r), run: () => request({ type: "worktree.remove", cwd: r.project, path: r.path, expectSafe: r.status?.safety === "safe", expect: { uncommitted: r.status?.uncommitted ?? 0, ahead: r.status?.ahead ?? 0, ignored: r.status?.ignored ?? 0 }, deleteBranch: opts.deleteBranch.has(r.key) && !!r.status?.branchMerged }) }]
+      ? [{ key: r.key, label: rowLabel(r), run: () => request({ type: "worktree.remove", cwd: r.project, path: r.path, expectSafe: r.status?.safety === "safe", expect: { uncommitted: r.status?.uncommitted ?? 0, ahead: r.status?.ahead ?? 0, ...(r.status?.ignored !== undefined && { ignored: r.status.ignored }) }, deleteBranch: opts.deleteBranch.has(r.key) && !!r.status?.branchMerged }) }]
       : [],
   );
   return [...workers, ...wts];

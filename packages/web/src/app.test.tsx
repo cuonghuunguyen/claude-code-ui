@@ -1645,7 +1645,7 @@ describe("worktrees", () => {
       await act(async () => {});
       const d = document.querySelector('[data-testid="cleanup-dialog"]')!;
       expect(d.textContent).toContain("All projects");
-      expect(sent.slice(from).filter((m) => m.type === "worktree.status")).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed }]);
+      expect(sent.slice(from).filter((m) => m.type === "worktree.status")).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed, scan: expect.any(String) }]);
       expect(d.textContent).toContain("Remove 1");
     } finally {
       restore();

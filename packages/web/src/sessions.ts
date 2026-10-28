@@ -40,10 +40,10 @@ export function keepsBranch(list: Worktree[] | undefined, path: string, st?: Pic
   return !!w?.branch && !w.detached && !w.branch.startsWith("worktree-");
 }
 
-/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. */
-export function removeWorktreeText({ uncommitted, commits, branch }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch">, o: { keepsBranch?: boolean } = {}) {
-  const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
-  const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : "Clean up the worktree directory.";
+/** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. `mergedInto`: its commits are already in that base (squash or rebase merged), so they are not lost. */
+export function removeWorktreeText({ uncommitted, commits, branch, mergedInto }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch" | "mergedInto">, o: { keepsBranch?: boolean } = {}) {
+  const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, !mergedInto && commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
+  const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : mergedInto ? `Its changes are already in ${mergedInto} (squash/rebase merged).` : "Clean up the worktree directory.";
   return o.keepsBranch ? `${text} Branch ${branch} stays.` : text;
 }
 

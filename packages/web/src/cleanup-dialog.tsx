@@ -12,8 +12,7 @@ import { timeAgo } from "./sessions.ts";
 import { ARCHIVE_DAYS, daysLabel } from "./sidebar-menus.ts";
 import { projectName } from "./tabs.ts";
 
-/** At most this many `worktree.status` requests in flight (the daemon's git queue runs 4). */
-const STATUS_PARALLEL = 4;
+type FetchState = { state: "fetching" } | { state: "done"; at: number } | { state: "failed"; reason: string };
 
 type Props = {
   scope?: CleanupScope;
@@ -52,23 +51,43 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   const closeRef = useRef<HTMLButtonElement>(null);
   const now = useMemo(() => Date.now(), []);
 
+  // One scan id for this dialog: the daemon queues its statuses behind the status bar and drops the queued ones on `worktree.cancel`.
+  const scan = useMemo(() => crypto.randomUUID(), []);
+  const repos = useMemo(() => [...new Set(cands.worktrees.map((w) => w.project))], [cands]);
+  const [fetches, setFetches] = useState<Record<string, FetchState>>({});
+  const [clock, setClock] = useState(() => Date.now());
+  const fetched = Object.values(fetches).some((f) => f.state === "done");
+
   useEffect(() => {
     let live = true;
-    const queue = [...cands.worktrees];
-    const next = async (): Promise<void> => {
-      const w = queue.shift();
-      if (!w || !live) return;
-      try {
-        const st = await request<WorktreeStatusResult>({ type: "worktree.status", cwd: w.project, path: w.path });
-        if (live) setStatus((s) => ({ ...s, [w.key]: st }));
-      } catch (e) {
-        if (live) setStatus((s) => ({ ...s, [w.key]: { error: (e as Error).message } }));
-      }
-      return next();
+    const scanRepo = (repo: string) => {
+      for (const w of cands.worktrees.filter((x) => x.project === repo))
+        request<WorktreeStatusResult>({ type: "worktree.status", cwd: repo, path: w.path, scan }).then(
+          (st) => live && setStatus((s) => ({ ...s, [w.key]: st })),
+          (e) => live && setStatus((s) => ({ ...s, [w.key]: { error: (e as Error).message } })),
+        );
     };
-    for (let i = 0; i < STATUS_PARALLEL; i++) void next();
-    return () => void (live = false);
-  }, [cands, request]);
+    // Per repository in parallel: fetch the default remote first (a failure only warns), then every status of it.
+    for (const repo of repos) {
+      setFetches((f) => ({ ...f, [repo]: { state: "fetching" } }));
+      request({ type: "git.fetch", cwd: repo, defaultRemote: true })
+        .then(
+          () => live && setFetches((f) => ({ ...f, [repo]: { state: "done", at: Date.now() } })),
+          (e) => live && setFetches((f) => ({ ...f, [repo]: { state: "failed", reason: (e as Error).message } })),
+        )
+        .then(() => live && scanRepo(repo));
+    }
+    return () => {
+      live = false;
+      void request({ type: "worktree.cancel", scan }).catch(() => {});
+    };
+  }, [cands, repos, request, scan]);
+
+  useEffect(() => {
+    if (!fetched) return;
+    const t = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [fetched]);
 
   const rows: Row[] = useMemo(
     () => [
@@ -138,6 +157,18 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
         <div className="flex flex-col gap-0.5 px-4 pt-4 pb-2">
           <Dialog.Title className="font-medium text-[15px] tracking-[-0.13px]">Clean up</Dialog.Title>
           <Dialog.Description className="text-muted-foreground text-sm">{describe(scope)}</Dialog.Description>
+          {repos.map((repo) => {
+            const f = fetches[repo];
+            if (!f) return null;
+            const secs = f.state === "done" ? Math.max(0, Math.round((clock - f.at) / 1000)) : 0;
+            const text = f.state === "fetching" ? "Fetching…" : f.state === "done" ? `Fetched ${secs < 60 ? `${secs} s` : timeAgo(f.at, clock)} ago` : `Fetch failed: ${f.reason} — results may be out of date`;
+            return (
+              <p key={repo} role="status" data-testid="cleanup-fetch" className={cn("text-xs", f.state === "failed" ? "text-destructive" : "text-muted-foreground")}>
+                {repos.length > 1 ? `${projectName(repo)}: ` : ""}
+                {text}
+              </p>
+            );
+          })}
         </div>
         {phase === "done" && result ? (
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-2" data-testid="cleanup-summary">
@@ -278,7 +309,10 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
   const meta = [
     r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
     act ? timeAgo(act, now) : undefined,
+    r.kind === "worktree" && r.status && r.status.ignored === undefined ? "ignored files: checked at removal" : undefined,
     r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored >= 1000 ? "1000+" : r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
+    r.kind === "worktree" && r.status?.upstreamGone ? "remote branch deleted" : undefined,
+    safety === "safe" ? reason : undefined,
     r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,
   ].filter(Boolean);
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;

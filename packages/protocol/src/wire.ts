@@ -211,7 +211,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
   | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
-  | { type: "git.fetch"; cwd: string; exact?: true }
+  | { type: "git.fetch"; cwd: string; exact?: true; /** Fetch only the default branch's remote with `--prune` (Clean up). */ defaultRemote?: boolean }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
   | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
@@ -230,13 +230,15 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** A pasted pull request link (GitHub, GitLab, Bitbucket Server) of `cwd`'s origin: the origin branches at its head commit. Reply PullRequestBranchesResult; errors pr_other_repo, pr_not_found, pr_unsupported, git_failed. */
   | { type: "worktree.pr"; cwd: string; url: string }
   /** What removing `path` loses and whether it may be removed (docs/spec.md "Worktrees"); reply WorktreeStatusResult. */
-  | { type: "worktree.status"; cwd: string; path: string }
+  | { type: "worktree.status"; cwd: string; path: string; /** A Clean up scan or warming read: low git priority, cancelled by `worktree.cancel`. */ scan?: string }
+  /** Cancels the queued and running `worktree.status` requests of `scan` (replied `cancelled`). Reply {}. */
+  | { type: "worktree.cancel"; scan: string }
   /**
    * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a Created branch (git config `branch.<name>.claudeUiCreated`, or legacy `worktree-*`; ADR 0005),
    * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
    * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
    */
-  | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }
+  | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }
   // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
   /** Reply McpListResult. */
   | { type: "mcp.list"; cwd: string; sessionId?: string }
@@ -459,12 +461,13 @@ export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_r
  * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
  * (or detached HEAD) holds, 0 when the branch is kept (not a Created branch); `ahead`: commits of HEAD in neither the base branch nor the upstream
  * (nor a same-name remote branch); `branchMerged`: a kept branch (not a Created branch, not detached) has no commit outside base or upstream (`git branch -d` may delete it);
- * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); `headTime`: ms of HEAD's committer date; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
- * "has_work" when `uncommitted` or `ahead`, else "safe".
+ * `ignored`: ignored files that removal deletes (ignored directories git reports as a whole are not counted); absent in the preview (counted at removal only); `headTime`: ms of HEAD's last reflog write; `running`: its sessions that run or need input. `safety`: "blocked" when `blocked` is set, else
+ * "has_work" when `uncommitted` or `ahead` (unless `mergedInto`), else "safe".
  */
-export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
+export type WorktreeStatusResult = { uncommitted: number; untracked: number; commits: number; ahead: number; ignored?: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** The changes are already in this base ref (squash or rebase merged). */ mergedInto?: string; /** The upstream branch was deleted on the remote (`[gone]`). */ upstreamGone?: true; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
 /** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
-export type WorktreeRemoveResult = { branchKept?: string };
+/** `ignoredDeleted`: ignored files removal deleted (counted at removal; the preview does not count them). */
+export type WorktreeRemoveResult = { branchKept?: string; ignoredDeleted?: number };
 /** Claude Code's worktree name rule; undefined when `name` is valid. */
 export function worktreeNameError(name: string): string | undefined {
   if (!name || name.length > 64) return "Name must be 1 to 64 characters";

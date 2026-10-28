@@ -56,6 +56,27 @@ describe("gitFetch", () => {
     expect(log?.branches).toContain("refs/remotes/origin/feat");
   });
 
+  it("gitFetch defaultRemote fetches only the default branch's remote with --prune", async () => {
+    const { root, a, b, inside } = remoteRepo();
+    run(root, "init", "-q", "--bare", "-b", "main", "other.git");
+    run(a, "remote", "add", "other", join(root, "other.git"));
+    newBranch(b, "gone");
+    run(a, "fetch", "-q", "origin");
+    expect(run(a, "branch", "-r")).toContain("origin/gone");
+    run(b, "push", "-q", "origin", "--delete", "gone");
+    const calls: GitRunOptions[] = [];
+    setGitRunner((o) => (calls.push(o), threadRunner(o)));
+    const r = await gitFetch(a, { allowed: inside, defaultRemote: true });
+    const fetches = calls.filter((c) => c.args.includes("fetch"));
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]!.args.slice(fetches[0]!.args.indexOf("fetch"))).toEqual(["fetch", "--prune", "--no-recurse-submodules", "origin"]);
+    expect(run(a, "branch", "-r")).not.toContain("origin/gone");
+    expect(r?.refs).toBe(await gitRefs(a, inside));
+    // No default remote: origin is missing and no branch names one.
+    run(a, "remote", "remove", "origin");
+    await expect(gitFetch(a, { allowed: inside, defaultRemote: true })).rejects.toMatchObject({ code: "bad_request", message: "No remote for the default branch" });
+  });
+
   it("is null outside a repository and refuses a top outside the roots", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "nogit-")));
     expect(await gitFetch(dir, { allowed: () => true })).toBeNull();

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { parseStatus, createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -813,7 +813,7 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ahead: 1, safety: "has_work" });
   });
 
-  it("worktreeStatus counts ignored files but not ignored directories git reports whole", async () => {
+  it("the removal check counts ignored files but not ignored directories git reports whole; the preview leaves ignored out", async () => {
     const { main } = plain();
     writeFileSync(join(main, ".gitignore"), "*.log\nbuild/\n");
     run(main, "add", ".");
@@ -822,12 +822,18 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     run(main, "worktree", "add", "-q", "-b", "ig", wt);
     mkdirSync(join(wt, "build"));
     writeFileSync(join(wt, "build", "o.js"), "x");
-    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 0, uncommitted: 0, safety: "safe" });
     writeFileSync(join(wt, "a.log"), "x");
-    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, safety: "safe" });
+    const preview = await worktreeStatus(main, wt, () => true);
+    expect(preview).toMatchObject({ uncommitted: 0, safety: "safe" });
+    expect(preview.ignored).toBeUndefined();
+    // build/ is a whole ignored directory (not counted): only a.log is.
+    expect(await code(removeWorktree(main, wt, () => true, { expect: { uncommitted: 0, ahead: 0, ignored: 0 } }))).toBe("stale");
+    expect(existsSync(wt)).toBe(true);
+    expect(await removeWorktree(main, wt, () => true, { expect: { uncommitted: 0, ahead: 0, ignored: 1 } })).toEqual({ ignoredDeleted: 1 });
+    expect(existsSync(wt)).toBe(false);
   });
 
-  it("worktreeStatus counts ignored files inside an untracked folder, per file, and names that need quoting", async () => {
+  it("the removal check counts ignored files inside an untracked folder, per file, and names that need quoting", async () => {
     const { main } = plain();
     writeFileSync(join(main, ".gitignore"), "*.env\n*.log\nbuild/\nmy dir/\n");
     run(main, "add", ".");
@@ -841,7 +847,9 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     mkdirSync(join(wt, "my dir"));
     writeFileSync(join(wt, "my dir", "f.txt"), "x");
     // secrets/ holds only an ignored file: Safe, and the file is counted; build/ and "my dir/" are whole ignored directories.
-    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ ignored: 1, uncommitted: 0, untracked: 0, safety: "safe" });
+    expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 0, untracked: 0, safety: "safe" });
+    expect(await code(removeWorktree(main, wt, () => true, { expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 } }))).toBe("stale");
+    expect(await removeWorktree(main, wt, () => true, { expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 1 } })).toEqual({ ignoredDeleted: 1 });
   });
 
   it("worktreeStatus counts every file of an untracked folder, so work added inside it is stale for expect", async () => {
@@ -855,12 +863,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await worktreeStatus(main, wt, () => true)).toMatchObject({ uncommitted: 2, untracked: 2 });
     expect(await code(removeWorktree(main, wt, () => true, { expect: { uncommitted: 1, ahead: 0, ignored: 0 } }))).toBe("stale");
     expect(existsSync(join(wt, "newdir", "b"))).toBe(true);
-  });
-
-  it("parseStatus: renames carry a second field, a leading-space first entry survives the runner's trim, directories are not counted, counts stop at the cap", () => {
-    expect(parseStatus("R  new\0old\0?? x\0!! dir/\0!! f.log\0")).toEqual({ uncommitted: 2, untracked: 1, ignored: 1 });
-    expect(parseStatus("M a.txt\0 M b.txt\0")).toEqual({ uncommitted: 2, untracked: 0, ignored: 0 });
-    expect(parseStatus(Array.from({ length: 1500 }, (_, i) => `?? f${i}`).join("\0")).uncommitted).toBe(1000);
   });
 
   it("removeWorktree expect refuses stale when more work exists than listed, also after beforeRemove ran", async () => {
@@ -1721,6 +1723,36 @@ describe("limiter", () => {
     open();
     await Promise.all([hold, rest]);
     expect(order).toEqual(["u1", "u2", "n1", "n2"]);
+  });
+
+  it("low tasks start after queued urgent and normal ones", async () => {
+    const run = limiter(1);
+    const order: string[] = [];
+    let open!: () => void;
+    const hold = run(() => new Promise<void>((r) => (open = r)));
+    const t = (n: string, tier: boolean | "low") => run(async () => void order.push(n), tier);
+    const rest = Promise.all([t("l", "low"), t("n", false), t("u", true)]);
+    open();
+    await Promise.all([hold, rest]);
+    expect(order).toEqual(["u", "n", "l"]);
+  });
+
+  it("an aborted waiter never starts and rejects; an abort before the call rejects at once", async () => {
+    const run = limiter(1);
+    let open!: () => void;
+    const hold = run(() => new Promise<void>((r) => (open = r)));
+    const ac = new AbortController();
+    const fn = vi.fn(async () => 1);
+    const waiter = run(fn, "low", ac.signal);
+    const reason = new Error("stop");
+    ac.abort(reason);
+    await expect(waiter).rejects.toBe(reason);
+    await expect(run(fn, "low", ac.signal)).rejects.toBe(reason);
+    open();
+    await hold;
+    expect(fn).not.toHaveBeenCalled();
+    // The slot is free again.
+    await expect(run(async () => 2)).resolves.toBe(2);
   });
 
   it("runs at most n tasks at a time, in order; a failed task frees its slot", async () => {

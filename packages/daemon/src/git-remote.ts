@@ -126,36 +126,41 @@ async function remoteOp(top: string, verb: string, args: string[], env: NodeJS.P
 export type RemoteResult = { output: string; refs: string | null };
 
 /** Remote names and the user's own ssh command of the repository (`core.sshCommand`). */
-async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string }> {
+async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string; defaultRemote?: string }> {
   const base = { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0" };
-  const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand)$"], base);
+  const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand|branch\\.(main|master)\\.remote)$"], base);
   const names = new Set<string>();
   let sshCommand = "";
+  const tracked: Record<string, string> = {};
   for (const line of cfg.out.split("\n").filter(Boolean)) {
     const sp = line.indexOf(" ");
     const key = sp < 0 ? line : line.slice(0, sp);
     if (key.toLowerCase() === "core.sshcommand") sshCommand = line.slice(sp + 1);
+    else if (/^branch\.(main|master)\.remote$/i.test(key)) tracked[key.toLowerCase()] = line.slice(sp + 1);
     else names.add(key.slice(7, -4));
   }
-  return { names, sshCommand };
+  // The remote of the default branch: its tracking remote, else origin.
+  const defaultRemote = tracked["branch.main.remote"] ?? tracked["branch.master.remote"] ?? (names.has("origin") ? "origin" : undefined);
+  return { names, sshCommand, ...(defaultRemote && { defaultRemote }) };
 }
 const WSL_REFUSED = "Fetch, push and pull are not supported for WSL projects yet";
 
 export type RemoteOptions = { allowed: (p: string) => boolean; platform?: string };
 
-/** `git fetch --all` in the repository of `cwd`; null outside a work tree. */
-export async function gitFetch(cwd: string, o: RemoteOptions): Promise<RemoteResult | null> {
+/** `git fetch --all` in the repository of `cwd`; null outside a work tree. `defaultRemote`: `git fetch --prune <remote of the default branch>` only (Clean up). */
+export async function gitFetch(cwd: string, o: RemoteOptions & { defaultRemote?: boolean }): Promise<RemoteResult | null> {
   // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
   if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
-    const { names, sshCommand } = await remoteConfigOf(top);
+    const { names, sshCommand, defaultRemote } = await remoteConfigOf(top);
+    if (o.defaultRemote && (!defaultRemote || !/^[^\0\s-][^\0\s]*$/.test(defaultRemote) || !names.has(defaultRemote))) throw new WorktreeError("bad_request", "No remote for the default branch");
     if (names.size === 0) throw new WorktreeError("bad_request", "No remote to fetch from");
     if (names.size > MAX_REMOTES) throw new WorktreeError("bad_request", `Too many remotes (${names.size}): fetch in a terminal`);
     const env = await remoteEnv(top, sshCommand);
-    await checkRemotes(top, [...names], false, env, o.allowed, o.platform ?? process.platform);
-    const output = await remoteOp(top, "fetch", FETCH_ARGS, env);
+    await checkRemotes(top, o.defaultRemote ? [defaultRemote!] : [...names], false, env, o.allowed, o.platform ?? process.platform);
+    const output = await remoteOp(top, "fetch", o.defaultRemote ? [...HARDEN, "fetch", "--prune", "--no-recurse-submodules", defaultRemote!] : FETCH_ARGS, env);
     return { output, refs: await gitRefs(top, o.allowed) };
   });
 }

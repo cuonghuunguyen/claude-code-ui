@@ -68,9 +68,10 @@ const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 const row = (key: string) => q(`[data-key="${key}"]`);
 const check = (key: string) => row(key).querySelector<HTMLInputElement>('[data-testid="cleanup-check"]')!;
 const click = (e: HTMLElement) => act(async () => e.click());
+const fetchLines = () => qa('[data-testid="cleanup-fetch"]').map((e) => e.textContent);
 const confirm = () => q<HTMLButtonElement>('[data-testid="cleanup-confirm"]');
 
-it("lists worktrees with External tag and safety badges once statuses arrive; at most 4 status requests in flight", async () => {
+it("lists worktrees with External tag and safety badges once statuses arrive; every status is requested at once (the daemon queues them)", async () => {
   let inFlight = 0;
   let max = 0;
   const release: (() => void)[] = [];
@@ -85,9 +86,8 @@ it("lists worktrees with External tag and safety badges once statuses arrive; at
       },
     });
     expect(qa('[data-testid="cleanup-badge"]').filter((b) => b.textContent === "Checking…").length).toBe(10);
-    expect(max).toBe(4);
+    expect(max).toBe(10);
     for (let i = 0; i < 20; i++) await act(async () => release.splice(0).forEach((f) => f()));
-    expect(max).toBe(4);
   } finally {
     worktrees[M] = more[M]!.slice(0, 5);
   }
@@ -191,7 +191,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
   await click(confirm());
   await act(async () => new Promise((r) => setTimeout(r, 60)));
   expect(max).toBe(1);
-  expect(sent.filter((m) => m.type !== "worktree.status").map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
+  expect(sent.filter((m) => !["worktree.status", "git.fetch", "worktree.cancel"].includes(m.type as string)).map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Removed 2, skipped 1");
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since the list");
   expect(document.activeElement).toBe(q("[data-testid=cleanup-close]"));
@@ -220,7 +220,7 @@ it("Esc closes the dialog like Cancel, also with focus on the select or a checkb
 
 it("Esc during a run does not close; the summary stays until Close", async () => {
   let release!: () => void;
-  const { onClose } = await open({ list: [], remove: () => new Promise((r) => (release = () => r({}))) });
+  const { onClose } = await open({ list: [], remove: (m) => (m.type === ("git.fetch" as string) ? Promise.resolve({}) : new Promise((r) => (release = () => r({})))) });
   await click(confirm());
   await esc();
   expect(onClose).not.toHaveBeenCalled();
@@ -257,4 +257,59 @@ it("'Also remove its worktree' ticked while a filter hides that worktree: not re
   expect(sent.filter((m) => m.type === "worktree.remove")).toEqual([]);
   expect(sent.filter((m) => m.type === "worker.remove")).toHaveLength(1);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("hidden by the filter");
+});
+
+it("fetches each repository first, shows the fetch line, then requests statuses with one scan id", async () => {
+  const gates: Record<string, () => void> = {};
+  const { sent } = await open({
+    scope: { kind: "all" },
+    list: [],
+    remove: (m) => (m.type === ("git.fetch" as string) ? new Promise((r) => (gates[(m as { cwd?: string }).cwd!] = () => r({ remote: null }))) : Promise.resolve({})),
+  });
+  expect(sent.map((m) => m.type)).toEqual(["git.fetch"]);
+  expect(sent[0]).toEqual({ type: "git.fetch", cwd: M, defaultRemote: true });
+  expect(fetchLines()).toEqual(["Fetching…"]);
+  expect(qa('[data-testid="cleanup-badge"]').every((b) => b.textContent === "Checking…")).toBe(true);
+  await act(async () => gates[M]!());
+  await act(async () => {});
+  const statuses = sent.filter((m) => m.type === "worktree.status");
+  expect(statuses.map((m) => m.path).sort()).toEqual([P("busy"), P("safe"), P("work"), "/x/ext"].sort());
+  const ids = new Set(statuses.map((m) => m.scan));
+  expect(ids.size).toBe(1);
+  expect(typeof [...ids][0]).toBe("string");
+  expect(fetchLines()).toEqual([expect.stringMatching(/^Fetched \d+ s ago$/)]);
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+});
+
+it("a failed fetch shows the warning and still scans", async () => {
+  const { sent } = await open({ list: [], remove: async (m) => (m.type === ("git.fetch" as string) ? Promise.reject(new Error("No remote for the default branch")) : {}) });
+  expect(fetchLines()).toEqual(["Fetch failed: No remote for the default branch — results may be out of date"]);
+  expect(sent.filter((m) => m.type === "worktree.status")).toHaveLength(4);
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+});
+
+it("closing the dialog sends worktree.cancel with the scan id", async () => {
+  const { sent } = await open({ list: [] });
+  const scan = sent.find((m) => m.type === "worktree.status")!.scan;
+  expect(sent.some((m) => m.type === "worktree.cancel")).toBe(false);
+  await act(async () => root!.unmount());
+  root = undefined;
+  expect(sent.filter((m) => m.type === "worktree.cancel")).toEqual([{ type: "worktree.cancel", scan }]);
+});
+
+it("a row shows ignored files: checked at removal and remote branch deleted", async () => {
+  const preview = { ...st(), ignored: undefined, upstreamGone: true as const };
+  await open({ list: [], status: async (p) => (p === P("safe") ? preview : STATUS[p]!) });
+  expect(row(`wt:${P("safe")}`).textContent).toContain("ignored files: checked at removal");
+  expect(row(`wt:${P("safe")}`).textContent).toContain("remote branch deleted");
+  expect(row(`wt:${P("safe")}`).textContent).not.toContain("ignored files will be deleted");
+  // A counted result keeps today's text.
+  expect(row("wt:/x/ext").textContent).toContain("3 ignored files will be deleted");
+  expect(row("wt:/x/ext").textContent).not.toContain("checked at removal");
+});
+
+it("a squash-merged row says why it is Safe", async () => {
+  await open({ list: [], status: async (p) => (p === P("safe") ? st({ ahead: 1, mergedInto: "origin/main" }) : STATUS[p]!) });
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+  expect(row(`wt:${P("safe")}`).textContent).toContain("changes already in origin/main (squash/rebase merged)");
 });

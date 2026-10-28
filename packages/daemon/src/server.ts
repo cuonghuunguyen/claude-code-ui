@@ -20,7 +20,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listRepos, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -569,6 +569,8 @@ export function createDaemon(opts: {
     broadcast({ type: "sessions.changed" });
     return r;
   };
+  /** Network git calls (fetch) of Clean up: at most 2 at a time, apart from the local git slot (a fetch may run for minutes). */
+  const netSlot = limiter(2);
   /** Worktrees being removed: no session or terminal may start in them meanwhile (`worktree_removing`). */
   const removing = new Set<string>();
   const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
@@ -580,7 +582,7 @@ export function createDaemon(opts: {
     return found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
   };
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
-  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }) => {
+  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
     // Early block for a worktree this app made, so no session slips in during git's own checks; the lock's mark below covers any other path.
     if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) {
@@ -1412,6 +1414,8 @@ export function createDaemon(opts: {
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
+    /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
+    const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
       watched.forEach((w) => unwatchFile(w.real, w.listener));
       watched.clear();
@@ -1427,6 +1431,8 @@ export function createDaemon(opts: {
       unwatchAll();
       attached.forEach((d) => d());
       searching?.abort();
+      scans.forEach((a) => a.abort());
+      scans.clear();
       focused.delete(ws);
       covered.delete(ws);
     });
@@ -1999,10 +2005,11 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          if (msg.defaultRemote !== undefined && typeof msg.defaultRemote !== "boolean") return fail("bad_request", "defaultRemote must be a boolean");
           const inside = (p: string) => inRoots(real(p) ?? p);
           // Output and URLs are never logged.
           try {
-            return reply({ remote: await gitFetch(cwd, { allowed: inside }) });
+            return reply({ remote: await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside })) });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
@@ -2044,6 +2051,12 @@ export function createDaemon(opts: {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
+        case "worktree.cancel": {
+          if (typeof msg.scan !== "string" || !msg.scan || msg.scan.length > 64) return fail("bad_request", "scan must be a string of at most 64 characters");
+          scans.get(msg.scan)?.abort();
+          scans.delete(msg.scan);
+          return reply({});
+        }
         case "worktree.create":
         case "worktree.status":
         case "worktree.remove": {
@@ -2057,15 +2070,25 @@ export function createDaemon(opts: {
           if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && !refused(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          if (msg.type === "worktree.status" && msg.scan !== undefined && !(typeof msg.scan === "string" && msg.scan && msg.scan.length <= 64)) return fail("bad_request", "scan must be a string of at most 64 characters");
           if (msg.type === "worktree.remove") {
             for (const k of ["expectSafe", "deleteBranch"] as const) if (msg[k] !== undefined && typeof msg[k] !== "boolean") return fail("bad_request", "expectSafe and deleteBranch must be booleans");
             const x = msg.expect as Record<string, unknown> | undefined;
-            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => Number.isInteger(x[k]) && (x[k] as number) >= 0))) return fail("bad_request", "expect must hold counts uncommitted, ahead and ignored");
+            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => (k === "ignored" && x[k] === undefined) || (Number.isInteger(x[k]) && (x[k] as number) >= 0)))) return fail("bad_request", "expect must hold counts uncommitted and ahead, and optionally ignored");
           }
           try {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
             if (msg.type === "worktree.status") {
-              const st = await worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              const check = () => worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              let st: Awaited<ReturnType<typeof worktreeStatus>>;
+              if (msg.scan === undefined) st = await check();
+              else {
+                // The ids are the client's: one per Clean up; requests with the same id share one abort.
+                const ac = scans.get(msg.scan) ?? new AbortController();
+                scans.set(msg.scan, ac);
+                st = await lowPriority(ac.signal, check);
+                if (ac.signal.aborted) return fail("cancelled", "cancelled");
+              }
               const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
               return reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
             }
