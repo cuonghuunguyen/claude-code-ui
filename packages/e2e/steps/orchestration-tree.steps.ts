@@ -26,6 +26,7 @@ async function revealWorkers(page: Page, project: string, name: string): Promise
   await openSidebar(page);
   if ((await row(page, project, name).count()) > 0) return;
   const toggles = page.getByTestId("worker-group-toggle");
+  // Worker groups start collapsed: expand every toggle once.
   for (let i = 0; i < (await toggles.count()); i++) if ((await toggles.nth(i).getAttribute("aria-expanded")) !== "true") await toggles.nth(i).click();
 }
 

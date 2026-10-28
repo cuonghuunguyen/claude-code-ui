@@ -239,6 +239,29 @@ export function saveCollapsed(cwds: Set<string>) {
   }
 }
 
+const WORKERS_KEY = "claude-ui.expandedWorkers";
+
+/** Worker group keys (`workerKey`) the user expanded in this browser: worker groups start collapsed. */
+export function loadExpandedWorkers(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(WORKERS_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((c): c is string => typeof c === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveExpandedWorkers(keys: Set<string>) {
+  try {
+    localStorage.setItem(WORKERS_KEY, JSON.stringify([...keys]));
+  } catch {
+    // Storage blocked: expanding still works for this page.
+  }
+}
+
+/** Whether `key` is a worker group key (expanded set) and not a project or worktree key (collapsed set). */
+export const isWorkerKey = (key: string) => /^(archived:)?coordinator:/.test(key);
+
 /** A worktree row's collapse key: not its path alone, which is also the project's key for the main checkout. */
 export const rowKey = (path: string) => `worktree:${path}`;
 /** The collapse key of the workers of coordinator `id` in the normal or the archived view. */
