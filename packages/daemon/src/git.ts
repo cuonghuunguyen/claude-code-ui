@@ -298,7 +298,7 @@ export async function listWorktrees(cwd: string): Promise<Worktree[] | null> {
     const path = raw && (wsl ? wslHostPath(wsl.root, raw) : process.platform === "win32" ? normalize(raw) : raw);
     if (!path || field("bare") !== undefined || field("prunable") !== undefined) return [];
     const branch = field("branch")?.replace(/^refs\/heads\//, "") ?? field("HEAD")?.slice(0, 7);
-    return [{ path, ...(branch && { branch }), main: i === 0, ...(field("locked") !== undefined && { locked: true as const }) }];
+    return [{ path, ...(branch && { branch }), main: i === 0, ...(field("locked") !== undefined && { locked: true as const }), ...(field("detached") !== undefined && { detached: true as const }) }];
   });
 }
 
@@ -571,25 +571,25 @@ const CONFIG_TRIES = 5;
  * Marks `branch` a Created branch, right after `git branch` under the repository lock. A held `config.lock` (another git
  * writing the config) is retried; on failure the create still succeeds without the mark, with a warning.
  */
-async function markCreated(main: string, branch: string): Promise<void> {
+async function markCreated(main: string, branch: string, value = true): Promise<void> {
   for (let i = 1; ; i++) {
     try {
-      await run(main, ["config", "--type=bool", "--", createdKey(branch), "true"]);
+      await run(main, ["config", "--type=bool", "--", createdKey(branch), String(value)]);
       return;
     } catch (e) {
       if (i < CONFIG_TRIES && /config\.lock|could not lock/i.test((e as Error).message)) {
         await new Promise((r) => setTimeout(r, 50 * i));
         continue;
       }
-      console.warn(`worktree: ${createdKey(branch)} not set, the branch stays when its worktree is deleted: ${(e as Error).message}`);
+      console.warn(`worktree: ${createdKey(branch)} not set${value ? ", the branch stays when its worktree is deleted" : ", a worktree-* branch is deleted with its worktree"}: ${(e as Error).message}`);
       return;
     }
   }
 }
 /** A Created branch: marked in git config, or a legacy `worktree-*` branch of a claude-ui before the mark. */
 async function isCreated(main: string, branch: string): Promise<boolean> {
-  if (branch.startsWith("worktree-")) return true;
-  return (await g(main, ["config", "--type=bool", "--get", "--", createdKey(branch)]).catch(() => "")) === "true";
+  const v = await g(main, ["config", "--type=bool", "--get", "--", createdKey(branch)]).catch(() => "");
+  return v ? v === "true" : branch.startsWith("worktree-"); // an explicit false (Branch-tab checkout of a worktree-* branch) wins
 }
 
 export type CreateWorktreeOptions = {
@@ -624,7 +624,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
 
     if (o.checkout !== undefined) return checkoutIn(main, rdir, o);
     const free = async (n: string) => !exists(join(rdir, n)) && !(await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${o.branch ?? `worktree-${n}`}`));
-    if (o.branch !== undefined && (!o.branch || o.branch.startsWith("-") || o.branch.length > BRANCH_MAX)) throw new WorktreeError("bad_name", `Not a valid branch name: ${o.branch}`);
+    if (o.branch !== undefined && (!o.branch || o.branch.startsWith("-") || o.branch.length > BRANCH_MAX || o.branch.includes("@{"))) throw new WorktreeError("bad_name", `Not a valid branch name: ${o.branch}`);
     let name = o.name ?? (o.branch !== undefined ? branchFolder(o.branch) : undefined);
     if (name !== undefined) {
       const bad = worktreeNameError(name);
@@ -638,7 +638,13 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
     }
     const branch = o.branch ?? `worktree-${name}`;
     if (!(await ok(main, "check-ref-format", "--branch", branch))) throw new WorktreeError("bad_name", `Not a valid branch name: ${branch}`);
-    if (await ok(main, "rev-parse", "--verify", "-q", `refs/heads/${branch}`)) throw new WorktreeError("exists", `Branch ${branch} already exists`);
+    // A branch `feat` blocks `feat/x` and the other way round (git stores refs as files).
+    const parts = branch.split("/");
+    const prefixes = parts.slice(0, -1).map((_, i) => `refs/heads/${parts.slice(0, i + 1).join("/")}`);
+    const own = `refs/heads/${branch}`;
+    const hit = (await g(main, ["for-each-ref", "--format=%(refname)", "--", own, ...prefixes])).split("\n").find((r) => r === own || r.startsWith(`${own}/`) || prefixes.includes(r));
+    if (hit === own) throw new WorktreeError("exists", `Branch ${branch} already exists`);
+    if (hit) throw new WorktreeError("exists", `Branch ${hit.slice(11)} exists: git cannot also have ${branch}`);
     const path = join(rdir, name);
     if (exists(path)) throw new WorktreeError("exists", `${path} already exists`);
     if (!o.allowed(path)) throw new WorktreeError("cwd_not_allowed", "The new worktree would be outside the allowed roots");
@@ -764,6 +770,7 @@ async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions):
   }
   try {
     await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
+    if (branch.startsWith("worktree-")) await markCreated(main, branch, false);
   } catch (e) {
     if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
     if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
@@ -803,7 +810,7 @@ export async function listBranches(cwd: string, o: ListBranchesOptions): Promise
   }
   const remotes = (await g(main, ["remote"]).catch(() => "")).split("\n").filter(Boolean).sort((a, b) => b.length - a.length);
   const refs = (await g(main, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `--count=${MAX_BRANCHES}`, "refs/heads", "refs/remotes"])).split("\n").filter(Boolean);
-  const holders = new Map(list.filter((w) => w.branch).map((w) => [w.branch!, w.path] as const));
+  const holders = new Map(list.filter((w) => w.branch && !w.detached).map((w) => [w.branch!, w.path] as const));
   const rows = new Map<string, BranchRow>();
   for (const ref of refs) {
     let name: string;

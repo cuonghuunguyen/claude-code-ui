@@ -400,8 +400,15 @@ it("externalWorktree: false only directly under <main>/.claude/worktrees", () =>
 it("removeWorktreeText adds 'Branch <b> stays.' for a kept branch; keepsBranch tells kept from worktree-* and detached", () => {
   expect(removeWorktreeText({ uncommitted: 0, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("Clean up the worktree directory. Branch feat stays.");
   expect(removeWorktreeText({ uncommitted: 1, commits: 0, branch: "feat" }, { keepsBranch: true })).toBe("You have 1 uncommitted file on feat. All will be lost if you remove. Branch feat stays.");
-  const l = [{ path: "/a", branch: "feat", main: false }, { path: "/b", branch: "worktree-b", main: false }, { path: "/c", branch: "abc1234", main: false }];
+  const l = [{ path: "/a", branch: "feat", main: false }, { path: "/b", branch: "worktree-b", main: false }, { path: "/c", branch: "abc1234", main: false, detached: true as const }];
   expect([keepsBranch(l, "/a"), keepsBranch(l, "/b"), keepsBranch(l, "/c"), keepsBranch(undefined, "/a")]).toEqual([true, false, false, false]);
   // A Created branch (GH-447) of any name goes with its worktree.
   expect(keepsBranch(l, "/a", { createdBranch: true })).toBe(false);
+});
+
+it("keepsBranch: a detached row and a worktree-* branch with createdBranch false", () => {
+  const l = [{ path: "/d", branch: "abc1234", main: false, detached: true as const }, { path: "/w", branch: "worktree-x", main: false }];
+  expect(keepsBranch(l, "/d", {})).toBe(false);
+  expect(keepsBranch(l, "/w", {})).toBe(true);
+  expect(keepsBranch(l, "/w")).toBe(false);
 });

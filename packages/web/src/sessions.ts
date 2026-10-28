@@ -35,8 +35,9 @@ export function externalWorktree(list: Worktree[], w: Worktree) {
 /** The branch of the listed worktree `path` stays after removal: not a Created branch (`st.createdBranch`, legacy `worktree-*`) and not a detached HEAD (listed as the short hash). */
 export function keepsBranch(list: Worktree[] | undefined, path: string, st?: Pick<WorktreeStatusResult, "createdBranch">) {
   if (st?.createdBranch) return false;
-  const b = list?.find((w) => w.path === path)?.branch;
-  return !!b && !b.startsWith("worktree-") && !/^[0-9a-f]{7}$/.test(b);
+  const w = list?.find((x) => x.path === path);
+  if (st) return !!w?.branch && !w.detached;
+  return !!w?.branch && !w.detached && !w.branch.startsWith("worktree-");
 }
 
 /** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. */

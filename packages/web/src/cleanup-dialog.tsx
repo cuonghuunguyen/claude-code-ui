@@ -284,7 +284,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;
   const wtHidden = !!wt && !shown(wt);
   const wtOk = wt && !wtHidden && !["blocked", "checking"].includes(safetyOf(wt));
-  const keptBranch = r.kind === "worktree" && r.branch && !r.branch.startsWith("worktree-") && !r.status?.createdBranch && r.status?.branchMerged;
+  const keptBranch = r.kind === "worktree" && r.branch && !r.status?.createdBranch && r.status?.branchMerged;
   return (
     <li className="flex min-h-8 flex-col justify-center py-1 max-md:min-h-11" data-testid="cleanup-row" data-key={r.key}>
       <div className="flex items-start gap-2">

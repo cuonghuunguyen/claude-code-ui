@@ -437,9 +437,9 @@ export type ListResult = {
 };
 /**
  * A git worktree of a project's repository, identified by its directory (canonical path). `main`: the repository's own checkout.
- * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there. `locked`: `git worktree lock`; never removable.
+ * `branch`: the short hash on a detached HEAD. `outsideRoots`: listed, but no session can start there. `locked`: `git worktree lock`; never removable. `detached`: HEAD is detached (`branch` is then a short hash, not a branch).
  */
-export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true };
+export type Worktree = { path: string; branch?: string; main: boolean; outsideRoots?: boolean; locked?: true; detached?: true };
 export type WorktreeCreateResult = { path: string; branch: string };
 /** One branch name of `worktree.branches`: `local` (refs/heads), `remote` (full ref, `origin` preferred), `worktree`: the path it is checked out in. */
 export type BranchRow = { name: string; local: boolean; remote?: string; worktree?: string };

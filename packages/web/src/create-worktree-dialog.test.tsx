@@ -265,3 +265,21 @@ it("Ticket: a pull request whose branch names no key says so", async () => {
   await flush();
   expect(document.body.textContent).toContain("The branch of pull request #7 (feat/remote) names no ticket key");
 });
+
+it("a plain branch list that arrives after the fetched one does not replace it", async () => {
+  const gates: Record<string, (v: unknown) => void> = {};
+  const request = vi.fn((m: Request) => {
+    if (m.type === "worktree.branches") return new Promise((r) => (gates[m.fetch ? "fetched" : "plain"] = r));
+    if (m.type === "settings.get") return Promise.resolve({ settings: { jira: { url: "", email: "", template: "" } }, jiraToken: false });
+    return Promise.reject(new Error(`unexpected ${m.type}`));
+  });
+  el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  act(() => root!.render(<CreateWorktreeDialog project={R} request={request as never} onClose={vi.fn()} onCreated={vi.fn()} onJiraSettings={vi.fn()} />));
+  await flush();
+  await act(async () => gates.fetched!({ branches: [{ name: "fresh", local: false, remote: "refs/remotes/origin/fresh" }], defaultBase: "origin/main", fetched: true }));
+  await act(async () => gates.plain!({ branches: [{ name: "stale", local: true }], defaultBase: "origin/main" }));
+  await flush();
+  expect(document.body.textContent).not.toContain("stale");
+});
