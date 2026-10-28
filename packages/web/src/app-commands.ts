@@ -1,7 +1,7 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import type { PaletteItem } from "./palette.tsx";
-import { HOME_LABEL, type Area } from "./layout.ts";
+import { HOME_LABEL, PANE_LABEL, type Area } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
@@ -79,9 +79,9 @@ export type CommandContext = {
   viewPlan?: () => void;
   /** GH-395: reveals the current session's plan (its tab in the main area, or the dock Plan pane). Absent without a plan. */
   showPlan?: () => void;
-  /** Where the Plan pane lives, and the move to another home; absent: no move rows. */
-  planHome?: Area;
-  movePlan?: (to: Area) => void;
+  /** Where the Plan, Files and Git graph panes live, and the move to another home; absent: no move rows. Changes never moves. */
+  homes?: Partial<Record<"plan" | "files" | "graph", Area>>;
+  moveKind?: (p: "plan" | "files" | "graph", to: Area) => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -176,7 +176,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
-    ...(c.movePlan && c.planHome ? (["main", "side", "bottom"] as const).filter((to) => to !== c.planHome).map((to) => cmd(`plan.move.${to}`, `Move plan to ${HOME_LABEL[to].toLowerCase()}`, () => c.movePlan!(to))) : []),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
     c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),

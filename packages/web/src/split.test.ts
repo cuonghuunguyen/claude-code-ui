@@ -112,3 +112,19 @@ it("switchRuns takes the target's view out and keeps the previous active tab's",
   expect(switchRuns({ b: "r1" }, "a", undefined, "b")).toEqual({ runs: undefined, run: "r1" });
   expect(switchRuns(undefined, "a", undefined, "b")).toEqual({ runs: undefined, run: undefined });
 });
+
+it("GH-396 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const ref = `graph:${U}`;
+  const s = sp();
+  const tabs = ["a", "b", ref];
+  expect(followSplit(s, ref, tabs)).toBe(s);
+  expect(followSplit(s, "b", tabs)?.ids).toEqual(s.ids);
+  expect(isSession(`files:${U}`)).toBe(false);
+});
+
+it("GH-396 parseSplit drops files and graph refs; splitTo refuses a graph ref", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  for (const k of ["files", "graph"]) expect(parseSplit(JSON.stringify({ ids: ["a", `${k}:${U}`] }))).toBeUndefined();
+  expect(splitTo(undefined, ["a", "b", `graph:${U}`], "a", `graph:${U}`, "row")).toBeUndefined();
+});

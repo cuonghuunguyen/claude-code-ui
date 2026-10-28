@@ -3,7 +3,8 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
-import { FilesPanel } from "./files-panel.tsx";
+import { createEditorStore } from "./editor-store.ts";
+import { EditorSync, FilesPanel } from "./files-panel.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -677,4 +678,49 @@ it("GH-392 FilesPanel passes repos to the tree: one git.diff per repository with
     { type: "git.diff", cwd: "/p/in", base: "head", exact: true },
   ]);
   act(() => root.render(null));
+});
+
+it("GH-396 with sync false the panel sends no fs.watch; EditorSync sends one for every open tab", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "x", mtime: 1 } : {}));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const store = createEditorStore(() => client);
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/p/a.ts" />));
+  expect(request.mock.calls.filter(([m]) => m.type === "fs.watch")).toEqual([]);
+  await act(async () => root.render(
+    <>
+      <EditorSync store={store} client={client} status="connected" watch={[]} />
+      <FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/p/a.ts" />
+      <FilesPanel client={client} status="connected" cwd="/q" onSend={() => {}} showTree onToggleTree={() => {}} editors={store} sync={false} openPath="/q/b.ts" />
+    </>,
+  ));
+  const watches = request.mock.calls.map(([m]) => m).filter((m) => m.type === "fs.watch");
+  expect(watches.at(-1)).toMatchObject({ type: "fs.watch", paths: expect.arrayContaining(["/p/a.ts", "/q/b.ts"]) });
+  act(() => root.render(null));
+});
+
+it("GH-396 two panels on one editor store keep their own shown file; becoming visible makes its file the store's active path", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "x", mtime: 1 } : {}));
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const store = createEditorStore(() => client);
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const panel = (cwd: string, visible: boolean, openPath?: string) => (
+    <div data-cwd={cwd}>
+      <FilesPanel client={client} status="connected" cwd={cwd} onSend={() => {}} showTree={false} onToggleTree={() => {}} editors={store} sync={false} visible={visible} suspended={!visible} openPath={openPath} />
+    </div>
+  );
+  const view = (p: string, q: string, openP?: string, openQ?: string) => <>{panel("/p", p === "on", openP)}{panel("/q", q === "on", openQ)}</>;
+  await act(async () => root.render(view("on", "off", "/p/a.ts")));
+  await act(async () => root.render(view("off", "on", undefined, "/q/b.ts")));
+  expect(store.get().activePath).toBe("/q/b.ts");
+  const crumb = (cwd: string) => el.querySelector(`[data-cwd="${cwd}"]`)!.textContent ?? "";
+  expect(crumb("/p")).toContain("a.ts");
+  expect(crumb("/p")).not.toContain("b.ts");
+  await act(async () => root.render(view("on", "off")));
+  expect(store.get().activePath).toBe("/p/a.ts");
+  act(() => root.render(null));
+  el.remove();
 });

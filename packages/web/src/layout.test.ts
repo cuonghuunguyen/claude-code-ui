@@ -39,10 +39,11 @@ it("parseLayout: an old stored layout without plan and main puts Plan at the end
   expect(l.areas).toEqual({ side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: [] });
 });
 
-it("parseLayout keeps plan in main and drops changes and files from main to their default areas", () => {
-  const l = parseLayout('{"side":"right","areas":{"side":[],"bottom":["terminal"],"main":["plan","changes","files"]}}');
-  expect(l.areas.main).toEqual(["plan"]);
-  expect(l.areas.side).toEqual(["changes", "files", "graph"]);
+it("parseLayout keeps files and graph in main and still drops changes and terminal from main to their default areas", () => {
+  const l = parseLayout('{"side":"right","areas":{"side":[],"bottom":[],"main":["plan","changes","files","graph","terminal"]}}');
+  expect(l.areas.main).toEqual(["plan", "files", "graph"]);
+  expect(l.areas.side).toEqual(["changes"]);
+  expect(l.areas.bottom).toEqual(["terminal"]);
 });
 
 it("movePane to main refuses changes (same object) and moves plan", () => {
@@ -55,10 +56,22 @@ it("movePane to main refuses changes (same object) and moves plan", () => {
   expect(movePane(n, "plan", "side").areas.side.at(-1)).toBe("plan");
 });
 
+it("movePane moves files and graph to main; changes stays (same object)", () => {
+  const n = movePane(movePane(DEFAULT_LAYOUT, "files", "main"), "graph", "main");
+  expect(n.areas.main).toEqual(["files", "graph"]);
+  expect(n.areas.side).toEqual(["changes", "plan"]);
+  expect(movePane(n, "changes", "main")).toBe(n);
+});
+
 it("withPane does not remember an area for a main-home pane", () => {
   const l = movePane(DEFAULT_LAYOUT, "plan", "main");
   expect(withPane({}, "plan", l)).toEqual({ narrow: "plan" });
-  expect(withPane({}, "files", l)).toEqual({ narrow: "files", side: "files" });
+  expect(withPane({}, "changes", l)).toEqual({ narrow: "changes", side: "changes" });
+});
+
+it("withPane does not remember a dock tab for files with home main", () => {
+  const l = movePane(DEFAULT_LAYOUT, "files", "main");
+  expect(withPane({}, "files", l)).toEqual({ narrow: "files" });
 });
 
 it("DEFAULT_LAYOUT has plan after graph in the side panel", () => {
