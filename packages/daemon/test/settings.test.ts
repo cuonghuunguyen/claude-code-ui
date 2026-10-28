@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { createSettings, DEFAULTS } from "../src/settings.ts";
+import { checkPatch, createSettings, DEFAULTS } from "../src/settings.ts";
 
 const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
@@ -210,4 +210,15 @@ it("maxDepth and maxChildren default to 2 and 4 and refuse values out of range",
   for (const maxDepth of [0, 6, 1.5]) expect(() => s.set({ orchestration: { maxDepth } as never })).toThrow("Maximum tree depth must be a whole number from 1 to 5");
   for (const maxChildren of [0, 21]) expect(() => s.set({ orchestration: { maxChildren } as never })).toThrow("Maximum workers per coordinator must be a whole number from 1 to 20");
   expect(s.set({ orchestration: { maxDepth: 3, maxChildren: 9 } }).orchestration).toMatchObject({ maxDepth: 3, maxChildren: 9 });
+});
+
+it("Jira URL: a new value is https, or http only for localhost and 127.0.0.1; a stored non-local http stays (GH-451)", () => {
+  const s = createSettings({ file: file() });
+  const rule = "Jira URL must be empty or an https address without user name or password (http only for localhost or 127.0.0.1)";
+  expect(checkPatch({ jira: { url: "http://jira.example.com" } })).toBe(rule);
+  for (const url of ["https://jira.example.com/jira", "http://localhost:8080/jira", "http://127.0.0.1:9", ""]) expect(checkPatch({ jira: { url } })).toBeUndefined();
+  expect(() => s.set({ jira: { url: "http://jira.example.com" } })).toThrow(rule);
+  const f = file();
+  writeFileSync(f, JSON.stringify({ jira: { url: "http://jira.example.com" } }));
+  expect(createSettings({ file: f }).get().jira.url).toBe("http://jira.example.com");
 });

@@ -2,7 +2,7 @@
 // URL, email and branch template are daemon settings (settings.json); the token is write-only (secrets.json): this page only
 // learns whether one is set, with Replace and Clear.
 import { useState } from "react";
-import { jiraIsCloud, MY_OPEN_JQL, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { jiraIsCloud, jiraUrlProblem, MY_OPEN_JQL, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
 import { LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
@@ -55,6 +55,11 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
       <span id={`settings-jira-${k}-hint`} className="text-muted-foreground text-xs">
         {hint}
       </span>
+      {k === "url" && jiraUrlProblem(jira.url) && (
+        <span role="alert" className="text-destructive text-xs" data-testid="settings-jira-url-error">
+          {jiraUrlProblem(jira.url)}
+        </span>
+      )}
     </label>
   );
 
@@ -89,7 +94,7 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
       <h3 id="settings-jira" className="pb-1 font-medium text-[13px] text-muted-foreground">
         Jira
       </h3>
-      {field("url", "Jira URL", "Cloud: https://<site>.atlassian.net. Data Center or Server: the address of your Jira.", { type: "url", placeholder: "https://acme.atlassian.net" })}
+      {field("url", "Jira URL", "Cloud: https://<site>.atlassian.net. Data Center or Server: the https address of your Jira. Changing the host clears the token.", { type: "url", placeholder: "https://acme.atlassian.net" })}
       {cloud && field("email", "Email", "Your Atlassian account email (Jira Cloud only).", { type: "email" })}
       <div className={ROW}>
         <span id="settings-jira-token-label" className="text-sm">
