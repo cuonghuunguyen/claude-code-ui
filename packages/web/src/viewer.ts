@@ -49,7 +49,7 @@ export function planOfPart(view: SessionView, call: ToolCall): string | undefine
   return planAt(view, parts, parts.findIndex((p) => p.id === call.id));
 }
 
-/** The newest ExitPlanMode call whose plan is known, with the plan by `planAt` (its approval request's plan, else the plan-file fold `planOfCall`, where the file wins over the call's own `input.plan`). Loaded parts and aux. */
+/** The newest ExitPlanMode call whose plan is known, with its plan from `planAt` (approval request plan, else plan-file fold). Over loaded parts and aux. */
 function findPlan(view: SessionView): { call?: ToolCall; plan: string } | undefined {
   const parts = wholeParts(view);
   for (let n = parts.length - 1; n >= 0; n--) {
