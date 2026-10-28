@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { parseStatus, createWorktree, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { parseStatus, createWorktree, worktreeIncludeLimits, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -312,6 +312,154 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     // Removing the worktree does not follow the link: the repository's node_modules stays.
     await removeWorktree(main, r.path, () => true);
     expect(existsSync(join(main, "node_modules", "x"))).toBe(true);
+  });
+
+  const put = (file: string, text: string) => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  };
+  const warnSpy = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warned = (spy: ReturnType<typeof warnSpy>) => spy.mock.calls.map((c) => String(c[0]));
+
+  it("copies the gitignored files .worktreeinclude lists, before onCreated, and never a tracked or unignored file", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\nsecrets/\nconfig/*.local\nnode_modules/\ntracked.env\n");
+    put(join(main, "tracked.env"), "committed");
+    run(main, "add", "-f", "tracked.env");
+    run(main, ...C, "commit", "-qm", "tracked");
+    put(join(main, "tracked.env"), "local edit");
+    put(join(main, ".worktreeinclude"), "# comment\n\n.env\r\nsecrets/\n/config/*.local\ntracked.env\nnot-ignored.txt\n");
+    put(join(main, ".env"), "secret");
+    put(join(main, "secrets", "sub", "s.txt"), "s");
+    put(join(main, "config", "app.local"), "c");
+    put(join(main, "not-ignored.txt"), "n");
+    put(join(main, "node_modules", "x"), "x");
+    let seen = "";
+    const r = await createWorktree(main, { ...opts, name: "inc", onCreated: (w) => (seen = readFileSync(join(w.path, ".env"), "utf8")) });
+    expect(seen).toBe("secret");
+    expect(lstatSync(join(r.path, ".env")).isFile()).toBe(true);
+    expect(lstatSync(join(r.path, ".env")).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(r.path, "secrets", "sub", "s.txt"))).toBe(true);
+    expect(existsSync(join(r.path, "config", "app.local"))).toBe(true);
+    expect(readFileSync(join(r.path, "tracked.env"), "utf8")).toBe("committed");
+    expect(existsSync(join(r.path, "not-ignored.txt"))).toBe(false);
+    expect(existsSync(join(r.path, "node_modules"))).toBe(false);
+    // A copy, not a link: an edit stays in the worktree.
+    writeFileSync(join(r.path, ".env"), "changed");
+    expect(readFileSync(join(main, ".env"), "utf8")).toBe("secret");
+  });
+
+  it("copies nothing without .worktreeinclude", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".env"), "secret");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "none" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(warned(spy).filter((m) => m.includes(".worktreeinclude"))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("skips links, paths through links, symlinkDirectories paths and paths the new branch makes a link", async () => {
+    const { main, opts } = plain();
+    const outside = tmp();
+    put(join(outside, "f"), "outside file");
+    put(join(main, ".gitignore"), "secrets/\nconfig/\nshared/\nd/\n");
+    put(join(main, ".worktreeinclude"), "secrets/\nconfig/\nshared/\nd/\n");
+    mkdirSync(join(main, "secrets"));
+    symlinkSync(join(outside, "f"), join(main, "secrets", "link"));
+    mkdirSync(join(main, "config"));
+    symlinkSync("/etc", join(main, "config", "dir.local"));
+    put(join(main, "shared", "a.env"), "shared");
+    put(join(main, ".claude", "settings.json"), JSON.stringify({ worktree: { symlinkDirectories: ["shared"] } }));
+    // The branch `evil` commits `d` as a link out of the repository; main's working tree has a real ignored folder `d`.
+    const target = tmp();
+    run(main, "checkout", "-q", "-b", "evil");
+    symlinkSync(target, join(main, "d"));
+    run(main, "add", "-f", "d");
+    run(main, ...C, "commit", "-qm", "link");
+    run(main, "checkout", "-q", "main");
+    rmSync(join(main, "d"), { force: true });
+    put(join(main, "d", "x.env"), "x");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "l" });
+      expect(existsSync(join(r.path, "secrets", "link"))).toBe(false);
+      expect(existsSync(join(r.path, "config", "dir.local"))).toBe(false);
+      expect(lstatSync(join(r.path, "shared")).isSymbolicLink()).toBe(true);
+      expect(readFileSync(join(main, "shared", "a.env"), "utf8")).toBe("shared");
+      const e = await createWorktree(main, { ...opts, name: "e", base: "evil" });
+      expect(existsSync(join(target, "x.env"))).toBe(false);
+      expect(existsSync(e.path)).toBe(true);
+      expect(warned(spy).some((m) => m.includes("link, not copied"))).toBe(true);
+      expect(warned(spy).some((m) => m.includes("out of the worktree"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("never overwrites a file the new branch checks out", async () => {
+    const { main, opts } = plain();
+    run(main, "checkout", "-q", "-b", "other");
+    put(join(main, ".env"), "committed");
+    run(main, "add", "-f", ".env");
+    run(main, ...C, "commit", "-qm", "env");
+    run(main, "checkout", "-q", "main");
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "local");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "o", base: "other" });
+      expect(readFileSync(join(r.path, ".env"), "utf8")).toBe("committed");
+      expect(warned(spy).some((m) => m.includes("already exists in the worktree"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips files over the copy limit with one warning", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "12345678");
+    put(join(main, "b.env"), "12345678");
+    put(join(main, "c.env"), "1");
+    const saved = { ...worktreeIncludeLimits };
+    Object.assign(worktreeIncludeLimits, { maxBytes: 10, maxFiles: 2 });
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "cap" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(false);
+      expect(existsSync(join(r.path, "c.env"))).toBe(true);
+      expect(warned(spy).filter((m) => m.includes("over the copy limit"))).toHaveLength(1);
+    } finally {
+      Object.assign(worktreeIncludeLimits, saved);
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a file that fails to copy is skipped and the worktree is still created", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, ".env"), "secret");
+    put(join(main, "ok.env"), "ok");
+    chmodSync(join(main, ".env"), 0);
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "fail" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(readFileSync(join(r.path, "ok.env"), "utf8")).toBe("ok");
+      expect(warned(spy).some((m) => m.includes(".worktreeinclude") && m.includes(".env"))).toBe(true);
+    } finally {
+      chmodSync(join(main, ".env"), 0o600);
+      spy.mockRestore();
+    }
   });
 
   it("removes the directory and its worktree-* branch; a foreign branch stays; main and unknown worktrees are refused", async () => {

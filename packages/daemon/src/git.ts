@@ -1,6 +1,6 @@
 // Git branch and diff size of a session cwd, for the status bar (`git.status`).
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
-import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants, appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { copyFile, lstat, mkdir, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import { runGit } from "./git-runner.ts";
@@ -365,6 +365,108 @@ type Listed = Worktree & { raw: string };
 /** `<main>/.claude/worktrees`, the folder this app creates worktrees in. */
 const worktreesDir = (main: string) => join(main, ".claude", "worktrees");
 
+/** `.worktreeinclude` copy budget per create (Orca's numbers): files that do not fit are skipped with a warning. Test seam. */
+export const worktreeIncludeLimits = { maxBytes: 2 * 1024 ** 3, maxFiles: 50_000 };
+
+/** git with NUL-separated output (and optional stdin): the path list; a nested repository (`dir/`) is dropped. `check-ignore` exit 1 = nothing ignored. */
+async function gitPaths(cwd: string, args: string[], input?: string): Promise<string[]> {
+  let stdout: Buffer;
+  try {
+    stdout = (await gitSlot(() => runGit({ cwd, args, input, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 30_000 }))).stdout;
+  } catch (e) {
+    const err = e as { killed?: boolean; code?: unknown; stderr?: string; message: string };
+    if (args[0] === "check-ignore" && err.code === 1) return [];
+    throw new Error(err.killed ? `git ${args[0]} timed out` : (err.stderr?.split("\n").find((l) => l.trim()) ?? err.message));
+  }
+  return stdout.toString("utf8").split("\0").filter((x) => x && !x.endsWith("/"));
+}
+
+/** True when writing `dst` would land outside `wt` (real path): the first existing ancestor resolves out, or `dst` is itself a link. */
+async function escapesWorktree(dst: string, wt: string): Promise<boolean> {
+  try {
+    if ((await lstat(dst)).isSymbolicLink()) return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return true;
+  }
+  let dir = dirname(dst);
+  for (;;) {
+    try {
+      await lstat(dir);
+      return !inside(wt, await realpath(dir));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return true;
+      const up = dirname(dir);
+      if (up === dir) return true;
+      dir = up;
+    }
+  }
+}
+
+/**
+ * Claude Code's `.worktreeinclude`: copy each file of the main checkout that matches `<main>/.worktreeinclude` (`.gitignore` syntax) AND is ignored by git.
+ * Copies only, never links, never over an existing file; every problem is a warning (creation never fails here).
+ */
+async function copyWorktreeInclude(main: string, path: string): Promise<void> {
+  const warn = (m: string) => console.warn(`worktree: .worktreeinclude ${m}`);
+  try {
+    const file = join(main, ".worktreeinclude");
+    let text: string;
+    try {
+      const st = await lstat(file);
+      if (!st.isFile()) return warn("skipped: not a regular file");
+      text = await readFile(file, "utf8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw e;
+    }
+    if (!text.split(/\r?\n/).some((l) => l.trim() && !l.trim().startsWith("#"))) return;
+    const candidates = await gitPaths(main, ["ls-files", "-z", "--others", "--ignored", "--exclude-from=.worktreeinclude"]);
+    if (!candidates.length) return;
+    const files = await gitPaths(main, ["check-ignore", "-z", "--stdin"], candidates.join("\0") + "\0");
+    let wt: string;
+    let rmain: string;
+    try {
+      [wt, rmain] = [await realpath(path), await realpath(main)];
+    } catch (e) {
+      return warn(`skipped: ${(e as Error).message}`);
+    }
+    let count = 0;
+    let bytes = 0;
+    const over: string[] = [];
+    for (const rel of files) {
+      try {
+        if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) throw new Error("not a relative path inside the repository");
+        const src = join(main, rel);
+        const st = await lstat(src);
+        if (st.isSymbolicLink()) throw new Error("link, not copied");
+        if (!st.isFile()) throw new Error("not a regular file");
+        if ((await realpath(src)) !== join(rmain, rel)) throw new Error("resolves through a link");
+        if (count + 1 > worktreeIncludeLimits.maxFiles || bytes + st.size > worktreeIncludeLimits.maxBytes) {
+          over.push(rel);
+          continue;
+        }
+        const dst = join(path, rel);
+        if (await escapesWorktree(dst, wt)) throw new Error("would be written through a link out of the worktree");
+        await mkdir(dirname(dst), { recursive: true });
+        try {
+          await copyFile(src, dst, constants.COPYFILE_EXCL);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new Error("already exists in the worktree");
+          throw e;
+        }
+        count++;
+        bytes += st.size;
+      } catch (e) {
+        warn(`entry ${JSON.stringify(rel)} skipped: ${(e as Error).message}`);
+      }
+    }
+    if (over.length) warn(`${over.length} files skipped, over the copy limit of ${worktreeIncludeLimits.maxBytes / 1024 ** 3} GiB / ${worktreeIncludeLimits.maxFiles} files: ${over.slice(0, 5).join(", ")}`);
+    if (count) console.log(`worktree: copied ${count} files from .worktreeinclude`);
+  } catch (e) {
+    warn(`skipped: ${(e as Error).message}`);
+  }
+}
+
 /** `worktree.*` of the Claude settings: local > project (of the main checkout) > user; per key the first file that sets it. */
 function worktreeSettings(claudeDir: string, main: string): { baseRef?: unknown; symlinkDirectories?: unknown } {
   const out: { baseRef?: unknown; symlinkDirectories?: unknown } = {};
@@ -505,7 +607,7 @@ export async function createWorktree(cwd: string, o: CreateWorktreeOptions): Pro
   });
 }
 
-/** After `git worktree add`: `symlinkDirectories`, the info/exclude line, the caller's step (rolled back when it throws). */
+/** After `git worktree add`: `symlinkDirectories`, the `.worktreeinclude` copies, the info/exclude line, the caller's step (rolled back when it throws). */
 async function finishCreate(main: string, path: string, branch: string, settings: ReturnType<typeof worktreeSettings>, o: CreateWorktreeOptions, ours: boolean): Promise<{ path: string; branch: string }> {
     // `worktree.symlinkDirectories`: each entry relative, inside the repository, existing; anything else is skipped with a warning.
     const dirs = Array.isArray(settings.symlinkDirectories) ? settings.symlinkDirectories : [];
@@ -522,6 +624,7 @@ async function finishCreate(main: string, path: string, branch: string, settings
         console.warn(`worktree: symlinkDirectories entry ${JSON.stringify(d)} skipped: ${(e as Error).message}`);
       }
     }
+    await copyWorktreeInclude(main, path);
     // Keep the main checkout's `git add -A` from adding the worktrees as embedded repositories (local only, never committed).
     try {
       const dir = await run(main, ["rev-parse", "--git-common-dir"]);
