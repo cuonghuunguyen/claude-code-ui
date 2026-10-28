@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpIcon, PencilIcon, XIcon } from "lucide-react";
 import type { QueuedPrompt } from "@claude-ui/protocol";
+import { summarizePasted } from "./pasted-text.ts";
 
 type Held = { reason: "usage_limit" | "not_live"; until?: number };
 type Action = "send" | "edit" | "delete";
@@ -60,7 +61,8 @@ export function QueueChips({
       </span>
       <ul ref={list} className={`flex min-w-0 flex-col ${items.length > 3 ? "max-h-40 overflow-y-auto" : ""}`}>
         {items.map((item, i) => {
-          const label = (item.bash ? "! " : "") + item.text.slice(0, 40);
+          const shown = summarizePasted(item.text);
+          const label = (item.bash ? "! " : "") + shown.slice(0, 40);
           const waits = !!item.bash && !!bashWait;
           return (
             <li key={item.id} className="flex min-h-9 min-w-0 flex-wrap items-center gap-1 max-md:min-h-11 pointer-coarse:min-h-11">
@@ -69,8 +71,8 @@ export function QueueChips({
                   !
                 </span>
               )}
-              <span className={`min-w-0 flex-1 truncate ${item.bash ? "font-mono" : "px-2"}`} title={item.text}>
-                {item.text}
+              <span className={`min-w-0 flex-1 truncate ${item.bash ? "font-mono" : "px-2"}`} title={shown}>
+                {shown}
               </span>
               {item.imageCount > 0 && <span className="shrink-0 rounded-md bg-secondary px-1.5 text-muted-foreground text-xs">+{item.imageCount} {item.imageCount === 1 ? "image" : "images"}</span>}
               <button

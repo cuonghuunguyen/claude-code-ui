@@ -5,6 +5,7 @@ import { CheckIcon, ChevronRightIcon, FileIcon, SearchIcon } from "lucide-react"
 import { keyLabels } from "./shortcuts.ts";
 import { isImeKey } from "./ime.ts";
 import { ProjectAvatar } from "./tabs-bar.tsx";
+import { cleanSnippet } from "./pasted-text.ts";
 
 export type PaletteItem = {
   id: string;
@@ -58,7 +59,7 @@ type MessageSearch = { query: string; all: boolean; results: SessionSearchHits[]
 const messageItems = (m: MessageSearch, messages: Messages, setAll: (all: boolean) => void): PaletteItem[] => {
   const group = m.error ? "Messages, search failed" : !m.done ? "Messages, searching…" : m.done.stopped === "time" || m.done.stopped === "bytes" ? "Messages, search stopped early" : "Messages";
   const rows = m.results.flatMap((r) =>
-    r.hits.map((h) => ({ id: `msg:${r.sessionId}:${h.messageId}`, group, title: r.title || "Untitled", cwd: r.cwd, snippet: { text: h.snippet, query: m.query }, run: () => messages.open(r.sessionId, h, m.query) })),
+    r.hits.map((h) => ({ id: `msg:${r.sessionId}:${h.messageId}`, group, title: r.title || "Untitled", cwd: r.cwd, snippet: { text: cleanSnippet(h.snippet), query: m.query }, run: () => messages.open(r.sessionId, h, m.query) })),
   );
   return !m.all && messages.cwd ? [...rows, { id: "msg:all", group, title: "Search messages in all projects", keep: true, run: () => setAll(true) }] : rows;
 };
