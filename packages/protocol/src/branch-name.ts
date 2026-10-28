@@ -20,24 +20,35 @@ const tidy = (s: string) =>
 /**
  * The Name rule: trim, lowercase, strip accents (NFKD), every character outside `a-z 0-9 . _ - /` becomes `-`, repeated `-`, `/`
  * and `.` collapse, no leading or trailing `-` `.` `/` (per part too), no `.lock` suffix, at most 80 characters. Empty: no name.
- * `keep`: a ticket key whose case stays (`PRJ-12`).
+ * Ticket keys keep their case: `keep` (`PRJ-12`, any case in the input) and every key typed in upper case (`GH-464`).
  */
 export function normalizeBranchName(input: string, o: { keep?: string } = {}): string {
-  let s = input
-    .trim()
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[^a-z0-9._\-/]/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/\/{2,}/g, "/")
-    .replace(/\.{2,}/g, ".");
-  s = tidy(s);
+  let s = lowerName(input);
   if (s.length > BRANCH_NAME_MAX) s = tidy(s.slice(0, BRANCH_NAME_MAX));
-  const key = o.keep && normalizeBranchName(o.keep);
-  if (o.keep && key) s = s.replace(new RegExp(`(?<![a-z0-9])${key.replace(/[.]/g, "\\.")}(?![0-9])`, "g"), o.keep);
+  const keys = new Set([...(o.keep ? [o.keep] : []), ...(input.match(TYPED_KEY) ?? [])]);
+  for (const k of keys) {
+    const low = lowerName(k);
+    if (low) s = s.replace(new RegExp(`(?<![a-z0-9])${low.replace(/[.]/g, "\\.")}(?![0-9])`, "g"), k);
+  }
   return s;
 }
+
+/** A ticket key typed in upper case, as a whole word (`GH-464`, not `fix-12` or `xGH-1`). */
+const TYPED_KEY = /(?<![A-Za-z0-9])[A-Z][A-Z0-9_]+-\d+(?!\d)/g;
+
+/** The Name rule without the length cut and key case. */
+const lowerName = (input: string) =>
+  tidy(
+    input
+      .trim()
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .replace(/[^a-z0-9._\-/]/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/\/{2,}/g, "/")
+      .replace(/\.{2,}/g, "."),
+  );
 
 /** The worktree folder of a branch: `/` becomes `-` (`feat/x` → `feat-x`). */
 export const branchFolder = (branch: string) => branch.replaceAll("/", "-");

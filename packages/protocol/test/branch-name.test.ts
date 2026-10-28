@@ -34,6 +34,16 @@ describe("normalizeBranchName (GH-447 Name rule)", () => {
     expect(normalizeBranchName("Feature/PRJ-12-Login", { keep: "PRJ-12" })).toBe("feature/PRJ-12-login");
     expect(normalizeBranchName("prj-12 again prj-12", { keep: "PRJ-12" })).toBe("PRJ-12-again-PRJ-12");
   });
+
+  it.each([
+    ["GH-464 Reuse container node", "GH-464-reuse-container-node"],
+    ["feat/PRJ-12 login", "feat/PRJ-12-login"],
+    ["PRJ_A-7 and GH-9", "PRJ_A-7-and-GH-9"],
+    ["gh-464 fix", "gh-464-fix"],
+    ["fix-123 V2-1", "fix-123-V2-1"],
+    ["Fix-12 x", "fix-12-x"],
+    ["xGH-1 y", "xgh-1-y"],
+  ])("keeps the case of a key typed in upper case: %j → %j", (input, want) => expect(normalizeBranchName(input)).toBe(want));
 });
 
 describe("branchFolder", () => {
