@@ -236,6 +236,21 @@ Given("the scratch project has gitignored files listed in .worktreeinclude", asy
   writeFileSync(join(dir, "skip.log"), "not listed\n");
 });
 
+// Claude Code's rule for a wholly ignored folder: `node_modules/` (ignored, no pattern names it) is not searched for `**/config.json`;
+// `vendor/` (ignored, named by a pattern) is copied with its files.
+Given("the scratch project has an ignored node_modules and an ignored vendor folder with a .worktreeinclude of config.json files", async ({ project, memo }) => {
+  const dir = project.path;
+  writeFileSync(join(dir, ".gitignore"), "node_modules/\nvendor/\n.claude/\n");
+  writeFileSync(join(dir, ".worktreeinclude"), "**/config.json\nvendor/\n");
+  git(dir, "add", ".gitignore", ".worktreeinclude");
+  git(dir, "commit", "-m", "worktreeinclude folder fixture");
+  memo.envValue = `secret-${randomUUID()}`;
+  for (const f of ["node_modules/pkg/config.json", "vendor/lib/config.json", "vendor/data.txt"]) {
+    mkdirSync(join(dir, f, ".."), { recursive: true });
+    writeFileSync(join(dir, f), `${memo.envValue}\n`);
+  }
+});
+
 Then("the worktree folder {string} has {string} with the main checkout's content", async ({ project, memo }, folder: string, file: string) => {
   const dst = join(worktreeDir(project.path, folder), file);
   await expect(async () => expect(existsSync(dst), `${dst} exists`).toBe(true)).toPass({ timeout: 60_000 });

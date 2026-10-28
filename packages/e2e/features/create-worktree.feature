@@ -156,3 +156,17 @@ Feature: Create worktree modal
     And the new-session tab runs in a worktree with a generated name
     And the generated worktree has ".env" with the main checkout's content
     And I capture "shift click worktreeinclude"
+
+  Scenario: A wholly ignored folder is copied only when .worktreeinclude names it
+    Given the scratch project has an ignored node_modules and an ignored vendor folder with a .worktreeinclude of config.json files
+    And I open the scratch project
+    When I click the new worktree button of the scratch project
+    And I open the "name" tab of the modal
+    And I type the worktree name "with-vendor"
+    And I confirm the modal
+    Then the modal closes
+    And the new-session tab runs in the worktree "with-vendor"
+    And the worktree folder "with-vendor" has "vendor/lib/config.json" with the main checkout's content
+    And the worktree folder "with-vendor" has "vendor/data.txt" with the main checkout's content
+    And the worktree folder "with-vendor" has no "node_modules/pkg/config.json"
+    And I capture "worktreeinclude ignored folder"
