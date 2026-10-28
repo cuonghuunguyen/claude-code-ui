@@ -494,3 +494,12 @@ it("palette moves the terminal between its homes (GH-397)", () => {
   expect(ids(ctx({ homes: { terminal: "bottom" }, moveKind: vi.fn() }))).toEqual(["terminal.move.main", "terminal.move.side"]);
   expect(ids(ctx({ homes: { terminal: "main" }, moveKind: vi.fn() }))).toEqual(["terminal.move.side", "terminal.move.bottom"]);
 });
+
+it("Run in background is listed only while a foreground shell runs, with Ctrl+Shift+B", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "shell.background")).toBeUndefined();
+  const run = vi.fn();
+  const item = appCommands(ctx({ runInBackground: run })).find((i) => i.id === "shell.background");
+  expect(item).toMatchObject({ title: "Run in background", keys: "mod+shift+b" });
+  if (item && "run" in item) item.run();
+  expect(run).toHaveBeenCalled();
+});

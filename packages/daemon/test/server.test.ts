@@ -21,7 +21,7 @@ import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, yielded } from "./fake-query.ts";
+import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, foregroundBashQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
@@ -3287,6 +3287,34 @@ describe("daemon", () => {
       // Ended: nothing left to stop.
       expect(await a.request({ type: "session.stopSubagent", sessionId, subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_subagent" });
       expect(await a.request({ type: "session.stopSubagent", sessionId: "nope", subagentId: "agent-1" })).toMatchObject({ type: "error", code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.backgroundShell moves the running foreground Bash call to the background; the turn ends with the shell running and working; its notification ends it", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: foregroundBashQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const a = await client((d.address() as AddressInfo).port);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "go" });
+      const callPart = (shell: string) => (m: ServerMessage) => m.type === "event" && m.part.id === "fg-1" && "shell" in m.part && m.part.shell === shell;
+      await a.waitFor(callPart("foreground"));
+      expect(await a.request({ type: "session.backgroundShell", sessionId, toolUseId: "fg-1" })).toMatchObject({ type: "reply" });
+      await a.waitFor(callPart("background"));
+      await a.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle" && m.part.working === true);
+      expect(a.inbox.filter((m) => m.type === "event" && m.part.id === "fg-1").at(-1)).toMatchObject({ part: { status: "running", shell: "background" } });
+      expect(await a.request({ type: "session.backgroundShell", sessionId, toolUseId: "fg-1" })).toMatchObject({ type: "error", code: "unknown_shell" });
+      expect(await a.request({ type: "session.backgroundShell", sessionId, toolUseId: "nope" })).toMatchObject({ type: "error", code: "unknown_shell" });
+      expect(await a.request({ type: "session.backgroundShell", sessionId, toolUseId: "disabled" })).toMatchObject({ type: "error", code: "background_failed" });
+      expect(await a.request({ type: "session.backgroundShell", sessionId })).toMatchObject({ type: "error", code: "bad_request" });
+      expect(await a.request({ type: "session.backgroundShell", sessionId: "nope", toolUseId: "fg-1" })).toMatchObject({ type: "error", code: "unknown_session" });
+      await a.request({ type: "session.prompt", sessionId, text: "notify" });
+      await a.waitFor((m) => m.type === "event" && m.part.id === "fg-1" && "status" in m.part && m.part.status === "done");
+      await a.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle" && !m.part.working);
     } finally {
       d.close();
     }

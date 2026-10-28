@@ -82,6 +82,8 @@ export const callPath = (call: ToolCall) => ((call.input as { file_path?: unknow
 
 /** Opens the popup viewer; undefined (default) = no open buttons (Focus page, tests without a provider). */
 export type OpenViewer = (t: ViewerTarget, opener?: HTMLElement | null) => void;
+/** Run in background of a Bash card (GH-440): the session view's request for that call. */
+export const BackgroundShellContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
 export const ViewerContext = createContext<OpenViewer | undefined>(undefined);
 
 export type ViewerState = { target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null };

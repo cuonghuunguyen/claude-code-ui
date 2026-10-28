@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GitStatus, Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
-import { backgroundShells, StatusBar, tokens, totals } from "./status-bar.tsx";
+import { backgroundShells, foregroundShells, StatusBar, tokens, totals } from "./status-bar.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,7 +18,7 @@ const result = (id: string, inputTokens: number, outputTokens: number, cacheRead
   isError: false,
   usage: { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens },
 });
-const bash = (id: string, input: object, status: "running" | "done"): Part => ({ type: "tool_call", id, toolUseId: id, tool: "Bash", input, status });
+const bash = (id: string, input: object, status: "running" | "done", shell?: "foreground" | "background"): Part => ({ type: "tool_call", id, toolUseId: id, tool: "Bash", input, status, shell });
 
 it("formats tokens with k and M", () => {
   expect([453, 1000, 241_100, 54_400_000, 1_000_000].map(tokens)).toEqual(["453", "1.0k", "241.1k", "54.4M", "1.0M"]);
@@ -46,6 +46,18 @@ it("lists running background Bash calls only", () => {
     bash("c", { command: "sleep 5" }, "running"),
   );
   expect(backgroundShells(v).map((c) => c.id)).toEqual(["a"]);
+});
+
+it("backgroundShells counts moved Bash calls; foregroundShells lists running foreground tasks only", () => {
+  const v = view(
+    bash("a", { command: "npm run dev", run_in_background: true }, "running"),
+    bash("m", { command: "sleep 60" }, "running", "background"),
+    bash("f", { command: "sleep 60" }, "running", "foreground"),
+    bash("g", { command: "sleep 60" }, "done", "foreground"),
+    bash("c", { command: "sleep 5" }, "running"),
+  );
+  expect(backgroundShells(v).map((c) => c.id)).toEqual(["a", "m"]);
+  expect(foregroundShells(v).map((c) => c.id)).toEqual(["f"]);
 });
 
 let unmount = () => {};

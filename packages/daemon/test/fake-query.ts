@@ -339,6 +339,59 @@ export function subagentQuery({ prompt, options }: { prompt: AsyncIterable<SDKUs
   });
 }
 
+/** backgroundTasks() calls of foregroundBashQuery. */
+export const backgrounded: string[] = [];
+
+/**
+ * Fake query() with foreground Bash calls (shapes of the GH-440 fixture, live SDK 0.3.285): each prompt starts Bash call `fg-<n>`
+ * (task `fg-task-<n>`, task_started is_backgrounded false) and waits. backgroundTasks(id) records the id; "disabled" throws; an
+ * unknown or already moved call gives false; otherwise task_updated, the placeholder tool_result and a result follow and it gives
+ * true. Prompt "notify" ends the moved tasks (task_notification completed) with the CLI's empty result.
+ */
+export function foregroundBashQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const out: SDKMessage[] = [];
+  let wake = () => {};
+  const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
+  const running = new Set<string>();
+  const moved: string[] = [];
+  let n = 0;
+  void (async () => {
+    for await (const input of prompt) {
+      const text = JSON.stringify(input.message.content);
+      if (text.includes("notify")) {
+        for (const id of moved.splice(0)) emit({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: id.replace("fg-", "fg-task-"), tool_use_id: id, status: "completed", output_file: "", summary: "" });
+        emit({ ...turns[0]!.at(-1)!, uuid: randomUUID(), usage: { input_tokens: 0, output_tokens: 0 } });
+        continue;
+      }
+      const id = `fg-${++n}`;
+      running.add(id);
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command: "sleep 60 && echo done" } }] } });
+      emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: "x", task_id: `fg-task-${n}`, tool_use_id: id, description: "sleep", is_backgrounded: false, task_type: "local_bash" });
+    }
+  })();
+  const q = (async function* () {
+    for (;;) {
+      while (out.length) yield out.shift()!;
+      await new Promise<void>((r) => (wake = r));
+    }
+  })();
+  return Object.assign(q, {
+    supportedCommands: async () => [],
+    backgroundTasks: async (toolUseId?: string) => {
+      backgrounded.push(toolUseId!);
+      if (toolUseId === "disabled") throw new Error("Background tasks are disabled");
+      if (!toolUseId || !running.delete(toolUseId)) return false;
+      moved.push(toolUseId);
+      emit({ type: "system", subtype: "task_updated", uuid: randomUUID(), session_id: "x", task_id: toolUseId.replace("fg-", "fg-task-"), patch: { is_backgrounded: true } });
+      emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Command was manually backgrounded by user with ID: ${toolUseId.replace("fg-", "fg-task-")}. Output is being written to: /tmp/o.output.` }] } });
+      emit(turns[0]!.at(-1)!);
+      return true;
+    },
+    close: () => void q.return(undefined as never),
+  });
+}
+
 /**
  * Fake query() for /clear (recorded in development-docs/GH-52/probe-clear.log): replays each input; "/clear" sends
  * conversation_reset, after which the CLI goes on under a new session_id (not new_conversation_id): a hook, init, the
