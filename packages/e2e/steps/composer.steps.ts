@@ -190,3 +190,78 @@ Then("the session list shows no pasted_content text", async ({ page }) => {
   expect(text).not.toContain("pasted_content");
   expect(await page.title()).not.toContain("pasted_content");
 });
+
+// GH-441 round 2: cut / undo / redo of the token, and "!" in a box that holds a token.
+const TOKEN_RE = /\[Pasted text #\d+[^\]]*\]/;
+const tokenRange = async (page: Page) => {
+  const v = await promptBox(page).inputValue();
+  const m = TOKEN_RE.exec(v);
+  expect(m, "the prompt box holds a pasted-text token").not.toBeNull();
+  return { start: m!.index, end: m!.index + m![0].length, token: m![0] };
+};
+const tokenOfBox = new WeakMap<Page, string>();
+const selectToken = async (page: Page) => {
+  const { start, end, token } = await tokenRange(page);
+  tokenOfBox.set(page, token);
+  await promptBox(page).focus();
+  await promptBox(page).evaluate((el: HTMLTextAreaElement, [s, e]) => el.setSelectionRange(s, e), [start, end]);
+};
+
+When("I cut the token out of the prompt box", async ({ page }) => {
+  await selectToken(page);
+  await page.keyboard.press("Control+x");
+  await expect(promptBox(page)).not.toHaveValue(TOKEN_RE);
+});
+
+When("I paste the cut token text back into the prompt box", async ({ page }) => {
+  await pasteInto(page, tokenOfBox.get(page)!);
+  // Short text: the app leaves it to the browser, whose default insertion is stood in for by insertText.
+  expect(pasteHandled.get(page)).toBe(false);
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.insertText(tokenOfBox.get(page)!);
+  await expect(promptBox(page)).toHaveValue(TOKEN_RE);
+});
+
+When("I delete the token with the Delete key", async ({ page }) => {
+  await selectToken(page);
+  await page.keyboard.press("Delete");
+  await expect(promptBox(page)).not.toHaveValue(TOKEN_RE);
+});
+
+When("I undo in the prompt box", async ({ page }) => {
+  await promptBox(page).focus();
+  await page.keyboard.press("Control+z");
+});
+
+When("I redo in the prompt box", async ({ page }) => {
+  await promptBox(page).focus();
+  await page.keyboard.press("Control+Shift+z");
+});
+
+Then("the prompt box holds the token text", async ({ page }) => {
+  await expect(promptBox(page)).toHaveValue(TOKEN_RE);
+});
+
+Then("the prompt box does not hold the token text", async ({ page }) => {
+  await expect(promptBox(page)).not.toHaveValue(TOKEN_RE);
+});
+
+Then("the user message shows no literal pasted-text token", async ({ page }) => {
+  const msg = page.locator('[data-testid="user-message"]:not([data-pending])').first();
+  await expect(msg).toBeVisible({ timeout: TURN_MS });
+  expect(((await msg.textContent()) ?? "")).not.toMatch(/\[Pasted text #\d+/);
+});
+
+When("I type {string} at the start of the prompt box", async ({ page }, text: string) => {
+  await promptBox(page).click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.type(text);
+});
+
+Then("the prompt box is not in bash mode", async ({ page }) => {
+  await expect(page.getByTestId("bash-mode")).toHaveCount(0);
+});
+
+Then("the prompt box starts with {string} and holds the token text", async ({ page }, text: string) => {
+  await expect(promptBox(page)).toHaveValue(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*\\[Pasted text #\\d+`));
+});
