@@ -2,7 +2,7 @@
 // (Cloud only) and branch template in settings.json, the token in secrets.json. Auth by URL: `*.atlassian.net` = Cloud (email + API
 // token, Basic, /rest/api/3), else Data Center / Server (personal access token, Bearer, /rest/api/2). The token never leaves this module
 // except in the Authorization header to the configured base URL; no error message carries it.
-import { jiraIsCloud, jiraKeyOf, MY_OPEN_JQL, type JiraTicket } from "@claude-ui/protocol";
+import { jiraIsCloud, jiraKeyOf, jiraUrlProblem, MY_OPEN_JQL, type JiraTicket } from "@claude-ui/protocol";
 
 export type JiraErrorCode = "jira_not_configured" | "jira_auth" | "jira_unreachable" | "jira_failed";
 export class JiraError extends Error {
@@ -48,6 +48,9 @@ export function createJira(d: JiraDeps) {
     const token = d.token();
     if (!url) throw new JiraError("jira_not_configured", "Jira is not set up: add its URL and token in Settings › Jira");
     if (!token) throw new JiraError("jira_not_configured", "No Jira token: set one in Settings › Jira");
+    // GH-451: a stored non-local http address is kept, but never gets the token.
+    const unsafe = jiraUrlProblem(url);
+    if (unsafe) throw new JiraError("jira_not_configured", `${unsafe}: change it in Settings › Jira`);
     const cloud = jiraIsCloud(url);
     if (cloud && !email) throw new JiraError("jira_not_configured", "Jira Cloud needs your account email: set it in Settings › Jira");
     const base = url.replace(/\/+$/, "");
@@ -106,3 +109,6 @@ export function createJira(d: JiraDeps) {
   };
 }
 export type Jira = ReturnType<typeof createJira>;
+
+/** The origin a saved token belongs to (GH-451); "" for no URL. `url` is a stored, valid Jira URL. */
+export const jiraOrigin = (url: string) => (url ? new URL(url).origin : "");

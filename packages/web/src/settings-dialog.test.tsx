@@ -326,6 +326,12 @@ it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only 
   await set("settings-jira-url", "https://acme.atlassian.net");
   expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" } } });
   expect(q("settings-jira-email")).not.toBeNull();
+  expect(q("settings-jira-url-error")).toBeNull();
+  // GH-451: a stored non-local http address stays shown, with the reason at the field.
+  await set("settings-jira-url", "http://jira.example.com");
+  expect(q("settings-jira-url-error")!.textContent).toContain("https");
+  await set("settings-jira-url", "https://acme.atlassian.net");
+  expect(q("settings-jira-url-error")).toBeNull();
   await set("settings-jira-email", "ann@example.com");
   expect(calls.filter((c) => c.type === "settings.set").at(-1)).toMatchObject({ patch: { jira: { email: "ann@example.com" } } });
   expect((q("settings-jira-jql") as HTMLInputElement).placeholder).toBe("assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC");

@@ -501,6 +501,20 @@ it("markdown tab: Source / Preview / Split (aria-pressed), the preview renders t
   localStorage.clear();
 });
 
+it("markdown preview: a table has no max height (Streamdown's 300px cap is off)", async () => {
+  localStorage.clear();
+  localStorage.setItem("claude-ui.markdown-view", "preview");
+  const rows = Array.from({ length: 40 }, (_, i) => `| r${i} | v${i} |`).join("\n");
+  const t = treePanel({ read: () => ({ content: `| a | b |\n|---|---|\n${rows}\n`, mtime: 1 }) });
+  await t.show({ openPath: "/p/docs/table.md" });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  const table = t.el.querySelector<HTMLElement>("[data-testid=md-preview] [data-streamdown=table]")!;
+  expect(table.querySelectorAll("tbody tr")).toHaveLength(40);
+  expect(table.parentElement!.style.maxHeight).toBe("");
+  act(() => t.root.render(null));
+  localStorage.clear();
+});
+
 it("markdown tab below md: no Split button, a stored Split shows the Preview", async () => {
   localStorage.setItem("claude-ui.markdown-view", "split");
   const original = window.matchMedia;
