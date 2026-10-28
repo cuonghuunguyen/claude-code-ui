@@ -1776,6 +1776,17 @@ export function createDaemon(opts: {
           }
           return reply({});
         }
+        case "session.backgroundShell": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          try {
+            if (!(await s.backgroundShell(msg.toolUseId))) return fail("unknown_shell", "no foreground Bash call with that ID runs");
+          } catch (e) {
+            return fail("background_failed", (e as Error).message);
+          }
+          return reply({});
+        }
         case "permission.respond": {
           if (typeof msg.requestId !== "string" || !["allow", "allow_always", "deny"].includes(msg.decision))
             return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");

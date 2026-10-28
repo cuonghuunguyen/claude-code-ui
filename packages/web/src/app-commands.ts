@@ -34,6 +34,8 @@ export type CommandContext = {
   newWorktree?: () => void;
   /** Opens the Clean up dialog for all projects; none while there is no linked worktree or worker. */
   cleanUp?: () => void;
+  /** Moves the shown session's running foreground Bash calls to the background (GH-440); none while there is none. */
+  runInBackground?: () => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
   /** Closes the active tab's group (asks first for 2 or more tabs); none while the active tab is in no named group. */
@@ -221,6 +223,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: "Messages, newest first", title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
     s?.running && { ...cmd("session.stop", "Stop", c.stop), keys: "escape" },
+    c.runInBackground && cmd("shell.background", "Run in background", c.runInBackground),
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", group: "Customize", keys: specOf("mcp.open"), title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
     c.openSkills && { id: "skills.open", group: "Customize", keys: specOf("skills.open"), title: "Slash commands", description: "Browse slash commands", run: c.openSkills },

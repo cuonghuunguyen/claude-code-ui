@@ -24,7 +24,6 @@ const IGNORED = new Set([
   "system:status",
   "system:thinking_tokens",
   "system:task_progress",
-  "system:task_updated",
   "system:background_tasks_changed",
   "system:hook_started",
   "system:hook_progress",
@@ -59,6 +58,8 @@ export function bashRecords(command: string, stdout: string, stderr: string, exi
 const NUDGE = /^\[Your previous response had no visible output\./;
 // A background subagent's placeholder tool_result names its agentId, which is the task ID of its notifications (SDK 0.3.285).
 const ASYNC_LAUNCHED = /^Async agent launched successfully\.[\s\S]*?^agentId: (\w+)/m;
+// A Bash call the user moved to the background: its tool_result names the task (SDK 0.3.285; the transcript has no tool_use_result).
+const MANUALLY_BACKGROUNDED = /^Command was manually backgrounded by user with ID: (\w+)\./;
 // SendMessage's tool_result when it resumed a finished subagent run (SDK 0.3.285); a queued message names no resumedAgentId.
 const RESUMED = /"resumedAgentId":"(\w+)"/;
 // A transcript records a background task's notification as this user text; a notice after the run resumed has no tool-use-id,
@@ -128,6 +129,15 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     const call = calls.get(toolUseId);
     if (!call || (call.status === status && !(again && call.type === "subagent"))) return [];
     const next = call.type === "subagent" && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
+    calls.set(toolUseId, next);
+    return [next];
+  }
+
+  /** Marks Bash call `toolUseId` as a foreground task or a background shell (GH-440). */
+  function markShell(toolUseId: string, shell: "foreground" | "background"): Part[] {
+    const call = calls.get(toolUseId);
+    if (call?.type !== "tool_call" || call.tool !== "Bash" || call.shell === shell) return [];
+    const next = { ...call, shell };
     calls.set(toolUseId, next);
     return [next];
   }
@@ -299,6 +309,12 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             background.add(b.tool_use_id);
             tasks.set(launched[1]!, b.tool_use_id);
           }
+          const moved = typeof output === "string" && call?.type === "tool_call" && call.tool === "Bash" ? MANUALLY_BACKGROUNDED.exec(output) : null;
+          if (moved) {
+            background.add(b.tool_use_id);
+            tasks.set(moved[1]!, b.tool_use_id);
+            parts.push(...markShell(b.tool_use_id, "background"));
+          }
           // A stopped run's tool_result is an error ("Agent stopped"); it stays stopped.
           if (!background.has(b.tool_use_id) && call?.status !== "stopped")
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
@@ -358,7 +374,14 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           if (tasks.has(m.task_id)) return resume(m.task_id);
           if (m.is_backgrounded && m.tool_use_id) background.add(m.tool_use_id);
           if (m.tool_use_id) tasks.set(m.task_id, m.tool_use_id);
-          return [];
+          return m.tool_use_id && m.task_type === "local_bash" ? markShell(m.tool_use_id, m.is_backgrounded ? "background" : "foreground") : [];
+        }
+        // A foreground task moved to the background (Run in background, a timeout): its tool_result is a placeholder now.
+        if (m.type === "system" && m.subtype === "task_updated") {
+          const id = tasks.get(m.task_id);
+          if (!id || !m.patch.is_backgrounded) return [];
+          background.add(id);
+          return markShell(id, "background");
         }
         if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status);
         // Claude Code's banners: "info" only in its transcript mode, "notice" gray, the rest prominent. Progress notices of one
