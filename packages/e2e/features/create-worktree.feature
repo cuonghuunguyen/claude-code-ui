@@ -168,5 +168,7 @@ Feature: Create worktree modal
     And the new-session tab runs in the worktree "with-vendor"
     And the worktree folder "with-vendor" has "vendor/lib/config.json" with the main checkout's content
     And the worktree folder "with-vendor" has "vendor/data.txt" with the main checkout's content
+    And the worktree folder "with-vendor" has "config/secrets.json" with the main checkout's content
+    And the worktree folder "with-vendor" has no "config/other.txt"
     And the worktree folder "with-vendor" has no "node_modules/pkg/config.json"
     And I capture "worktreeinclude ignored folder"

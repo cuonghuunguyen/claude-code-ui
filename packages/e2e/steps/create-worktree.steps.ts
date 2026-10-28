@@ -237,15 +237,15 @@ Given("the scratch project has gitignored files listed in .worktreeinclude", asy
 });
 
 // Claude Code's rule for a wholly ignored folder: `node_modules/` (ignored, no pattern names it) is not searched for `**/config.json`;
-// `vendor/` (ignored, named by a pattern) is copied with its files.
+// `vendor/` (ignored, named by a pattern) is copied with its files; `config/` (ignored) gets only `config/secrets.json`, a pattern with a path.
 Given("the scratch project has an ignored node_modules and an ignored vendor folder with a .worktreeinclude of config.json files", async ({ project, memo }) => {
   const dir = project.path;
-  writeFileSync(join(dir, ".gitignore"), "node_modules/\nvendor/\n.claude/\n");
-  writeFileSync(join(dir, ".worktreeinclude"), "**/config.json\nvendor/\n");
+  writeFileSync(join(dir, ".gitignore"), "node_modules/\nvendor/\nconfig/\n.claude/\n");
+  writeFileSync(join(dir, ".worktreeinclude"), "**/config.json\nvendor/\nconfig/secrets.json\n");
   git(dir, "add", ".gitignore", ".worktreeinclude");
   git(dir, "commit", "-m", "worktreeinclude folder fixture");
   memo.envValue = `secret-${randomUUID()}`;
-  for (const f of ["node_modules/pkg/config.json", "vendor/lib/config.json", "vendor/data.txt"]) {
+  for (const f of ["node_modules/pkg/config.json", "vendor/lib/config.json", "vendor/data.txt", "config/secrets.json", "config/other.txt"]) {
     mkdirSync(join(dir, f, ".."), { recursive: true });
     writeFileSync(join(dir, f), `${memo.envValue}\n`);
   }
