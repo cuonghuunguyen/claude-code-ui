@@ -14,13 +14,39 @@ afterEach(() => act(() => root.render(<></>)));
 const body = Array.from({ length: 200 }, (_, i) => `line-${i + 1}`).join("\n");
 
 it("PastedBlock is collapsed with the line count and expands on click", async () => {
-  await act(async () => root.render(<PastedBlock body={body} />));
+  await act(async () => root.render(<PastedBlock body={body} id="t:0" />));
   const trigger = el.querySelector<HTMLButtonElement>('[data-testid="pasted-block"]')!;
   expect(trigger.textContent).toContain("Pasted text · 199 lines");
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
   await act(async () => trigger.click());
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   expect(el.querySelector('[data-testid="pasted-block-body"]')?.textContent).toContain("line-200");
+});
+
+it("PastedBlock stays expanded when its bubble remounts (pending prompt replaced by the echo, scrolled out of the window)", async () => {
+  const Pending = () => (
+    <div data-testid="pending">
+      <PastedBlock body={body} id="m1:0" />
+    </div>
+  );
+  const Echoed = () => (
+    <section>
+      <PastedBlock body={body} id="m1:0" />
+    </section>
+  );
+  await act(async () => root.render(<Pending />));
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="pasted-block"]')!.click());
+  expect(el.querySelector('[data-testid="pasted-block-body"]')).not.toBeNull();
+  await act(async () => root.render(<Echoed />)); // another element type: React remounts the block
+  expect(el.querySelector('[data-testid="pasted-block"]')!.getAttribute("aria-expanded")).toBe("true");
+  expect(el.querySelector('[data-testid="pasted-block-body"]')?.textContent).toContain("line-200");
+  await act(async () => root.render(<PastedBlock body={body} id="m2:0" />)); // another block stays collapsed
+  expect(el.querySelector('[data-testid="pasted-block"]')!.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="pasted-block"]')!.click());
+  await act(async () => root.render(<PastedBlock body={body} id="m1:0" />)); // collapsing again is remembered too
+  await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="pasted-block"]')!.click());
+  await act(async () => root.render(<Pending />));
+  expect(el.querySelector('[data-testid="pasted-block"]')!.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("PasteChips shows one chip per token in text order; Remove calls onRemove with its id; View opens the full text", async () => {

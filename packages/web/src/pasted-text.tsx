@@ -65,10 +65,20 @@ export function PasteChips({ text, pastes, onRemove }: { text: string; pastes: P
   );
 }
 
-/** A pasted block inside a user message: collapsed, expands on click. */
-export function PastedBlock({ body }: { body: string }) {
+/** Expanded blocks by id: the open state outlives a remount of the bubble (pending prompt replaced by its echo, a row scrolled out of the window). */
+const expanded = new Set<string>();
+
+/** Id of block `index` of a user message: its text, not the part id, because the pending bubble and its echo have different part ids and the same text. */
+export function pastedBlockId(text: string, index: number): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 33) + text.charCodeAt(i)) | 0;
+  return `${text.length}:${h >>> 0}:${index}`;
+}
+
+/** A pasted block inside a user message: collapsed, expands on click. `id`: pastedBlockId of the message and the block index. */
+export function PastedBlock({ body, id }: { body: string; id: string }) {
   return (
-    <Collapsible className="my-1 w-full min-w-0 rounded-md border-[0.5px] bg-secondary text-sm">
+    <Collapsible defaultOpen={expanded.has(id)} onOpenChange={(open) => void (open ? expanded.add(id) : expanded.delete(id))} className="my-1 w-full min-w-0 rounded-md border-[0.5px] bg-secondary text-sm">
       <CollapsibleTrigger
         data-testid="pasted-block"
         className="group flex min-h-7 w-full cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-xs outline-none focus-visible:outline-2 focus-visible:outline-info pointer-coarse:min-h-11 max-md:min-h-11"

@@ -25,6 +25,7 @@ Feature: Pasted text blocks
     And I capture "bubble-expanded"
     And I see a reply from Claude
     And the turn has finished
+    Then the pasted block is still expanded
     And the session list shows no pasted_content text
     And the page has no horizontal scroll
     And I capture "after-reply"

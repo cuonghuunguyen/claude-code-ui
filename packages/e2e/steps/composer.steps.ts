@@ -183,6 +183,11 @@ Then("the pasted block holds lines 1 to {int}", async ({ page }, n: number) => {
   expect(((await body.textContent()) ?? "").trim()).toBe(lineText(n));
 });
 
+Then("the pasted block is still expanded", async ({ page }) => {
+  await expect(page.getByTestId("pasted-block").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("pasted-block-body").first()).toBeVisible();
+});
+
 Then("the session list shows no pasted_content text", async ({ page }) => {
   const sidebar = page.getByTestId("sidebar");
   await expect(sidebar).toHaveCount(1);

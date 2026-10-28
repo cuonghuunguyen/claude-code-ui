@@ -55,7 +55,7 @@ import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
-import { PastedBlock, PasteChips } from "./pasted-text.tsx";
+import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
@@ -4912,7 +4912,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
             <Message from="user">
               <MessageContent className="[overflow-wrap:anywhere]">
                 <ImageStrip images={part.images} partId={part.id} />
-                {shown.map((seg, i) => (seg.kind === "paste" ? <PastedBlock key={i} body={seg.body} /> : <UserMarkdown key={i} text={seg.text} />))}
+                {shown.map((seg, i) => (seg.kind === "paste" ? <PastedBlock key={i} body={seg.body} id={pastedBlockId(part.text, i)} /> : <UserMarkdown key={i} text={seg.text} />))}
               </MessageContent>
             </Message>
           )}
