@@ -33,6 +33,12 @@ type Client = ReturnType<typeof connect>;
 export const TREE_BESIDE_PX = 672;
 const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
 
+/** The one editor sync of the shared store (disk watch, reload on change) for every Files view. */
+export function EditorSync({ store, client, status, watch }: { store: EditorStore; client: Client; status: ConnectionStatus; watch: string[] }) {
+  useEditorSync(store, client, status, watch, true);
+  return null;
+}
+
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
  * `openPath` (quick open) opens that file in a tab, then `onOpened` clears it.
@@ -60,6 +66,7 @@ export function FilesPanel({
   onPopOut,
   onOpenInFiles,
   headerEnd,
+  sync = true,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -94,6 +101,8 @@ export function FilesPanel({
   /** Open in editor (dialog only, for a file inside `cwd`): close the dialog and show the Files tab. */
   onOpenInFiles?: () => void;
   headerEnd?: ReactNode;
+  /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
+  sync?: boolean;
 }) {
   const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
   const store = (editors ?? own)!;
@@ -117,14 +126,21 @@ export function FilesPanel({
   }, [openPath]);
 
   const paths = Object.keys(tabs);
-  useEditorSync(store, client, status, watch, !dialog);
+  useEditorSync(store, client, status, watch, !dialog && sync);
 
   const openRef = useRef(open);
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
   const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
   const shown = paths.filter((p) => inDir(p, cwd) || (dialog && tabs[p]!.outside));
-  const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[shown[0]!];
+  // The store has one global activePath: a view whose folder does not own it keeps the file it showed last.
+  const lastShown = useRef<string>(undefined);
+  const active = activePath && shown.includes(activePath) ? tabs[activePath] : lastShown.current && shown.includes(lastShown.current) ? tabs[lastShown.current] : tabs[shown[0]!];
+  lastShown.current = active?.path;
+  // Becoming visible makes the shown file the active one, so Pop out and save act on it.
+  useEffect(() => {
+    if (visible && !dialog && active && store.get().activePath !== active.path) store.setActive(active.path);
+  }, [visible, active?.path]);
   const rootRef = useRef<HTMLDivElement>(null);
   const treeColumn = useRef<HTMLDivElement>(null);
   const filesButton = useRef<HTMLButtonElement>(null);

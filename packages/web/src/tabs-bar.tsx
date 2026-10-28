@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -71,6 +71,8 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
 
 function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind }) {
   if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
   // Needs input gets its own shape, not only another dot colour than unread.

@@ -465,13 +465,26 @@ it("GH-395 Show plan is listed only with showPlan; move commands list the two ot
   expect(ids(ctx())).not.toContain("plan.show");
   expect(ids(ctx())).not.toContain("plan.move.main");
   const showPlan = vi.fn();
-  const c = ctx({ showPlan, planHome: "side", movePlan: vi.fn() });
+  const c = ctx({ showPlan, homes: { plan: "side" }, moveKind: vi.fn() });
   expect(appCommands(c).find((x) => x.id === "plan.show")).toMatchObject({ title: "Show plan", keys: undefined });
   run(c, "plan.show");
   expect(showPlan).toHaveBeenCalledOnce();
   expect(ids(c).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.main", "plan.move.bottom"]);
   expect(appCommands(c).find((x) => x.id === "plan.move.main")).toMatchObject({ title: "Move plan to main area" });
   run(c, "plan.move.bottom");
-  expect(c.movePlan).toHaveBeenCalledWith("bottom");
-  expect(ids(ctx({ planHome: "main", movePlan: vi.fn() })).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.side", "plan.move.bottom"]);
+  expect(c.moveKind).toHaveBeenCalledWith("plan", "bottom");
+  expect(ids(ctx({ homes: { plan: "main" }, moveKind: vi.fn() })).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.side", "plan.move.bottom"]);
+});
+
+it("GH-396 move rows per kind list the two other homes: files, graph (git only) and plan; none for changes", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.includes(".move."));
+  const homes = { plan: "side", files: "side", graph: "main" } as const;
+  const c = ctx({ homes, moveKind: vi.fn(), isGit: true });
+  expect(ids(c)).toEqual(["plan.move.main", "plan.move.bottom", "files.move.main", "files.move.bottom", "graph.move.side", "graph.move.bottom"]);
+  expect(appCommands(c).find((x) => x.id === "files.move.main")).toMatchObject({ title: "Move files to main area" });
+  expect(appCommands(c).find((x) => x.id === "graph.move.side")).toMatchObject({ title: "Move git graph to side panel" });
+  run(c, "files.move.main");
+  expect(c.moveKind).toHaveBeenCalledWith("files", "main");
+  expect(ids(c).some((i) => i.startsWith("changes."))).toBe(false);
+  expect(ids(ctx({ homes, moveKind: vi.fn() })).some((i) => i.startsWith("graph."))).toBe(false);
 });
