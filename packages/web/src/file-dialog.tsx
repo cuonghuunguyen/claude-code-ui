@@ -8,6 +8,7 @@ import { shownPrompt } from "./config-dialog.tsx";
 import { FilesPanel } from "./files-panel.tsx";
 import { trapTab } from "./focus-trap.ts";
 import { DialogClose } from "./viewer-dialog.tsx";
+import type { RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -29,6 +30,8 @@ export function FileDialog({
   onSend,
   onCopy,
   onShowChanges,
+  repos,
+  onShowGraph,
   onOpenInFiles,
 }: {
   open: boolean;
@@ -44,6 +47,8 @@ export function FileDialog({
   onSend: (mention: string) => void;
   onCopy?: (text: string, what: string) => void;
   onShowChanges?: (path: string) => void;
+  repos?: RepoList;
+  onShowGraph?: () => void;
   /** Open in editor: close the dialog and show the Files tab. */
   onOpenInFiles: () => void;
 }) {
@@ -85,6 +90,8 @@ export function FileDialog({
               onSend={onSend}
               onCopy={onCopy}
               onShowChanges={onShowChanges}
+              repos={repos}
+              onShowGraph={onShowGraph}
               onOpenInFiles={onOpenInFiles}
               showTree={showTree}
               onToggleTree={() => setShowTree((v) => !v)}

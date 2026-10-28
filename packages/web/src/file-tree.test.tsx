@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { act, createRef, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
+import type { GitRepo } from "@claude-ui/protocol";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -12,13 +14,20 @@ const listings: Record<string, ReturnType<typeof ent>[]> = {
   "/p": [ent("/p/src", true), ent("/p/README.md"), ent("/p/package.json"), ent("/p/new.ts")],
   "/p/src": [ent("/p/src/lib", true), ent("/p/src/app.ts")],
   "/p/src/lib": [ent("/p/src/lib/util.ts")],
+  "/q": [ent("/q/tools", true), ent("/q/libs", true), ent("/q/far", true), ent("/q/s.ts")],
+  "/q/tools": [ent("/q/tools/inner", true)],
+  "/q/tools/inner": [ent("/q/tools/inner/x.ts"), ent("/q/tools/inner/y.ts")],
+  "/q/libs": [ent("/q/libs/lib", true)],
+  "/q/libs/lib": [ent("/q/libs/lib/a.txt")],
 };
 const diff = { diff: { prefix: "", files: [{ status: "M", path: "src/app.ts" }, { status: "A", path: "new.ts", untracked: true }] } };
 
 function setup(props: Partial<ComponentProps<typeof FileTree>> = {}, replies: Record<string, unknown> = {}) {
-  const request = vi.fn(async (m: { type: string; path?: string }) => {
+  const request = vi.fn(async (m: { type: string; path?: string; cwd?: string }) => {
     if (m.type === "fs.list") return { entries: listings[m.path!] ?? [] };
-    if (m.type in replies) return replies[m.type];
+    const reply = replies[m.type];
+    if (typeof reply === "function") return reply(m);
+    if (m.type in replies) return reply;
     return {};
   });
   const client = { request } as unknown as ReturnType<typeof connect>;
@@ -35,7 +44,11 @@ function setup(props: Partial<ComponentProps<typeof FileTree>> = {}, replies: Re
   const key = (target: Element, k: string, init: KeyboardEventInit = {}) => act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init })));
   return { request, el, root, render, rows, names, row, key, onOpen, handle, unmount: () => act(() => root.render(null)) };
 }
-afterEach(() => void (document.body.innerHTML = ""));
+afterEach(() => {
+  document.body.innerHTML = "";
+  forgetRepoChoices();
+  localStorage.clear();
+});
 
 it("renders a flat ARIA tree: role=tree, treeitems with aria-level, aria-expanded on dirs, one tabIndex=0 row", async () => {
   const t = setup();
@@ -607,4 +620,271 @@ it("GH-394 the file dialog's own tree (no onViewer) has no Open in file dialog i
   await t.render({ onViewer: undefined });
   await ctxMenu(t.row("/p/README.md"));
   expect(menuIds()).toEqual(["open", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  await closeMenu();
+  t.unmount();
+});
+
+const wait = (ms = 350) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+const QMAIN: GitRepo = { path: "/q", rel: "", kind: "main", branch: "main" };
+const QINNER: GitRepo = { path: "/q/tools/inner", rel: "tools/inner", kind: "nested", parent: "/q", branch: "main" };
+const QLIB: GitRepo = { path: "/q/libs/lib", rel: "libs/lib", kind: "submodule", parent: "/q", branch: "a4a3b80" };
+const QFAR: GitRepo = { path: "/q/far", rel: "far", kind: "nested", parent: "/q", outsideRoots: true };
+const repos = (list: GitRepo[] = [QMAIN, QINNER, QLIB, QFAR]) => ({ list, projectKey: "proj" });
+const diffs: Record<string, unknown> = {
+  "/q": { diff: { prefix: "", files: [{ status: "M", path: "s.ts" }, { status: "A", path: "tools/inner/", untracked: true }, { status: "M", path: "libs/lib", submodule: { from: "a", to: "b" } }] } },
+  "/q/tools/inner": { diff: { prefix: "", files: [{ status: "A", path: "x.ts", untracked: true }, { status: "M", path: "y.ts" }] } },
+  "/q/libs/lib": { diff: { prefix: "", files: [] } },
+};
+const byCwd = (m: { cwd?: string }) => diffs[m.cwd!] ?? { diff: null };
+const diffCalls = (t: { request: { mock: { calls: unknown[][] } } }) => t.request.mock.calls.map(([m]) => m as { type: string; cwd: string }).filter((m) => m.type === "git.diff");
+const mark = (t: ReturnType<typeof setup>, p: string) => t.row(p).querySelector("[data-testid=git-mark]");
+const openAll = async (t: ReturnType<typeof setup>) => {
+  for (const p of ["/q/tools", "/q/tools/inner", "/q/libs"]) await act(async () => t.row(p).click());
+};
+
+it("GH-392 with a repository list: one git.diff per readable repository with cwd = its top, base head and exact; none for outsideRoots", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  expect(diffCalls(t).map((m) => m.cwd).sort()).toEqual(["/q", "/q/libs/lib", "/q/tools/inner"]);
+  expect(t.request).toHaveBeenCalledWith({ type: "git.diff", cwd: "/q/tools/inner", base: "head", exact: true });
+  t.unmount();
+});
+
+it("GH-392 at most 4 git.diff requests in flight", async () => {
+  const list: GitRepo[] = [QMAIN, ...Array.from({ length: 6 }, (_, i) => ({ path: `/q/r${i}`, rel: `r${i}`, kind: "nested" as const, parent: "/q" }))];
+  const held: (() => void)[] = [];
+  let pending = 0;
+  let max = 0;
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(list) }, {
+    "git.diff": () => {
+      pending++;
+      max = Math.max(max, pending);
+      return new Promise((res) => held.push(() => (pending--, res({ diff: null }))));
+    },
+  });
+  await t.render();
+  await wait();
+  expect(held).toHaveLength(4);
+  await act(async () => held.shift()!());
+  expect(held).toHaveLength(4);
+  while (held.length) await act(async () => held.shift()!());
+  expect(max).toBe(4);
+  expect(diffCalls(t)).toHaveLength(7);
+  t.unmount();
+});
+
+it("GH-392 a re-triggered read during the first wave never exceeds 4 git.diff in flight over both runs", async () => {
+  const list: GitRepo[] = [QMAIN, ...Array.from({ length: 9 }, (_, i) => ({ path: `/q/r${i}`, rel: `r${i}`, kind: "nested" as const, parent: "/q" }))];
+  const held: (() => void)[] = [];
+  let pending = 0;
+  let max = 0;
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(list) }, {
+    "git.diff": () => {
+      pending++;
+      max = Math.max(max, pending);
+      return new Promise((res) => held.push(() => (pending--, res({ diff: null }))));
+    },
+  });
+  await t.render();
+  await wait();
+  expect(held).toHaveLength(4);
+  await t.render({ gitStamp: "s2" });
+  await wait();
+  expect(pending).toBe(4);
+  while (held.length) await act(async () => held.shift()!());
+  await wait();
+  expect(max).toBe(4);
+  expect(pending).toBe(0);
+  t.unmount();
+});
+
+describe("GH-392 a reply that arrives after the read was replaced shows no marks", () => {
+  const held: Record<string, () => void> = {};
+  const setupHeld = (props: Partial<ComponentProps<typeof FileTree>> = {}) =>
+    setup({ cwd: "/q", gitStamp: "s", repos: repos([QMAIN]), ...props }, {
+      "git.diff": (m: { cwd: string }) => new Promise((res) => (held[m.cwd] = () => res(byCwd(m)))),
+    });
+  afterEach(() => void Object.keys(held).forEach((k) => delete held[k]));
+
+  it("after a repository list change", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    await t.render({ repos: repos([{ ...QMAIN, path: "/q", rel: "", branch: "dev" }, QLIB]) });
+    await wait();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(mark(t, "/q/s.ts")).toBeNull();
+    t.unmount();
+  });
+
+  it("after a cwd change", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    await t.render({ cwd: "/p", repos: undefined, gitStamp: "s" });
+    await wait();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(t.el.querySelector("[data-testid=git-mark]")).toBeNull();
+    t.unmount();
+  });
+
+  it("after unmount", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.unmount();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+});
+
+it("GH-392 a file in a nested repository shows its own mark; the parent's untracked folder entry gives no mark and no dot", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  await openAll(t);
+  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
+  expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
+  expect(mark(t, "/q/far")).toBeNull();
+  t.unmount();
+});
+
+it("GH-392 a clean nested repository gets no mark from the parent's untracked entry", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": (m: { cwd: string }) => (m.cwd === "/q/tools/inner" ? { diff: { prefix: "", files: [] } } : byCwd(m)) });
+  await t.render();
+  await wait();
+  expect(mark(t, "/q/tools")).toBeNull();
+  t.unmount();
+});
+
+it("GH-392 a moved submodule folder shows the letter M and no dot", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  const m = mark(t, "/q/libs");
+  expect(m!.className).toContain("rounded-full");
+  await act(async () => t.row("/q/libs").click());
+  const lib = mark(t, "/q/libs/lib")!;
+  expect(lib.textContent).toBe("M");
+  expect(lib.className).not.toContain("rounded-full");
+  expect(t.row("/q/libs/lib").textContent).toContain(", modified");
+  t.unmount();
+});
+
+it("GH-392 repository folders show the repository and submodule icons with their accessible labels and tooltips", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
+  await t.render();
+  await act(async () => t.row("/q/tools").click());
+  await act(async () => t.row("/q/libs").click());
+  const icon = (p: string) => t.row(p).querySelector<HTMLElement>("[data-testid=tree-repo-icon]");
+  expect(icon("/q/tools/inner")!.getAttribute("aria-label")).toBe("Repository inner, branch main");
+  expect(icon("/q/tools/inner")!.title).toBe("main · repository");
+  expect(icon("/q/tools/inner")!.querySelector("[data-icon=repo]")).not.toBeNull();
+  expect(icon("/q/libs/lib")!.getAttribute("aria-label")).toBe("Submodule lib, branch a4a3b80");
+  expect(icon("/q/libs/lib")!.querySelector("[data-icon=archive]")).not.toBeNull();
+  expect(icon("/q/far")!.getAttribute("aria-label")).toBe("Repository far, outside the allowed folders");
+  expect(icon("/q/tools")).toBeNull();
+  t.unmount();
+});
+
+it("GH-392 no new request without a trigger: a re-rendered identical list does not read again; reloadKey reads every repository again", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  expect(diffCalls(t)).toHaveLength(3);
+  await t.render({ repos: repos([{ ...QMAIN }, { ...QINNER }, { ...QLIB }, { ...QFAR }]) });
+  await wait();
+  expect(diffCalls(t)).toHaveLength(3);
+  await t.render({ reloadKey: 1 });
+  await wait();
+  expect(diffCalls(t)).toHaveLength(6);
+  t.unmount();
+});
+
+it("GH-392 a failed read of one repository keeps the others' marks", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": (m: { cwd: string }) => (m.cwd === "/q/libs/lib" ? Promise.reject(new Error("x")) : byCwd(m)) });
+  await t.render();
+  await wait();
+  await openAll(t);
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
+  t.unmount();
+});
+
+it("GH-392 a restarted read keeps the previous marks until its first reply", async () => {
+  let hold = false;
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos([QMAIN]) }, { "git.diff": (m: { cwd: string }) => (hold ? new Promise(() => {}) : byCwd(m)) });
+  await t.render();
+  await wait();
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  hold = true;
+  await t.render({ gitStamp: "s2" });
+  await wait();
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  t.unmount();
+});
+
+const runMenu = async (t: ReturnType<typeof setup>, path: string, id: string) => {
+  await ctxMenu(t.row(path));
+  await act(async () => menuItem(id).click());
+  await act(async () => {});
+  if (document.querySelector('[role="menu"]')) await closeMenu();
+};
+
+it("GH-392 Show changes on a repository folder sets the choice to its rel and calls onShowChanges with the folder", async () => {
+  const onShowChanges = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowChanges }, { "git.diff": byCwd });
+  await t.render();
+  await act(async () => t.row("/q/tools").click());
+  await runMenu(t, "/q/tools/inner", "repoChanges");
+  expect(getRepoChoice("proj")).toBe("tools/inner");
+  expect(onShowChanges).toHaveBeenCalledWith("/q/tools/inner");
+  t.unmount();
+});
+
+it("GH-392 Show graph on a repository folder sets the choice and calls onShowGraph", async () => {
+  const onShowGraph = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowGraph }, { "git.diff": byCwd });
+  await t.render();
+  await act(async () => t.row("/q/libs").click());
+  await runMenu(t, "/q/libs/lib", "repoGraph");
+  expect(getRepoChoice("proj")).toBe("libs/lib");
+  expect(onShowGraph).toHaveBeenCalledTimes(1);
+  t.unmount();
+});
+
+it("GH-392 Show changes on a file inside a nested repository chooses that repository, then reveals the file; on a file of the own repository chooses the own one", async () => {
+  const onShowChanges = vi.fn();
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowChanges }, { "git.diff": byCwd });
+  await t.render();
+  await wait();
+  await openAll(t);
+  await runMenu(t, "/q/tools/inner/x.ts", "changes");
+  expect(getRepoChoice("proj")).toBe("tools/inner");
+  expect(onShowChanges).toHaveBeenLastCalledWith("/q/tools/inner/x.ts");
+  await runMenu(t, "/q/s.ts", "changes");
+  expect(getRepoChoice("proj")).toBe("");
+  expect(onShowChanges).toHaveBeenLastCalledWith("/q/s.ts");
+  t.unmount();
+});
+
+it("GH-392 an outsideRoots repository folder has the icon but no repository menu items", async () => {
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(), onShowGraph: () => {} }, { "git.diff": byCwd });
+  await t.render();
+  await ctxMenu(t.row("/q/far"));
+  expect(menuIds()).not.toContain("repoChanges");
+  expect(menuIds()).not.toContain("repoGraph");
+  await closeMenu();
+  t.unmount();
 });

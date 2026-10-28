@@ -289,3 +289,17 @@ describe("GH-395 pane tabs", () => {
     expect(insertPaneTab(open, ref, cwd)).toBe(open);
   });
 });
+
+describe("GH-396 files and graph tabs", () => {
+  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
+  it("tabFromHash reads #files%3A<uuid> and #graph%3A<uuid>", () => {
+    for (const k of ["files", "graph"]) {
+      expect(tabFromHash(`#${k}%3A${U}`)).toBe(`${k}:${U}`);
+      expect(tabFromHash(tabHash(`${k}:${U}`))).toBe(`${k}:${U}`);
+    }
+  });
+  it("staleTabs keeps a files tab while its owner is known", () => {
+    expect(staleTabs([`files:${U}`, `graph:${U}`], new Set([U]))).toEqual([]);
+    expect(staleTabs([`files:${U}`], new Set(["x"]))).toEqual([`files:${U}`]);
+  });
+});

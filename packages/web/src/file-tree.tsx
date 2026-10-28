@@ -1,15 +1,17 @@
-// The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks, a filter field and keyboard navigation.
-import { Fragment, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+// The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks (each file marked by its own repository), a filter field and keyboard navigation.
+import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { fileNameError, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult } from "@claude-ui/protocol";
+import { fileNameError, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
-import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type Row } from "./file-tree-model.ts";
+import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
-import { gitRows } from "./git-changes.ts";
+import { createLimiter, gitRows } from "./git-changes.ts";
 import { isImeKey } from "./ime.ts";
-import { isWinPath, joinPath, relPath } from "./paths.ts";
+import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
+import { setRepoChoice, type RepoList } from "./repo-choice.ts";
+import { RepoIcon } from "./repo-selector.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 import { openContextMenuFromKey } from "./tab-menu.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
@@ -38,7 +40,7 @@ const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-inf
 
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
-const MOVES_FOCUS = new Set<TreeCommand>(["open", "viewer", "changes", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
+const MOVES_FOCUS = new Set<TreeCommand>(["open", "viewer", "changes", "repoChanges", "repoGraph", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
 
 const parentOf = (p: string) => {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
@@ -173,6 +175,8 @@ export function FileTree({
   onCopy,
   onViewer,
   onShowChanges,
+  repos,
+  onShowGraph,
   onMention,
   onReload,
   onMoved,
@@ -200,6 +204,10 @@ export function FileTree({
   onViewer?: (path: string) => void;
   /** Show changes (a file with a git mark). */
   onShowChanges?: (path: string) => void;
+  /** The repositories of the cwd (`git.repos`): the marks are read per repository. Unset: one `git.diff` of the cwd. */
+  repos?: RepoList;
+  /** Show graph (a repository folder; hidden when unset). */
+  onShowGraph?: () => void;
   /** Add to prompt. */
   onMention?: (path: string) => void;
   /** Refresh (the header's reload). */
@@ -291,20 +299,63 @@ export function FileTree({
     return () => ((live = false), clearTimeout(timer));
   }, [q, cwd]);
 
-  // Git marks: read while the tree is on screen in a git work tree; a failed read or a plain directory shows none.
+  // Repository folders of the listed repositories, and the key of what is read (a re-asked identical list does not read again).
+  const repoList = repos?.list ?? undefined;
+  const folders = useMemo(() => (repoList ? repoFolders(repoList, cwd) : new Map<string, GitRepo>()), [repoList, cwd]);
+  const listKey = repoList?.map((r) => `${r.path}\0${r.rel}\0${r.outsideRoots ? 1 : 0}`).join("\n");
+  const reads = useRef(new Map<string, RepoRead>());
+  const limiter = useRef<ReturnType<typeof createLimiter>>(undefined);
+  limiter.current ??= createLimiter(4);
+
+  // Git marks: read while the tree is on screen in a git work tree; a failed read or a plain directory shows none. One `git.diff` per
+  // readable listed repository (at most 4 in flight over all runs); each reply draws at once, the previous marks of a repository stay until its reply.
   useEffect(() => {
-    if (!visible || gitStamp === undefined) return void setMarks(undefined);
+    if (!visible || gitStamp === undefined) return void ((reads.current = new Map()), setMarks(undefined));
     let live = true;
-    const timer = setTimeout(
-      () =>
-        client
+    let frame = 0;
+    const timer = setTimeout(() => {
+      if (!repoList) {
+        reads.current = new Map();
+        return void client
           .request<GitDiffResult>({ type: "git.diff", cwd, base: "head" })
           .then((r) => live && setMarks(r.diff ? gitMarks(gitRows(r.diff, cwd), cwd) : undefined))
-          .catch(() => live && setMarks(undefined)),
-      300,
-    );
-    return () => ((live = false), clearTimeout(timer));
-  }, [visible, gitStamp, cwd, reloadKey, gitNudge]);
+          .catch(() => live && setMarks(undefined));
+      }
+      const targets = repoList.filter((r) => !r.outsideRoots);
+      const tops = repoList.map((r) => repoDir(cwd, r.rel));
+      const next = new Map<string, RepoRead>();
+      for (const r of targets) {
+        const prev = reads.current.get(r.path);
+        if (prev) next.set(r.path, prev);
+      }
+      reads.current = next;
+      if (!targets.length) return void setMarks(undefined);
+      const limit = limiter.current!;
+      // Replies of one frame merge once.
+      const draw = () => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (live) setMarks(repoMarks([...next.values()], tops, cwd));
+        });
+      };
+      for (const r of targets)
+        void limit(
+          () => live,
+          async () => {
+            const dir = repoDir(cwd, r.rel);
+            const rows = await client
+              .request<GitDiffResult>({ type: "git.diff", cwd: r.path, base: "head", exact: true })
+              .then((res) => (res.diff ? gitRows(res.diff, dir) : []))
+              .catch(() => []);
+            if (!live) return;
+            next.set(r.path, { dir, rows });
+            draw();
+          },
+        );
+    }, 300);
+    return () => ((live = false), clearTimeout(timer), cancelAnimationFrame(frame));
+  }, [visible, gitStamp, cwd, reloadKey, gitNudge, listKey]);
 
   const rows: Row[] = q ? (found?.query === q ? searchRows(found.paths.map((p) => joinPath(cwd, p)), cwd) : []) : visibleRows(model, cwd, editing);
   const entries = rows.flatMap((r, i) => (r.kind === "entry" ? [{ r, i }] : []));
@@ -464,7 +515,8 @@ export function FileTree({
   const targetOf = (path: string | undefined): TreeTarget => {
     const r = path === undefined ? undefined : rows.find((x) => x.kind === "entry" && x.entry.path === path);
     if (!r || r.kind !== "entry") return { kind: "root" };
-    return r.entry.isDir ? { kind: "dir", entry: r.entry, expanded: !!r.expanded } : { kind: "file", entry: r.entry, changed: !!marks?.files.get(pathKey(r.entry.path)) };
+    const repo = r.entry.isDir && repos?.list ? folders.get(pathKey(r.entry.path)) : undefined;
+    return r.entry.isDir ? { kind: "dir", entry: r.entry, expanded: !!r.expanded, ...(repo && !repo.outsideRoots && { repo }) } : { kind: "file", entry: r.entry, changed: !!marks?.files.get(pathKey(r.entry.path)) };
   };
   const captureTarget = (target: EventTarget) => {
     const path = (target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset.path;
@@ -472,6 +524,7 @@ export function FileTree({
     // Right click and long press focus the row (VS Code).
     if (path !== undefined) setFocused(path);
   };
+  const choose = (rel: string) => repos && setRepoChoice(repos.projectKey, rel);
   function run(id: TreeCommand, t: TreeTarget) {
     const path = t.kind === "root" ? cwd : t.entry.path;
     if (MOVES_FOCUS.has(id)) movedFocus.current = true;
@@ -491,8 +544,20 @@ export function FileTree({
         return onOpen(path, { pinned: true, focusEditor: true });
       case "viewer":
         return onViewer?.(path);
-      case "changes":
+      case "changes": {
+        // The file's own repository is the one Changes lists.
+        const own = repos?.list ? repoOfPath(path, repos.list, cwd) : undefined;
+        if (own) choose(own.rel);
         return onShowChanges?.(path);
+      }
+      case "repoChanges":
+        if (t.kind !== "dir" || !t.repo) return;
+        choose(t.repo.rel);
+        return onShowChanges?.(path);
+      case "repoGraph":
+        if (t.kind !== "dir" || !t.repo) return;
+        choose(t.repo.rel);
+        return onShowGraph?.();
       case "mention":
         return onMention?.(path);
       case "copyPath":
@@ -620,8 +685,11 @@ export function FileTree({
             );
           }
           const { entry } = r;
-          const mark = entry.isDir ? undefined : marks?.files.get(pathKey(entry.path));
-          const dirMark = entry.isDir ? marks?.dirs.get(pathKey(entry.path)) : undefined;
+          const mark = marks?.files.get(pathKey(entry.path));
+          // A moved submodule's letter replaces the folder's dot.
+          const dirMark = entry.isDir && !mark ? marks?.dirs.get(pathKey(entry.path)) : undefined;
+          const repo = entry.isDir ? folders.get(pathKey(entry.path)) : undefined;
+          const repoText = repo && repoIconText(repo, entry.name);
           const selected = entry.path === activePath;
           return (
             <Fragment key={entry.path}>
@@ -671,6 +739,11 @@ export function FileTree({
               ) : (
                 <span className="truncate">{entry.name}</span>
               )}
+              {repo && repoText && (
+                <span role="img" aria-label={repoText.label} title={repoText.title} data-testid="tree-repo-icon" data-kind={repo.kind} className="shrink-0">
+                  <RepoIcon kind={repo.kind} className="size-3.5 text-faint" />
+                </span>
+              )}
               {mark && (
                 <>
                   <span className={`ml-auto w-4 shrink-0 text-center font-semibold text-[11px] ${MARK_STYLE[mark].text}`} data-testid="git-mark" aria-hidden>
@@ -706,7 +779,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (

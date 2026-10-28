@@ -14,8 +14,8 @@ export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "
 export const AREA_LABEL: Record<DockArea, string> = { side: "Side panel", bottom: "Bottom panel" };
 export const HOME_LABEL: Record<Area, string> = { side: "Side panel", bottom: "Bottom panel", main: "Main area" };
 export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } };
-/** Panes that may have the main area as their home (the others never); later slices add files, graph and terminal. */
-export const MAIN_KINDS: PaneId[] = ["plan"];
+/** Panes that may have the main area as their home (Changes never; the terminal in 3/8). */
+export const MAIN_KINDS: PaneId[] = ["plan", "files", "graph"];
 export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
 export const TERMINAL_DOCKS: { value: DockArea; label: string }[] = [
   { value: "bottom", label: "Bottom" },

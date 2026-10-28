@@ -1314,3 +1314,18 @@ it("SwipeRow registers touchmove only during a gesture (GH-242)", async () => {
     rem.mockRestore();
   }
 });
+
+it("GH-396 files and graph tabs show the folder and git-graph icons and their labels in the phone switcher", async () => {
+  const F = "files:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const G = "graph:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const info = (id: string) => (id === F ? { title: "Files · web", kind: "files" as const, cwd: "/home/u/web", unread: false, transcript: false } : id === G ? { title: "Git graph · web", kind: "graph" as const, cwd: "/home/u/web", unread: false, transcript: false } : INFO[id]!);
+  const { tab, el } = await render({ tabs: ["a", F, G], info, activeId: F });
+  expect(tab(F).textContent).toContain("Files · web");
+  expect(tab(F).querySelector(".lucide-folder")).not.toBeNull();
+  expect(tab(G).querySelector(".lucide-git-graph")).not.toBeNull();
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.click());
+  const rows = swipeRows();
+  expect(rows[1]!.textContent).toContain("Files · web");
+  expect(rows[1]!.querySelector(".lucide-folder")).not.toBeNull();
+  expect(rows[2]!.querySelector(".lucide-git-graph")).not.toBeNull();
+});
