@@ -74,7 +74,7 @@ vi.mock("./client.ts", async (orig) => ({
     reconnect = opts.onOpen ?? (() => {});
     setStatus = opts.onStatus ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
-    return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
+    return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), search: async () => ({}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
 }));
 const { App } = await import("./App.tsx");
