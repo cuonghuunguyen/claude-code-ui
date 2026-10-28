@@ -107,6 +107,8 @@ export type CommandContext = {
   startGuide: () => void;
   /** Clears the key promoter's counters and turns tips on (GH-234). */
   resetKeyTips: () => void;
+  /** Ask aside (docs/spec.md "Aside"): puts `/btw ` in the shown session's prompt box; none without a session tab. */
+  askAside?: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
   openMcp?: () => void;
   /** Opens the "Slash commands" dialog of the shown project; none without a project. */
@@ -184,6 +186,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("layout.reset", "Reset layout", c.resetLayout),
     c.panels && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
+    c.askAside && cmd("aside.ask", "Ask aside", c.askAside),
     s &&
       c.models.length > 0 &&
       page(

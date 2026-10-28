@@ -1,6 +1,7 @@
 import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, nextWaiting, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
+import { asideItem } from "./aside.ts";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 
 const item = (id: string, over: Partial<SessionListItem> = {}) => ({ id, cwd: "/p", state: "idle", title: id, lastActivity: 0, archived: false, transcript: true, ...over }) as SessionListItem;
@@ -267,4 +268,14 @@ it("waitingRequests and attentionRows give the requests in the same order", () =
   expect(i.waiting.map((w) => w.part.id)).toEqual(["pb", "pa", "pd", "qc"]);
   expect(attentionRows(i).map((r) => r.id)).toEqual(i.waiting.map((w) => w.part.id));
   expect(nextWaiting(i.waiting, "pb")?.part.id).toBe("pa");
+});
+
+it("an Aside's request is listed as 'Aside: title' through its synthetic list item", () => {
+  const info = { id: "as1", state: "needs_input", model: "default", permissionMode: "default", effort: "default", permissionModes: [], cwd: "/p" } as never;
+  const a = { id: "as1", ownerId: "o", title: "why?", from: "p", minimized: false, readOnly: true };
+  const list = [item("o"), asideItem(a, info)];
+  const w = waitingRequests(list, { as1: view([perm("p1", { at: 1 })]) }, none, 5);
+  expect(w.map((x) => x.sessionId)).toEqual(["as1"]);
+  expect(list[1]!.title).toBe("Aside: why?");
+  expect(waitingCount(w)).toBe(1);
 });

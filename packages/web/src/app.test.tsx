@@ -4696,3 +4696,58 @@ describe("GH-396 Files and Git graph in the main area", () => {
     }
   });
 });
+
+describe("Aside popup (GH-465)", () => {
+  const AS = "99999999-2222-3333-4444-555555555555";
+  const asInfo = { ...session, id: AS, title: "which file?" };
+  const typeInto = async (text: string) => {
+    const box = el.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+    await act(async () => {});
+  };
+  const popup = () => el.querySelector<HTMLElement>("[data-aside-popup]");
+  beforeEach(() => {
+    sent.length = 0;
+    replies["aside.open"] = { session: asInfo, title: "which file?", from: "q1" };
+    replies["aside.close"] = {};
+    replies["aside.keep"] = {};
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === AS ? asInfo : session });
+  });
+  afterEach(() => (delete replies["aside.open"], delete replies["aside.close"], delete replies["aside.keep"], (replies["session.subscribe"] = { logEpoch: "e1", session })));
+
+  it("/btw <question> forks the shown session into a popup that subscribes from the question; nothing is sent as a prompt", async () => {
+    await typeInto("/btw which file?");
+    expect(sent.find((m) => m.type === "aside.open")).toMatchObject({ sessionId: ID, text: "which file?" });
+    expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+    expect(sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS)).toMatchObject({ from: "q1" });
+    expect(popup()?.getAttribute("aria-label")).toBe("Aside: which file?");
+  });
+
+  it("Close sends aside.close and removes the popup", async () => {
+    await typeInto("/btw which file?");
+    await act(async () => void el.querySelector<HTMLElement>("[aria-label='Close aside']")!.click());
+    expect(sent.some((m) => m.type === "aside.close")).toBe(true);
+    expect(popup()).toBeNull();
+  });
+
+  it("Keep as session sends aside.keep, removes the popup and opens the session as a tab", async () => {
+    await typeInto("/btw which file?");
+    await act(async () => void [...el.querySelectorAll<HTMLElement>("[data-aside-popup] button")].find((b) => b.textContent === "Keep as session")!.click());
+    await act(async () => {});
+    expect(sent.some((m) => m.type === "aside.keep")).toBe(true);
+    expect(popup()).toBeNull();
+    expect(location.hash).toBe(`#${AS}`);
+  });
+
+  it("the popup is hidden while another tab is shown and is back with its owner", async () => {
+    await typeInto("/btw which file?");
+    await press({ key: "s", code: "KeyS", ctrlKey: true, shiftKey: true });
+    expect(popup()).toBeNull();
+    await press({ key: "1", code: "Digit1", altKey: true });
+    expect(popup()).not.toBeNull();
+  });
+});

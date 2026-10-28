@@ -41,7 +41,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, type SettingsResult } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,7 +61,7 @@ import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewL
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
-import { activeCommand, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
+import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
@@ -110,6 +110,9 @@ import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { AsidePopup } from "./aside-popup.tsx";
+import { isClearCommand } from "./clear.ts";
+import { asideItem, cascade, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
 import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
@@ -371,6 +374,9 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  /** Open Aside popups (docs/spec.md "Aside"), the top one last; `asideFocused`: the one Esc applies to. */
+  const [asides, setAsides] = useState<AsideState[]>([]);
+  const [asideFocused, setAsideFocused] = useState<string>();
   /** React key of a session tab: a /clear moves it to the session the tab follows to, so its prompt box (text, images, focus) stays mounted. */
   const [tabKeys, setTabKeys] = useState<Record<string, string>>({});
   /** A session a tab followed to after /clear, until its subscribe reply: the session it replaced. */
@@ -619,14 +625,15 @@ export function App() {
   // A session that is not live in the daemon is rebuilt from its transcript and resumes with the same ID on the next prompt.
   /** `addProject`: an explicit open (link, notification, click); a reconnect resubscribe must not re-add a project the user removed. */
   /** `fresh`: a new snapshot (last page) whatever the view holds: a cursor or rewind the view cannot follow. `background`: follow only (no hold). */
-  async function subscribe(sessionId: string, addProject = false, fresh = false, background = false) {
+  /** `startAt`: the part to start the snapshot at when the view has none (an Aside: its own question). */
+  async function subscribe(sessionId: string, addProject = false, fresh = false, background = false, startAt?: string) {
     const view = viewsRef.current[sessionId];
     if (view) resubscribing.current.add(sessionId);
     // After a daemon restart the snapshot starts at the oldest turn this view holds (transcript uuids are stable), so the scroll position survives.
     const from = fresh ? undefined : view?.order.find((id) => {
       const p = view.parts.get(id);
       return p?.type === "user_text" && !p.parentId;
-    });
+    }) ?? startAt;
     try {
       const r = await client.current!.request<SubscribeResult>({
         type: "session.subscribe",
@@ -793,6 +800,8 @@ export function App() {
 
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
   function forget(sessionId: string, deleted = false) {
+    // An Aside deleted elsewhere (another tab closed it): its popup goes.
+    setAsides((a) => (a.some((x) => x.id === sessionId) ? a.filter((x) => x.id !== sessionId) : a));
     drop(sessionId, false);
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
@@ -810,6 +819,44 @@ export function App() {
       history.replaceState(null, "", location.pathname + location.search);
       if (!deleted) setError("That session no longer exists in the daemon.");
     }
+  }
+
+  /** /btw: the daemon forks `ownerId` into an Aside and sends the question there; the popup shows its timeline from that question. */
+  async function openAside(ownerId: string, question: string) {
+    if (statusRef.current !== "connected") throw new Error(`the daemon is ${statusRef.current}`);
+    const r = await client.current!.request<AsideOpenResult>({ type: "aside.open", sessionId: ownerId, text: question });
+    const id = r.session.id;
+    setInfos((i) => ({ ...i, [id]: r.session }));
+    setTitles((t) => ({ ...t, [id]: cleanTitle(r.title) }));
+    setAsides((a) => [...a, { id, ownerId, title: r.title, from: r.from, minimized: false, readOnly: true }]);
+    setAsideFocused(id);
+    void subscribe(id, false, false, false, r.from);
+  }
+  function closeAside(id: string) {
+    setAsides((a) => a.filter((x) => x.id !== id));
+    setAsideFocused((f) => (f === id ? undefined : f));
+    drop(id, true);
+    client.current?.request({ type: "aside.close", sessionId: id }).catch((e) => setError((e as Error).message));
+  }
+  /** Keep as session: the popup becomes a tab; the view and subscription stay, `loadOlder` brings the copied history on scroll up. */
+  async function keepAside(id: string) {
+    try {
+      await client.current!.request({ type: "aside.keep", sessionId: id });
+    } catch (e) {
+      return setError((e as Error).message);
+    }
+    setAsides((a) => a.filter((x) => x.id !== id));
+    setAsideFocused((f) => (f === id ? undefined : f));
+    open(id);
+    void refreshList();
+  }
+  /** Brings an Aside popup forward (Focus "open"): its owner tab shows, the popup is restored and on top. */
+  function showAside(id: string) {
+    const a = asides.find((x) => x.id === id);
+    if (!a) return;
+    setAsides((l) => raise(setMinimized(l, id, false), id));
+    setAsideFocused(id);
+    open(a.ownerId);
   }
 
   /** Subscribes the owner of a pane tab when no view exists: in the background (no CLI hold) unless a session tab of it is open. Once per owner while requested. */
@@ -1268,13 +1315,14 @@ export function App() {
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.
+  const focusList = useMemo(() => (asides.length ? [...list, ...asides.flatMap((a) => (infos[a.id] ? [asideItem(a, infos[a.id]!)] : []))] : list), [list, asides, infos]);
   const waiting = useMemo(() => {
-    const w = waitingRequests(list, views, firstSeen.current, Date.now());
+    const w = waitingRequests(focusList, views, firstSeen.current, Date.now());
     for (const x of w) if (!firstSeen.current.has(x.part.id)) firstSeen.current.set(x.part.id, x.since);
     const ids = new Set(w.map((x) => x.part.id));
     for (const id of firstSeen.current.keys()) if (!ids.has(id)) firstSeen.current.delete(id);
     return w;
-  }, [list, views]);
+  }, [focusList, views]);
   const waitingN = waitingCount(waiting);
   /** A permission request or question of the shown session, or a file opened from search, needs the session view or side panel: restore. */
   const needKey = waiting.filter((x) => visibleIds.includes(x.sessionId)).map((x) => x.part.id).join();
@@ -1699,6 +1747,81 @@ export function App() {
     refocus.current = undefined;
     requestAnimationFrame(() => shownPrompt()?.focus());
   }, [shown?.id]);
+  /** A session tab's pane: the main area's tabs and the Aside popups render it the same way; `o` overrides props (an Aside's). */
+  const renderTab = (id: string, s: SessionInfo, v: SessionView, pend: Pending[] | undefined, o: Partial<ComponentProps<typeof SessionPane>> = {}) => (
+                      <SessionTab
+                        // Outside a split every pane is "active": a tab switch re-renders no pane (GH-51).
+                        scrollKey={scrollKeys[id] ?? 0}
+                        insert={id === activeId ? insert : undefined}
+                        onInserted={() => setInsert(undefined)}
+                        rewindTo={id === activeId ? rewindTo : undefined}
+                        revealHit={id === revealHit?.sessionId ? revealHit : undefined}
+                        onRevealShown={() => setRevealHit(undefined)}
+                        run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
+                        onOpenRun={(r) => openRun(s.id, r)}
+                        links={linksOf(id)}
+                        onOpenSession={(sid) => open(sid)}
+                        onLoadOlder={(opts) => loadOlder(s.id, opts)}
+                        loadingOlder={!!olderLoading[s.id]}
+                        onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
+                        onRewindShown={() => setRewindTo(undefined)}
+                        session={s}
+                        coordinator={isCoordinator(id)}
+                        place={worktreeName(s.cwd, worktrees)}
+                        view={v}
+                        pending={pend}
+                        models={models}
+                        onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
+                        onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
+                        onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
+                        onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
+                        onPrompt={(text, images) => {
+                          // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
+                          if (!v.externalTurn && clearing(v, pend)) {
+                            if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
+                            const key = pendingKey();
+                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
+                            (clearQueue.current[s.id] ??= []).push({ key, text, images });
+                            return Promise.resolve();
+                          }
+                          return sendPrompt(s.id, text, images);
+                        }}
+                        onBash={(command) =>
+                          status === "connected"
+                            ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
+                            : Promise.reject(new Error(`the daemon is ${status}`))
+                        }
+                        onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
+                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[]; bash?: boolean }>({ type: "session.dequeue", sessionId: s.id, itemId })}
+                        onSendQueued={(itemId) => queueRequest({ type: "session.sendQueued", sessionId: s.id, itemId })}
+                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
+                        onInterrupt={() =>
+                          client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
+                        }
+                        onRewindPreview={(userMessageId) =>
+                          client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: s.id, userMessageId })
+                        }
+                        onRewind={(userMessageId, mode) =>
+                          client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
+                        }
+                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
+                        onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
+                        onRespond={respond}
+                        onSearch={search(s.cwd)}
+                        onDialog={openDialog}
+                        onAside={(q) => openAside(s.id, q)}
+                        signalOnly={signalOnly}
+                        onAnswer={answer}
+                        connected={status === "connected"}
+                        onGitStatus={() =>
+                          status === "connected"
+                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => (noteRefs(s.cwd, r.status?.refs), r.status))
+                            : Promise.reject(new Error(`the daemon is ${status}`))
+                        }
+                      {...o}
+                      />
+  );
+
   const draftShown = activeId === NEW_TAB && tabs.includes(NEW_TAB);
   // The project the config dialogs act on: the shown session's cwd, or the new-session tab's project chip.
   // A worktree row's New session starts in that worktree (inside the roots), not only in an added project.
@@ -2182,6 +2305,7 @@ export function App() {
   const reopen = popClosed(closedTabs, existsTab, tabs).tab;
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
+    askAside: shown && !paneRef && !draftShown ? () => setInsert("/btw ") : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs,
     activeId,
@@ -2809,76 +2933,7 @@ export function App() {
                           onFocusCapture: () => focusSplit(id),
                         })}
                       >
-                      <SessionTab
-                        // Outside a split every pane is "active": a tab switch re-renders no pane (GH-51).
-                        active={splitShown ? id === activeId : true}
-                        scrollKey={scrollKeys[id] ?? 0}
-                        insert={id === activeId ? insert : undefined}
-                        onInserted={() => setInsert(undefined)}
-                        rewindTo={id === activeId ? rewindTo : undefined}
-                        revealHit={id === revealHit?.sessionId ? revealHit : undefined}
-                        onRevealShown={() => setRevealHit(undefined)}
-                        run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
-                        onOpenRun={(r) => openRun(s.id, r)}
-                        links={linksOf(id)}
-                        onOpenSession={(sid) => open(sid)}
-                        onLoadOlder={(opts) => loadOlder(s.id, opts)}
-                        loadingOlder={!!olderLoading[s.id]}
-                        onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
-                        onRewindShown={() => setRewindTo(undefined)}
-                        session={s}
-                        coordinator={isCoordinator(id)}
-                        place={worktreeName(s.cwd, worktrees)}
-                        view={v}
-                        pending={pend}
-                        models={models}
-                        onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
-                        onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
-                        onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
-                        onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
-                        onPrompt={(text, images) => {
-                          // While the /clear runs the message waits: its bubble shows now, it is sent once the tab follows (or the /clear ends without).
-                          if (!v.externalTurn && clearing(v, pend)) {
-                            if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
-                            const key = pendingKey();
-                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
-                            (clearQueue.current[s.id] ??= []).push({ key, text, images });
-                            return Promise.resolve();
-                          }
-                          return sendPrompt(s.id, text, images);
-                        }}
-                        onBash={(command) =>
-                          status === "connected"
-                            ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
-                            : Promise.reject(new Error(`the daemon is ${status}`))
-                        }
-                        onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
-                        onDequeue={(itemId) => queueRequest<{ text: string; images: string[]; bash?: boolean }>({ type: "session.dequeue", sessionId: s.id, itemId })}
-                        onSendQueued={(itemId) => queueRequest({ type: "session.sendQueued", sessionId: s.id, itemId })}
-                        onCancelContinue={() => client.current!.request({ type: "session.cancelContinue", sessionId: s.id }).catch((e) => setError((e as Error).message))}
-                        onInterrupt={() =>
-                          client.current!.request({ type: "session.interrupt", sessionId: s.id }).catch((e) => setError((e as Error).message))
-                        }
-                        onRewindPreview={(userMessageId) =>
-                          client.current!.request<RewindPreview>({ type: "session.rewindPreview", sessionId: s.id, userMessageId })
-                        }
-                        onRewind={(userMessageId, mode) =>
-                          client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
-                        }
-                        onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
-                        onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
-                        onRespond={respond}
-                        onSearch={search(s.cwd)}
-                        onDialog={openDialog}
-                        signalOnly={signalOnly}
-                        onAnswer={answer}
-                        connected={status === "connected"}
-                        onGitStatus={() =>
-                          status === "connected"
-                            ? client.current!.request<GitStatusResult>({ type: "git.status", cwd: s.cwd }).then((r) => (noteRefs(s.cwd, r.status?.refs), r.status))
-                            : Promise.reject(new Error(`the daemon is ${status}`))
-                        }
-                      />
+                      {renderTab(id, s, v, pend, { active: splitShown ? id === activeId : true })}
                       </div>
                     </Activity>
                   );
@@ -2907,6 +2962,51 @@ export function App() {
                 )}
                 {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>
+              {/* Aside popups (docs/spec.md "Aside"): hidden with their owner's tab, still running and subscribed. */}
+              {asides.map((a, i) => {
+                if (!visibleIds.includes(a.ownerId)) return null;
+                const s = sessionOf(a.id);
+                const v = views[a.id];
+                const rect = a.rect ?? { ...cascade(i, { w: window.innerWidth }), w: 480, h: 420 };
+                const notHere = () => Promise.reject(new Error("Not available inside an aside"));
+                return (
+                  <AsidePopup
+                    key={a.id}
+                    id={a.id}
+                    index={asides.filter((x, j) => j < i && x.minimized).length}
+                    title={a.title}
+                    readOnly={a.readOnly}
+                    minimized={a.minimized}
+                    rect={rect}
+                    onRect={(r) => setAsides((l) => l.map((x) => (x.id === a.id ? { ...x, rect: clampRect(r, { w: window.innerWidth, h: window.innerHeight }) } : x)))}
+                    onMinimize={() => (setAsides((l) => setMinimized(l, a.id, true)), setAsideFocused((f) => (f === a.id ? undefined : f)))}
+                    onRestore={() => (setAsides((l) => raise(setMinimized(l, a.id, false), a.id)), setAsideFocused(a.id))}
+                    onClose={() => closeAside(a.id)}
+                    onKeep={() => void keepAside(a.id)}
+                    onFocus={() => (setAsideFocused(a.id), setAsides((l) => raise(l, a.id)))}
+                  >
+                    {s && v ? (
+                      renderTab(a.id, s, v, optimistic[a.id], {
+                        active: asideFocused === a.id,
+                        aside: true,
+                        scrollKey: 0,
+                        insert: undefined,
+                        rewindTo: undefined,
+                        revealHit: undefined,
+                        run: undefined,
+                        place: undefined,
+                        links: NO_LINKS,
+                        onLoadOlder: () => Promise.resolve(),
+                        onAside: notHere,
+                        onMode: (mode) => (setAsides((l) => l.map((x) => (x.id === a.id ? { ...x, readOnly: false } : x))), configure({ type: "session.setPermissionMode", sessionId: a.id, mode })),
+                        onPrompt: (text, images) => (isClearCommand(text) ? notHere() : sendPrompt(a.id, text, images)),
+                      })
+                    ) : (
+                      <p className="m-auto text-muted-foreground text-sm">Loading…</p>
+                    )}
+                  </AsidePopup>
+                );
+              })}
               {/* Mounted while the tab is open: hidden, it keeps its draft; replaced by the created session, it starts empty next time. */}
               {tabs.includes(NEW_TAB) && (
                 <NewSessionTab
@@ -2950,7 +3050,7 @@ export function App() {
               )}
               {activeId === FOCUS_TAB && (
                 <FocusPage
-                  list={list}
+                  list={focusList}
                   views={views}
                   worktrees={worktrees}
                   waiting={waiting}
@@ -2958,7 +3058,7 @@ export function App() {
                   onSelect={setFocusSel}
                   onRespond={respond}
                   onAnswer={answer}
-                  onOpenSession={(id) => open(id)}
+                  onOpenSession={(id) => (asides.some((a) => a.id === id) ? showAside(id) : open(id))}
                   unread={unread}
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
@@ -3803,6 +3903,8 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  onAside,
+  aside = false,
   signalOnly = false,
 }: {
   /** Split view: only the active split stops its turn on Esc. */
@@ -3870,6 +3972,10 @@ export function SessionPane({
   onGitStatus?: () => Promise<GitStatus | null>;
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
+  /** /btw typed in the prompt box (docs/spec.md "Aside"): opens the Aside; rejects with the reason it did not. */
+  onAside?: (question: string) => Promise<unknown>;
+  /** This pane is an Aside popup's: Esc stops its turn only from inside the popup; an owner pane's only from outside. */
+  aside?: boolean;
 }) {
   const phone = usePhone();
   const current = runOf(view, run);
@@ -3898,7 +4004,9 @@ export function SessionPane({
   const onEscape = useEffectEvent(() => (current ? stopRun(current.id) : onInterrupt()));
   useEffect(() => {
     if (!escStops || !active) return;
-    const onEsc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !isImeKey(e) && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onEscape();
+    // An Aside popup's pane answers Esc from inside the popup, an owner pane from outside it: one Esc stops one turn.
+    const onEsc = (e: globalThis.KeyboardEvent) =>
+      e.key === "Escape" && !isImeKey(e) && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && !!(e.target as Element | null)?.closest?.("[data-aside-popup]") === aside && onEscape();
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
   }, [escStops, active]);
@@ -4152,6 +4260,7 @@ export function SessionPane({
               cwd={session.cwd}
               commands={view.commands}
               onDialog={onDialog}
+              onAside={onAside}
               models={models}
               model={view.model ?? session.model}
               onModel={onModel}
@@ -4241,12 +4350,15 @@ function PromptBox({
   queueing,
   inputRef,
   onDialog,
+  onAside,
 }: {
   /** Changing it clears the send error. */
   cwd?: string;
   commands: SlashCommand[];
   /** Given: the dialog commands (`/mcp`, `/skills`, `/plugins`, `/resume`) are in the picker and open their dialog instead of being sent. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
+  /** /btw typed in the prompt box (docs/spec.md "Aside"): opens the Aside; rejects with the reason it did not. */
+  onAside?: (question: string) => Promise<unknown>;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -4322,7 +4434,7 @@ function PromptBox({
   const composing = useRef(false);
   const token = dismissed || bash ? undefined : activeCommand(text, caret);
   // Dialog commands are actions, not text: only when the slash is the whole prompt.
-  const matches = token && matchCommands(onDialog && token.lead ? withDialogCommands(commands) : commands, text, caret);
+  const matches = token && matchCommands((onDialog || onAside) && token.lead ? withDialogCommands(commands) : commands, text, caret);
   const mention = dismissed || bash || matches ? undefined : activeMention(text, caret);
   // Only results for the query being typed, so Enter never picks a stale path.
   const paths = mention && found?.query === mention.query ? found.paths : [];
@@ -4447,6 +4559,15 @@ function PromptBox({
       return;
     }
     if (!t.trim() && !images.length) return;
+    // /btw works while the turn runs: before `blocked` and the queue. Images stay in the box (the Aside takes text only).
+    // shortcut: /btw sends text only; pass images if asked.
+    const aside = onAside && asideOf(t);
+    if (aside !== undefined && onAside) {
+      if (!aside) return setSendError("Type a question after /btw");
+      setSendError(undefined);
+      onAside(aside).catch((e: Error) => (restore(t), setSendError(`Aside not opened: ${e.message}`)));
+      return setPastes({}), edit("");
+    }
     const dialog = onDialog && dialogOf(t, commands);
     if (dialog && (!images.length || dialog === "resume")) {
       const arg = dialogArg(t);

@@ -1459,3 +1459,54 @@ it("a soft keyboard that types ! into a box holding a token does not open shell 
   expect(d.box.value).toBe(`!${tok}`);
   expect(d.box.placeholder).not.toMatch(/shell/i);
 });
+
+it("/btw <question> opens an Aside instead of sending, also while the turn runs", async () => {
+  const onAside = vi.fn(async () => {});
+  const onPrompt = vi.fn(async () => {});
+  const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "session_state", state: "running" } as never });
+  const d = await render({ onAside, onPrompt, session: { id: "s1", cwd: "/tmp", state: "running", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"] } }, running);
+  await type(d.box, "/btw which file?");
+  await key(d.box, { key: "Enter" });
+  expect(onAside).toHaveBeenCalledWith("which file?");
+  expect(onPrompt).not.toHaveBeenCalled();
+  expect(d.box.value).toBe("");
+});
+
+it("/btw alone asks for a question and opens nothing", async () => {
+  const onAside = vi.fn(async () => {});
+  const d = await render({ onAside });
+  await type(d.box, "/btw");
+  await key(d.box, { key: "Enter" });
+  expect(onAside).not.toHaveBeenCalled();
+  expect(d.el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("Type a question after /btw");
+});
+
+it("a rejected Aside puts the text back and shows the reason", async () => {
+  const onAside = vi.fn(() => Promise.reject(new Error("An aside needs a reply in this session first")));
+  const d = await render({ onAside });
+  await type(d.box, "/btw hi");
+  await key(d.box, { key: "Enter" });
+  expect(d.box.value).toBe("/btw hi");
+  expect(d.el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("needs a reply");
+});
+
+it("Esc stops the turn of an Aside pane only from inside its popup, and of an owner pane only from outside", async () => {
+  const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "session_state", state: "running" } as never });
+  const run = { id: "s1", cwd: "/tmp", state: "running" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default" as const] };
+  const esc = (t: EventTarget) => act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
+  const inAside = vi.fn();
+  const a = await render({ aside: true, onInterrupt: inAside, session: run }, running);
+  a.el.setAttribute("data-aside-popup", "");
+  await esc(document.body);
+  expect(inAside).not.toHaveBeenCalled();
+  await esc(a.el);
+  expect(inAside).toHaveBeenCalledOnce();
+  unmount();
+  const owner = vi.fn();
+  const o = await render({ onInterrupt: owner, session: run }, running);
+  o.el.setAttribute("data-aside-popup", "");
+  await esc(o.el);
+  expect(owner).not.toHaveBeenCalled();
+  await esc(document.body);
+  expect(owner).toHaveBeenCalledOnce();
+});
