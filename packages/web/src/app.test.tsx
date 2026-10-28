@@ -1605,7 +1605,7 @@ describe("worktrees", () => {
 
   it("Remove worktree asks with the counts and removes on confirm; Esc returns focus to the button", async () => {
     const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
-    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 2, commits: 1, branch: "worktree-x" } });
+    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 2, commits: 1, ahead: 1, safety: "has_work", branch: "worktree-x" }, "worktree.remove": { ignoredDeleted: 3 } });
     const from = sent.length;
     const trash = () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!;
     try {
@@ -1617,7 +1617,9 @@ describe("worktrees", () => {
       expect(document.activeElement).toBe(trash());
       await act(async () => trash().click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-worktree-confirm"]')!.click());
-      expect(sent.slice(from).filter((m) => m.type === "worktree.remove")).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed }]);
+      // Confirm sends the counts the dialog showed: the daemon checks again and refuses when there is more work now.
+      expect(sent.slice(from).filter((m) => m.type === "worktree.remove")).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed, expectSafe: false, expect: { uncommitted: 2, ahead: 1 } }]);
+      expect(document.body.textContent).toContain("3 ignored files deleted");
     } finally {
       restore();
     }

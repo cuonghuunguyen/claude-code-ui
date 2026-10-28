@@ -39,6 +39,7 @@ import type {
   TerminalListResult,
   Worktree,
   WorktreeCreateResult,
+  WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type SearchHit, type SettingsResult } from "@claude-ui/protocol";
@@ -1490,10 +1491,13 @@ export function App() {
     }
   }
   /** Removes in the background: the row shows Removing… until the list refresh drops it; a failure restores it and says why. */
-  async function removeWorktree(w: { project: string; path: string; branch?: string }) {
+  async function removeWorktree(w: { project: string; path: string; branch?: string; status?: WorktreeStatusResult }) {
     markRemoving(w.path, true);
     try {
-      await client.current!.request({ type: "worktree.remove", cwd: w.project, path: w.path });
+      // The counts the user saw: the daemon checks again and refuses (`stale`) when there is more work now.
+      const st = w.status;
+      const r = await client.current!.request<WorktreeRemoveResult>({ type: "worktree.remove", cwd: w.project, path: w.path, ...(st && { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } }) });
+      if (r?.ignoredDeleted) setToast(`Removed ${w.branch ?? lastSegment(w.path)}: ${r.ignoredDeleted} ignored ${r.ignoredDeleted === 1 ? "file" : "files"} deleted`);
       if (draftCwd === w.path) setDraftCwd(w.project);
       await refreshList();
     } catch (e) {

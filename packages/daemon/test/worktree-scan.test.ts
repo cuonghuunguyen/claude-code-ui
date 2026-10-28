@@ -1,6 +1,6 @@
 // Clean up scan (GH-461): the preview status in a few git processes, repo-wide facts once, squash/rebase merged worktrees as Safe, full check at removal.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -206,6 +206,14 @@ describe("merged another way", () => {
 });
 
 describe("removal", () => {
+  it("an old tab's expect.ignored 0 is refused with a message that names the counts and the reload", async () => {
+    const { main } = repo();
+    const path = wt(main, "oldtab");
+    writeFileSync(join(path, "a.log"), "1");
+    await expect(removeWorktree(main, path, allowed, { expect: { uncommitted: 0, ahead: 0, ignored: 0 } })).rejects.toThrow(/1 ignored files \(counted 0 ignored files; reload the page/);
+    expect(existsSync(path)).toBe(true);
+  });
+
   it("commits that cancel out (add, then delete) are not merged: has_work, no mergedInto, a Created branch is not Safe, deleteBranch keeps a kept one", async () => {
     const { main } = repo();
     const created = wt(main, "net0", { created: true });

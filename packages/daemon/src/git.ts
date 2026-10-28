@@ -957,7 +957,7 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
       const st = (last = await statusOf(await repoFacts(main, true), w, path, allowed, true));
       const e = o.expect;
       if ((o.expectSafe && st.safety !== "safe") || st.blocked || (e && (st.uncommitted > e.uncommitted || st.ahead > e.ahead || (e.ignored !== undefined && (st.ignored ?? 0) > e.ignored))))
-        throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}`);
+        throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}${e?.ignored !== undefined && (st.ignored ?? 0) > e.ignored ? ` (counted ${e.ignored} ignored files; reload the page if this tab is from an older version)` : ""}`);
     };
     await verify();
     await o.beforeRemove?.();
