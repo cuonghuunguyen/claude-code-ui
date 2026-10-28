@@ -93,7 +93,7 @@ import { useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
-import { StatusBar, totals, type Totals } from "./status-bar.tsx";
+import { foregroundShells, StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
 import { useSmoothText } from "./smooth.ts";
 import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscription } from "./push.ts";
@@ -102,7 +102,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -2180,6 +2180,7 @@ export function App() {
     else focusShownPrompt(id);
   };
   const reopen = popClosed(closedTabs, existsTab, tabs).tab;
+  const movingShells = useRef(new Set<string>());
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
@@ -2202,6 +2203,18 @@ export function App() {
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
+    runInBackground: shown && !paneRef && !draftShown && view && foregroundShells(view).length
+      ? () => {
+          // A second press while a move is pending would only get unknown_shell.
+          for (const c of foregroundShells(view)) {
+            if (movingShells.current.has(c.toolUseId)) continue;
+            movingShells.current.add(c.toolUseId);
+            client.current!.request({ type: "session.backgroundShell", sessionId: shown.id, toolUseId: c.toolUseId })
+              .catch((e) => setError((e as Error).message))
+              .finally(() => movingShells.current.delete(c.toolUseId));
+          }
+        }
+      : undefined,
     models,
     canQuickOpen,
     newSession: () => newSession(),
@@ -2825,6 +2838,7 @@ export function App() {
                         onLoadOlder={(opts) => loadOlder(s.id, opts)}
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
+                        onBackgroundShell={(toolUseId) => client.current!.request({ type: "session.backgroundShell", sessionId: s.id, toolUseId })}
                         onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         coordinator={isCoordinator(id)}
@@ -3770,6 +3784,7 @@ export function SessionPane({
   links = NO_LINKS,
   onOpenSession = () => {},
   onStopRun = async () => {},
+  onBackgroundShell,
   insert,
   onInserted,
   rewindTo,
@@ -3819,6 +3834,8 @@ export function SessionPane({
   onOpenSession?: (id: string) => void;
   /** Stop agent: stops that subagent run only; rejects with the daemon's error. */
   onStopRun?: (id: string) => Promise<unknown>;
+  /** Run in background of a Bash card (GH-440); rejects with the daemon's error. Undefined: no button. */
+  onBackgroundShell?: (toolUseId: string) => Promise<unknown>;
   insert?: string;
   onInserted: () => void;
   /** Opens the rewind panel of this user message (palette Rewind). */
@@ -3892,6 +3909,10 @@ export function SessionPane({
     onStopRun(id).catch((e: Error) => setStop({ run: id, error: e.message }));
   };
   const stopOf = current && stop?.run === current.id ? stop : undefined;
+  // Stable for the cards: they do not re-render on every App render.
+  const backgroundShellRef = useRef(onBackgroundShell);
+  backgroundShellRef.current = onBackgroundShell;
+  const backgroundShellStable = useCallback((id: string) => backgroundShellRef.current!(id), []);
   // Esc stops the turn, like Claude Code; in a subagent view it stops only that run, like Stop agent. The command picker handles
   // its own Esc first (preventDefault), and an open modal dialog owns Esc.
   const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
@@ -3965,6 +3986,7 @@ export function SessionPane({
     <ArtifactConnectedContext value={connected}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
+    <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
     <AgentLinksContext value={agentCtx}>
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
@@ -4187,6 +4209,7 @@ export function SessionPane({
         <StatusBar view={view} git={onGitStatus} />
       </div>
     </AgentLinksContext>
+    </BackgroundShellContext>
     </OpenRunContext>
     </CwdContext>
     </ArtifactConnectedContext>

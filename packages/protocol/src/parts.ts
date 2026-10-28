@@ -64,8 +64,11 @@ export type Part = { parentId?: string } & (
   /**
    * `id` = `toolUseId`; re-emitted on every status change. `editedByUser`: `input` is the user's edit of Claude's input, accepted in the permission panel.
    * `coordinator`: a coordinator settled this call's permission request (Orchestration); `reason` is its text.
+   * `shell` (Bash calls only; GH-440): "foreground" = the CLI registered the call's task in the foreground (task_started
+   * is_backgrounded false), so Run in background applies while it runs; "background" = it runs as a background shell
+   * (run_in_background, or moved there: task_updated is_backgrounded, a transcript's "manually backgrounded" result).
    */
-  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string } }
+  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; shell?: "foreground" | "background" }
   /**
    * `id` = `<toolUseId>:result`. `original`: the file before this call, on the first Edit/Write of a path in a live
    * query (null = the call created it); absent in a restored transcript, which does not keep it.
@@ -191,3 +194,7 @@ export function isAttention(prev: SessionState, part: { state: SessionState; wor
   const busy = prev === "running" || prev === "needs_input";
   return part.state === "needs_input" || (busy && (part.state === "error" || (part.state === "idle" && !part.working)));
 }
+
+/** A Bash call that runs or ran as a background shell: `run_in_background`, or moved to the background (GH-440). Any status. */
+export const isBackgroundShell = (p: Part): p is Extract<Part, { type: "tool_call" }> =>
+  p.type === "tool_call" && p.tool === "Bash" && (p.shell === "background" || (p.input as { run_in_background?: unknown } | null)?.run_in_background === true);
