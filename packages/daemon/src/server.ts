@@ -2116,7 +2116,7 @@ export function createDaemon(opts: {
           try {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
             if (msg.type === "worktree.status") {
-              const check = () => worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              const check = () => worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p), { cached: msg.scan !== undefined });
               let st: Awaited<ReturnType<typeof worktreeStatus>>;
               if (msg.scan === undefined) st = await check();
               else {

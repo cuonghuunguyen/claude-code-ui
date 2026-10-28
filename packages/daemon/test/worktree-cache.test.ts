@@ -32,7 +32,7 @@ const spy = () => {
   setGitRunner((o) => (calls.push(o), threadRunner(o)));
   return calls;
 };
-const status = (main: string, p: string) => worktreeStatus(main, p, allowed);
+const status = (main: string, p: string) => worktreeStatus(main, p, allowed, { cached: true });
 
 describe("worktree status cache", () => {
   it("an unchanged worktree is served from the cache with no git process", async () => {

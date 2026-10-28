@@ -1104,13 +1104,14 @@ async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: str
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
-export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
+/** `cached`: a valid entry of the preview cache may answer (Clean up scans and warming only). The default is a fresh read: the Remove dialog must see the files as they are now. */
+export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean, o: { cached?: boolean } = {}): Promise<WorktreeStatusResult> {
   const gen = marks;
   const f = await repoFacts(cwd);
   const w = linked(f.list, path);
   const fp = await fingerprint(w.path);
   const hit = previews.get(w.path);
-  if (hit && !hit.stale && same(hit.fp, fp)) return hit.st;
+  if (o.cached && hit && !hit.stale && same(hit.fp, fp)) return hit.st;
   const st = await statusOf(f, w, path, allowed, false);
   // `git status` refreshes the index file itself: store the fingerprint after the read. Refs or the reflog moving during the read leave the entry stale.
   // shortcut: an index change during the read is not seen, the next index change or mark fixes it.
@@ -1124,7 +1125,8 @@ export async function worktreeStatus(cwd: string, path: string, allowed: (p: str
  * Last preview status of each worktree (GH-463). A valid entry is served without git; recomputed lazily on the next request, never by a sweep.
  * Coverage: the daemon marks entries stale at a session turn end and after its own git writes (`markWorktreeStale`, `markRepoStale`);
  * the fingerprint covers terminal tabs, the IDE and external git that changed refs, HEAD, the index or the reflog.
- * Known gap: a new untracked file changes none of these. The UI shows the age, and removal re-checks.
+ * Known gap: a new untracked file and an edit of a tracked file change none of these. The UI shows the age; only Clean up scans and warming read the cache
+ * (`worktreeStatus` `cached`), the Remove dialog reads fresh, and every removal with `expect`/`expectSafe` re-checks.
  */
 type Cached = { fp: Fp; common: string; st: WorktreeStatusResult; stale: boolean };
 const previews = lru<Cached>(256);

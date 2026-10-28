@@ -179,7 +179,7 @@ function removeDialogText(w: RemovingWt | undefined, worktrees: Record<string, W
   if (!w) return "";
   const text = (st: WorktreeStatusResult) => removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[w.project], w.path, st) });
   if (w.error !== undefined) return w.error;
-  if (w.checking) return w.cached ? `${text(w.cached)} · checked ${timeAgo(w.cached.checkedAt)} · Checking…` : "Checking…";
+  if (w.checking) return w.cached ? `${text(w.cached)}${w.cached.checkedAt ? ` · checked ${timeAgo(w.cached.checkedAt)}` : ""} · Checking…` : "Checking…"; // an older daemon sends no checkedAt
   if (w.status?.safety === "blocked") return `Worktree ${w.status.branch} cannot be removed: ${BLOCK_TEXT[w.status.blocked!]}`;
   return w.status ? text(w.status) : "";
 }
