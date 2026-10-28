@@ -1510,3 +1510,24 @@ it("Esc stops the turn of an Aside pane only from inside its popup, and of an ow
   await esc(document.body);
   expect(owner).toHaveBeenCalledOnce();
 });
+
+it("while a permission card replaces the prompt box, Ask aside still opens an Aside (button, and the palette's /btw insert)", async () => {
+  const perm = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "permission_request", id: "p1", requestId: "p1", toolUseId: "t1", tool: "Bash", input: { command: "rm x" }, suggestions: [], settled: false } as never });
+  const onAside = vi.fn(async () => {});
+  const d = await render({ onAside }, perm);
+  expect(d.box).toBeNull();
+  await act(async () => void d.$("aside-ask-open")!.click());
+  const input = d.el.querySelector<HTMLInputElement>('input[aria-label="Aside question"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "why rm?");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void d.$("aside-ask")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(onAside).toHaveBeenCalledWith("why rm?");
+  expect(d.$("permission-panel")).not.toBeNull();
+  unmount();
+  const onInserted = vi.fn();
+  const e = await render({ onAside, insert: "/btw ", onInserted }, perm);
+  expect(e.el.querySelector('input[aria-label="Aside question"]')).not.toBeNull();
+  expect(onInserted).toHaveBeenCalled();
+});

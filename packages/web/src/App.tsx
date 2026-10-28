@@ -110,6 +110,7 @@ import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
@@ -4245,6 +4246,7 @@ export function SessionPane({
             onEmpty={() => prompt.current?.focus()}
           />
         )}
+        {(permission || question) && onAside && <AsideAsk onAside={onAside} insert={insert} onInserted={onInserted} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
