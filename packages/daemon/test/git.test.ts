@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { open as openHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { parseStatus, createWorktree, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { parseStatus, createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -312,6 +313,348 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     // Removing the worktree does not follow the link: the repository's node_modules stays.
     await removeWorktree(main, r.path, () => true);
     expect(existsSync(join(main, "node_modules", "x"))).toBe(true);
+  });
+
+  const put = (file: string, text: string) => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  };
+  const warnSpy = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warned = (spy: ReturnType<typeof warnSpy>) => spy.mock.calls.map((c) => String(c[0]));
+
+  it("copies the gitignored files .worktreeinclude lists, before onCreated, and never a tracked or unignored file", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\nsecrets/\nconfig/*.local\nnode_modules/\ntracked.env\n");
+    put(join(main, "tracked.env"), "committed");
+    run(main, "add", "-f", "tracked.env");
+    run(main, ...C, "commit", "-qm", "tracked");
+    put(join(main, "tracked.env"), "local edit");
+    put(join(main, ".worktreeinclude"), "# comment\n\n.env\r\nsecrets/\n/config/*.local\ntracked.env\nnot-ignored.txt\n");
+    put(join(main, ".env"), "secret");
+    put(join(main, "secrets", "sub", "s.txt"), "s");
+    put(join(main, "config", "app.local"), "c");
+    put(join(main, "not-ignored.txt"), "n");
+    put(join(main, "node_modules", "x"), "x");
+    let seen = "";
+    const r = await createWorktree(main, { ...opts, name: "inc", onCreated: (w) => (seen = readFileSync(join(w.path, ".env"), "utf8")) });
+    expect(seen).toBe("secret");
+    expect(lstatSync(join(r.path, ".env")).isFile()).toBe(true);
+    expect(lstatSync(join(r.path, ".env")).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(r.path, "secrets", "sub", "s.txt"))).toBe(true);
+    expect(existsSync(join(r.path, "config", "app.local"))).toBe(true);
+    expect(readFileSync(join(r.path, "tracked.env"), "utf8")).toBe("committed");
+    expect(existsSync(join(r.path, "not-ignored.txt"))).toBe(false);
+    expect(existsSync(join(r.path, "node_modules"))).toBe(false);
+    // A copy, not a link: an edit stays in the worktree.
+    writeFileSync(join(r.path, ".env"), "changed");
+    expect(readFileSync(join(main, ".env"), "utf8")).toBe("secret");
+  });
+
+  it("copies nothing without .worktreeinclude", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".env"), "secret");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "none" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(warned(spy).filter((m) => m.includes(".worktreeinclude"))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("skips links, paths through links, symlinkDirectories paths and paths the new branch makes a link", async () => {
+    const { main, opts } = plain();
+    const outside = tmp();
+    put(join(outside, "f"), "outside file");
+    put(join(main, ".gitignore"), "secrets/\nconfig/\nshared/\nd/\n");
+    put(join(main, ".worktreeinclude"), "secrets/\nconfig/\nshared/\nd/\n");
+    mkdirSync(join(main, "secrets"));
+    symlinkSync(join(outside, "f"), join(main, "secrets", "link"));
+    mkdirSync(join(main, "config"));
+    symlinkSync("/etc", join(main, "config", "dir.local"));
+    put(join(main, "shared", "a.env"), "shared");
+    put(join(main, ".claude", "settings.json"), JSON.stringify({ worktree: { symlinkDirectories: ["shared"] } }));
+    // The branch `evil` commits `d` as a link out of the repository; main's working tree has a real ignored folder `d`.
+    const target = tmp();
+    run(main, "checkout", "-q", "-b", "evil");
+    symlinkSync(target, join(main, "d"));
+    run(main, "add", "-f", "d");
+    run(main, ...C, "commit", "-qm", "link");
+    run(main, "checkout", "-q", "main");
+    rmSync(join(main, "d"), { force: true });
+    put(join(main, "d", "x.env"), "x");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "l" });
+      expect(existsSync(join(r.path, "secrets", "link"))).toBe(false);
+      expect(existsSync(join(r.path, "config", "dir.local"))).toBe(false);
+      expect(lstatSync(join(r.path, "shared")).isSymbolicLink()).toBe(true);
+      expect(readFileSync(join(main, "shared", "a.env"), "utf8")).toBe("shared");
+      const e = await createWorktree(main, { ...opts, name: "e", base: "evil" });
+      expect(existsSync(join(target, "x.env"))).toBe(false);
+      expect(existsSync(e.path)).toBe(true);
+      expect(warned(spy).some((m) => m.includes("link, not copied"))).toBe(true);
+      expect(warned(spy).some((m) => m.includes("out of the worktree"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("never overwrites a file the new branch checks out", async () => {
+    const { main, opts } = plain();
+    run(main, "checkout", "-q", "-b", "other");
+    put(join(main, ".env"), "committed");
+    run(main, "add", "-f", ".env");
+    run(main, ...C, "commit", "-qm", "env");
+    run(main, "checkout", "-q", "main");
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "local");
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "o", base: "other" });
+      expect(readFileSync(join(r.path, ".env"), "utf8")).toBe("committed");
+      expect(warned(spy).some((m) => m.includes("already exists in the worktree"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips files over the copy limit with one warning", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "12345678");
+    put(join(main, "b.env"), "12345678");
+    put(join(main, "c.env"), "1");
+    const saved = { ...worktreeIncludeLimits };
+    Object.assign(worktreeIncludeLimits, { maxBytes: 10, maxFiles: 2 });
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "cap" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(false);
+      expect(existsSync(join(r.path, "c.env"))).toBe(true);
+      expect(warned(spy).filter((m) => m.includes("over the copy limit"))).toHaveLength(1);
+    } finally {
+      Object.assign(worktreeIncludeLimits, saved);
+      spy.mockRestore();
+    }
+  });
+
+  it("looks inside a folder ignored as a whole only when it matches a pattern or the first name after **/ is in its path (Claude Code)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "node_modules/\nvendor/\n.claude/\nbuild/\n.env\n");
+    put(join(main, ".worktreeinclude"), "**/config.json\n**/.claude/*.md\nvendor/\n.env\n");
+    put(join(main, "node_modules", "pkg", "config.json"), "n");
+    put(join(main, "node_modules", "pkg", ".env"), "n");
+    put(join(main, "build", "config.json"), "b");
+    put(join(main, "vendor", "pkg", "x.txt"), "v");
+    put(join(main, ".claude", "a.md"), "a");
+    put(join(main, "app", ".claude", "b.md"), "b");
+    put(join(main, "app", ".env"), "e");
+    const r = await createWorktree(main, { ...opts, name: "rule" });
+    const has = (f: string) => existsSync(join(r.path, f));
+    // Wholly ignored folder, not matching: nothing inside is copied, not even a file the pattern names.
+    expect(has("node_modules/pkg/config.json")).toBe(false);
+    expect(has("node_modules/pkg/.env")).toBe(false);
+    expect(has("build/config.json")).toBe(false);
+    // The folder matches a pattern: its files are copied.
+    expect(has("vendor/pkg/x.txt")).toBe(true);
+    // First name after **/ (`.claude`) is in the folder's path.
+    expect(has(".claude/a.md")).toBe(true);
+    expect(has("app/.claude/b.md")).toBe(true);
+    // Files ignored one by one are not affected.
+    expect(has("app/.env")).toBe(true);
+  });
+
+  it("applies the folder rule only to **/ and slash-less patterns; a pattern with its own path reaches into an ignored folder", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "node_modules/\nconfig/\nvendor/\ncfg/\n");
+    put(join(main, ".worktreeinclude"), "config/secrets.json\nvendor/**/config.json\ncfg/*\n*.json\n**/config.json\n");
+    put(join(main, "config", "secrets.json"), "s");
+    put(join(main, "config", "other.json"), "o");
+    put(join(main, "vendor", "pkg", "config.json"), "v");
+    put(join(main, "cfg", "a.json"), "a");
+    put(join(main, "node_modules", "pkg", "config.json"), "n");
+    put(join(main, "node_modules", "pkg", "x.json"), "n");
+    const r = await createWorktree(main, { ...opts, name: "anchored" });
+    const has = (f: string) => existsSync(join(r.path, f));
+    expect(has("config/secrets.json")).toBe(true);
+    expect(has("vendor/pkg/config.json")).toBe(true);
+    expect(has("cfg/a.json")).toBe(true);
+    expect(has("node_modules/pkg/config.json")).toBe(false);
+    // A slash-less pattern is **/-style: `*.json` does not reach node_modules.
+    expect(has("node_modules/pkg/x.json")).toBe(false);
+    // Not named by an anchored pattern, and `*.json`/`**/config.json` do not name the folder `config`.
+    expect(has("config/other.json")).toBe(false);
+  });
+
+  it("copies a folder's files when its own pattern names the folder (vendor/ then vendor/pkg/)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "vendor/\n");
+    put(join(main, ".worktreeinclude"), "vendor/\n");
+    put(join(main, "vendor", "pkg", "x.txt"), "v");
+    const r = await createWorktree(main, { ...opts, name: "dirpat" });
+    expect(existsSync(join(r.path, "vendor/pkg/x.txt"))).toBe(true);
+  });
+
+  it("deletes the partial file when a copy fails, and runs the listing calls with core.fsmonitor=false", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "e");
+    const probe = await openHandle(join(main, ".env"));
+    const proto = Object.getPrototypeOf(probe) as { chmod: (m: number) => Promise<void> };
+    await probe.close();
+    const chmod = vi.spyOn(proto, "chmod").mockRejectedValue(new Error("disk full"));
+    const calls: string[][] = [];
+    setGitRunner(async (o: GitRunOptions) => (calls.push(o.args), threadRunner(o)));
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "partial" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes(".env") && m.includes("disk full"))).toBe(true);
+      const listing = calls.filter((a) => ["ls-files", "check-ignore"].includes(a.find((x) => !x.startsWith("-") && x !== "core.fsmonitor=false" && x !== "protocol.allow=never") ?? ""));
+      expect(listing.length).toBeGreaterThan(0);
+      for (const a of listing) expect(a.join(" ")).toContain("-c core.fsmonitor=false");
+    } finally {
+      chmod.mockRestore();
+      setGitRunner(undefined);
+      spy.mockRestore();
+    }
+  });
+
+  it("skips files under .claude/worktrees", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), ".env\n");
+    put(join(main, ".worktreeinclude"), ".env\n");
+    put(join(main, ".env"), "e");
+    put(join(main, ".claude", "worktrees", "stale", ".env"), "stale");
+    const r = await createWorktree(main, { ...opts, name: "w" });
+    expect(existsSync(join(r.path, ".env"))).toBe(true);
+    expect(existsSync(join(r.path, ".claude", "worktrees", "stale", ".env"))).toBe(false);
+  });
+
+  it("skips a file whose real path differs from its path in the repository (link or junction that lstat misses)", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "a");
+    put(join(main, "b.env"), "b");
+    const saved = worktreeIncludeIo.realpath;
+    worktreeIncludeIo.realpath = (async (p: string) => (String(p).endsWith("b.env") ? join(tmp(), "elsewhere") : saved(p)) as never) as typeof saved;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "rp" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes("b.env") && m.includes("resolves through a link"))).toBe(true);
+    } finally {
+      worktreeIncludeIo.realpath = saved;
+      spy.mockRestore();
+    }
+  });
+
+  it("names the cause when the git listing fails (output buffer exceeded, timeout)", async () => {
+    for (const [fail, text] of [[{ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, "output buffer exceeded"], [{ killed: true }, "timed out"]] as const) {
+      const { main, opts } = plain();
+      put(join(main, ".gitignore"), ".env\n");
+      put(join(main, ".worktreeinclude"), ".env\n");
+      put(join(main, ".env"), "e");
+      const spy = warnSpy();
+      setGitRunner(async (o: GitRunOptions) => {
+        if (o.args.includes("--exclude-from=.worktreeinclude")) throw Object.assign(new Error("boom"), { stderr: "", ...fail });
+        return threadRunner(o);
+      });
+      try {
+        const r = await createWorktree(main, { ...opts, name: `cause-${text.split(" ")[0]}` });
+        expect(existsSync(r.path)).toBe(true);
+        expect(warned(spy).some((m) => m.includes(".worktreeinclude skipped") && m.includes(text))).toBe(true);
+      } finally {
+        setGitRunner(undefined);
+        spy.mockRestore();
+      }
+    }
+  });
+
+  it("stops at the file limit: one warning with the count of the rest", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    for (const n of ["a", "b", "c", "d", "e"]) put(join(main, `${n}.env`), n);
+    const saved = { ...worktreeIncludeLimits };
+    Object.assign(worktreeIncludeLimits, { maxFiles: 2 });
+    const calls: string[] = [];
+    const real = worktreeIncludeIo.realpath;
+    worktreeIncludeIo.realpath = (async (p: string) => (calls.push(String(p)), real(p))) as typeof real;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "stop" });
+      expect(existsSync(join(r.path, "a.env"))).toBe(true);
+      expect(existsSync(join(r.path, "b.env"))).toBe(true);
+      expect(existsSync(join(r.path, "c.env"))).toBe(false);
+      expect(calls.filter((c) => c.endsWith(".env"))).toHaveLength(2);
+      const w = warned(spy).filter((m) => m.includes("over the copy limit"));
+      expect(w).toHaveLength(1);
+      expect(w[0]).toContain("3 files skipped");
+    } finally {
+      worktreeIncludeIo.realpath = real;
+      Object.assign(worktreeIncludeLimits, saved);
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a file swapped for a link after the checks (O_NOFOLLOW) and keeps the file mode", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, "a.env"), "a");
+    chmodSync(join(main, "a.env"), 0o640);
+    put(join(main, "swap.env"), "s");
+    const outside = tmp();
+    put(join(outside, "secret"), "outside");
+    const real = worktreeIncludeIo.realpath;
+    // The swap happens between the lstat/realpath checks and the open.
+    worktreeIncludeIo.realpath = (async (p: string) => {
+      const r = await real(p);
+      if (String(p).endsWith("swap.env")) {
+        rmSync(p);
+        symlinkSync(join(outside, "secret"), p);
+      }
+      return r;
+    }) as typeof real;
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "swap" });
+      expect(statSync(join(r.path, "a.env")).mode & 0o777).toBe(0o640);
+      expect(existsSync(join(r.path, "swap.env"))).toBe(false);
+      expect(warned(spy).some((m) => m.includes("swap.env"))).toBe(true);
+    } finally {
+      worktreeIncludeIo.realpath = real;
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a file that fails to copy is skipped and the worktree is still created", async () => {
+    const { main, opts } = plain();
+    put(join(main, ".gitignore"), "*.env\n");
+    put(join(main, ".worktreeinclude"), "*.env\n");
+    put(join(main, ".env"), "secret");
+    put(join(main, "ok.env"), "ok");
+    chmodSync(join(main, ".env"), 0);
+    const spy = warnSpy();
+    try {
+      const r = await createWorktree(main, { ...opts, name: "fail" });
+      expect(existsSync(join(r.path, ".env"))).toBe(false);
+      expect(readFileSync(join(r.path, "ok.env"), "utf8")).toBe("ok");
+      expect(warned(spy).some((m) => m.includes(".worktreeinclude") && m.includes(".env"))).toBe(true);
+    } finally {
+      chmodSync(join(main, ".env"), 0o600);
+      spy.mockRestore();
+    }
   });
 
   it("removes the directory and its worktree-* branch; a foreign branch stays; main and unknown worktrees are refused", async () => {

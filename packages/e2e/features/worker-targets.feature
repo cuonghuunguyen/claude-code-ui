@@ -41,3 +41,12 @@ Feature: Coordinator starts workers by project or worktree name
     And the "worker_start" tool card shows an error that names no such project
     And no worker session exists for the scratch project
     And I capture "unknown name"
+
+  Scenario: worker_start with a new branch gets the .worktreeinclude files
+    Given the scratch project has gitignored files listed in .worktreeinclude
+    When I send "Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start), then call it with exactly {\"name\":\"probe\",\"repo\":\"<project>\",\"branch\":\"<branch>\",\"prompt\":\"Reply with exactly: OK. Do nothing else.\"}. Do nothing else." with the scratch project and a new branch name filled in
+    Then I see a permission request
+    When I allow the permission request
+    Then the worktree folder of the new branch has ".env" with the main checkout's content
+    And the worktree folder of the new branch has no "skip.log"
+    And I capture "worker worktreeinclude"

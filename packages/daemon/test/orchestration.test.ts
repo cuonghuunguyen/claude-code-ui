@@ -594,6 +594,22 @@ describe("orchestration", () => {
     expect(list.projects).not.toContain(path);
   });
 
+  it.skipIf(process.platform === "win32")("worker_start copies the .worktreeinclude files before the worker's session starts", async () => {
+    enable();
+    const repo = gitRepo(join(root, "wt5-inc"));
+    writeFileSync(join(repo, ".gitignore"), ".env\n");
+    writeFileSync(join(repo, ".worktreeinclude"), ".env\n");
+    writeFileSync(join(repo, ".env"), "KEY=main-secret");
+    await c.request({ type: "project.open", cwd: repo });
+    await c.request({ type: "session.list" });
+    const coord = await coordinator();
+    const path = join(repo, ".claude", "worktrees", "feat-inc");
+    const w = await call(coord, "worker_start", { name: "wi", repo, branch: "feat-inc", prompt: "build" });
+    await until(() => runsOf(w.sessionId).length);
+    expect(readFileSync(join(path, ".env"), "utf8")).toBe("KEY=main-secret");
+    expect(runsOf(w.sessionId)[0]!.options.cwd).toBe(path);
+  });
+
   it.skipIf(process.platform === "win32")("worker_start with repo refuses an unknown project, a bad base or branch, an existing branch and a mixed form, leaving no worktree or branch", async () => {
     enable();
     const repo = gitRepo(join(root, "wt5-b"));

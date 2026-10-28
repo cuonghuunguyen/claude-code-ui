@@ -11,7 +11,7 @@ export type Project = { path: string; name: string };
 export type Evidence = { next(): number };
 
 /** Per-scenario scratch for "I note ..." / "... is unchanged" step pairs. */
-export type Memo = { layout?: unknown; creates?: () => number; worktree?: string };
+export type Memo = { layout?: unknown; creates?: () => number; worktree?: string; envValue?: string; branch?: string };
 
 /** The fake Jira of the scenario, once a step started it. */
 export type JiraBox = { fake?: FakeJira };

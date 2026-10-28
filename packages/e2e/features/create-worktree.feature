@@ -131,3 +131,44 @@ Feature: Create worktree modal
     And a worktree with a generated name exists
     And the new-session tab runs in a worktree with a generated name
     And I capture "phone quick create"
+
+  Scenario: A new worktree gets the gitignored files .worktreeinclude lists and nothing else
+    Given the scratch project has gitignored files listed in .worktreeinclude
+    And I open the scratch project
+    When I click the new worktree button of the scratch project
+    And I open the "name" tab of the modal
+    And I type the worktree name "with-env"
+    And I confirm the modal
+    Then the modal closes
+    And the new-session tab runs in the worktree "with-env"
+    And the worktree folder "with-env" has ".env" with the main checkout's content
+    And the worktree folder "with-env" has "config/local.env" with the main checkout's content
+    And the worktree folder "with-env" has no "skip.log"
+    And the worktree folder "with-env" keeps the committed content of "tracked.env"
+    And I capture "worktreeinclude copied"
+
+  Scenario: Shift+click also copies the files .worktreeinclude lists
+    Given the scratch project has gitignored files listed in .worktreeinclude
+    And I open the scratch project
+    When I shift-click the new worktree button of the scratch project
+    Then no Create worktree modal is open
+    And a worktree with a generated name exists
+    And the new-session tab runs in a worktree with a generated name
+    And the generated worktree has ".env" with the main checkout's content
+    And I capture "shift click worktreeinclude"
+
+  Scenario: A wholly ignored folder is copied only when .worktreeinclude names it
+    Given the scratch project has an ignored node_modules and an ignored vendor folder with a .worktreeinclude of config.json files
+    And I open the scratch project
+    When I click the new worktree button of the scratch project
+    And I open the "name" tab of the modal
+    And I type the worktree name "with-vendor"
+    And I confirm the modal
+    Then the modal closes
+    And the new-session tab runs in the worktree "with-vendor"
+    And the worktree folder "with-vendor" has "vendor/lib/config.json" with the main checkout's content
+    And the worktree folder "with-vendor" has "vendor/data.txt" with the main checkout's content
+    And the worktree folder "with-vendor" has "config/secrets.json" with the main checkout's content
+    And the worktree folder "with-vendor" has no "config/other.txt"
+    And the worktree folder "with-vendor" has no "node_modules/pkg/config.json"
+    And I capture "worktreeinclude ignored folder"
