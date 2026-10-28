@@ -1,13 +1,13 @@
 // The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks (each file marked by its own repository), a filter field and keyboard navigation.
 import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { fileNameError, type FsDeleteResult, type GitRepo, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult } from "@claude-ui/protocol";
+import { fileNameError, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
-import { eachLimited, gitRows } from "./git-changes.ts";
+import { createLimiter, gitRows } from "./git-changes.ts";
 import { isImeKey } from "./ime.ts";
 import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
 import { setRepoChoice, type RepoList } from "./repo-choice.ts";
@@ -304,12 +304,15 @@ export function FileTree({
   const folders = useMemo(() => (repoList ? repoFolders(repoList, cwd) : new Map<string, GitRepo>()), [repoList, cwd]);
   const listKey = repoList?.map((r) => `${r.path}\0${r.rel}\0${r.outsideRoots ? 1 : 0}`).join("\n");
   const reads = useRef(new Map<string, RepoRead>());
+  const limiter = useRef<ReturnType<typeof createLimiter>>(undefined);
+  limiter.current ??= createLimiter(4);
 
   // Git marks: read while the tree is on screen in a git work tree; a failed read or a plain directory shows none. One `git.diff` per
-  // readable listed repository (at most 4 in flight); each reply draws at once, the previous marks of a repository stay until its reply.
+  // readable listed repository (at most 4 in flight over all runs); each reply draws at once, the previous marks of a repository stay until its reply.
   useEffect(() => {
     if (!visible || gitStamp === undefined) return void ((reads.current = new Map()), setMarks(undefined));
     let live = true;
+    let frame = 0;
     const timer = setTimeout(() => {
       if (!repoList) {
         reads.current = new Map();
@@ -327,19 +330,31 @@ export function FileTree({
       }
       reads.current = next;
       if (!targets.length) return void setMarks(undefined);
-      void eachLimited(targets, 4, async (r) => {
-        if (!live) return;
-        const dir = repoDir(cwd, r.rel);
-        const rows = await client
-          .request<GitDiffResult>({ type: "git.diff", cwd: r.path, base: "head", exact: true })
-          .then((res) => (res.diff ? gitRows(res.diff, dir) : []))
-          .catch(() => []);
-        if (!live) return;
-        next.set(r.path, { dir, rows });
-        setMarks(repoMarks([...next.values()], tops, cwd));
-      });
+      const limit = limiter.current!;
+      // Replies of one frame merge once.
+      const draw = () => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (live) setMarks(repoMarks([...next.values()], tops, cwd));
+        });
+      };
+      for (const r of targets)
+        void limit(
+          () => live,
+          async () => {
+            const dir = repoDir(cwd, r.rel);
+            const rows = await client
+              .request<GitDiffResult>({ type: "git.diff", cwd: r.path, base: "head", exact: true })
+              .then((res) => (res.diff ? gitRows(res.diff, dir) : []))
+              .catch(() => []);
+            if (!live) return;
+            next.set(r.path, { dir, rows });
+            draw();
+          },
+        );
     }, 300);
-    return () => ((live = false), clearTimeout(timer));
+    return () => ((live = false), clearTimeout(timer), cancelAnimationFrame(frame));
   }, [visible, gitStamp, cwd, reloadKey, gitNudge, listKey]);
 
   const rows: Row[] = q ? (found?.query === q ? searchRows(found.paths.map((p) => joinPath(cwd, p)), cwd) : []) : visibleRows(model, cwd, editing);

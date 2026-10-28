@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createRef, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import type { GitRepo } from "@claude-ui/protocol";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
@@ -672,6 +672,79 @@ it("GH-392 at most 4 git.diff requests in flight", async () => {
   expect(max).toBe(4);
   expect(diffCalls(t)).toHaveLength(7);
   t.unmount();
+});
+
+it("GH-392 a re-triggered read during the first wave never exceeds 4 git.diff in flight over both runs", async () => {
+  const list: GitRepo[] = [QMAIN, ...Array.from({ length: 9 }, (_, i) => ({ path: `/q/r${i}`, rel: `r${i}`, kind: "nested" as const, parent: "/q" }))];
+  const held: (() => void)[] = [];
+  let pending = 0;
+  let max = 0;
+  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(list) }, {
+    "git.diff": () => {
+      pending++;
+      max = Math.max(max, pending);
+      return new Promise((res) => held.push(() => (pending--, res({ diff: null }))));
+    },
+  });
+  await t.render();
+  await wait();
+  expect(held).toHaveLength(4);
+  await t.render({ gitStamp: "s2" });
+  await wait();
+  expect(pending).toBe(4);
+  while (held.length) await act(async () => held.shift()!());
+  await wait();
+  expect(max).toBe(4);
+  expect(pending).toBe(0);
+  t.unmount();
+});
+
+describe("GH-392 a reply that arrives after the read was replaced shows no marks", () => {
+  const held: Record<string, () => void> = {};
+  const setupHeld = (props: Partial<ComponentProps<typeof FileTree>> = {}) =>
+    setup({ cwd: "/q", gitStamp: "s", repos: repos([QMAIN]), ...props }, {
+      "git.diff": (m: { cwd: string }) => new Promise((res) => (held[m.cwd] = () => res(byCwd(m)))),
+    });
+  afterEach(() => void Object.keys(held).forEach((k) => delete held[k]));
+
+  it("after a repository list change", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    await t.render({ repos: repos([{ ...QMAIN, path: "/q", rel: "", branch: "dev" }, QLIB]) });
+    await wait();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(mark(t, "/q/s.ts")).toBeNull();
+    t.unmount();
+  });
+
+  it("after a cwd change", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    await t.render({ cwd: "/p", repos: undefined, gitStamp: "s" });
+    await wait();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(t.el.querySelector("[data-testid=git-mark]")).toBeNull();
+    t.unmount();
+  });
+
+  it("after unmount", async () => {
+    const t = setupHeld();
+    await t.render();
+    await wait();
+    const releaseA = held["/q"]!;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.unmount();
+    await act(async () => releaseA());
+    await wait(50);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
 });
 
 it("GH-392 a file in a nested repository shows its own mark; the parent's untracked folder entry gives no mark and no dot", async () => {
