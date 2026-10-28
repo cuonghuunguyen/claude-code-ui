@@ -33,17 +33,17 @@ type Client = ReturnType<typeof connect>;
 export const TREE_BESIDE_PX = 672;
 const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
 
-/**
- * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
- * `openPath` (quick open) opens that file in a tab, then `onOpened` clears it.
- * `watch`: more paths for this connection's fs.watch list (fs.watch replaces it), e.g. the changes tab's files.
- */
 /** The one editor sync of the shared store (disk watch, reload on change) for every Files view. */
 export function EditorSync({ store, client, status, watch }: { store: EditorStore; client: Client; status: ConnectionStatus; watch: string[] }) {
   useEditorSync(store, client, status, watch, true);
   return null;
 }
 
+/**
+ * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.
+ * `openPath` (quick open) opens that file in a tab, then `onOpened` clears it.
+ * `watch`: more paths for this connection's fs.watch list (fs.watch replaces it), e.g. the changes tab's files.
+ */
 export function FilesPanel({
   client,
   status,

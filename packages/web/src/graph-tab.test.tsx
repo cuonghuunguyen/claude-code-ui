@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import { GraphTab } from "./graph-tab.tsx";
+import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 
 vi.mock("@pierre/diffs/react", () => ({ MultiFileDiff: () => <div data-testid="pierre-diff" /> }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,23 +31,23 @@ Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: tru
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);
-afterEach(() => act(() => root.render(null)));
+afterEach(() => (forgetRepoChoices(), localStorage.clear(), act(() => root.render(null))));
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const hash = (i: number) => i.toString(16).padStart(40, "0");
 type Req = { type: string; cwd?: string; [k: string]: unknown };
-function fake() {
+function fake(repos: object[] = [{ path: "/p/repo", rel: "repo", kind: "nested" }]) {
   const sent: Req[] = [];
   const request = vi.fn(async (m: Req) => {
     sent.push(m);
-    if (m.type === "git.repos") return { repos: [{ path: "/p/repo", rel: "repo", kind: "nested" }] };
+    if (m.type === "git.repos") return { repos };
     if (m.type === "git.log") return { log: { commits: [{ hash: hash(1), parents: [], author: "Ann", email: "a@x.test", time: 1_700_000_001, subject: "commit 1", refs: ["HEAD", "refs/heads/main"] }], more: false, branches: ["refs/heads/main"], refs: "s1", head: "refs/heads/main" } };
     if (m.type === "git.refs") return { refs: "s1" };
     return {};
   });
   return Object.assign({ request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>, { sent });
 }
-const mount = async (c: ReturnType<typeof fake>, hidden: boolean) => {
-  await act(async () => root.render(<GraphTab client={c} cwd="/p" hidden={hidden} connected openFiles={[]} seq={0} repoKey="/p" />));
+const mount = async (c: ReturnType<typeof fake>, hidden: boolean, repoKey: string | undefined = "/p") => {
+  await act(async () => root.render(<GraphTab client={c} cwd="/p" hidden={hidden} connected openFiles={[]} seq={0} repoKey={repoKey} />));
   await flush();
 };
 
@@ -66,4 +67,28 @@ it("GH-396 hidden keeps the loaded list: no second git.log while hidden, none on
   await mount(c, false);
   expect(c.sent.filter((m) => m.type === "git.log")).toHaveLength(1);
   expect(c.sent.filter((m) => m.type === "git.repos")).toHaveLength(1);
+});
+
+it("GH-396 a project with a nested repository: the tab shows the repository selector, and its choice is the project's saved one (repoKey) that the other graph and Changes read", async () => {
+  const c = fake([
+    { path: "/p", rel: ".", kind: "main" },
+    { path: "/p/libs/lib", rel: "libs/lib", kind: "nested" },
+  ]);
+  await mount(c, false);
+  const trigger = () => el.querySelector<HTMLElement>("[data-testid=repo-selector]");
+  const lastLog = () => c.sent.filter((m) => m.type === "git.log").at(-1);
+  expect(trigger()).not.toBeNull();
+  expect(lastLog()).toMatchObject({ cwd: "/p", exact: true });
+  await act(async () => trigger()!.click());
+  await flush();
+  const option = [...document.querySelectorAll<HTMLElement>("[role=treeitem], [role=option], [role=menuitem], button")].find((e) => e.textContent?.includes("lib") && e !== trigger());
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+  await flush();
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  expect(lastLog()).toMatchObject({ cwd: "/p/libs/lib", exact: true });
+  // A choice made elsewhere (the dock graph, Changes) under the same project key moves the tab.
+  await act(async () => setRepoChoice("/p", "."));
+  await flush();
+  expect(lastLog()).toMatchObject({ cwd: "/p", exact: true });
 });
