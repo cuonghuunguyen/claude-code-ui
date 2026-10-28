@@ -10,7 +10,7 @@ import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
 import { saveKeepAwake, useKeepAwakeSetting, wakeLockReason, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type DockArea } from "./layout.ts";
+import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type Area } from "./layout.ts";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { AUTO_CLOSE, type AutoClose } from "./tab-cleanup.ts";
@@ -222,7 +222,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
@@ -490,11 +490,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
-          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, or a tab of the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, a tab of the side panel, or a tab of the main area next to the session. Narrow screens show it as the terminal pane. Kept in this browser.</span>
         </div>
-        <Select value={terminalDock} onValueChange={(v) => v && saveTerminalDock(v as DockArea)}>
+        <Select value={terminalDock} onValueChange={(v) => v && (onTerminalPosition ?? saveTerminalDock)(v as Area)}>
           <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: DockArea) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
+            <SelectValue>{(v: Area) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {TERMINAL_DOCKS.map((d) => (

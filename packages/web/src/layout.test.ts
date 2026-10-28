@@ -39,11 +39,18 @@ it("parseLayout: an old stored layout without plan and main puts Plan at the end
   expect(l.areas).toEqual({ side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: [] });
 });
 
-it("parseLayout keeps files and graph in main and still drops changes and terminal from main to their default areas", () => {
+it("parseLayout keeps files and graph in main and still drops changes from main to its default area (GH-397: terminal may be in main)", () => {
   const l = parseLayout('{"side":"right","areas":{"side":[],"bottom":[],"main":["plan","changes","files","graph","terminal"]}}');
-  expect(l.areas.main).toEqual(["plan", "files", "graph"]);
+  expect(l.areas.main).toEqual(["plan", "files", "graph", "terminal"]);
   expect(l.areas.side).toEqual(["changes"]);
-  expect(l.areas.bottom).toEqual(["terminal"]);
+  expect(l.areas.bottom).toEqual([]);
+});
+
+it("the terminal may have the main home", () => {
+  expect(movePane(DEFAULT_LAYOUT, "terminal", "main").areas).toMatchObject({ bottom: [], main: ["terminal"] });
+  expect(movePane(DEFAULT_LAYOUT, "changes", "main")).toBe(DEFAULT_LAYOUT);
+  saveTerminalDock("main");
+  expect(loadTerminalDock()).toBe("main");
 });
 
 it("movePane to main refuses changes (same object) and moves plan", () => {
