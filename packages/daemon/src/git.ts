@@ -597,18 +597,18 @@ const CONFIG_TRIES = 5;
  * Marks `branch` a Created branch, right after `git branch` under the repository lock. A held `config.lock` (another git
  * writing the config) is retried; on failure the create still succeeds without the mark, with a warning.
  */
-async function markCreated(main: string, branch: string, value = true): Promise<void> {
+async function markCreated(main: string, branch: string, value = true): Promise<boolean> {
   for (let i = 1; ; i++) {
     try {
       await run(main, ["config", "--type=bool", "--", createdKey(branch), String(value)]);
-      return;
+      return true;
     } catch (e) {
       if (i < CONFIG_TRIES && /config\.lock|could not lock/i.test((e as Error).message)) {
         await new Promise((r) => setTimeout(r, 50 * i));
         continue;
       }
       console.warn(`worktree: ${createdKey(branch)} not set${value ? ", the branch stays when its worktree is deleted" : ", a worktree-* branch is deleted with its worktree"}: ${(e as Error).message}`);
-      return;
+      return false;
     }
   }
 }
@@ -796,11 +796,17 @@ async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions):
   }
   try {
     await run(main, ["worktree", "add", "--quiet", "--", path, branch]);
-    if (branch.startsWith("worktree-")) await markCreated(main, branch, false);
   } catch (e) {
     if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
     if (exists(path)) throw new WorktreeError("exists", `${name} already exists`);
     throw e;
+  }
+  // ADR 0005: a failed mark keeps the branch. Without the `false` mark the legacy `worktree-*` rule would delete the user's branch with its worktree: undo the checkout.
+  if (branch.startsWith("worktree-") && !(await markCreated(main, branch, false))) {
+    await run(main, ["worktree", "remove", "--force", "--", path]).catch((x) => console.warn(`worktree: rollback of ${path} failed: ${x.message}`));
+    await run(main, ["worktree", "prune"]).catch(() => {});
+    if (remote) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: branch ${branch} of a failed checkout kept: ${x.message}`));
+    throw new WorktreeError("git_failed", `Could not mark ${branch} as a kept branch (git config is locked); it was not checked out`);
   }
   // A local branch the user had stays on rollback; a tracking branch this call made goes.
   return finishCreate(main, path, branch, settings, o, remote);

@@ -158,4 +158,19 @@ describe("Created branch marker", () => {
     await removeWorktree(main, join(main, ".claude", "worktrees", "old"), () => true);
     expect(has(main, "worktree-old")).toBe(false);
   });
+
+  it("a worktree-* checkout whose false mark cannot be written is undone: no worktree, the branch stays", async () => {
+    const { main, opts } = plain();
+    run(main, "branch", "worktree-mine");
+    lockConfig(5);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(createWorktree(main, { ...opts, checkout: "refs/heads/worktree-mine" })).rejects.toMatchObject({ code: "git_failed" });
+    } finally {
+      warn.mockRestore();
+    }
+    setGitRunner(undefined);
+    expect(has(main, "worktree-mine")).toBe(true);
+    expect(out(main, "worktree", "list", "--porcelain")).not.toContain("worktrees");
+  });
 });
