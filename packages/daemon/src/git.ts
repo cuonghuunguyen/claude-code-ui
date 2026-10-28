@@ -27,12 +27,14 @@ export function limiter(n: number) {
     else
       await new Promise<void>((go, drop) => {
         const q = tier === "low" ? qs.low : tier ? qs.urgent : qs.normal;
-        const w = { go };
-        q.push(w);
-        signal?.addEventListener("abort", () => {
+        const onAbort = () => {
           const i = q.indexOf(w);
-          if (i >= 0) (q.splice(i, 1), drop(signal.reason));
-        }, { once: true });
+          if (i >= 0) (q.splice(i, 1), drop(signal!.reason));
+        };
+        // The listener goes when the job starts: a signal that never fires (shared facts reads) must not collect them.
+        const w: W = { go: () => (signal?.removeEventListener("abort", onAbort), go()) };
+        q.push(w);
+        signal?.addEventListener("abort", onAbort, { once: true });
       });
     try {
       return await fn();
@@ -1083,7 +1085,11 @@ async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: str
       if (e instanceof WorktreeError && e.code === "cancelled") throw e;
       return "";
     });
-    if (merged.split("\n")[0] === f.baseTree) mergedInto = shortRef(f.base);
+    // Commits that cancel out (add, then delete) merge to the base too, but nothing of them is in the base: not merged. The net change since the merge base is empty then.
+    if (merged.split("\n")[0] === f.baseTree && (await g(w.path, ["diff", "--name-only", "-z", `${f.base}...HEAD`]).catch((e) => {
+      if (e instanceof WorktreeError && e.code === "cancelled") throw e;
+      return "";
+    }))) mergedInto = shortRef(f.base);
   }
   // With HEAD attached, no commit outside the saved refs is `ahead === 0`; merged another way counts too.
   const branchMerged = keeps && refs.length > 0 && (ahead === 0 || !!mergedInto);

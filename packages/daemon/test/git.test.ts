@@ -1714,6 +1714,19 @@ describe("gitDiff truncation", { timeout: 120_000 }, () => {
 });
 
 describe("limiter", () => {
+  it("a queued job leaves no abort listener on a signal that never fires, started or cancelled", async () => {
+    const { getEventListeners } = await import("node:events");
+    const never = new AbortController().signal;
+    const run = limiter(1);
+    let open!: () => void;
+    const hold = run(() => new Promise<void>((r) => (open = r)));
+    const jobs = Array.from({ length: 50 }, () => run(async () => 1, "low", never));
+    expect(getEventListeners(never, "abort").length).toBe(50);
+    open();
+    await Promise.all([hold, ...jobs]);
+    expect(getEventListeners(never, "abort").length).toBe(0);
+  });
+
   it("an urgent task starts before queued normal ones", async () => {
     const run = limiter(1);
     const order: string[] = [];

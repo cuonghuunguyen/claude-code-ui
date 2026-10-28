@@ -80,7 +80,7 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   const st = r.status;
   if (!st) return { safety: "checking", ...(r.cached && { cached: rowSafety({ ...r, status: r.cached, cached: undefined }) }) };
   if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : "Blocked" };
-  if (st.safety === "has_work") return { safety: "has_work", reason: `${plural(st.uncommitted, "file")}, ${plural(st.ahead, "commit")}` };
+  if (st.safety === "has_work") return { safety: "has_work", reason: st.uncommitted ? `${plural(st.uncommitted, "file")}, ${plural(st.ahead, "commit")}` : `${plural(st.ahead, "commit")}, has unmerged commits` };
   // Squash or rebase merged: ahead, but the base already has the changes.
   if (st.mergedInto) return { safety: "safe", reason: `changes already in ${st.mergedInto} (squash/rebase merged)` };
   return { safety: "safe" };

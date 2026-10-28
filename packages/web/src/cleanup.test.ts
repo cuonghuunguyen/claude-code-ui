@@ -42,6 +42,7 @@ describe("cleanup", () => {
     expect(rowSafety(wt("/a", { status: st({ safety: "blocked", blocked: "sessions_running" }) } as never)).reason).toBe("A session there is running or needs input");
     expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 1, ahead: 2 }) } as never))).toEqual({ safety: "has_work", reason: "1 file, 2 commits" });
     expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 3, ahead: 1 }) } as never)).reason).toBe("3 files, 1 commit");
+    expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 0, ahead: 2 }) } as never)).reason).toBe("2 commits, has unmerged commits");
     expect(rowSafety(wt("/a", { status: st() } as never))).toEqual({ safety: "safe" });
     expect(rowSafety(wk("a", "running"))).toEqual({ safety: "blocked", reason: "Running" });
     expect(rowSafety(wk("a", "needs_input")).reason).toBe("Needs input");

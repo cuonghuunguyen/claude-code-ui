@@ -206,6 +206,25 @@ describe("merged another way", () => {
 });
 
 describe("removal", () => {
+  it("commits that cancel out (add, then delete) are not merged: has_work, no mergedInto, a Created branch is not Safe, deleteBranch keeps a kept one", async () => {
+    const { main } = repo();
+    const created = wt(main, "net0", { created: true });
+    commit(created, "secret.txt", "work\n");
+    git(created, "rm", "-q", "secret.txt");
+    git(created, "commit", "-qm", "undo");
+    const kept = wt(main, "net0k");
+    commit(kept, "secret2.txt", "work\n");
+    git(kept, "rm", "-q", "secret2.txt");
+    git(kept, "commit", "-qm", "undo");
+    for (const p of [created, kept]) {
+      const st = await worktreeStatus(main, p, allowed);
+      expect(st).toMatchObject({ ahead: 2, safety: "has_work" });
+      expect(st.mergedInto).toBeUndefined();
+    }
+    expect((await removeWorktree(main, kept, allowed, { deleteBranch: true })).branchKept).toBeTruthy();
+    expect(has(main, "net0k")).toBe(true);
+  });
+
   it("deleteBranch on a squash-merged kept branch deletes it with -D; an unmerged kept branch keeps it with -d (branchKept)", async () => {
     const { main } = repo();
     const merged = wt(main, "sq");
