@@ -1409,3 +1409,53 @@ it("typing ! in a box that holds a token does not open shell mode", async () => 
   expect(ev.defaultPrevented).toBe(false);
   expect(d.box.placeholder).not.toMatch(/shell/i);
 });
+
+// Review lows (GH-441): IME, pastes cleared after every send path, "!" on a soft keyboard.
+it("a deletion inside a token during an IME composition is left to the IME (no healing)", async () => {
+  const d = await render();
+  await type(d.box, "a ");
+  paste(d.box, lines200);
+  const full = d.box.value;
+  await act(async () => void d.box.dispatchEvent(new Event("compositionstart", { bubbles: true })));
+  setSel(d.box, full.length);
+  await type(d.box, full.slice(0, -1));
+  expect(d.box.value).toBe(full.slice(0, -1));
+  await act(async () => void d.box.dispatchEvent(new Event("compositionend", { bubbles: true })));
+});
+
+it("pastes restart at #1 after a queued send", async () => {
+  const onQueue = vi.fn(async () => {});
+  const d = await render({ onQueue }, { ...emptySession(), state: "running" });
+  paste(d.box, lines200);
+  await key(d.box, { key: "Enter", altKey: true });
+  expect(onQueue).toHaveBeenCalled();
+  paste(d.box, lines200);
+  expect(d.box.value).toBe("[Pasted text #1 +199 lines]");
+});
+
+it("pastes restart at #1 after a dialog command", async () => {
+  const onDialog = vi.fn();
+  const d = await render({ onDialog });
+  paste(d.box, lines200);
+  await type(d.box, "/help");
+  await key(d.box, { key: "Enter" });
+  expect(onDialog).toHaveBeenCalled();
+  expect(d.box.value).toBe("");
+  paste(d.box, lines200);
+  expect(d.box.value).toBe("[Pasted text #1 +199 lines]");
+});
+
+it("a soft keyboard that types ! into a box holding a token does not open shell mode", async () => {
+  const onBash = vi.fn(async () => {});
+  const d = await render({ onBash });
+  paste(d.box, lines200);
+  const tok = d.box.value;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  await act(async () => {
+    setValue.call(d.box, `!${tok}`);
+    d.box.setSelectionRange(1, 1); // the caret sits right after the typed "!"
+    d.box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(d.box.value).toBe(`!${tok}`);
+  expect(d.box.placeholder).not.toMatch(/shell/i);
+});

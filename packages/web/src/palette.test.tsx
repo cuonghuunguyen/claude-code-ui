@@ -336,8 +336,8 @@ it("a message hit whose snippet holds pasted_content tags shows them without the
   const { rows, type } = await render(undefined, ITEMS, undefined, m.messages);
   await type("zebra");
   await settle();
-  const hit = { ...HIT, hits: [{ messageId: "m1", role: "assistant" as const, snippet: '…<pasted_content id="9f3a">\nthe Zebra crossing\n</pasted_content id="9f3a">…' }] };
+  const hit = { ...HIT, hits: [{ messageId: "m1", role: "assistant" as const, snippet: '…_content id="9f3a"> aaa bbb the Zebra crossing ccc </pasted_content id="9f3a"> and </pasted_con' }] };
   await act(async () => (m.calls[0]!.onResult(hit), m.calls[0]!.done(DONE)));
   const row = rows().find((r) => r.dataset.id === "msg:sx:m1")!;
-  expect(row.querySelector('[data-testid="palette-snippet"]')!.textContent).not.toContain("pasted_content");
+  expect(row.querySelector('[data-testid="palette-snippet"]')!.textContent).toBe("…aaa bbb the Zebra crossing ccc and");
 });

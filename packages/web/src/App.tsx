@@ -4711,7 +4711,7 @@ function PromptBox({
             return edit(v.slice(1), 0);
           }
           // A soft keyboard deletes one character (no usable Backspace key): a token it cut into goes whole.
-          const healed = bash ? undefined : healDeletion(text, v, e.target.selectionStart);
+          const healed = bash || composing.current ? undefined : healDeletion(text, v, e.target.selectionStart);
           if (healed) return edit(healed.text, healed.caret);
           typed(v, e.target.selectionStart);
         }}

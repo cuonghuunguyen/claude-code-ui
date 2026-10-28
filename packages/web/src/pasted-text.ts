@@ -184,7 +184,13 @@ export function healDeletion(old: string, next: string, caret: number): Edit | u
   return from === caret && to === caret + n ? undefined : { text: old.slice(0, from) + old.slice(to), caret: from };
 }
 
-/** A search snippet (a fragment of the raw transcript text) without pasted_content tags, also a cut one. */
+/** A search snippet (a fragment of the raw transcript text, cut at both ends) without pasted_content tags, also a tag cut by the snippet window. */
 export function cleanSnippet(snippet: string): string {
-  return snippet.replace(/<\/?pasted_content(?: id="[0-9a-f]{0,4}"?)?>?\n?/gi, "");
+  const tail = /^\/?(?:pasted_content(?: (?:i(?:d(?:=(?:"[0-9a-f]{0,4}"?)?)?)?)?)?|p(?:a(?:s(?:t(?:e(?:d(?:_(?:c(?:o(?:n(?:t(?:e(?:nt?)?)?)?)?)?)?)?)?)?)?)?)?)$/;
+  let s = snippet;
+  const lt = s.lastIndexOf("<");
+  if (lt >= 0 && tail.test(s.slice(lt + 1).replace(/…$/, ""))) s = s.slice(0, lt) + (s.endsWith("…") ? "…" : "");
+  s = s.replace(/^(…?)\s*(?:\S*_content\s+)?id="[0-9a-f]{4}">/, "$1");
+  s = s.replace(/^(…?)\s*\S*_content>/, "$1");
+  return s.replace(/\s*<\/?pasted_content(?: id="[0-9a-f]{4}")?>\s*/g, " ").replace(/…\s+/, "…").replace(/\s+…$/, "…").trim();
 }

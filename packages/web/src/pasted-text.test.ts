@@ -212,9 +212,23 @@ describe("healDeletion", () => {
 });
 
 describe("cleanSnippet", () => {
-  it("removes pasted_content tags, also a cut one", () => {
-    expect(cleanSnippet('a <pasted_content id="9f3a">\nb\n</pasted_content id="9f3a"> c')).toBe("a b\n c");
-    expect(cleanSnippet('x <pasted_content id="9f')).toBe("x ");
+  it("removes full tags and the double space they leave", () => {
+    expect(cleanSnippet('hi <pasted_content id="9f3a"> line hit </pasted_content id="9f3a"> end')).toBe("hi line hit end");
     expect(cleanSnippet("plain")).toBe("plain");
+  });
+  it("removes a tag fragment at the start", () => {
+    expect(cleanSnippet('…_content id="9f3a"> line1 line2 hit')).toBe("…line1 line2 hit");
+    expect(cleanSnippet('…id="9f3a"> line1 hit')).toBe("…line1 hit");
+    expect(cleanSnippet("…_content> hit")).toBe("…hit");
+  });
+  it("removes a cut tag at the end", () => {
+    expect(cleanSnippet("hit line </pasted_con")).toBe("hit line");
+    expect(cleanSnippet('x <pasted_content id="9f')).toBe("x");
+    expect(cleanSnippet('hit </pasted_content id="9f3a')).toBe("hit");
+    expect(cleanSnippet("hit </pasted_con…")).toBe("hit…");
+  });
+  it("keeps other angle-bracket text", () => {
+    expect(cleanSnippet("if a <b then")).toBe("if a <b then");
+    expect(cleanSnippet("a <p")).toBe("a");
   });
 });
