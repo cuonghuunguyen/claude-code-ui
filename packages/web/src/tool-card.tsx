@@ -143,7 +143,7 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
       ) : (
         header
       )}
-      {moving?.error && (
+      {canBackground && moving?.error && (
         <p role="alert" data-testid="run-in-background-error" className="px-3 pb-2 text-xs text-destructive">
           Could not run in background: {moving.error}
         </p>

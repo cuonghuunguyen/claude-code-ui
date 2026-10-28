@@ -55,3 +55,11 @@ it("Run in background sends the call's toolUseId and waits; a failed request sho
   expect(el.querySelector('[role="alert"]')!.textContent).toContain("no foreground Bash call with that ID runs");
   expect(button()!.disabled).toBe(false);
 });
+
+it("a failed move's error does not show once the call has ended", async () => {
+  await render(call(), async () => Promise.reject(new Error("boom")));
+  await act(async () => button()!.click());
+  expect(el.querySelector('[role="alert"]')).not.toBeNull();
+  await render(call({ status: "done" }), async () => {});
+  expect(el.querySelector('[role="alert"]')).toBeNull();
+});

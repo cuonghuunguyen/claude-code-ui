@@ -2180,6 +2180,7 @@ export function App() {
     else focusShownPrompt(id);
   };
   const reopen = popClosed(closedTabs, existsTab, tabs).tab;
+  const movingShells = useRef(new Set<string>());
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
@@ -2204,7 +2205,14 @@ export function App() {
     } : undefined,
     runInBackground: shown && !paneRef && !draftShown && view && foregroundShells(view).length
       ? () => {
-          for (const c of foregroundShells(view)) client.current!.request({ type: "session.backgroundShell", sessionId: shown.id, toolUseId: c.toolUseId }).catch((e) => setError((e as Error).message));
+          // A second press while a move is pending would only get unknown_shell.
+          for (const c of foregroundShells(view)) {
+            if (movingShells.current.has(c.toolUseId)) continue;
+            movingShells.current.add(c.toolUseId);
+            client.current!.request({ type: "session.backgroundShell", sessionId: shown.id, toolUseId: c.toolUseId })
+              .catch((e) => setError((e as Error).message))
+              .finally(() => movingShells.current.delete(c.toolUseId));
+          }
         }
       : undefined,
     models,

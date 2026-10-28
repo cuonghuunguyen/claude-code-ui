@@ -840,6 +840,16 @@ describe("Bash call moved to the background (GH-440)", () => {
     expect(calls(ended).at(-1)).toMatchObject({ status: "done" });
   });
 
+  it("a live Bash result that starts with the placeholder text ends the call; only a replayed one (no tool_use_result) is a moved shell", () => {
+    const text = "Command was manually backgrounded by user with ID: abc. x";
+    for (const live of [true, false]) {
+      const adapter = createAdapter();
+      adapter.convert(bashCall() as never);
+      const parts = adapter.convert({ ...result("tb1", text), ...(live ? { tool_use_result: { stdout: text, stderr: "", interrupted: false } } : {}) } as never);
+      expect(calls(parts).at(-1)).toMatchObject(live ? { status: "done" } : { status: "running", shell: "background" });
+    }
+  });
+
   it("a Bash call that ends before its task registers gets no shell mark", () => {
     const ps = run([bashCall(), result("tb1", "ok")]);
     expect(calls(ps).at(-1)).toMatchObject({ status: "done" });

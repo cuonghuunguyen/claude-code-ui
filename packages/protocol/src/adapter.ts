@@ -58,7 +58,7 @@ export function bashRecords(command: string, stdout: string, stderr: string, exi
 const NUDGE = /^\[Your previous response had no visible output\./;
 // A background subagent's placeholder tool_result names its agentId, which is the task ID of its notifications (SDK 0.3.285).
 const ASYNC_LAUNCHED = /^Async agent launched successfully\.[\s\S]*?^agentId: (\w+)/m;
-// A Bash call the user moved to the background: its tool_result names the task (SDK 0.3.285; the transcript has no tool_use_result).
+// A Bash call the user moved to the background: its tool_result names the task (SDK 0.3.285; only the transcript has no tool_use_result, so only replay matches the text).
 const MANUALLY_BACKGROUNDED = /^Command was manually backgrounded by user with ID: (\w+)\./;
 // SendMessage's tool_result when it resumed a finished subagent run (SDK 0.3.285); a queued message names no resumedAgentId.
 const RESUMED = /"resumedAgentId":"(\w+)"/;
@@ -309,7 +309,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             background.add(b.tool_use_id);
             tasks.set(launched[1]!, b.tool_use_id);
           }
-          const moved = typeof output === "string" && call?.type === "tool_call" && call.tool === "Bash" ? MANUALLY_BACKGROUNDED.exec(output) : null;
+          // Replay only: a live result carries tool_use_result, so plain output that quotes the text does not match.
+          const moved = m.tool_use_result === undefined && typeof output === "string" && call?.type === "tool_call" && call.tool === "Bash" ? MANUALLY_BACKGROUNDED.exec(output) : null;
           if (moved) {
             background.add(b.tool_use_id);
             tasks.set(moved[1]!, b.tool_use_id);
