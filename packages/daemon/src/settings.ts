@@ -1,11 +1,12 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
 export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
 
-type Check = { valid: (v: unknown) => boolean; label: string; rule: string };
+/** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
+type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
 const jiraUrl = (v: unknown) => {
   if (typeof v !== "string" || v.length > 500) return false;
   try {
@@ -38,7 +39,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   notifications: { desktop: bool("Desktop notifications") },
   performance: { monitor: bool("Performance monitor") },
   jira: {
-    url: { valid: (v) => v === "" || jiraUrl(v), label: "Jira URL", rule: "empty or an http(s) address without user name or password" },
+    url: { valid: (v) => v === "" || jiraUrl(v), label: "Jira URL", rule: "empty or an http(s) address without user name or password", patch: (v) => v === "" || (jiraUrl(v) && !jiraUrlProblem(v as string)), patchRule: "empty or an https address without user name or password (http only for localhost or 127.0.0.1)" },
     email: { valid: (v) => typeof v === "string" && v.length <= 254 && !/[\s]/.test(v), label: "Jira email", rule: "an email address" },
     template: { valid: (v) => typeof v === "string" && v.length >= 1 && v.length <= 200 && !/[\0-\x1f]/.test(v), label: "Branch template", rule: "1 to 200 characters" },
     jql: { valid: (v) => typeof v === "string" && v.length <= 2000 && !/[\0-\x08\x0b-\x1f]/.test(v), label: "Ticket filter", rule: "JQL of at most 2000 characters" },
@@ -99,7 +100,7 @@ export function checkPatch(patch: unknown): string | undefined {
     for (const k of Object.keys(v)) {
       const c = Object.hasOwn(sec, k) ? sec[k] : undefined;
       if (!c) return `unknown setting ${s}.${k}`;
-      if (!c.valid(v[k])) return `${c.label} must be ${c.rule}`;
+      if (!(c.patch ?? c.valid)(v[k])) return `${c.label} must be ${c.patchRule ?? c.rule}`;
     }
   }
 }

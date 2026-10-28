@@ -810,3 +810,56 @@ describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in 
   });
 });
 
+
+describe("Bash call moved to the background (GH-440)", () => {
+  const bashCall = (id = "tb1") => ({ type: "assistant", message: { id: `m-${id}`, role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command: "sleep 60" } }] } });
+  const result = (id: string, content: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] } });
+  const calls = (ps: Part[]) => ps.filter((p): p is Extract<Part, { type: "tool_call" }> => p.type === "tool_call");
+
+  it("a foreground Bash call moved to the background stays running until its task_notification (live SDK 0.3.285)", () => {
+    const messages = fixture("bash-backgrounded.jsonl");
+    const adapter = createAdapter();
+    const steps = messages.map((m) => adapter.convert(m as never));
+    const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
+    const last = (ps: Part[]) => calls(ps).at(-1)!;
+    expect(last(at((m) => m.subtype === "task_started"))).toMatchObject({ shell: "foreground", status: "running" });
+    expect(last(at((m) => m.subtype === "task_updated" && m.patch.is_backgrounded))).toMatchObject({ shell: "background", status: "running" });
+    // The placeholder tool_result keeps it running.
+    expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
+    expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ shell: "background", status: "done" });
+  });
+
+  it("a restored manually backgrounded Bash call is a background shell until its notification record", () => {
+    const placeholder = "Command was manually backgrounded by user with ID: bg1. Output is being written to: /tmp/x.output. If it is still running after 30m in the background, it will be stopped and you will be notified.";
+    const adapter = createAdapter();
+    adapter.convert(bashCall() as never);
+    const parts = adapter.convert(result("tb1", placeholder) as never);
+    expect(calls(parts).at(-1)).toMatchObject({ shell: "background", status: "running" });
+    expect(adapter.openCalls().map((c) => c.id)).toContain("tb1");
+    const ended = adapter.convert({ type: "user", message: { role: "user", content: "<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>tb1</tool-use-id>\n<status>completed</status>\n</task-notification>" } } as never);
+    expect(calls(ended).at(-1)).toMatchObject({ status: "done" });
+  });
+
+  it("a live Bash result that starts with the placeholder text ends the call; only a replayed one (no tool_use_result) is a moved shell", () => {
+    const text = "Command was manually backgrounded by user with ID: abc. x";
+    for (const live of [true, false]) {
+      const adapter = createAdapter();
+      adapter.convert(bashCall() as never);
+      const parts = adapter.convert({ ...result("tb1", text), ...(live ? { tool_use_result: { stdout: text, stderr: "", interrupted: false } } : {}) } as never);
+      expect(calls(parts).at(-1)).toMatchObject(live ? { status: "done" } : { status: "running", shell: "background" });
+    }
+  });
+
+  it("a Bash call that ends before its task registers gets no shell mark", () => {
+    const ps = run([bashCall(), result("tb1", "ok")]);
+    expect(calls(ps).at(-1)).toMatchObject({ status: "done" });
+    expect(calls(ps).every((p) => p.shell === undefined)).toBe(true);
+  });
+
+  it("task_updated without is_backgrounded changes nothing", () => {
+    const adapter = createAdapter();
+    adapter.convert(bashCall() as never);
+    adapter.convert({ type: "system", subtype: "task_started", task_id: "bg1", tool_use_id: "tb1", is_backgrounded: false, task_type: "local_bash", uuid: "u1" } as never);
+    expect(adapter.convert({ type: "system", subtype: "task_updated", task_id: "bg1", patch: { status: "completed" }, uuid: "u2" } as never)).toEqual([]);
+  });
+});

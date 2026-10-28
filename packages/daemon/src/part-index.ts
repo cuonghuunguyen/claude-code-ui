@@ -1,6 +1,6 @@
 // Materialized view of a session's event log (docs/spec.md "Event log and sequence numbers", paged subscribe): the same fold the
 // client's applyEvent does, kept so the daemon can send whole-turn pages instead of replaying every delta.
-import { isAttention, isEditOf, isPlanFileWrite, planOfCall, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
+import { isAttention, isBackgroundShell, isEditOf, isPlanFileWrite, planOfCall, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
 import type { Event, Part, PosPart, SessionState, TimelinePage } from "@claude-ui/protocol";
 
 type Entry = { part: Part; pos: number; seq: number };
@@ -138,7 +138,7 @@ export class PartIndex {
         }
       }
     }
-    return this.scan(beforePos, (p) => keep.has(p.id) || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && (p.input as { run_in_background?: unknown } | null)?.run_in_background === true));
+    return this.scan(beforePos, (p) => keep.has(p.id) || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.status === "running" && isBackgroundShell(p)));
   }
 
   /** The plan of the ExitPlanMode call `toolUseId` (see planOfCall; a call not indexed yet counts as the newest part). */

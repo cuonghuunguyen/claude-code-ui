@@ -488,3 +488,12 @@ it("GH-396 move rows per kind list the two other homes: files, graph (git only) 
   expect(ids(c).some((i) => i.startsWith("changes."))).toBe(false);
   expect(ids(ctx({ homes, moveKind: vi.fn() })).some((i) => i.startsWith("graph."))).toBe(false);
 });
+
+it("Run in background is listed only while a foreground shell runs, with Ctrl+Shift+B", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "shell.background")).toBeUndefined();
+  const run = vi.fn();
+  const item = appCommands(ctx({ runInBackground: run })).find((i) => i.id === "shell.background");
+  expect(item).toMatchObject({ title: "Run in background", keys: "mod+shift+b" });
+  if (item && "run" in item) item.run();
+  expect(run).toHaveBeenCalled();
+});

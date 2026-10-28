@@ -31,8 +31,12 @@ export function createJsonFile<T>(file: string | undefined, parse: (raw: unknown
         loaded = true;
       }
       // Corrupt or unreadable (EACCES, EISDIR, ...; then the data in memory stays): log once until a read succeeds.
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT" && !readFailed)
-        (readFailed = true), console.error(corrupt ? `ignoring unreadable ${label} (${file}):` : `reading ${label} failed, keeping it in memory:`, e);
+      // A SyntaxError quotes the file's start (V8): log no file content (secrets.json, the JQL in settings.json) (GH-451).
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT" && !readFailed) {
+        readFailed = true;
+        if (corrupt) console.error(`ignoring unreadable ${label} (${file}): not valid JSON`);
+        else console.error(`reading ${label} failed, keeping it in memory:`, e);
+      }
     }
   };
   /** Temp file (per process: two daemons must not share one) + rename: a crash during the write leaves the old file, never a truncated one. */

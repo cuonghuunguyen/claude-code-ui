@@ -9,7 +9,7 @@ import { DIFF_THEMES } from "./code-palette.ts";
 import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArrowDownToLineIcon, Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -19,8 +19,10 @@ import { Mark, statusText } from "./todo-dock.tsx";
 import { parseAnsi } from "./ansi.ts";
 import type { ToolCall } from "./store.ts";
 import { relPath } from "./paths.ts";
+import { specOf } from "./keymap.ts";
+import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
-import { PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactPreview } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
@@ -96,10 +98,13 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   const cwd = use(CwdContext);
   const target = openViewer && cardTarget(call, plan);
   const showPlan = use(PlanTabContext);
+  const toBackground = use(BackgroundShellContext);
+  const canBackground = !!toBackground && call.tool === "Bash" && call.status === "running" && call.shell === "foreground";
+  const [moving, setMoving] = useState<{ error?: string }>();
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
   const header = (
     <ToolHeader
-      className={target ? "min-w-0 flex-1" : undefined}
+      className={target || canBackground ? "min-w-0 flex-1" : undefined}
       type="dynamic-tool"
       toolName={call.tool}
       state={awaiting ? "approval-requested" : STATE[call.status]}
@@ -120,14 +125,28 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   );
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
-      {target ? (
+      {target || canBackground ? (
         <div className="group/head flex items-center gap-1">
           {header}
+          {canBackground && (
+            <BackgroundButton
+              pending={!!moving && !moving.error}
+              onClick={() => {
+                setMoving({});
+                toBackground!(call.toolUseId).catch((e: Error) => setMoving({ error: e.message }));
+              }}
+            />
+          )}
           {call.tool === "ExitPlanMode" && target?.kind === "plan" && showPlan && <PlanTabButton onOpen={showPlan} />}
-          <OpenButton target={target} onOpen={openViewer!} label={openLabel(target, stats, cwd)} />
+          {target && <OpenButton target={target} onOpen={openViewer!} label={openLabel(target, stats, cwd)} />}
         </div>
       ) : (
         header
+      )}
+      {canBackground && moving?.error && (
+        <p role="alert" data-testid="run-in-background-error" className="px-3 pb-2 text-xs text-destructive">
+          Could not run in background: {moving.error}
+        </p>
       )}
       <ToolContent>
         {decided && (
@@ -150,6 +169,26 @@ const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | 
 
 const OPEN_CLASS =
   "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100";
+
+/** Run in background (GH-440): always visible while the command runs (a transient action), 44 px below md. */
+function BackgroundButton({ pending, onClick }: { pending: boolean; onClick: () => void }) {
+  const keys = keyText(specOf("shell.background"));
+  return (
+    <button
+      type="button"
+      aria-label="Run in background"
+      title={keys ? `Run in background (${keys})` : "Run in background"}
+      data-testid="run-in-background"
+      data-command="shell.background"
+      disabled={pending}
+      aria-busy={pending}
+      onClick={onClick}
+      className={cn(OPEN_CLASS.replace("opacity-0 ", ""), "disabled:cursor-default disabled:opacity-50")}
+    >
+      <ArrowDownToLineIcon aria-hidden className="size-4" />
+    </button>
+  );
+}
 
 /** "Open in tab" of the plan card (GH-395): same reveal rules as OpenButton. */
 function PlanTabButton({ onOpen }: { onOpen: () => void }) {
