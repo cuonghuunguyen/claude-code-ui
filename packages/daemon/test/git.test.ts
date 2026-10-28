@@ -1118,12 +1118,12 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect((await gitLog(r.dir, { ref: "refs/heads/--all", allowed: all }))!.commits).toHaveLength(1);
   });
 
-  /** The git argv of every call made while `fn` runs (a logging wrapper first on PATH). */
+  /** The git argv of every call made while `fn` runs (a logging wrapper first on PATH; one write per call, so parallel calls never interleave). */
   async function recorded(fn: () => Promise<unknown>): Promise<string[][]> {
     const bin = mkdtempSync(join(tmpdir(), "gitbin-"));
     const log = join(bin, "log");
     const real = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ -z "$GIT_WRAP" ]; then\nprintf 'LAZY=%s\\037' "$GIT_NO_LAZY_FETCH" >> '${log}'\nprintf '%s\\037' "$@" >> '${log}'\nprintf '\\n' >> '${log}'\nfi\nexport GIT_WRAP=1\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ -z "$GIT_WRAP" ]; then\nprintf 'LAZY=%s\\037%s\\n' "$GIT_NO_LAZY_FETCH" "$(printf '%s\\037' "$@")" >> '${log}'\nfi\nexport GIT_WRAP=1\nexec '${real}' "$@"\n`, { mode: 0o755 });
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {

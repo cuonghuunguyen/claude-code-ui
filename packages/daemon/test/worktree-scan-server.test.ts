@@ -124,6 +124,22 @@ describe("worktree.status with a scan id", () => {
     expect(await c.request({ type: "worktree.cancel", scan: 5 })).toMatchObject({ code: "bad_request" });
   });
 
+  it("a Clean up scan of 20 worktrees spawns at most 3 git processes per worktree and the repo-wide reads once", async () => {
+    const { root, repo, paths } = fixture(20, 0);
+    const c = await client(await daemon({ root, repo }));
+    const calls: GitRunOptions[] = [];
+    setGitRunner((o) => (calls.push(o), threadRunner(o)));
+    const replies = await Promise.all(paths.map((path) => c.request({ type: "worktree.status", cwd: repo, path, scan: "budget" })));
+    expect(replies.map((r) => r.type)).toEqual(paths.map(() => "reply"));
+    const sub = (cs: GitRunOptions[]) => cs.map((o) => gitSub(o.args));
+    for (const p of paths) expect(sub(calls.filter((o) => o.cwd === p)).length, p).toBeLessThanOrEqual(3);
+    const rest = calls.filter((o) => !paths.includes(o.cwd));
+    for (const s of ["worktree", "config", "for-each-ref"]) expect(sub(rest).filter((x) => x === s), s).toHaveLength(1);
+    expect(sub(calls)).not.toContain("log");
+    expect(sub(calls)).not.toContain("symbolic-ref");
+    expect(calls.length).toBeLessThanOrEqual(3 * paths.length + 3);
+  });
+
   it("a scan's worktree.status waits behind git.status", async () => {
     const { root, repo, paths, bs } = fixture(1, 5);
     const c = await client(await daemon({ root, repo }));
