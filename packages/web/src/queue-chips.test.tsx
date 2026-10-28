@@ -120,3 +120,10 @@ it("GH-443: a failed bash item shows why it did not run", async () => {
   expect(rows[0]!.textContent).toContain("Not run: outside the allowlisted roots: /x");
   expect(rows[1]!.textContent).not.toContain("Not run");
 });
+
+it("a queued message with a pasted block shows '[Pasted text +K lines]', not the tags", async () => {
+  const text = 'go\n\n<pasted_content id="9f3a">\na\nb\nc\nd\n</pasted_content id="9f3a">\n';
+  const el = await render(<QueueChips items={[item("a", text)]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  expect(el.textContent).toContain("go[Pasted text +3 lines]");
+  expect(el.innerHTML).not.toContain("pasted_content");
+});
