@@ -1,7 +1,7 @@
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
-import { startDaemon, type Daemon } from "../support/daemon.ts";
+import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
 import { runDir } from "../support/paths.ts";
 import { RECONNECT_MS, waitConnected } from "../support/ui.ts";
@@ -28,7 +28,7 @@ Given("a session that published the page {string} titled {string}", async ({ pag
   const run = runDir();
   const configDir = join(run, `claude-config-w${$testInfo.workerIndex}`);
   transcript = writePublishTranscript({ sessionId: randomUUID(), cwd: project.path, file, title, url: "https://claude.ai/artifact/AbC123", configDir, run });
-  own = await startDaemon(run, 1000 + $testInfo.workerIndex, { env: { CLAUDE_CONFIG_DIR: configDir } });
+  own = await startDaemon(run, 1000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: { CLAUDE_CONFIG_DIR: configDir } });
   await openApp(page, own);
   await openProject(page, project.path);
   const row = page.getByTestId("session-item").filter({ hasText: "Publish the dashboard" }).first();
@@ -76,6 +76,10 @@ When("I click Open in tab on the Artifact card", async ({ page }) => {
 When("I close the artifact tab {string}", async ({ page }, name: string) => {
   await tab(page, name).getByTestId("tab-close").click({ force: true });
   await expect(tab(page, name)).toHaveCount(0);
+});
+
+When("I click the session tab {string}", async ({ page }, name: string) => {
+  await page.getByTestId("tab-strip").getByRole("tab", { name, exact: true }).click();
 });
 
 When("I click the artifact tab {string}", async ({ page }, name: string) => {

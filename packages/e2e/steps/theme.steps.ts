@@ -7,11 +7,13 @@ import { Given, Then, When } from "./fixtures.ts";
 // GH-468 theme picker. Written, not run (release rule): selectors for the diff and the terminal are unverified against a live page.
 const rgb = (hex: string) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
 const token = (page: Page, name: string) => page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+/** CSS may write #fff for #ffffff. */
+const long = (hex: string) => (/^#[0-9a-f]{3}$/i.test(hex) ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex).toLowerCase();
 
 async function openSettings(page: Page): Promise<void> {
   const drawer = page.getByTestId("open-drawer");
   if (await drawer.isVisible()) await drawer.click();
-  await page.locator('[data-testid="open-settings"]:visible').first().click();
+  await page.getByTestId("open-settings").last().click(); // the drawer copy on a phone
 }
 
 /** Titlebar (or drawer) theme button cycles System, Light, Dark: click until its label names the mode. */
@@ -36,6 +38,9 @@ async function chooseTheme(page: Page, name: string): Promise<void> {
   await page.getByTestId("settings-theme").click();
   await page.getByRole("option", { name: new RegExp(`^${name}`) }).click();
   await expect(page.getByTestId("settings-theme")).toContainText(name);
+  // Settings is modal: close it so the titlebar mode button and the page can be used.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-appearance")).toBeHidden();
 }
 
 When("I choose the theme {string}", async ({ page }, name: string) => chooseTheme(page, name));
@@ -45,41 +50,53 @@ When("I set the mode to {string}", async ({ page }, mode: string) => setMode(pag
 
 Given("the theme is {string} and the mode is {string}", async ({ page }, name: string, mode: string) => {
   await chooseTheme(page, name);
-  await page.keyboard.press("Escape");
   await setMode(page, mode);
 });
 
-Then("the theme list is {string}", async ({ page }, names: string) => {
+/** Escape may close the whole Settings dialog with the select popup: reopen it when needed. */
+async function openThemeSelect(page: Page): Promise<void> {
+  if (!(await page.getByTestId("settings-appearance").isVisible())) {
+    await openSettings(page);
+    await page.getByTestId("settings-group-appearance").click();
+  }
   await page.getByTestId("settings-theme").click();
-  const got = (await page.getByRole("option").allTextContents()).map((t) => t.replace(/dark only$/, ""));
-  expect(got).toEqual(names.split(", "));
+}
+
+Then("the theme list is {string}", async ({ page }, names: string) => {
+  await openThemeSelect(page);
+  const want = names.split(", ");
+  await expect.poll(async () => (await page.getByRole("option").allTextContents()).map((t) => t.replace(/dark only$/, ""))).toEqual(want);
   await page.keyboard.press("Escape");
 });
 
 Then("the theme {string} is marked dark only", async ({ page }, name: string) => {
-  await page.getByTestId("settings-theme").click();
+  await openThemeSelect(page);
   await expect(page.getByRole("option", { name: new RegExp(`^${name}`) })).toContainText("dark only");
   await page.keyboard.press("Escape");
 });
 
 Then("the app card colour is {string}", async ({ page }, hex: string) => {
-  await expect.poll(() => token(page, "--card")).toBe(hex);
+  await expect.poll(async () => long(await token(page, "--card"))).toBe(hex);
 });
 
 Then("the terminal background is {string}", async ({ page }, hex: string) => {
-  await expect.poll(() => page.locator(".xterm-viewport").first().evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(rgb(hex));
+  await expect.poll(() => page.locator(".xterm-scrollable-element").first().evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(rgb(hex));
 });
 
 Then("the diff background is the app card colour", async ({ page }) => {
-  const card = rgb(await token(page, "--card"));
+  const card = rgb(long(await token(page, "--card")));
   await expect
-    .poll(() => page.evaluate(() => getComputedStyle(document.querySelector("diffs-container")!.shadowRoot!.querySelector("pre")!).backgroundColor))
+    .poll(() => page.evaluate(() => {
+      const pre = document.querySelector("diffs-container")?.shadowRoot?.querySelector("pre");
+      return pre ? getComputedStyle(pre).backgroundColor : undefined;
+    }))
     .toBe(card);
 });
 
 Then("the Graph ref chip uses the theme colour", async ({ page }) => {
-  const local = rgb(await token(page, "--ref-local"));
-  await expect.poll(() => page.locator('[data-ref^="refs/heads/"]').first().evaluate((e) => getComputedStyle(e).color)).toBe(local);
+  // The first branch chip is the checked-out one (--ref-head); other local branches use --ref-local.
+  const ok = [rgb(long(await token(page, "--ref-local"))), rgb(long(await token(page, "--ref-head")))];
+  await expect.poll(async () => ok.includes(await page.locator('[data-ref^="refs/heads/"]').first().evaluate((e) => getComputedStyle(e).color))).toBe(true);
 });
 
 Then("the page did not navigate", async ({ page }) => {
@@ -122,7 +139,6 @@ Then("the theme select is at least 44px high", async ({ page }) => {
 });
 
 Then("the Settings dialog has a 1px border and the floating shadow", async ({ page }) => {
-  await openSettings(page);
   const dialog = page.getByRole("dialog").first();
   const s = await dialog.evaluate((e) => { const c = getComputedStyle(e); return { width: c.borderTopWidth, shadow: c.boxShadow }; });
   expect(s.width).toBe("1px");
@@ -131,7 +147,8 @@ Then("the Settings dialog has a 1px border and the floating shadow", async ({ pa
 
 Then("the session pane has a 1px border", async ({ page }) => {
   await page.keyboard.press("Escape");
-  const w = await page.getByTestId("pane-session").evaluate((e) => getComputedStyle(e).borderTopWidth);
+  // The pane of a draft session (pane-session is a phone tab button).
+  const w = await page.getByTestId("new-session-tab").evaluate((e) => getComputedStyle(e).borderTopWidth);
   expect(w).toBe("1px");
 });
 

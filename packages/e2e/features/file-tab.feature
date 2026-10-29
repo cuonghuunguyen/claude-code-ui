@@ -8,6 +8,7 @@ Feature: Open a single file as a tab (GH-399)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I choose "Open in tab" in the tree menu of "src/a.ts"
     Then the file tab "a.ts" opens right of its session tab with the editor focused
     And the Files editor tabs do not list "a.ts"
@@ -17,6 +18,7 @@ Feature: Open a single file as a tab (GH-399)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I type "// edit " at the start of the Files editor
     And I click Open in tab in the Files header
@@ -86,6 +88,7 @@ Feature: Open a single file as a tab (GH-399)
   Scenario: Split a file tab beside its session
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
+    And I hide the side panel
     When I Quick open "src/a.ts" with Alt+Enter
     And I choose "Split right" in the menu of the file tab "a.ts"
     Then the session area is split
