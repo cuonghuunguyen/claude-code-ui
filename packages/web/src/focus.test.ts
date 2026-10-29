@@ -127,6 +127,14 @@ it("usage limit: a scheduled continue gives a Cancel continue row", () => {
   expect(r).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset: continues at 14:05", action: "cancel_continue" });
 });
 
+it("usage limit without a scheduled continue (auto-continue off): an Open session row, with or without the reset time; a scheduled continue wins", () => {
+  const stop = (resetsAt?: number): Part => ({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW + 5000)]) }))[0]).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset: resets at 14:05", action: "open" });
+  expect(attentionRows(input([item("a")], { a: view([stop()]) }))[0]).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset", action: "open" });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW + 9000), { type: "auto_continue", id: "auto_continue", at: NOW + 5000 }]) }))[0]).toMatchObject({ reason: "Wait for the usage limit to reset: continues at 14:05", action: "cancel_continue" });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW), { type: "limit_stop", id: "limit_stop", stopped: false }]) }))).toEqual([]);
+});
+
 it("stuck: running, nothing pending, no running call, quiet 5 min; quiet 4 min or a running call gives none", () => {
   const list = [item("a")];
   const v = view([user, call("c1", "Read", "done", { file_path: "/p/a.ts" }), state("running")]);

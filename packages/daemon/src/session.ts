@@ -238,6 +238,7 @@ export class Session {
   private limitHit = false;
   private limitResetsAt?: number;
   private continueAt: number | null = null;
+  private limitStopped = false;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
   /**
@@ -888,6 +889,12 @@ export class Session {
     this.emit({ type: "auto_continue", id: "auto_continue", at });
   }
 
+  /** The turn ended at the usage limit (`resetsAt` ms when known): the Focus page's limit row, also with auto-continue off. Cleared when the next turn starts. */
+  setLimitStop(resetsAt: number | undefined) {
+    this.limitStopped = true;
+    this.emit({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
+  }
+
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
   setQueue(items: { id: string; text: string; images: string[]; bash?: true; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
     const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };
@@ -1418,6 +1425,10 @@ export class Session {
 
   private setState(state: SessionState) {
     this.state = state;
+    if (state === "running" && this.limitStopped) {
+      this.limitStopped = false;
+      this.emit({ type: "limit_stop", id: "limit_stop", stopped: false });
+    }
     this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
     if (state === "idle") this.flushBashNotices();

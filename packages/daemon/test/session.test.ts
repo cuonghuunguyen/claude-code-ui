@@ -1422,6 +1422,22 @@ describe("Session context usage", () => {
     expect(onLimitStop).not.toHaveBeenCalled();
   });
 
+  it("setLimitStop emits limit_stop, the next turn clears it, the snapshot carries it (GH-305)", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const stops = () => events.filter((e) => e.part.type === "limit_stop").map((e) => e.part);
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(stops()).toEqual([]);
+    s.setLimitStop(7000);
+    expect(stops()).toEqual([{ type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: 7000 }]);
+    expect(s.snapshot().snapshot.heads.some((e) => e.part.type === "limit_stop" && e.part.stopped)).toBe(true);
+    s.prompt("again");
+    await until(events, (e) => e.part.type === "limit_stop" && !e.part.stopped);
+    expect(stops()).toHaveLength(2);
+  });
+
   it("setContinueAt emits one auto_continue part per change; the snapshot heads carry it", () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     const events: Event[] = [];

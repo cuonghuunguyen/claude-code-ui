@@ -51,6 +51,14 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
   });
 
+  it("limit_stop sets and clears limitStop and adds no timeline item (GH-305)", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: 5000 }));
+    expect(s.limitStop).toEqual({ resetsAt: 5000 });
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "limit_stop", id: "limit_stop", stopped: true })).limitStop).toEqual({});
+    expect(applyEvent(s, ev(2, { type: "limit_stop", id: "limit_stop", stopped: false })).limitStop).toBeUndefined();
+  });
+
   it("auto_continue sets and clears continueAt and adds no timeline item", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "auto_continue", id: "auto_continue", at: 5000 }));
     expect(s.continueAt).toBe(5000);

@@ -351,6 +351,7 @@ export function createDaemon(opts: {
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
       const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
+      sessions.get(id)?.setLimitStop(at);
       autoContinue.schedule(id, at);
       // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
       queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);

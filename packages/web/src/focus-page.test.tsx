@@ -232,6 +232,15 @@ it("usage-limit row: selecting shows Cancel continue, which calls onCancelContin
   expect(cancelContinue).toHaveBeenCalledWith("l");
 });
 
+it("usage-limit row without a scheduled continue (auto-continue off): Open session, no Cancel continue", async () => {
+  const s: State = { list: [item("l", { state: "idle" })], views: { l: view([{ type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: Date.now() + 60_000 }]) } };
+  await render(s);
+  expect(rows()[0]!.dataset.kind).toBe("limit");
+  expect(rows()[0]!.textContent).toContain("resets at");
+  expect(el.querySelector('[data-testid="focus-row-action"]')!.textContent).toBe("Open session");
+  expect(el.querySelector('[data-testid="focus-cancel-continue"]')).toBeNull();
+});
+
 it("the detail shows the task list (done, in progress, next) above the recent context", async () => {
   const s = base();
   s.views.a = view([{ type: "user_text", id: "u", text: "go", images: [] }, todo(["Plan", "completed"], ["Build", "in_progress"], ["Test", "pending"]), bash("ra", "ls", NOW)]);

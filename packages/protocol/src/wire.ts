@@ -342,7 +342,7 @@ export type PosPart = { part: Part; pos: number };
 /** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
- * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, prompt_queue, todo_update events; `aux` = parts of the
+ * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, limit_stop, prompt_queue, todo_update events; `aux` = parts of the
  * unloaded region that whole-session features need (subagent, turn_result, running background Bash calls).
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };

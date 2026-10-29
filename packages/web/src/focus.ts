@@ -205,6 +205,7 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
     if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, `Check the error: ${errorText(view)}`, "open"));
     else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset: continues at ${clock(view.continueAt)}`, "cancel_continue"));
+    else if (view.limitStop) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset${view.limitStop.resetsAt ? `: resets at ${clock(view.limitStop.resetsAt)}` : ""}`, "open"));
     else if ((view.state === "running" || view.externalTurn) && !busy(view) && i.now - i.activity(s.id) >= STUCK_MS) {
       const at = i.activity(s.id);
       const lastCall = lastOf(topLevel(view), (p) => p.type === "tool_call");
