@@ -792,6 +792,42 @@ it("a maximized terminal restores when the shown session asks for permission", a
   expect(mainHidden()).toBe(false);
 });
 
+// `hidden lg:flex` shows on wide screens; a bare `hidden` or `lg:hidden` does not.
+const hasHidden = (n: Element | null) => {
+  const c = (n?.className ?? "").split(/\s+/);
+  return (c.includes("hidden") && !c.includes("lg:flex")) || c.includes("lg:hidden");
+};
+const openFocus = () => act(async () => el.querySelector<HTMLElement>('[data-testid="focus-tab"] button')!.click());
+
+it("GH-367: Focus keeps the side and bottom panels and the titlebar toggles of the session shown last", async () => {
+  await clickId("terminal-toggle");
+  await openFocus();
+  expect(q("focus-page")).not.toBeNull();
+  expect(hasHidden(q("side-panel")!.parentElement)).toBe(false);
+  expect(hasHidden(q("bottom-panel"))).toBe(false);
+  expect(q("panel-toggle")).not.toBeNull();
+  expect(q("terminal-toggle-titlebar")).not.toBeNull();
+});
+
+it("GH-367: Focus keeps a maximized bottom panel maximized", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-maximize");
+  await openFocus();
+  expect(q("bottom-panel")!.className).toContain("flex-1");
+  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("GH-367: narrow Focus still shows no docks", async () => {
+  width = 390;
+  await rerender();
+  const tab = q("focus-tab")?.querySelector("button");
+  if (tab) await act(async () => tab.click());
+  else await clickId("focus-row-sidebar");
+  expect(q("terminal-toggle-titlebar")).toBeNull();
+  expect(q("bottom-panel")).toBeNull();
+  width = 1440;
+});
+
 it("hiding the side panel keeps the bottom terminal", async () => {
   await clickId("terminal-toggle");
   await clickId("panel-toggle");
