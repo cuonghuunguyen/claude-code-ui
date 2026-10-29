@@ -56,7 +56,10 @@ Feature: Filter files and @-mentions find files inside nested repositories and s
     And the app is open
     And I open the scratch project
     And I start a new Haiku session
-    When I open the Files tab of the side panel
+    # A phone shows the panes only for a session with a message.
+    When I send "Reply with exactly: OK"
+    And the turn has finished
+    And I open the Files tab of the side panel
     And I filter the Files tree by "handler"
     Then the Files filter shows the file "api/src/handler.ts"
     And the page has no horizontal scroll
