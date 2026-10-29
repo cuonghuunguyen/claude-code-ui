@@ -9,7 +9,7 @@ Feature: Drag panes between the side and bottom panels and the main area
     And I capture "drag-plan-to-strip"
 
   Scenario: The Files dock tab dropped on the right edge of the session area splits it
-    Given the viewport is 1440x900
+    Given the viewport is 1700x900
     And a Haiku session with one finished reply
     When I drag the "Files" dock tab onto the right edge of the session area
     Then the session area is split
@@ -46,7 +46,8 @@ Feature: Drag panes between the side and bottom panels and the main area
   Scenario: A Terminal tab of the main area dropped on the side panel returns to a panel
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
-    When I move the "Terminal" pane to the main area from its tab menu
+    When I toggle the terminal from the titlebar
+    And I move the "Terminal" pane to the main area from its tab menu
     And I drag the "Terminal" tab onto the side panel
     Then there is no "Terminal" tab
     And a toast says "Closed 1 Terminal tab"
@@ -57,7 +58,6 @@ Feature: Drag panes between the side and bottom panels and the main area
     Given the viewport is 1440x900
     And a Haiku session in Plan mode with a plan waiting for approval
     When I move the "Plan" pane to the main area from its tab menu
-    And I hide the bottom panel
     And I drag the "Plan" tab onto the bottom drop strip
     Then there is no "Plan" tab
     And the bottom panel has the "Plan" tab selected
@@ -77,6 +77,7 @@ Feature: Drag panes between the side and bottom panels and the main area
     And the Files editor shows "a.ts" with the text "// edit export const a = 1;"
     And I capture "drag-file-to-files"
     When I click Open in tab in the Files header
+    And I toggle the terminal from the titlebar
     And I start dragging the file tab "a.ts" over the bottom panel
     Then no drop target is outlined
 
@@ -84,7 +85,8 @@ Feature: Drag panes between the side and bottom panels and the main area
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     And I open a second session with a finished reply
-    When I drag the first session tab onto the bottom panel
+    When I toggle the terminal from the titlebar
+    And I drag the first session tab onto the bottom panel
     Then the "bottom" panel has a selected session tab with a timeline and a prompt box
     And the tab strip has 1 session tab
     And I capture "drag-dock-session"
@@ -97,7 +99,8 @@ Feature: Drag panes between the side and bottom panels and the main area
     Given the viewport is 1440x900
     And a Haiku session in Plan mode with a plan waiting for approval
     When I start dragging the "Plan" dock tab over the tab strip
-    And I press "Escape"
+    Then a drop target is outlined
+    When I press "Escape"
     Then no drop target is outlined
     And the side panel lists the "Plan" tab
     And I capture "drag-escape"

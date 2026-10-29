@@ -14,13 +14,16 @@ const panel = (page: Page, area: string) => page.getByTestId(`${area}-panel`);
 const drop = (from: Locator, to: Locator, position?: { x: number; y: number }) => from.dragTo(to, position ? { targetPosition: position } : undefined);
 const edgeAt = async (page: Page, edge: string) => {
   const b = (await sessionArea(page).boundingBox())!;
-  return { x: edge === "left" ? 12 : edge === "right" ? b.width - 12 : b.width / 2, y: edge === "top" ? 12 : edge === "bottom" ? b.height - 12 : b.height / 2 };
+  // 15% in from the edge (zone is the outer third): the very edge may be covered by a drop strip.
+  return { x: edge === "left" ? b.width * 0.15 : edge === "right" ? b.width * 0.85 : b.width / 2, y: edge === "top" ? b.height * 0.15 : edge === "bottom" ? b.height * 0.85 : b.height / 2 };
 };
 /** Hover only: press, move over the target, keep the button down. */
 async function hold(from: Locator, page: Page, x: number, y: number) {
   await from.hover();
   await page.mouse.down();
   await page.mouse.move(x, y, { steps: 8 });
+  // Chromium sends dragover on the next move: one more so the overlay follows the last position.
+  await page.mouse.move(x + 2, y, { steps: 2 });
 }
 const centre = async (l: Locator) => {
   const b = (await l.boundingBox())!;
@@ -36,7 +39,11 @@ When("I drag the {string} dock tab onto the session area", async ({ page }, kind
 });
 
 When("I drag the {string} dock tab onto the {word} edge of the session area", async ({ page }, kind: string, edge: string) => {
-  await drop(dockTab(page, kind), sessionArea(page), await edgeAt(page, edge));
+  // Manual drag: the session area takes the drop only after a dragover, which needs a move over it first.
+  const b = (await sessionArea(page).boundingBox())!;
+  const at = await edgeAt(page, edge);
+  await hold(dockTab(page, kind), page, b.x + at.x, b.y + at.y);
+  await page.mouse.up();
 });
 
 When("I start dragging the {string} dock tab over the session area", async ({ page }, kind: string) => {
@@ -60,7 +67,18 @@ When("I drag the {string} tab onto the {word} panel", async ({ page }, kind: str
 });
 
 When("I drag the {string} tab onto the bottom drop strip", async ({ page }, kind: string) => {
-  await drop(stripTab(page, kind), page.getByTestId("drop-bottom"));
+  // The strip exists only while a drag runs: start the drag with a small move, then wait for it.
+  const tab = stripTab(page, kind);
+  await tab.hover();
+  await page.mouse.down();
+  const t = (await tab.boundingBox())!;
+  await page.mouse.move(t.x + t.width / 2, t.y + t.height + 40, { steps: 4 });
+  const strip = page.getByTestId("drop-bottom");
+  await expect(strip).toBeVisible();
+  const c = await centre(strip);
+  await page.mouse.move(c.x, c.y, { steps: 8 });
+  await page.mouse.move(c.x + 2, c.y, { steps: 2 });
+  await page.mouse.up();
 });
 
 When("I drag the file tab {string} onto the {word} panel", async ({ page }, name: string, area: string) => {
@@ -78,6 +96,10 @@ When("I drag the first session tab onto the {word} panel", async ({ page }, area
 
 When("I drag the docked session tab onto the tab strip", async ({ page }) => {
   await drop(dockedTab(page), strip(page));
+});
+
+Then("a drop target is outlined", async ({ page }) => {
+  await expect(page.locator("[data-drop-target]")).not.toHaveCount(0);
 });
 
 Then("no drop target is outlined", async ({ page }) => {
