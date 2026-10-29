@@ -9,6 +9,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I double click the Files editor tab "a.ts"
     And I open the tree file "src/b.ts"
@@ -26,6 +27,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I double click the Files editor tab "a.ts"
     And I open the tree file "src/b.ts"
@@ -41,6 +43,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I type "// edit " at the start of the Files editor
     And I reload the page and accept the leave dialog
@@ -55,6 +58,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I type "// edit " at the start of the Files editor
     And I change the project file "src/a.ts" to "export const a = 2;"
@@ -71,6 +75,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I type "// edit " at the start of the Files editor
     And I delete the project file "src/a.ts"
@@ -86,6 +91,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I choose "Open in tab" in the tree menu of "src/a.ts"
     And I type "// edit " at the start of the file tab "a.ts"
     And I reload the page and accept the leave dialog
@@ -97,6 +103,7 @@ Feature: Files tab restores open editor tabs after reload (GH-366)
     Given the viewport is 390x844
     And a Haiku session with one finished reply
     When I open the Files tab of the side panel
+    And I expand the tree folder "src"
     And I open the tree file "src/a.ts"
     And I double click the Files editor tab "a.ts"
     And I reload the page

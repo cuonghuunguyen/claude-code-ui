@@ -8,6 +8,9 @@ const entry = (page: Page, rel: string): Locator => page.locator(`[data-testid="
 /** Desktop: a tab of the side panel. Phone: the Panes tab list. */
 async function openPane(page: Page, name: RegExp): Promise<void> {
   const desktopTab = side(page).getByRole("tab", { name });
+  const phoneTab = page.getByRole("tablist", { name: "Panes" }).getByRole("tab", { name });
+  // After a reload the panel renders late: wait for either before choosing.
+  await desktopTab.or(phoneTab).first().waitFor({ timeout: 15_000 });
   if (await desktopTab.isVisible()) return void (await desktopTab.click());
   await page.getByRole("tablist", { name: "Panes" }).getByRole("tab", { name }).click();
 }
