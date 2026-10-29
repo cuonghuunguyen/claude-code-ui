@@ -1106,7 +1106,7 @@ it("GH-359 the touch drag switch follows the (pointer: coarse) media query", asy
 
 it("GH-356 the tab of the other split has the split icon and 'shown in split 2'; the menu Split right / Split down call onTabCommand", async () => {
   const onTabCommand = vi.fn();
-  const { el, tab } = await render({ onTabCommand, canSplit: true, splitShown: { id: "a", dir: "row", n: 1 } });
+  const { el, tab } = await render({ onTabCommand, canSplit: () => true, splitShown: { id: "a", dir: "row", n: 1 } });
   expect(tab("a").querySelector('[data-testid="tab-split-mark"]')).not.toBeNull();
   expect(tab("a").querySelector("[role=tab]")!.getAttribute("aria-label")).toContain("shown in split 1");
   expect(tab("b").querySelector('[data-testid="tab-split-mark"]')).toBeNull();
@@ -1272,13 +1272,13 @@ it("a plan tab shows the plan icon, \"Plan · <title>\" and its project line in 
 
 it("a plan tab's context menu is the pane menu; double click does not rename", async () => {
   const onCommand = vi.fn();
-  const { tab, onAction } = await render({ tabs: ["a", PLAN_ID], info: withPlan, activeId: "a", onTabCommand: onCommand, canSplit: true });
+  const { tab, onAction } = await render({ tabs: ["a", PLAN_ID], info: withPlan, activeId: "a", onTabCommand: onCommand, canSplit: () => true });
   await act(async () => void tab(PLAN_ID).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 4, clientY: 4 })));
   const ids = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((x) => x.dataset.testid);
   expect(ids).toContain("tab-menu-moveSide");
   expect(ids).toContain("tab-menu-goToSession");
   expect(ids).not.toContain("tab-menu-copyId");
-  expect(document.querySelector('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+  expect(document.querySelector('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(false);
   await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveBottom"]')!.click());
   expect(onCommand).toHaveBeenCalledWith(PLAN_ID, "moveBottom");
   await act(async () => void tab(PLAN_ID).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));

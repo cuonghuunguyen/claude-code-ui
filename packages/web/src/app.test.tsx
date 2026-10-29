@@ -809,12 +809,39 @@ it("GH-367: Focus keeps the side and bottom panels and the titlebar toggles of t
   expect(q("terminal-toggle-titlebar")).not.toBeNull();
 });
 
-it("GH-367: Focus keeps a maximized bottom panel maximized", async () => {
+it("GH-499: opening Focus restores a maximized bottom panel and shows the Focus page", async () => {
   await clickId("terminal-toggle");
   await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
   await openFocus();
-  expect(q("bottom-panel")!.className).toContain("flex-1");
-  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("true");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
+  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-499: the sidebar Focus row restores a maximized bottom panel too", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await clickId("focus-row-sidebar");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
+  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-499: a hidden bottom panel stays hidden on Focus", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-hide");
+  await openFocus();
+  expect(q("focus-page")).not.toBeNull();
+  expect(q("bottom-panel")).toBeNull();
+  expect(q("terminal-toggle")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-367: the Focus page comes before the side panel in the DOM (right side)", async () => {
+  await clickId("terminal-toggle");
+  await openFocus();
+  expect(q("focus-page")!.compareDocumentPosition(q("side-panel")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it("GH-367: narrow Focus still shows no docks", async () => {
@@ -823,6 +850,8 @@ it("GH-367: narrow Focus still shows no docks", async () => {
   const tab = q("focus-tab")?.querySelector("button");
   if (tab) await act(async () => tab.click());
   else await clickId("focus-row-sidebar");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
   expect(q("terminal-toggle-titlebar")).toBeNull();
   expect(q("bottom-panel")).toBeNull();
   width = 1440;
@@ -2699,6 +2728,108 @@ describe("GH-356 split view", () => {
     sent.length = 0;
   });
 
+  // GH-398: a session and one of its panes.
+  const PLAN = `plan:${ID}`;
+  const TERM = `terminal:${ID}`;
+  const FILES = `files:${ID}`;
+  const GRAPH = `graph:${ID}`;
+  const MAIN = (...main: string[]) => localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["changes"], bottom: [], main } }));
+  const paletteItems = async () => {
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    return [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')];
+  };
+  const overlay = () => el.querySelector<HTMLElement>('[data-testid="split-drop"]');
+
+  it("GH-398 Split right on a Plan tab shows the session and its plan side by side; the plan split is active and the side panel shows its owner", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    await remount(ID, [ID, S2, PLAN]);
+    await (await menu(PLAN))("Split right");
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Plan · Demo, split 2 of 2, active"]);
+    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${PLAN}"]`)).not.toBeNull();
+    expect(location.hash).toBe(`#${encodeURIComponent(PLAN)}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`)).not.toBeNull();
+  });
+
+  it("GH-398 activating a Terminal tab while split with Plan replaces the Plan split, the session stays", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    await remount(ID, [ID, S2, PLAN, TERM]);
+    await (await menu(PLAN))("Split right");
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${TERM}"] [role="tab"]`)!.click());
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Terminal · demo, split 2 of 2, active"]);
+    // The session split active: the pane still never replaces the only session.
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${PLAN}"] [role="tab"]`)!.click());
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Plan · Demo, split 2 of 2, active"]);
+  });
+
+  it("GH-398 a restored split with a Terminal tab mounts its terminal in the non-active split", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
+    await remount(ID, [ID, TERM]);
+    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${TERM}"] [data-pane-host]`)).not.toBeNull();
+  });
+
+  it("GH-398 the Git graph tab menu has Split right / down disabled with the reason; activating it shows it alone", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    await remount(ID, [ID, S2, GRAPH]);
+    await (await menu(S2))("Split right");
+    await menu(GRAPH);
+    for (const l of ["Split right", "Split down", "Git graph needs the whole area"]) expect([...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === l)!.hasAttribute("data-disabled")).toBe(true);
+    expect(document.querySelector('[data-testid="tab-menu-splitNote"]')!.textContent).toBe("Git graph needs the whole area");
+    await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${GRAPH}"] [role="tab"]`)!.click());
+    expect(splits()).toHaveLength(0);
+  });
+
+  it("GH-398 dragging Git graph over the session area shows the refusal and the drop does nothing", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    await remount(ID, [ID, S2, GRAPH]);
+    await drag(area(), "dragover", 880, 300, GRAPH);
+    expect(overlay()?.dataset.refused).toBe("whole");
+    expect(overlay()!.textContent).toBe("Git graph needs the whole area");
+    await drag(area(), "drop", 880, 300, GRAPH);
+    expect(splits()).toHaveLength(0);
+    expect(location.hash).toBe(`#${ID}`);
+  });
+
+  it("GH-398 dropping a pane on the centre of the only session's split is refused; dropping it at an edge splits", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, PLAN], at: 1, ratio: 0.5 }));
+    await remount(PLAN, [ID, PLAN, FILES]);
+    for (const sp of splits()) sp.getBoundingClientRect = () => ({ left: sp.style.order === "0" ? 0 : 450, top: 0, width: 450, height: 600, right: sp.style.order === "0" ? 450 : 900, bottom: 600, x: 0, y: 0, toJSON() {} });
+    await drag(area(), "dragover", 380, 300, FILES);
+    expect(overlay()?.dataset.refused).toBe("session");
+    expect(overlay()!.textContent).toBe("A split needs a session");
+    await drag(area(), "dragover", 880, 300, FILES);
+    expect(overlay()?.dataset.refused).toBeUndefined();
+    await drag(area(), "drop", 880, 300, FILES);
+    expect(labels()).toContain("Files · demo, split 2 of 2, active");
+  });
+
+  it("GH-398 Focus prompt from a pane split focuses the session split's prompt and makes it active", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [S2, PLAN], at: 1, ratio: 0.5 }));
+    await remount(PLAN, [ID, S2, PLAN]);
+    const o = (await paletteItems()).find((x) => x.textContent?.startsWith("Focus prompt"))!;
+    await act(async () => o.click());
+    await vi.waitFor(() => expect(document.activeElement).toBe(el.querySelector(`#split-${S2} textarea[aria-label="Prompt"]`)));
+    expect(el.querySelector(`#split-${S2}`)!.hasAttribute("data-active")).toBe(true);
+  });
+
+  it("GH-398 palette session commands follow the owner only while its session is in the split", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [S2, PLAN], at: 1, ratio: 0.5 }));
+    await remount(PLAN, [ID, S2, PLAN]);
+    const names = async () => (await paletteItems()).map((x) => x.textContent ?? "");
+    const without = await names();
+    expect(without.some((n) => n.startsWith("Focus prompt"))).toBe(true);
+    expect(without.some((n) => n.startsWith("Change permission mode"))).toBe(false);
+    await press({ key: "Escape" });
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, PLAN], at: 1, ratio: 0.5 }));
+    await remount(PLAN, [ID, S2, PLAN]);
+    expect((await names()).some((n) => n.startsWith("Change permission mode"))).toBe(true);
+  });
+
   it("GH-378 the session in the other split pane gets its shown record (list lastActivity) too", async () => {
     localStorage.setItem("claude-ui.shown-activity", "{}");
     await remount(ID);
@@ -4238,7 +4369,7 @@ describe("GH-395 Plan pane", () => {
     }
   });
 
-  it("Activating a plan tab makes its session current: the side panel shows that session's changes; the split is suspended", async () => {
+  it("Activating a plan tab makes its session current: the side panel shows that session's changes; the plan takes the active split", async () => {
     localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, OTHER], at: 1, ratio: 0.5 }));
     const restore = await mountMain({ tabs: [ID, OTHER, REF2], hash: `#${ID}` });
     try {
@@ -4248,7 +4379,7 @@ describe("GH-395 Plan pane", () => {
       await hashTo(`plan%3A${OTHER}`);
       expect(location.hash).toBe(`#plan%3A${OTHER}`);
       expect(q("pane-changes")!.textContent).toContain("1");
-      expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(0);
+      expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(2);
       // The sidebar shows the owner's row as the current one.
       expect(el.querySelector('[data-testid="sidebar"] [aria-current="page"]')?.textContent).toContain("Other");
     } finally {
@@ -4421,12 +4552,12 @@ describe("GH-395 Plan pane", () => {
     }
   });
 
-  it("Plan tab menu: Close others, Pin, Go to session; Split right and down are disabled", async () => {
+  it("Plan tab menu: Close others, Pin, Go to session; Split right and down are enabled (GH-398)", async () => {
     const restore = await mountMain({ tabs: [ID, REF, OTHER], hash: `#plan%3A${ID}` });
     try {
       await ctxMenu(stripTab(REF));
-      expect(menuItem("splitRight").hasAttribute("data-disabled")).toBe(true);
-      expect(menuItem("splitDown").hasAttribute("data-disabled")).toBe(true);
+      expect(menuItem("splitRight").hasAttribute("data-disabled")).toBe(false);
+      expect(menuItem("splitDown").hasAttribute("data-disabled")).toBe(false);
       expect(document.querySelector('[data-testid="tab-menu-copyId"]')).toBeNull();
       await act(async () => menuItem("pin").click());
       expect(stripTab(REF).hasAttribute("data-pinned")).toBe(true);

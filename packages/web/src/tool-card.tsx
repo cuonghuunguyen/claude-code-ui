@@ -171,7 +171,7 @@ const OPEN_CLASS =
   "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 outline-none hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info group-hover/head:opacity-100 group-has-[[data-panel-open]]/head:opacity-100 max-md:size-11 pointer-coarse:size-11 pointer-coarse:opacity-100";
 
 /** Run in background (GH-440): always visible while the command runs (a transient action), 44 px below md. */
-function BackgroundButton({ pending, onClick }: { pending: boolean; onClick: () => void }) {
+export function BackgroundButton({ pending, onClick }: { pending: boolean; onClick: () => void }) {
   const keys = keyText(specOf("shell.background"));
   return (
     <button

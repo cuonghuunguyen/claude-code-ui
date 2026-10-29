@@ -61,6 +61,8 @@ const NUDGE = /^\[Your previous response had no visible output\./;
 const ASYNC_LAUNCHED = /^Async agent launched successfully\.[\s\S]*?^agentId: (\w+)/m;
 // A background Bash call's tool_result names its task and output file (run_in_background, or moved there; SDK 0.3.285).
 // The file name must be <taskId>.output. The daemon reads the file only inside the CLI's task folder (shell-output.ts).
+// A bash mode command moved to the background: its output record names the task (terminal CLI 2.1.312; claude-ui uses the part id, GH-485).
+const BASH_BACKGROUNDED = /^Command was manually backgrounded by user with ID: ([\w-]+)\./;
 const SHELL_PLACEHOLDER = /^Command (?:running in background|was manually backgrounded by user) with ID: (\w+)\. Output is being written to: (.+?[\\/]\1\.output)\./;
 // SendMessage's tool_result when it resumed a finished subagent run (SDK 0.3.285); a queued message names no resumedAgentId.
 const RESUMED = /"resumedAgentId":"(\w+)"/;
@@ -107,6 +109,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const tasks = new Map<string, string>();
   // Background Bash call -> its task output file (GH-442 shells list).
   const outputs = new Map<string, string>();
+  // Bash mode commands moved to the background (GH-485), by task ID: running until their notice.
+  const bashShells = new Map<string, Extract<Part, { type: "bash" }>>();
   // Subagent run ID -> time of its latest message, the end of a run that stopped without a notice.
   const lastSeen = new Map<string, number>();
   // Paths whose original file was already sent: the changes tab needs only the first one.
@@ -276,6 +280,14 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           if (synthetic && boundary) return [{ ...boundary, summary: content }];
           if (content.startsWith("<task-notification>")) {
             const tags = new Map([...content.matchAll(NOTIFICATION_TAG)].map((t) => [t[1], t[2]]));
+            const shell = bashShells.get(tags.get("task-id") ?? "");
+            if (shell) {
+              bashShells.delete(tags.get("task-id")!);
+              const out = BASH_OUTPUT.exec(content.slice(content.indexOf("</task-notification>") + 20).trim());
+              const code = /(?:failed with exit code (\d+)|completed \(exit code (\d+)\))$/.exec(tags.get("summary") ?? "");
+              const st = tags.get("status");
+              return [{ ...shell, status: st === "completed" ? "done" : st === "killed" || st === "stopped" ? "stopped" : "error", ...(code && { exitCode: Number(code[1] ?? code[2]) }), ...(out && { stdout: unescapeBash(out[1]!), stderr: unescapeBash(out[2] ?? "") }) }];
+            }
             return taskEnded(tags.get("task-id"), tags.get("tool-use-id"), tags.get("status"), tags.get("summary"));
           }
           if (synthetic) return [];
@@ -292,6 +304,12 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
               ...(exitCode !== undefined ? { exitCode } : {}),
             };
             lastBash = undefined;
+            const moved = part.type === "bash" ? BASH_BACKGROUNDED.exec(part.stdout) : null;
+            if (moved && part.type === "bash") {
+              const p = { ...part, status: "running" as const, shell: "background" as const };
+              bashShells.set(moved[1]!, p);
+              return [p];
+            }
             return [part];
           }
           return userString(id, content);
@@ -442,11 +460,14 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
    * the parts, the calls stay open here (a /clear hands them to a new session; the old one shows them stopped).
    */
   function endCalls(keep = false): Part[] {
-    return openCalls().map((c) => {
+    const ended: Part[] = openCalls().map((c) => {
       const next: Call = c.type === "subagent" ? { ...c, status: "stopped", endedAt: lastSeen.get(c.id) ?? c.startedAt } : { ...c, status: "stopped" };
       if (!keep) calls.set(c.id, next);
       return next;
     });
+    for (const b of bashShells.values()) ended.push({ ...b, status: "stopped" });
+    if (!keep) bashShells.clear();
+    return ended;
   }
 
   /** The call that started background task `taskId` (its Agent call for a subagent run, also after SendMessage resumed it). */

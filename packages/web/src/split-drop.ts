@@ -1,10 +1,10 @@
 // Drag a tab onto the session area (GH-356, docs/spec.md "Split view"): an overlay shows what the drop does; native capture listeners, because xterm and previews inside the area swallow React's drag events (same reason as `useAreaDrop`).
 import { useCallback, useRef, useState } from "react";
-import { TAB_DRAG_TYPE } from "./tabs-bar.tsx";
-import { type DropZone, dropZone } from "./split.ts";
+import { TAB_DRAG_TYPE, draggedTab } from "./tabs-bar.tsx";
+import { type DropZone, type SplitRefusal, dropZone } from "./split.ts";
 
 /** Overlay rectangle in px relative to the area. */
-export type DropState = { zone: DropZone; box: { left: number; top: number; width: number; height: number }; /** Index of the split under the pointer (centre zone), -1 when none. */ over: number };
+export type DropState = { zone: DropZone; box: { left: number; top: number; width: number; height: number }; /** Index of the split under the pointer (centre zone), -1 when none. */ over: number; /** Why a drop here does nothing (the overlay shows it). */ refused?: SplitRefusal };
 
 const rel = (r: DOMRect, a: DOMRect) => ({ left: r.left - a.left, top: r.top - a.top, width: r.width, height: r.height });
 
@@ -27,7 +27,7 @@ export function dropTarget(area: HTMLElement, x: number, y: number): DropState {
 }
 
 /** Ref callback for the session area. `enabled`: a tab drop makes sense now (wide, a session shows). */
-export function useSplitDrop(on: { enabled: () => boolean; onDrop: (id: string, t: DropState) => void }) {
+export function useSplitDrop(on: { enabled: () => boolean; onDrop: (id: string, t: DropState) => void; refuse?: (id: string, t: DropState) => SplitRefusal | undefined }) {
   const latest = useRef(on);
   latest.current = on;
   const [state, setState] = useState<DropState>();
@@ -38,9 +38,12 @@ export function useSplitDrop(on: { enabled: () => boolean; onDrop: (id: string, 
     const over = (e: DragEvent) => {
       if (!isTab(e)) return;
       e.preventDefault();
-      e.dataTransfer!.dropEffect = "move";
-      const t = dropTarget(n, e.clientX, e.clientY);
-      setState((s) => (s && s.zone === t.zone && s.over === t.over && s.box.width === t.box.width && s.box.height === t.box.height && s.box.left === t.box.left && s.box.top === t.box.top ? s : t));
+      // dragover cannot read the data: the strip tab sets `draggedTab`.
+      const id = draggedTab() || e.dataTransfer!.getData(TAB_DRAG_TYPE);
+      const t0 = dropTarget(n, e.clientX, e.clientY);
+      const t = { ...t0, refused: id ? latest.current.refuse?.(id, t0) : undefined };
+      e.dataTransfer!.dropEffect = t.refused ? "none" : "move";
+      setState((s) => (s && s.zone === t.zone && s.over === t.over && s.refused === t.refused && s.box.width === t.box.width && s.box.height === t.box.height && s.box.left === t.box.left && s.box.top === t.box.top ? s : t));
     };
     const leave = (e: DragEvent) => !(e.relatedTarget instanceof Node && n.contains(e.relatedTarget)) && clear();
     const drop = (e: DragEvent) => {
@@ -48,7 +51,9 @@ export function useSplitDrop(on: { enabled: () => boolean; onDrop: (id: string, 
       const id = e.dataTransfer!.getData(TAB_DRAG_TYPE);
       e.preventDefault();
       clear();
-      if (id) latest.current.onDrop(id, dropTarget(n, e.clientX, e.clientY));
+      if (!id) return;
+      const target = dropTarget(n, e.clientX, e.clientY);
+      if (!latest.current.refuse?.(id, target)) latest.current.onDrop(id, target);
     };
     n.addEventListener("dragover", over, true);
     n.addEventListener("dragleave", leave, true);

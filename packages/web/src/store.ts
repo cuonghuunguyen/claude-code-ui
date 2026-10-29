@@ -52,7 +52,7 @@ export type SessionView = {
 export const emptySession = (): SessionView => ({ lastSeq: 0, settingsSeq: 0, state: "idle", attentionSeq: 0, commands: [], todos: [], lastTodos: [], order: [], parts: new Map(), aux: [] });
 
 /** A bash mode command of this session still runs: the prompt box shows Stop, Esc kills it. */
-export const bashRunning = (s: SessionView) => [...s.parts.values()].some((p) => p.type === "bash" && p.status === "running");
+export const bashRunning = (s: SessionView) => [...s.parts.values()].some((p) => p.type === "bash" && p.status === "running" && !p.shell);
 
 /** The state tabs, sidebar and header show: an idle session in which a terminal CLI turn or background work runs shows running. */
 export const shownState = (s: SessionView | undefined) => ((s?.externalTurn || s?.working) && s.state === "idle" ? "running" : s?.state);

@@ -54,6 +54,8 @@ export type CommandContext = {
   /** The active tab is pinned: the command reads "Unpin tab". */
   pinned?: boolean;
   /** Split view (GH-356): each is absent while it does not apply (narrow screen, fewer than two sessions, no split). */
+  /** A session split is on screen while a pane split is active: Focus prompt is offered (GH-398). */
+  splitPrompt?: boolean;
   splitRight?: () => void;
   splitDown?: () => void;
   splitNext?: () => void;
@@ -189,7 +191,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.panels && cmd("terminal.new", "New terminal", c.newTerminal),
     cmd("layout.reset", "Reset layout", c.resetLayout),
     c.panels && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
-    s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
+    (s || c.splitPrompt) && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
     c.askAside && cmd("aside.ask", "Ask aside", c.askAside),
     s &&
       c.models.length > 0 &&

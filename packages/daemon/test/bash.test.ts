@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BASH_KILL_GRACE_MS, runBash, shellArgs } from "../src/bash.ts";
+import { BASH_KILL_GRACE_MS, killMovedShells, runBash, shellArgs } from "../src/bash.ts";
 
 const posix = it.skipIf(process.platform === "win32");
 const dir = () => realpathSync(mkdtempSync(join(tmpdir(), "bash-")));
@@ -52,6 +52,55 @@ describe("runBash", () => {
   posix("a missing cwd is an error result, not a throw", async () => {
     const r = await runBash("ls", join(dir(), "gone"), () => {}).done;
     expect(r.exitCode).toBe(127);
+  });
+});
+
+describe("runBash background() (GH-485)", () => {
+  posix("never kills: the command runs past the foreground timeout", async () => {
+    const run = runBash("sleep 1; echo x", dir(), () => {}, { timeoutMs: 200 });
+    run.background();
+    expect(await run.done).toEqual({ stdout: "x\n", stderr: "", exitCode: 0, stopped: false });
+  });
+
+  posix("keeps the last maxChars of a stream (rolling tail) with a marker at the start", async () => {
+    const run = runBash("seq 1 20000", dir(), () => {}, { maxChars: 1000 });
+    run.background();
+    const r = await run.done;
+    expect(r.stdout.startsWith("… output truncated, showing the last 1000 characters\n")).toBe(true);
+    expect(r.stdout.endsWith("\n20000\n")).toBe(true);
+    expect(r.stdout).not.toContain("\n1\n");
+    expect(r.stdout.length).toBeLessThan(1100);
+  });
+
+  posix("the streamed output is the tail too; a short output has no marker", async () => {
+    const seen: string[] = [];
+    const run = runBash("seq 1 20000; sleep 0.2; echo end", dir(), (o) => seen.push(o), { maxChars: 1000 });
+    run.background();
+    await run.done;
+    expect(seen.at(-1)!.endsWith("20000\nend\n")).toBe(true);
+    expect(seen.at(-1)!.length).toBeLessThan(1100);
+    const short = runBash("echo hi", dir(), () => {});
+    short.background();
+    expect((await short.done).stdout).toBe("hi\n");
+  });
+
+  posix("daemon shutdown kills the process group of a moved command, not of a foreground one or a finished one", async () => {
+    const moved = runBash("sleep 30 & sleep 30; wait", dir(), () => {});
+    moved.background();
+    const fg = runBash("sleep 1; echo fg", dir(), () => {});
+    const finished = runBash("echo hi", dir(), () => {});
+    finished.background();
+    await finished.done;
+    killMovedShells();
+    expect((await moved.done).stopped).toBe(true);
+    expect(await fg.done).toMatchObject({ stdout: "fg\n", stopped: false });
+  });
+
+  posix("kill() still stops a moved command", async () => {
+    const run = runBash("sleep 30", dir(), () => {});
+    run.background();
+    setTimeout(() => run.kill(), 100);
+    expect((await run.done).stopped).toBe(true);
   });
 });
 
