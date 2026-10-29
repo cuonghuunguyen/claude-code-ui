@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchFolder, checkoutFolder, branchNameError, DEFAULT_BRANCH_TEMPLATE, jiraIsCloud, jiraKeyOf, normalizeBranchName, ticketBranchName } from "../src/branch-name.ts";
+import { branchFolder, checkoutFolder, checkoutFolderError, branchNameError, DEFAULT_BRANCH_TEMPLATE, jiraIsCloud, jiraKeyOf, normalizeBranchName, ticketBranchName } from "../src/branch-name.ts";
 
 describe("normalizeBranchName (GH-447 Name rule)", () => {
   it.each([
@@ -138,5 +138,14 @@ describe("GH-452 long names", () => {
     expect(checkoutFolder(`${"a".repeat(60)}-PROJ-351-${"b".repeat(30)}`)).toBe(`${"a".repeat(60)}-PROJ-351`);
     // No key, one long word: characters are cut.
     expect(checkoutFolder("x".repeat(80))).toBe("x".repeat(64));
+  });
+  it("checkoutFolder never cuts back to the prefix alone: `feature/` + one long word keeps characters of the word", () => {
+    const f = checkoutFolder(`feature/${"x".repeat(80)}`);
+    expect(f).toBe(`feature-${"x".repeat(56)}`);
+    expect(checkoutFolder(`feature/${"word-".repeat(20)}end`).startsWith("feature-word")).toBe(true);
+  });
+  it("checkoutFolderError: none after a cut; a message when the ticket key itself crosses the limit", () => {
+    expect(checkoutFolderError(`feature/PROJ-351-${"x-".repeat(60)}`)).toBeUndefined();
+    expect(checkoutFolderError(`${"a".repeat(60)}-PROJ-351-tail`)).toMatch(/key.*never cut/);
   });
 });

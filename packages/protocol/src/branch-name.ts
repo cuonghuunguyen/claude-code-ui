@@ -67,9 +67,17 @@ export function checkoutFolder(branch: string): string {
   const at = key ? folder.toUpperCase().indexOf(key) : -1;
   const floor = at >= 0 ? at + key!.length : 0;
   let s = folder.slice(0, Math.max(FOLDER_MAX, floor));
+  // A word cut never goes back into the prefix (`feature/` + one long word keeps characters of the word, not only `feature`).
   const i = s.lastIndexOf("-");
-  if (folder[s.length] !== "-" && i > floor) s = s.slice(0, i);
+  if (folder[s.length] !== "-" && i > Math.max(floor, branch.lastIndexOf("/", s.length))) s = s.slice(0, i);
   return s.replace(/[-.]+$/, "");
+}
+
+/** Why an existing branch cannot be checked out into its folder (the key crosses the 64-character limit); undefined when it may. */
+export function checkoutFolderError(branch: string): string | undefined {
+  const folder = checkoutFolder(branch);
+  const e = worktreeNameError(folder);
+  return e && `Folder ${folder}: ${e}. The ticket key in the branch name is never cut: rename the branch to check it out.`;
 }
 
 /** Quick checks of a new branch name before the daemon's `git check-ref-format --branch`; undefined when it may be valid. */

@@ -1,7 +1,7 @@
 // Create worktree modal (GH-447, docs/spec.md "Worktrees"): a new worktree's branch from a Jira Ticket, an existing Branch or a free Name.
 // The daemon creates it (`worktree.create`); errors (a taken folder or branch: `exists`) show here and the modal stays open.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { branchNameError, checkoutFolder, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
+import { branchNameError, checkoutFolder, checkoutFolderError, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
 import { LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -143,7 +143,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   const existing = source === "ticket" && ticket && branches ? branchWithKey(branches, ticket.key) : undefined;
   const selected = source === "branch" ? branches?.find((b) => b.name === row && !b.worktree) : undefined;
   const nameProblem = newBranch ? branchNameError(newBranch) : undefined;
-  const plan: Create | undefined = source === "branch" ? (selected ? { checkout: checkoutRef(selected) } : undefined) : newBranch && !nameProblem ? { branch: newBranch, ...(base && { base }) } : undefined;
+  const checkoutProblem = selected ? checkoutFolderError(selected.name) : undefined;
+  const plan: Create | undefined = source === "branch" ? (selected && !checkoutProblem ? { checkout: checkoutRef(selected) } : undefined) : newBranch && !nameProblem ? { branch: newBranch, ...(base && { base }) } : undefined;
   const shownBranch = source === "branch" ? selected?.name : newBranch;
 
   const create = async (req: Create | undefined = plan) => {
@@ -206,7 +207,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       <dd className="min-w-0 break-all font-mono" data-testid="create-worktree-folder">{shownBranch ? `.claude/worktrees/${checkoutFolder(shownBranch)}` : "—"}</dd>
     </dl>
   );
-  const hint = nameProblem && <p className="text-destructive text-xs" role="alert" data-testid="create-worktree-problem">{nameProblem}</p>;
+  const hint = (nameProblem ?? checkoutProblem) && <p className="text-destructive text-xs" role="alert" data-testid="create-worktree-problem">{nameProblem ?? checkoutProblem}</p>;
 
   return (
     <ConfigDialog
@@ -281,7 +282,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
                   aria-selected={b.name === row}
                   aria-disabled={!!b.worktree}
                   onClick={() => !b.worktree && (setRow(b.name), setError(undefined))}
-                  onDoubleClick={() => !b.worktree && void create({ checkout: checkoutRef(b) })}
+                  onDoubleClick={() => !b.worktree && !checkoutFolderError(b.name) && void create({ checkout: checkoutRef(b) })}
                   className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-left text-sm outline-none focus-visible:bg-accent max-md:min-h-11", b.name === row ? "bg-accent" : "hover:bg-accent/60", b.worktree && "cursor-default text-muted-foreground")}
                   data-testid="create-worktree-branch-row"
                   data-name={b.name}
@@ -291,6 +292,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
                 </button>
               ))}
             </div>
+            {hint}
             {result}
           </>
         )}
