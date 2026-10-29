@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
 import { runDir, slug } from "../support/paths.ts";
+import { fakeDockerScript, writeFakeDocker } from "../support/fake-docker.ts";
+import { spawnSync } from "node:child_process";
 
 describe("freePort", () => {
   it("skips excluded ports", async () => {
@@ -70,6 +72,14 @@ describe("daemonEnv", () => {
   it("on Windows gives the daemon its own LOCALAPPDATA (uploads go there); elsewhere leaves it", () => {
     expect(daemonEnv({ LOCALAPPDATA: "C:\\real" }, "/run", 5555, "win32").LOCALAPPDATA).toBe(join("/run", "localappdata"));
     expect(daemonEnv({ LOCALAPPDATA: "/real" }, "/run", 5555, "linux").LOCALAPPDATA).toBe("/real");
+  });
+  it("gives the daemon its own cache dir: the side parts never land in the owner's ~/.cache", () => {
+    expect(daemonEnv({ XDG_CACHE_HOME: "/real-cache" }, "/run", 5555).XDG_CACHE_HOME).toBe(join("/run", "cache"));
+    expect(daemonEnv({}, "/run", 5555).XDG_CACHE_HOME).toBe(join("/run", "cache"));
+  });
+  it("a path prefix goes first on PATH (a fake docker), else PATH is unchanged", () => {
+    expect(daemonEnv({ PATH: "/usr/bin" }, "/run", 5555, "linux", "/run/bin").PATH).toBe(`/run/bin${delimiter}/usr/bin`);
+    expect(daemonEnv({ PATH: "/usr/bin" }, "/run", 5555).PATH).toBe("/usr/bin");
   });
   it("points the config at the run, sets the port and Haiku", () => {
     expect(env.XDG_CONFIG_HOME).toBe(join("/run", "ui-config"));
@@ -191,6 +201,35 @@ describe("stop", () => {
       expect(() => stopRun(join(base, "nope"), () => {}, () => "")).toThrow(/no such run/);
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("fake docker", () => {
+  const cfg = { containers: ["dev", "k8s_pod"], probe: { code: 1, stdout: "", stderr: "OCI runtime exec failed: it's \"bad\"" }, check: { stdout: "CLAUDE_UI_CHECK arch=x86_64\n" }, setup: { code: 1, stdout: "CLAUDE_UI_SETUP node_missing\n" } };
+  const run = (args: string[]) => spawnSync("sh", ["-c", fakeDockerScript(cfg), "docker", ...args], { encoding: "utf8" });
+  it("answers version, ps, inspect and cp like a running Linux container", () => {
+    expect(run(["version", "--format", "{{.Server.Os}}"]).stdout.trim()).toBe("linux");
+    expect(run(["ps", "--filter", "status=running", "--format", "{{.Names}}"]).stdout.split("\n").filter(Boolean)).toEqual(["dev", "k8s_pod"]);
+    expect(run(["inspect", "-f", "{{.State.Running}}", "dev"]).stdout.trim()).toBe("true");
+    expect(run(["inspect", "-f", "{{.HostConfig.ReadonlyRootfs}}{{range .Mounts}}x{{end}}", "dev"]).stdout).toBe("false\n/data true\nnull\n");
+    expect(run(["cp", "a", "dev:/tmp/a"]).status).toBe(0);
+  });
+  it("exec picks the probe, the check or the setup script by what the script says, and replays the configured answer", () => {
+    const probe = run(["exec", "dev", "sh", "-c", 'emit() { :; }; emit arch "$(uname -m)"']);
+    expect([probe.status, probe.stderr]).toEqual([1, cfg.probe.stderr]);
+    expect(run(["exec", "dev", "sh", "-c", "emit installed none"]).stdout).toBe(cfg.check.stdout);
+    const setup = run(["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
+    expect([setup.status, setup.stdout]).toEqual([1, cfg.setup.stdout]);
+  });
+  it("writeFakeDocker writes an executable <run>/bin/docker and returns the folder to put on PATH", () => {
+    const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
+    try {
+      const bin = writeFakeDocker(d, cfg);
+      expect(bin).toBe(join(d, "bin"));
+      expect(spawnSync(join(bin, "docker"), ["version"], { encoding: "utf8" }).stdout.trim()).toBe("linux");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
     }
   });
 });
