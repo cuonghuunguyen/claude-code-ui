@@ -594,6 +594,7 @@ export function createSides(opts: {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const later = (id: string, ms: number, f: () => void) => {
     clearTimeout(timers.get(id));
+    if (closing) return;
     const t = setTimeout(() => (timers.delete(id), f()), ms);
     t.unref();
     timers.set(id, t);
@@ -607,11 +608,11 @@ export function createSides(opts: {
    */
   const startSaved = (id: string, retried = false) => {
     const e = saved.get(id);
-    if (!e) return;
+    if (!e || closing) return;
     const same = (e.key !== undefined && e.key === opts.key?.()) || e.update === false;
     start(id, same ? "never" : "needed", undefined, !same).catch((err) => {
       console.error(`starting ${id} failed:`, (err as Error).message);
-      if (!retried && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
+      if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
     });
   };
   const autoStart = (id: string) => {
@@ -621,7 +622,10 @@ export function createSides(opts: {
   };
   /** Last list of each saved side (projects, recent projects, sessions, worktrees). */
   const lists = new Map<string, string>();
-  for (const [id, l] of Object.entries(opts.cache?.read() ?? {})) if (saved.has(id)) lists.set(id, JSON.stringify(l));
+  /** A list without its `lastActivity` times: only a change of this is written to the cache file. */
+  const sig = (j: string) => j.replace(/"lastActivity":\d+,?/g, "");
+  const sigs = new Map<string, string>();
+  for (const [id, l] of Object.entries(opts.cache?.read() ?? {})) if (saved.has(id)) (lists.set(id, JSON.stringify(l)), sigs.set(id, sig(JSON.stringify(l))));
   const writeCache = () => opts.cache?.write(Object.fromEntries([...lists].map(([id, j]) => [id, JSON.parse(j)])));
   /** After an exit of a ready side: restart (`starting`) after the next wait, or false when it exited too often. */
   function scheduleRestart(s: Side) {
@@ -1025,7 +1029,7 @@ export function createSides(opts: {
     /** Every side, local first. */
     list: (): SideInfo[] => [
       { id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" },
-      ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote, update }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }), ...(saved.has(id) && { autoStart: true as const }), ...(saved.get(id)?.update === false && { autoUpdate: false as const }), ...(update && state === "off" && { update: true as const }) })),
+      ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote, update }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error" || (state === "off" && update)) && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }), ...(saved.has(id) && { autoStart: true as const }), ...(saved.get(id)?.update === false && { autoUpdate: false as const }), ...(update && state === "off" && { update: true as const }) })),
       ...[...saved.keys()].filter((id) => !sides.has(id)).map(missingRow),
     ],
     /** "Start with Claude UI" / "Update automatically" (side.prefs). False: no such side. Turning start on starts nothing now. */
@@ -1033,9 +1037,11 @@ export function createSides(opts: {
       if (!sides.has(id) && !saved.has(id)) return false;
       if (p.start === false) {
         saved.delete(id);
+        // A restart waiting for its timer shows `starting`: with the timer gone the side is off.
+        const s = sides.get(id);
         clearTimeout(timers.get(id));
-        timers.delete(id);
-        if (lists.delete(id)) writeCache();
+        if (timers.delete(id) && s && s.state === "starting" && !s.starting) Object.assign(s, { state: "off", message: undefined });
+        if (lists.delete(id)) (sigs.delete(id), writeCache());
       } else if (p.start === true && !saved.has(id)) {
         saved.set(id, { id });
         // Next hub start, not now (a listed container would start at once).
@@ -1050,8 +1056,10 @@ export function createSides(opts: {
     /** Remembers a saved side's list when it changed. */
     remember(id: string, list: unknown) {
       const j = JSON.stringify(list);
-      if (!saved.has(id) || lists.get(id) === j) return;
+      if (!saved.has(id)) return;
       lists.set(id, j);
+      if (sigs.get(id) === sig(j)) return;
+      sigs.set(id, sig(j));
       writeCache();
     },
     /** Last lists of the saved sides that are not ready. */
@@ -1077,7 +1085,8 @@ export function createSides(opts: {
         write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer } });
       });
     },
-    start,
+    /** A manual start (Retry, Update, Open project): the exit count starts again. */
+    start: (id: string, setup?: SideSetup) => (exits.delete(id), start(id, setup)),
     refresh,
     posixLocal: !!opts.posixLocal,
     open,
@@ -1387,7 +1396,7 @@ export function createRouter(opts: {
         }
       }
       case "side.prefs": {
-        if (typeof msg.side !== "string" || !sides.list().some((s) => s.id === msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+        if (typeof msg.side !== "string" || msg.side === LOCAL_SIDE || !sides.list().some((s) => s.id === msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
         const ok = (v: unknown) => v === undefined || typeof v === "boolean";
         if (!ok(msg.start) || !ok(msg.update) || (msg.start === undefined && msg.update === undefined)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "start and update must be booleans, at least one" });
         sides.prefs(msg.side, { start: msg.start as boolean | undefined, update: msg.update as boolean | undefined });

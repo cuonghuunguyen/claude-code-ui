@@ -472,6 +472,17 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     expect((await go({ bundleOnly: true }).result).bundle?.target).toBe("linux-x64");
   });
 
+  it("bundleOnly without a bundle source never falls through to npm", async () => {
+    const d = docker();
+    const n = fakeNpm();
+    const installs: unknown[] = [];
+    const r = await prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(), key: "1.0.0-1", cacheDir: dir("cache-"), exec: d.exec, npm: n.npm, bundleOnly: true, onInstall: (i) => installs.push(i) });
+    expect(r).toEqual({ path: "", never: true });
+    expect(n.calls).toEqual([]);
+    expect(d.calls.some((c) => c[0] === "cp")).toBe(false);
+    expect(installs).toEqual([{ fallback: expect.any(String) }]);
+  });
+
   const DAY = 24 * 3_600_000;
   const oldVersion = (cacheRoot: string, name: string, daysOld: number) => {
     const d = join(cacheRoot, name);

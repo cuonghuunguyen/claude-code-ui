@@ -82,6 +82,14 @@ describe("auto start of a saved side", () => {
     s.close();
   });
 
+  it("an off side that needs an update keeps the reason the bundle was not used", async () => {
+    vi.useFakeTimers();
+    const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "old" }], key: () => "k2", spawn: async (_id, o) => (o.install?.({ fallback: "musl" }), notInstalled()) });
+    await tick(5);
+    expect(state(s, "wsl:A")).toMatchObject({ state: "off", update: true, fallback: "musl" });
+    s.close();
+  });
+
   it("ready saves the current key", async () => {
     const saves: SavedSide[][] = [];
     const s = createSides({ targets: [wslSide("A")], key: () => "k2", spawn: async () => readySide().proc, save: (x) => saves.push(x) });
@@ -177,6 +185,45 @@ describe("restart after an exit", () => {
     s.close();
     await tick(70_000);
     expect(procs).toHaveLength(1);
+  });
+
+  it("switching start off while a restart is pending sets the side off, not stuck starting", async () => {
+    vi.useFakeTimers();
+    const { s, procs } = mk();
+    await s.start("wsl:A");
+    procs[0]!.die();
+    expect(state(s, "wsl:A")?.state).toBe("starting");
+    s.prefs("wsl:A", { start: false });
+    expect(state(s, "wsl:A")).toMatchObject({ state: "off" });
+    await tick(70_000);
+    expect(procs).toHaveLength(1);
+    s.close();
+  });
+
+  it("close() while a start is failing: no retry timer is made", async () => {
+    vi.useFakeTimers();
+    const spawn = vi.fn(async () => failing());
+    const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "k" }], key: () => "k", spawn });
+    // The first start is in flight when the hub closes: its failure makes no retry.
+    s.close();
+    await tick(60_000);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a manual start resets the exit count", async () => {
+    vi.useFakeTimers();
+    const { s, procs } = mk();
+    await s.start("wsl:A");
+    for (let i = 0; i < 3; i++) {
+      procs.at(-1)!.die();
+      await tick(61_000);
+    }
+    procs.at(-1)!.die();
+    expect(state(s, "wsl:A")?.state).toBe("error");
+    await s.start("wsl:A");
+    procs.at(-1)!.die();
+    expect(state(s, "wsl:A")?.state).toBe("starting");
+    s.close();
   });
 
   it("a side switched off is not restarted", async () => {
@@ -330,6 +377,17 @@ describe("cached lists of saved sides", () => {
     s.close();
   });
 
+  it("a list that differs only in lastActivity is not written again", async () => {
+    const writes: unknown[] = [];
+    const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "k" }], key: () => "k", spawn: async () => readySide().proc, cache: { read: () => ({}), write: (c) => writes.push(c) } });
+    s.remember("wsl:A", list);
+    s.remember("wsl:A", { ...list, sessions: [{ ...list.sessions[0], lastActivity: 99 }] });
+    expect(writes).toHaveLength(1);
+    s.remember("wsl:A", { ...list, projects: ["/w/p", "/w/q"] });
+    expect(writes).toHaveLength(2);
+    s.close();
+  });
+
   it("the cache read at start serves a saved side that has not started; a side switched off loses it", async () => {
     const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "k" }], key: () => "k", posixLocal: true, localDirs: [], spawn: () => new Promise<SideProcess>(() => {}), cache: { read: () => ({ "wsl:A": list, "wsl:Gone": list }), write: () => {} } });
     const h = hub(s);
@@ -343,6 +401,7 @@ describe("cached lists of saved sides", () => {
     const s = createSides({ targets: [wslSide("A")], spawn: async () => readySide().proc });
     const h = hub(s);
     expect(await h.ask({ type: "side.prefs", side: "wsl:Nope", start: true })).toMatchObject({ type: "error", code: "unknown_side" });
+    expect(await h.ask({ type: "side.prefs", side: "local", start: false })).toMatchObject({ type: "error", code: "unknown_side" });
     expect(await h.ask({ type: "side.prefs", side: "wsl:A", start: "yes" })).toMatchObject({ type: "error", code: "bad_request" });
     expect(await h.ask({ type: "side.prefs", side: "wsl:A" })).toMatchObject({ type: "error", code: "bad_request" });
     expect(await h.ask({ type: "side.prefs", side: "wsl:A", start: true })).toMatchObject({ type: "reply", result: {} });

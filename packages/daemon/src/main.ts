@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, release } from "node:os";
 import { delimiter, join } from "node:path";
@@ -136,7 +136,7 @@ if (side) {
           onPush: forwardSidePush(push),
           saved: parseSaved(readJson(sidesFile)),
           save: (list: SavedSide[]) => writeFileSync(sidesFile, JSON.stringify({ sides: list })),
-          cache: { read: () => ((c) => (c && typeof c === "object" && !Array.isArray(c) ? (c as Record<string, unknown>) : {}))(readJson(listsFile)), write: (c) => writeFileSync(listsFile, JSON.stringify(c)) },
+          cache: { read: () => ((c) => (c && typeof c === "object" && !Array.isArray(c) ? (c as Record<string, unknown>) : {}))(readJson(listsFile)), write: (c) => (writeFileSync(listsFile, JSON.stringify(c), { mode: 0o600 }), chmodSync(listsFile, 0o600)) },
         })
       : undefined;
   void sides?.refresh();

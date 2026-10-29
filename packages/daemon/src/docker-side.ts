@@ -141,8 +141,9 @@ export async function prepareDockerSide(o: {
     const sent = await sendBundle(exec, o, o.bundle, label);
     if ("path" in sent) return sent;
     o.onInstall?.({ fallback: sent.fallback });
-    if (o.bundleOnly) return { path: "", never: true };
-  }
+  } else if (o.bundleOnly) o.onInstall?.({ fallback: "this hub has no bundle source" });
+  // An automatic update never runs npm: without a usable bundle only what is installed runs.
+  if (o.bundleOnly) return { path: "", never: true };
   o.onPhase?.("packing");
   mkdirSync(o.cacheDir, { recursive: true });
   const tgz = await packSide({ pkgDir: o.pkgDir, key: o.key, cacheDir: o.cacheDir, label, npm: o.npm });
