@@ -26,6 +26,8 @@ export type Tab = {
   outside?: boolean;
   /** GH-399: the file shows in its own main-area tab, not in Files; never a preview. */
   item?: boolean;
+  /** A restored draft whose file is gone: Save creates it again (GH-366). */
+  gone?: true;
 };
 
 export const openedMedia = (path: string, m: FsMediaResult): Tab => ({ path, disk: "", draft: "", mtime: m.mtime, media: m });
@@ -90,8 +92,23 @@ export function placeTab(tabs: Record<string, Tab>, tab: Tab, preview: boolean, 
   return Object.fromEntries(Object.entries(tabs).map(([p, t]) => (p === old ? [tab.path, next] : [p, t])));
 }
 
+/**
+ * A tab restored after a reload (GH-366) from the current disk version `r` and the saved draft `d` (`mtime`: the disk version it was based on).
+ * A draft on a changed file keeps the conflict: `mtime = r.mtime`, so the next `diskChanged(t, r)` keeps it and a plain Save stays refused.
+ */
+export function restoredTab(path: string, r: FsReadResult, d?: { draft: string; mtime: number }): Tab {
+  const t = opened(path, r);
+  if (!d || d.draft === r.content) return t;
+  return r.mtime === d.mtime ? { ...t, draft: d.draft } : { ...t, draft: d.draft, conflict: r };
+}
+
+/** A saved draft whose file is gone (or cannot be read: `error`): kept dirty; Save creates the file again. */
+export const goneTab = (path: string, d: { draft: string }, error = "Deleted on disk. Save creates it again."): Tab => ({ path, disk: "", mtime: 0, draft: d.draft, gone: true, error });
+
 /** A disk version read after a change: a clean tab reloads, a dirty one gets a conflict. */
 export function diskChanged(t: Tab, r: FsReadResult): Tab {
+  // The file came back: the draft meets it as a conflict, never overwrites it.
+  if (t.gone) return diskChanged({ ...t, gone: undefined, error: undefined }, r);
   if (t.notice) return { ...t, disk: r.content, draft: r.content, mtime: r.mtime, conflict: undefined, error: undefined, notice: undefined, noticeHint: undefined };
   if (r.mtime === t.mtime) return t;
   if (r.content === t.disk) return { ...t, mtime: r.mtime, conflict: undefined };

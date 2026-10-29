@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
+import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -195,5 +195,33 @@ describe("moveTabs and dropTabs (GH-360)", () => {
   it("dropTabs closes clean tabs below the path and keeps a tab with unsaved edits", () => {
     expect(Object.keys(dropTabs(tabs, "/p/src"))).toEqual(["/p/a.ts", "/p/src2/c.ts"]);
     expect(Object.keys(dropTabs(tabs, "/p/a.ts"))).toEqual(["/p/a.ts", "/p/src/b.ts", "/p/src2/c.ts"]);
+  });
+});
+
+describe("restoredTab (GH-366)", () => {
+  const r = { content: "disk", mtime: 5 };
+  it.each([
+    ["no draft", undefined, { draft: "disk", conflict: undefined }],
+    ["draft equal to disk", { draft: "disk", mtime: 1 }, { draft: "disk", conflict: undefined }],
+    ["draft, same mtime", { draft: "mine", mtime: 5 }, { draft: "mine", conflict: undefined }],
+    ["draft, other mtime", { draft: "mine", mtime: 4 }, { draft: "mine", conflict: r }],
+  ])("%s", (_n, d, want) => {
+    const t = restoredTab("/p/a.ts", r, d);
+    expect(t).toMatchObject({ path: "/p/a.ts", disk: "disk", mtime: 5, draft: want.draft });
+    expect(t.conflict).toEqual(want.conflict);
+  });
+
+  it("a draft on a changed file keeps its conflict after the post-watch refresh, and Save stays refused", () => {
+    const t = restoredTab("/p/a.ts", r, { draft: "mine", mtime: 4 });
+    expect(diskChanged(t, r)).toBe(t);
+    expect(saveBase(t, false)).toBe(5);
+    expect(saveBase(t, true)).toBe(5);
+  });
+
+  it("goneTab is dirty with the line; a file that comes back becomes a conflict", () => {
+    const t = goneTab("/p/a.ts", { draft: "mine" });
+    expect(isDirty(t)).toBe(true);
+    expect(t).toMatchObject({ gone: true, error: "Deleted on disk. Save creates it again." });
+    expect(diskChanged(t, r)).toMatchObject({ draft: "mine", conflict: r, gone: undefined, error: undefined });
   });
 });
