@@ -1,7 +1,7 @@
 // Tab context menu above the session items (GH-359): data, so more sections (Split, GH-356) slot in.
 import type { KeyboardEvent } from "react";
 
-export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession" | "moveToFiles" | "copyPath" | "copyRel" | "revealInFiles";
+export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession" | "moveToFiles" | "moveToArtifacts" | "copyPath" | "copyRel" | "revealInFiles";
 export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote" | TabCommand; label: string; disabled?: boolean; testId: string };
 
 const entry = (id: TabMenuEntry["id"], label: string, disabled = false): TabMenuEntry => ({ id, label, disabled, testId: `tab-menu-${id}` });
@@ -16,7 +16,7 @@ export function tabMenuSections(s: { session: boolean; /** Absent: pinning is no
   if (s.pane) {
     const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can), ...(s.split.whole ? [entry("splitNote", "Git graph needs the whole area", true)] : [])]] : [];
     const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
-    return [...sections, ...pin, ...(s.pane.item === "artifact" ? [] : [s.pane.item === "file" ? [entry("moveToFiles", "Move to Files"), entry("copyPath", "Copy path"), entry("copyRel", "Copy relative path"), entry("revealInFiles", "Reveal in Files")] : [entry("moveSide", `Move ${s.pane.label} to side panel`), entry("moveBottom", `Move ${s.pane.label} to bottom panel`)]]), [entry("goToSession", "Go to session")], ...split];
+    return [...sections, ...pin, ...[s.pane.item === "artifact" ? [entry("moveToArtifacts", "Move to Artifacts")] : s.pane.item === "file" ? [entry("moveToFiles", "Move to Files"), entry("copyPath", "Copy path"), entry("copyRel", "Copy relative path"), entry("revealInFiles", "Reveal in Files")] : [entry("moveSide", `Move ${s.pane.label} to side panel`), entry("moveBottom", `Move ${s.pane.label} to bottom panel`)]], [entry("goToSession", "Go to session")], ...split];
   }
   const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
   const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can)]] : [];

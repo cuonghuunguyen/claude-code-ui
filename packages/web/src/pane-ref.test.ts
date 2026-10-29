@@ -119,3 +119,14 @@ describe("GH-400 artifact refs", () => {
     expect(paneTabFor([ref], "artifact", U, () => "/p", undefined, "toolu_02")).toBe(artifactRef(U, "toolu_02"));
   });
 });
+
+describe("GH-176 artifacts kind", () => {
+  it("parseRef/refOf round-trip artifacts:<uuid>; it is a kind, not an item, and splittable", () => {
+    expect(parseRef(`artifacts:${U}`)).toEqual({ kind: "artifacts", owner: U });
+    expect(refOf({ kind: "artifacts", owner: U })).toBe(`artifacts:${U}`);
+    expect(isItem(`artifacts:${U}`)).toBe(false);
+    expect(splittable(`artifacts:${U}`)).toBe(true);
+    expect(parseRef(`artifacts:${U}x`)).toBeUndefined();
+    expect(paneTabTitle("artifacts", "Fix")).toBe("Artifacts · Fix");
+  });
+});

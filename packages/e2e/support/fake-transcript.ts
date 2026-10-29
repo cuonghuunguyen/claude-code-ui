@@ -36,3 +36,40 @@ export function writePublishTranscript(p: FakePublish): string {
   writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
   return file;
 }
+
+export type FakeTurnPublish = { file: string; title?: string; url: string };
+export type FakeTurns = { sessionId: string; cwd: string; configDir: string; run: string; /** Number of prompt/reply turns. */ turns: number; /** Turn number (from 1) -> the Artifact publish that turn makes; the other turns end in a text reply. */ publishes: Record<number, FakeTurnPublish> };
+
+/** Writes a session of `turns` turns, one hour apart, ending an hour before now; the turns in `publishes` call Artifact (GH-176 e2e). Returns its path. */
+export function writeTurnsTranscript(p: FakeTurns): string {
+  const cwd = realpathSync(p.cwd);
+  const dir = join(projectsDirOf(p.configDir, p.run), slugOf(cwd));
+  mkdirSync(dir, { recursive: true });
+  const t0 = Date.now() - (p.turns + 1) * 3_600_000;
+  const at = (turn: number, step: number) => new Date(t0 + turn * 3_600_000 + step * 1000).toISOString();
+  const base = { isSidechain: false, userType: "external", cwd, sessionId: p.sessionId, version: "2.0.0" };
+  const id = (turn: number, step: number) => `${String(turn).padStart(4, "0")}${String(step)}000-0000-4000-8000-000000000000`;
+  const rows: object[] = [];
+  let parent: string | null = null;
+  const add = (turn: number, step: number, type: "user" | "assistant", message: object) => {
+    const uuid = id(turn, step);
+    rows.push({ ...base, parentUuid: parent, type, uuid, timestamp: at(turn, step), message });
+    parent = uuid;
+  };
+  for (let n = 1; n <= p.turns; n++) {
+    add(n, 0, "user", { role: "user", content: `Turn ${n}` });
+    const pub = p.publishes[n];
+    const head = { id: `msg_fake_${n}`, type: "message", role: "assistant", model: "claude-haiku-4-5" };
+    if (!pub) {
+      add(n, 1, "assistant", { ...head, content: [{ type: "text", text: `Reply ${n}` }], stop_reason: "end_turn" });
+      continue;
+    }
+    const call = `toolu_fake_${n}`;
+    add(n, 1, "assistant", { ...head, content: [{ type: "tool_use", id: call, name: "Artifact", input: { file_path: pub.file, ...(pub.title && { title: pub.title }) } }], stop_reason: "tool_use" });
+    add(n, 2, "user", { role: "user", content: [{ type: "tool_result", tool_use_id: call, content: `Published ${pub.file} at ${pub.url} (Version 1)` }] });
+    add(n, 3, "assistant", { ...head, id: `msg_fake_${n}b`, content: [{ type: "text", text: `Done ${n}` }], stop_reason: "end_turn" });
+  }
+  const file = join(dir, `${p.sessionId}.jsonl`);
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return file;
+}

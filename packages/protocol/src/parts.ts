@@ -67,7 +67,7 @@ export type Part = { parentId?: string } & (
    * `shell` (Bash calls only; GH-440): "foreground" = the CLI registered the call's task in the foreground (task_started
    * is_backgrounded false), so Run in background applies while it runs; "background" = it runs as a background shell
    * (run_in_background, or moved there: task_updated is_backgrounded, a transcript's "manually backgrounded" result).
-   * `startedAt`/`endedAt`: a Bash call the CLI ran as a task (shell set): its task registration (a restored moved shell: its placeholder result) and its end, daemon clock.
+   * `startedAt`/`endedAt`: a Bash call the CLI ran as a task (shell set): its task registration (a restored moved shell: its placeholder result) and its end, daemon clock. `endedAt` alone on a done Artifact call (GH-176): its publish time (the result's transcript timestamp; absent without one).
    * `exitCode`: from the end notification's summary ("... exit code N"); none when killed or unknown.
    */
   | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }

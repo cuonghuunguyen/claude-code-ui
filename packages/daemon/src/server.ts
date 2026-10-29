@@ -1667,13 +1667,14 @@ export function createDaemon(opts: {
           }
         }
         case "session.page":
-        case "session.edits": {
+        case "session.edits":
+        case "session.artifacts": {
           const s = await find(msg.sessionId);
           if (!s) return;
           if (msg.logEpoch !== logEpoch) return fail("stale_epoch", "the daemon restarted since this view was loaded");
           if (typeof msg.before !== "string") return fail("bad_request", "before must be a part id");
-          if (msg.type === "session.edits") {
-            const parts = s.edits(msg.before);
+          if (msg.type === "session.edits" || msg.type === "session.artifacts") {
+            const parts = msg.type === "session.edits" ? s.edits(msg.before) : s.artifacts(msg.before);
             return parts ? reply({ parts }) : fail("unknown_cursor", `no part ${msg.before}`);
           }
           if (msg.until !== undefined && (typeof msg.until !== "string" || msg.until.length > 200)) return fail("bad_request", "until must be a string of at most 200 characters");

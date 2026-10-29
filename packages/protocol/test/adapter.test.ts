@@ -990,3 +990,29 @@ describe("Bash mode command moved to the background (GH-485)", () => {
     expect(bashes(adapter.endCalls())).toMatchObject([{ id: "b2", status: "stopped", shell: "background" }]);
   });
 });
+
+describe("Artifact publish time (GH-176)", () => {
+  const ts = (s: number) => new Date(Date.UTC(2026, 9, 5, 10, 0, 0) + s * 1000).toISOString();
+  const call = (id: string, name: string, s?: number) => ({ type: "assistant", parent_tool_use_id: null, ...(s !== undefined && { timestamp: ts(s) }), message: { id: `m-${id}`, content: [{ type: "tool_use", id, name, input: {} }] } });
+  const result = (id: string, s?: number) => ({ type: "user", parent_tool_use_id: null, ...(s !== undefined && { timestamp: ts(s) }), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+  const tools = (parts: Part[]) => parts.filter((p) => p.type === "tool_call") as Extract<Part, { type: "tool_call" }>[];
+
+  it("a restored Artifact call gets endedAt = its result's transcript time", () => {
+    const out = createAdapter({ resumed: true });
+    const parts = [call("a1", "Artifact", 0), result("a1", 7)].flatMap((m) => out.convert(m as never));
+    expect(tools(parts).at(-1)).toMatchObject({ status: "done", endedAt: Date.parse(ts(7)) });
+  });
+
+  it("an Artifact call whose result has no timestamp gets no endedAt (the pane shows no time)", () => {
+    const out = createAdapter();
+    const parts = [call("a1", "Artifact"), result("a1")].flatMap((m) => out.convert(m as never));
+    expect(tools(parts).at(-1)).toMatchObject({ status: "done" });
+    expect(tools(parts).at(-1)).not.toHaveProperty("endedAt");
+  });
+
+  it("another tool has no endedAt", () => {
+    const out = createAdapter();
+    const parts = [call("r1", "Read"), result("r1")].flatMap((m) => out.convert(m as never));
+    expect(tools(parts).at(-1)).not.toHaveProperty("endedAt");
+  });
+});

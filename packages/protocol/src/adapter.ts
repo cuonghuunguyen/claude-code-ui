@@ -127,6 +127,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
 
   // Time of the message being converted: its transcript timestamp, else now (live messages carry none).
   let now = 0;
+  /** The transcript timestamp of the message being converted; undefined without one. */
+  let stamp: number | undefined;
   const startOf = (id: string) => {
     const call = calls.get(id);
     return call?.type === "subagent" ? call.startedAt : now;
@@ -136,7 +138,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   function setStatus(toolUseId: string, status: ToolStatus, again = false): Part[] {
     const call = calls.get(toolUseId);
     if (!call || (call.status === status && !(again && call.type === "subagent"))) return [];
-    const next = (call.type === "subagent" || call.startedAt !== undefined) && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
+    const next = (call.type === "subagent" || call.startedAt !== undefined) && ENDED.has(status) ? { ...call, status, endedAt: now } : call.type === "tool_call" && call.tool === "Artifact" && status === "done" && stamp !== undefined ? { ...call, status, endedAt: stamp } : { ...call, status };
     calls.set(toolUseId, next);
     return [next];
   }
@@ -202,7 +204,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   /** Parts from inside a subagent get `parentId` = the subagent's toolUseId. */
   function convert(m: SDKMessage): Part[] {
     const timestamp = (m as { timestamp?: unknown }).timestamp;
-    now = (typeof timestamp === "string" && Date.parse(timestamp)) || Date.now();
+    stamp = (typeof timestamp === "string" && Date.parse(timestamp)) || undefined;
+    now = stamp ?? Date.now();
     const parts = convertMessage(m);
     if ((m.type === "assistant" || m.type === "user") && m.uuid)
       partsOf.set(m.uuid, parts.flatMap((p) => (m.type === "assistant" || p.type === "tool_result" ? [p.id] : [])));

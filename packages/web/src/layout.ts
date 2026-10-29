@@ -1,7 +1,7 @@
 // Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side; plus the pane last selected per dock area (GH-381).
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
-export type PaneId = "changes" | "files" | "graph" | "terminal" | "plan";
+export type PaneId = "changes" | "files" | "graph" | "terminal" | "plan" | "artifacts";
 export type DockArea = "side" | "bottom";
 export type DockSide = "left" | "right";
 /** Where a pane lives: a dock area, or the main area (a tab in the tabs bar; GH-395). */
@@ -9,13 +9,13 @@ export type Area = DockArea | "main";
 export type Layout = { side: DockSide; areas: Record<Area, PaneId[]> };
 
 /** Also the order of the narrow pane switcher. */
-export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal", "plan"];
-export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "Files", graph: "Git graph", terminal: "Terminal", plan: "Plan" };
+export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal", "plan", "artifacts"];
+export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "Files", graph: "Git graph", terminal: "Terminal", plan: "Plan", artifacts: "Artifacts" };
 export const AREA_LABEL: Record<DockArea, string> = { side: "Side panel", bottom: "Bottom panel" };
 export const HOME_LABEL: Record<Area, string> = { side: "Side panel", bottom: "Bottom panel", main: "Main area" };
-export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } };
+export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan", "artifacts"], bottom: ["terminal"], main: [] } };
 /** Panes that may have the main area as their home (Changes never). */
-export const MAIN_KINDS: PaneId[] = ["plan", "files", "graph", "terminal"];
+export const MAIN_KINDS: PaneId[] = ["plan", "artifacts", "files", "graph", "terminal"];
 export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
 export const TERMINAL_DOCKS: { value: Area; label: string }[] = [
   { value: "bottom", label: "Bottom" },

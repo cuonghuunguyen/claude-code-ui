@@ -58,6 +58,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.page"; sessionId: string; logEpoch: string; before: string; until?: string }
   /** Edit/Write calls (and their results) older than the cursor `before`, for the changes tab. Reply `EditsResult`. */
   | { type: "session.edits"; sessionId: string; logEpoch: string; before: string }
+  /** Done Artifact publishes (and their results) older than the cursor `before`, for the Artifacts pane (GH-176). Reply `ArtifactsResult`. */
+  | { type: "session.artifacts"; sessionId: string; logEpoch: string; before: string }
   /** A base64 payload a snapshot or page left out (images.ts omitMedia): `index` into the tool_result output or the user_text images. Reply `MediaResult`; error `unknown_media`. */
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
@@ -349,6 +351,7 @@ export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePag
 export type PageResult = { page: TimelinePage };
 export type MediaResult = { dataUrl: string };
 export type EditsResult = { parts: PosPart[] };
+export type ArtifactsResult = { parts: PosPart[] };
 
 export type ServerMessage =
   | Event

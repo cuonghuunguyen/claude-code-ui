@@ -47,6 +47,8 @@ export type SessionView = {
   aux: PosPart[];
   /** `session.edits` of this boundary is merged into `aux`. */
   auxEdits?: boolean;
+  /** `session.artifacts` of this boundary is merged into `aux` (GH-176). */
+  auxArtifacts?: boolean;
   /** The folders the session's CLI keeps plan files in (subscribe reply), to find an ExitPlanMode plan written there. */
   planDirs?: string[];
   /** The view cannot follow a rewind into the not loaded region: App takes a fresh snapshot. */
@@ -137,6 +139,7 @@ export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot
       aux: snapshot.aux,
       planDirs,
       auxEdits: false,
+      auxArtifacts: false,
       stale: false,
     };
   }
@@ -155,11 +158,16 @@ export function withPage(s: SessionView, before: string, page: TimelinePage): Se
 }
 
 /** `session.edits` for the cursor `before` arrived: merges the Edit/Write parts into aux (by pos, no duplicates). */
-export function withEdits(s: SessionView, before: string, edits: PosPart[]): SessionView {
+export const withEdits = (s: SessionView, before: string, edits: PosPart[]): SessionView => mergeAux(s, before, edits, "auxEdits");
+
+/** `session.artifacts` for the cursor `before` arrived: merges the Artifact publishes into aux (GH-176). */
+export const withArtifacts = (s: SessionView, before: string, parts: PosPart[]): SessionView => mergeAux(s, before, parts, "auxArtifacts");
+
+function mergeAux(s: SessionView, before: string, extra: PosPart[], flag: "auxEdits" | "auxArtifacts"): SessionView {
   if (s.older?.before !== before) return s;
   const have = new Set(s.aux.map((a) => a.part.id));
-  const aux = [...s.aux, ...edits.filter((e) => !have.has(e.part.id) && !s.parts.has(e.part.id))].filter((a) => a.pos < s.older!.pos).sort((a, b) => a.pos - b.pos);
-  return { ...s, aux, auxEdits: true };
+  const aux = [...s.aux, ...extra.filter((e) => !have.has(e.part.id) && !s.parts.has(e.part.id))].filter((a) => a.pos < s.older!.pos).sort((a, b) => a.pos - b.pos);
+  return { ...s, aux, [flag]: true };
 }
 
 /** A part by id: loaded, else from the not loaded region's aux. */

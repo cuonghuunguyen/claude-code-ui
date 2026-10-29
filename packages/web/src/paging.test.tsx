@@ -63,6 +63,7 @@ beforeEach(() => {
   replies["session.list"] = () => ({ sessions: [session], projects: ["/p/demo"] });
   replies["models.list"] = () => ({ models: [] });
   replies["session.edits"] = () => ({ parts: [] });
+  replies["session.artifacts"] = () => ({ parts: [] });
   replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session, snapshot });
   replies["session.page"] = () => ({ page: { parts: [user("u1"), answer("a1"), user("u2"), answer("a2")] } });
 });
@@ -174,4 +175,15 @@ it("scroll events after a failed page retry that cursor at most once per few sec
   } finally {
     now.mockRestore();
   }
+});
+
+it("GH-176 session.artifacts is asked once with the cursor; a publish older than the loaded page lists the Artifacts tab", async () => {
+  const old = { type: "tool_call", id: "old", toolUseId: "old", tool: "Artifact", input: { file_path: "/p/demo/old.html" }, status: "done", endedAt: 1 };
+  replies["session.artifacts"] = () => ({ parts: [{ part: old, pos: 5 }] });
+  replies["session.page"] = () => new Promise(() => {}); // the older page stays unloaded: the publish lives in aux only
+  await mount();
+  for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  const asked = sent.filter((m) => m.type === "session.artifacts");
+  expect(asked).toEqual([{ type: "session.artifacts", sessionId: ID, logEpoch: "e1", before: "u3" }]);
+  expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
 });

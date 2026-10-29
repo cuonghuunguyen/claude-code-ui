@@ -297,6 +297,9 @@ describe("daemon", () => {
       expect(await b.request({ type: "session.page", sessionId, logEpoch: sub.result.logEpoch, before: "nope" })).toMatchObject({ type: "error", code: "unknown_cursor" });
       expect(await b.request({ type: "session.edits", sessionId, logEpoch: sub.result.logEpoch, before: snapshot.page.older!.before })).toMatchObject({ result: { parts: [] } });
       expect(await b.request({ type: "session.edits", sessionId, logEpoch: sub.result.logEpoch, before: "nope" })).toMatchObject({ code: "unknown_cursor" });
+      expect(await b.request({ type: "session.artifacts", sessionId, logEpoch: sub.result.logEpoch, before: snapshot.page.older!.before })).toMatchObject({ result: { parts: [] } });
+      expect(await b.request({ type: "session.artifacts", sessionId, logEpoch: sub.result.logEpoch, before: "nope" })).toMatchObject({ code: "unknown_cursor" });
+      expect(await b.request({ type: "session.artifacts", sessionId, logEpoch: "old", before: "x" })).toMatchObject({ code: "stale_epoch" });
 
       // A client of an older epoch that holds a turn gets a snapshot from it.
       const from = snapshot.page.older!.before;
