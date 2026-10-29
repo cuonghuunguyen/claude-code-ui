@@ -9,3 +9,4 @@ export * from "./branch-name.ts";
 export * from "./pull-request.ts";
 export * from "./plan.ts";
 export * from "./repo-tree.ts";
+export * from "./node-min.ts";

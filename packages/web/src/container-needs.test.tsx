@@ -34,7 +34,7 @@ describe("What this container needs", () => {
     const n = needsOf();
     expect(n.method).toBe("bundle");
     expect(n.needed.every((i) => i.ok === undefined)).toBe(true);
-    expect(n.needed.map((i) => i.name)).toEqual(["sh, tar and gzip", "Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++", "A writable /tmp, /dev/shm or home folder", "git, for the Git panel (optional)"]);
+    expect(n.needed.map((i) => i.name)).toEqual(["sh, tar and gzip", "Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++", "Node.js 22 or newer (used when present, not required)", "A writable /tmp, /dev/shm or home folder", "git, for the Git panel (optional)"]);
   });
 
   it("collapsed at first; expands to the needed items with a ✓ or ✗ each after a check; no path sentence, no login (bundle path)", async () => {
@@ -47,11 +47,18 @@ describe("What this container needs", () => {
     expect(rows("needs-needed")).toEqual([
       "true sh, tar and gzip",
       "true Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++",
+      "false Node.js 22 or newer (used when present, not required)",
       "true A writable /tmp, /dev/shm or home folder",
       "false git, for the Git panel (optional)",
     ]);
     expect(document.querySelector('[data-testid="needs-path"]')).toBeNull();
     expect(d.textContent).not.toMatch(/login|not needed/i);
+  });
+
+  it("bundle path lists Node.js as optional, ✓ when found", () => {
+    const row = (nodeOk?: boolean) => needsOf({ ...bundleCheck, facts: { ...bundleCheck.facts, nodeOk } }).needed.find((i) => i.name.startsWith("Node.js"))!;
+    expect(row(true)).toMatchObject({ ok: true, optional: true });
+    expect(row(false)).toMatchObject({ ok: false, optional: true });
   });
 
   it("npm path (musl): rows match the npm install and the reason shows", async () => {

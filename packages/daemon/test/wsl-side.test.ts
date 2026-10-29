@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -18,7 +18,7 @@ const dir = (p: string) => {
 afterAll(() => made.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const hasTools = process.platform !== "win32" && ["sh", "tar", "gzip"].every((t) => spawnSync(t, ["--version"]).status !== null);
 
-const probeOut = (arch: string, libc = "glibc") => ["arch=" + arch, "libc=" + libc, "glibc=2.36", "cxxrt=1"].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
+const probeOut = (arch: string, libc = "glibc", foundnode?: string) => ["arch=" + arch, "libc=" + libc, "glibc=2.36", "cxxrt=1", ...(foundnode ? ["foundnode=" + foundnode] : [])].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
 const sha = (b: string) => createHash("sha256").update(b).digest("hex");
 const sideBuildPkg = (withSide = true) => {
   const d = dir("wsl-pkg-");
@@ -36,22 +36,22 @@ const offline = (async () => {
 }) as unknown as typeof fetch;
 
 describe("prepareWslSide", () => {
-  function go(o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; setup?: "never" | "needed" | "force" }) {
+  function go(o: { foundnode?: string; seen?: unknown[]; arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; setup?: "never" | "needed" | "force" }) {
     const calls: string[][] = [];
     const exec: Exec = async (_cmd, args) => {
       calls.push(args);
-      return { code: 0, stdout: probeOut(o.arch ?? "x86_64", o.libc), stderr: "" };
+      return { code: 0, stdout: probeOut(o.arch ?? "x86_64", o.libc, o.foundnode), stderr: "" };
     };
     const phases: string[] = [];
     const installs: unknown[] = [];
     const cacheRoot = o.cacheRoot ?? dir("wsl-cache-");
-    const result = prepareWslSide({ distro: "Ubuntu", pkgDir: sideBuildPkg(o.withSide), setup: o.setup, exec, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts } });
+    const result = prepareWslSide({ distro: "Ubuntu", pkgDir: sideBuildPkg(o.withSide), setup: o.setup, exec, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts: o.seen ? (_t, p) => (o.seen!.push(p.node), p.node === "found" ? [] : parts()) : parts } });
     return { calls, phases, installs, result, cacheRoot };
   }
 
-  it("the probe runs in plain sh in the distro, with the script as base64 (no quotes or newlines on the Windows command line)", () => {
+  it("the probe runs in bash -lic like the setup script, with the script as base64 (no quotes or newlines on the Windows command line)", () => {
     const a = probeArgs("Ubuntu");
-    expect(a.slice(0, 5)).toEqual(["-d", "Ubuntu", "--exec", "sh", "-c"]);
+    expect(a.slice(0, 5)).toEqual(["-d", "Ubuntu", "--exec", "bash", "-lic"]);
     expect(a[5]).not.toMatch(/["\n]/);
   });
 
@@ -68,6 +68,20 @@ describe("prepareWslSide", () => {
     const c = go({ cacheRoot: a.cacheRoot, fetch: offline });
     expect((await c.result)?.target).toBe("linux-x64");
     expect(c.phases).toEqual([]);
+  });
+
+  it("a distro with Node.js 22+: no Node.js part, no nodejs.org fetch, parts id node-found; the pinned id is unchanged", async () => {
+    const seen: unknown[] = [];
+    const a = go({ foundnode: "1", seen, fetch: offline });
+    const b = (await a.result)!;
+    expect(seen).toEqual(["found"]);
+    expect(b.nodeDir).toBeUndefined();
+    expect(b.host!.partsId).toMatch(/^node-found\|/);
+    expect(b.host!.partsId).toBe(partsIdOf("linux-x64", "0.3.1", "found"));
+    expect(partsIdOf("linux-x64", "0.3.1", "pinned")).toBe(partsIdOf("linux-x64", "0.3.1"));
+    expect(partsIdOf("linux-x64", "0.3.1")).toMatch(/^node-24\./);
+    const pinned = (await go({ foundnode: "0" }).result)!;
+    expect(pinned.nodeDir).toBeTruthy();
   });
 
   it("aarch64 picks the arm64 parts; the parts id changes with the target and the SDK", async () => {
@@ -155,7 +169,7 @@ describe("setupScript for a WSL distro: bundle, npm fallback, never", () => {
     expect(npm).toContain("npm install");
     expect(npm).toContain("build_tools_missing");
     expect(npm).toContain('if [ -x "$dir/node/bin/node" ] && [ -f "$cli" ] && sdk "$dir"; then :; else');
-    expect(npm).toContain('exec node "$cli" --side');
+    expect(npm).toContain('exec "${n:-node}" "$cli" --side');
     const never = setupScript("C:\\pkg", "1.0.0-1", "wsl", "never", bundle);
     expect(never).toBe(setupScript("C:\\pkg", "1.0.0-1", "wsl", "never"));
     expect(never).toContain("say not_installed");
@@ -231,8 +245,12 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     writeFileSync(join(sideDir, "THIRD_PARTY_LICENSES.txt"), "licenses");
     writeFileSync(join(bin, "wslpath"), '#!/bin/sh\nprintf "%s\\n" "$2"\n', { mode: 0o755 });
     const root = join(home, ".local/share/claude-ui/side");
-    const run = (key: string, mode: "needed" | "force" | "never", id = "id-1", extra: Record<string, string> = {}) => {
-      const b = { target: TARGET, nodeDir: NODE_DIR, claudePackage: `claude-agent-sdk-${TARGET}`, host: { partsDir, sideDir, version: "1.0.0", partsId: id } } as const;
+    // A node that passes the usable_node rule (the host's is no linux node on macOS) and runs the rest on the host's.
+    writeFileSync(join(bin, "found-node"), `#!/bin/sh\ncase "$1" in -e) exit 0;; -p) echo "$0";; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+    const run = (key: string, mode: "needed" | "force" | "never", id = "id-1", extra: Record<string, string> = {}, found = false) => {
+      if (found) copyFileSync(join(bin, "found-node"), join(bin, "node"));
+      else rmSync(join(bin, "node"), { force: true });
+      const b = { target: TARGET, ...(!found && { nodeDir: NODE_DIR }), claudePackage: `claude-agent-sdk-${TARGET}`, host: { partsDir, sideDir, version: "1.0.0", partsId: id } } as const;
       const r = spawnSync("bash", ["-c", setupScript("C:\\unused", key, "wsl", mode, b)], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test", ...extra } });
       return { status: r.status, out: r.stdout, entries: existsSync(root) ? readdirSync(root).sort() : [] };
     };
@@ -320,6 +338,22 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     expect(r.status, r.out).not.toBe(3);
     expect(r.out).toContain("side started");
     expect(existsSync(join(installed(w.root, "1.0.0-1"), "node/bin/node"))).toBe(true);
+  });
+
+  it("found mode: runs on the found Node.js with no node/ and no node.tar.gz; reuse links node_modules only; a pinned id is not reused", () => {
+    const w = world();
+    rmSync(join(w.partsDir, "node.tar.gz"));
+    const r = w.run("1.0.0-1", "needed", "node-found|x", {}, true);
+    expect(r.out).toContain("side started");
+    expect(r.out).not.toContain("install_failed");
+    expect(existsSync(join(installed(w.root, "1.0.0-1"), "node"))).toBe(false);
+    for (const f of w.hostFiles()) rmSync(join(w.partsDir, f));
+    const again = w.run("1.0.0-2", "needed", "node-found|x", {}, true);
+    expect(again.out).toContain("side started");
+    expect(again.entries).toEqual(["1.0.0-2"]);
+    expect(existsSync(join(installed(w.root, "1.0.0-2"), "node"))).toBe(false);
+    const pinned = w.run("1.0.0-3", "needed", "node-24|x");
+    expect(pinned.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*parts were not found/m);
   });
 
   it("a candidate for reuse without the SDK binary is not linked: the parts are unpacked", () => {

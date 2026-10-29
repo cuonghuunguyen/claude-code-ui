@@ -32,14 +32,14 @@ In 0.5.0 every WSL and Docker side stops about 15 seconds after it starts. This 
 
 ### The side needs Node.js or build tools
 
-The Open project dialog says what is missing. A WSL distro or Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar` and `gzip` (a WSL distro also `bash`): claude-code-ui brings Node.js. A WSL distro that installs with npm (musl, see below) needs Node.js 22+, make, python3 and g++. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. The dialog does not check the Claude login: a session started without one says so. See [WSL & Docker](../features/wsl-docker).
+The Open project dialog says what is missing. A WSL distro or Docker container with glibc (Debian, Ubuntu, ...) needs only `sh`, `tar` and `gzip` (a WSL distro also `bash`): claude-code-ui uses a Node.js 22+ found there, else brings its own. A WSL distro that installs with npm (musl, see below) needs Node.js 22+, make, python3 and g++. Open **What this container needs** in the dialog for the list with a ✓ or ✗ per item. The dialog does not check the Claude login: a session started without one says so. See [WSL & Docker](../features/wsl-docker).
 
 ### A Docker container or WSL distro installs with npm, not the bundle
 
 The dialog says why. Causes:
 
 - The container or distro uses musl (Alpine) or a CPU other than x86_64 and arm64, has glibc older than 2.28, or has no libstdc++. Use a glibc image or distro, or install Node.js 22+, make, python3 and g++ there.
-- Your computer could not download a part (Node.js from nodejs.org, node-pty, the Claude Agent SDK or Claude Code from the npm registry) and has no checked copy in `~/.cache/claude-ui/side`. Check the network or set `CLAUDE_UI_UPDATE_REGISTRY` to a registry mirror, then retry.
+- Your computer could not download a part (Node.js from nodejs.org, only for a target without Node.js 22+; node-pty, the Claude Agent SDK or Claude Code from the npm registry) and has no checked copy in `~/.cache/claude-ui/side`. Check the network or set `CLAUDE_UI_UPDATE_REGISTRY` to a registry mirror, then retry.
 
 A downloaded or cached part that does not match its checksum is never used: it is downloaded again.
 

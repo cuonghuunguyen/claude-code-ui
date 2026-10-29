@@ -3,8 +3,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { NODE_MIN, nodeMinOf } from "@claude-ui/protocol";
 import { describe, expect, it } from "vitest";
-import { assembleBundle, bundleTargetOf, ensureParts, parseTarget, partsFor, sideCacheDir, TARGET_PROBE, writeTar, type Part } from "../src/side-bundle.ts";
+import { assembleBundle, bundleTargetOf, ensureParts, installMethodOf, NODE_OK_JS, parseTarget, partsFor, sideCacheDir, TARGET_PROBE, USABLE_NODE_FN, writeTar, type Part } from "../src/side-bundle.ts";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 const hasTar = spawnSync("tar", ["--version"]).status === 0 && process.platform !== "win32";
@@ -29,6 +31,69 @@ describe("target", () => {
     expect(bundleTargetOf({ arch: "x86_64", ...g, glibc: "2.17" })).toEqual({ reason: expect.stringMatching(/glibc 2\.17.*2\.28/) });
     expect(bundleTargetOf({ arch: "x86_64", ...g, cxxRuntime: false })).toEqual({ reason: expect.stringMatching(/libstdc\+\+/) });
     expect(bundleTargetOf({ arch: "x86_64", libc: "unknown", cxxRuntime: true })).toEqual({ reason: expect.stringMatching(/C library/) });
+  });
+
+  it("parses foundnode; installMethodOf picks found or pinned Node.js on the bundle path", () => {
+    const g = "CLAUDE_UI_CHECK arch=x86_64\nCLAUDE_UI_CHECK libc=glibc\nCLAUDE_UI_CHECK glibc=2.36\nCLAUDE_UI_CHECK cxxrt=1\n";
+    expect(installMethodOf(parseTarget(`${g}CLAUDE_UI_CHECK foundnode=1`), true)).toEqual({ method: "bundle", target: "linux-x64", node: "found" });
+    expect(installMethodOf(parseTarget(`${g}CLAUDE_UI_CHECK foundnode=0`), true)).toMatchObject({ node: "pinned" });
+    expect(installMethodOf(parseTarget(g), true)).toMatchObject({ node: "pinned" });
+    expect(installMethodOf(parseTarget(g.replace("glibc\n", "musl\n") + "CLAUDE_UI_CHECK foundnode=1"), true)).toMatchObject({ method: "npm" });
+  });
+
+  it("NODE_MIN comes from engines.node; another shape throws", () => {
+    expect(NODE_MIN).toBe(JSON.parse(readFileSync(new URL("../../claude-ui/package.json", import.meta.url), "utf8")).engines.node.replace(">=", ""));
+    expect(nodeMinOf(">=22.1")).toBe("22.1");
+    expect(() => nodeMinOf("^22")).toThrow(/engines\.node/);
+  });
+
+  describe("NODE_OK_JS (the rule the candidate node runs)", () => {
+    const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string }) => {
+      let code: number | undefined;
+      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? ""], platform: o.platform ?? "linux", arch: o.arch ?? "x64", exit: (c: number) => (code = c) };
+      runInNewContext(NODE_OK_JS, { process });
+      return code === 0;
+    };
+    it("version: full x.y.z compare against the minimum", () => {
+      expect(ok({})).toBe(true);
+      expect(ok({ v: "24.1.0" })).toBe(true);
+      expect(ok({ v: "21.9.9" })).toBe(false);
+      expect(ok({ v: "22.3.0", min: "22.4" })).toBe(false);
+      expect(ok({ v: "22.4.1", min: "22.4.1" })).toBe(true);
+    });
+    it("platform linux, matching arch (when one is asked), no Bun or Deno", () => {
+      expect(ok({ platform: "darwin" })).toBe(false);
+      expect(ok({ want: "arm64", arch: "x64" })).toBe(false);
+      expect(ok({ want: "arm64", arch: "arm64" })).toBe(true);
+      expect(ok({ want: "", arch: "ia32" })).toBe(true);
+      expect(ok({ bun: "1.1.0" })).toBe(false);
+      expect(ok({ deno: "2.0.0" })).toBe(false);
+    });
+  });
+
+  it("found Node.js: the parts leave Node.js out; pinned has it", () => {
+    expect(partsFor("linux-x64", { sdkVersion: "0.3.285", node: "found" }).map((p) => p.file)).toEqual(["node-pty.tgz", "sdk.tgz", "claude.tgz"]);
+    expect(partsFor("linux-x64", { sdkVersion: "0.3.285", node: "pinned" }).map((p) => p.file)).toContain("node.tar.gz");
+  });
+
+  it.skipIf(!hasTar)("usable_node: the real binary behind a shim; refuses a node that fails the rule or whose real path is not a runnable file", () => {
+    const bin = tmp("un-");
+    const real = join(bin, "real-node");
+    const fake = (path: string, o: { exec: string; ok?: boolean }) => writeFileSync(path, `#!/bin/sh\ncase "$1" in -e) exit ${o.ok === false ? 1 : 0};; -p) echo '${o.exec}';; esac\n`, { mode: 0o755 });
+    fake(real, { exec: real });
+    const shim = join(bin, "shim");
+    mkdirSync(shim);
+    const n = (path: string) => spawnSync("sh", ["-c", `${USABLE_NODE_FN}; usable_node x64; echo "rc=$? n=$n"`], { encoding: "utf8", env: { PATH: `${path}:/usr/bin:/bin` } }).stdout.trim();
+    fake(join(shim, "node"), { exec: real });
+    expect(n(shim)).toBe(`rc=0 n=${real}`);
+    fake(real, { exec: real, ok: false });
+    expect(n(shim)).toBe("rc=1 n=");
+    fake(real, { exec: real });
+    fake(join(shim, "node"), { exec: join(bin, "missing") });
+    expect(n(shim)).toBe("rc=1 n=");
+    fake(join(shim, "node"), { exec: bin });
+    expect(n(shim)).toBe("rc=1 n=");
+    expect(n("/nonexistent")).toBe("rc=1 n=");
   });
 
   it.skipIf(!hasTar)("the probe runs in sh and reports this machine", () => {
@@ -108,6 +173,15 @@ describe("parts", () => {
     const again: string[] = [];
     await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}, again) });
     expect(again).toEqual([]);
+  });
+
+  it("a found-mode and a pinned-mode call for one folder at once: the pinned caller gets node.tar.gz", async () => {
+    const dir = tmp("parts-");
+    const found = ensureParts({ dir, parts: parts().slice(1), registry: "https://r", fetch: fakeFetch(files) });
+    const pinned = ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files) });
+    const [rf, rp] = await Promise.all([found, pinned]);
+    expect(Object.keys(rf)).toEqual(["claude.tgz"]);
+    expect(Object.keys(rp).sort()).toEqual(["claude.tgz", "node.tar.gz"]);
   });
 
   it("a .partial left by a killed run is removed once it is an hour old; a fresh one stays", async () => {
@@ -191,7 +265,7 @@ describe.skipIf(!hasTar)("tar", () => {
 describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", () => {
   const KEY = "1.2.3-1";
   const B = { target: "linux-x64" as const, nodeDir: "node-v9.9.9-linux-x64", claudePackage: "claude-agent-sdk-linux-x64" };
-  function makeBundle(home: string, o: { nodeFails?: boolean } = {}) {
+  function makeBundle(home: string, o: { nodeFails?: boolean; noNode?: boolean } = {}) {
     const w = mkdtempSync(join(tmpdir(), "bw-"));
     const nd = join(w, "n", B.nodeDir);
     mkdirSync(join(nd, "bin"), { recursive: true });
@@ -211,7 +285,7 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
     const side = join(w, "side");
     mkdirSync(side);
     writeFileSync(join(side, "cli.js"), "side");
-    return assembleBundle({ partFiles: { "node.tar.gz": join(w, "node.tar.gz"), "node-pty.tgz": join(w, "node-pty.tgz"), "sdk.tgz": join(w, "sdk.tgz"), "claude.tgz": join(w, "claude.tgz") }, sideDir: side, version: "1.2.3", outDir: home });
+    return assembleBundle({ partFiles: { ...(!o.noNode && { "node.tar.gz": join(w, "node.tar.gz") }), "node-pty.tgz": join(w, "node-pty.tgz"), "sdk.tgz": join(w, "sdk.tgz"), "claude.tgz": join(w, "claude.tgz") }, sideDir: side, version: "1.2.3", outDir: home });
   }
   const run = (home: string, script: string) => spawnSync("sh", ["-c", script], { cwd: home, encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: home, ANTHROPIC_API_KEY: "x" } });
 
@@ -236,6 +310,58 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
     expect(again.stdout).toContain("bundled side started");
     const never = spawnSync("sh", ["-c", setupScript("", KEY, "docker", "never")], { cwd: home, encoding: "utf8", env: { PATH: "/nonexistent:/bin", HOME: home, ANTHROPIC_API_KEY: "x" } });
     expect(never.stdout).toContain("bundled side started");
+  });
+
+  describe("found Node.js", () => {
+    const F = { target: "linux-x64" as const, claudePackage: "claude-agent-sdk-linux-x64" };
+    /** A node on PATH that passes the usable_node rule and answers the side's --version and --side. */
+    const nodeIn = () => {
+      const bin = tmp("fn-");
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) exit 0;; -p) echo "$0";; esac\nfor a in "$@"; do case "$a" in --version) echo 1.2.3; exit 0;; --side) echo "found node side started"; exit 0;; esac; done\n`, { mode: 0o755 });
+      return bin;
+    };
+    const runOn = (home: string, script: string, path: string) => spawnSync("sh", ["-c", script], { cwd: home, encoding: "utf8", env: { PATH: `${path}:/usr/bin:/bin`, HOME: home, ANTHROPIC_API_KEY: "x" } });
+    const sideDir = (home: string) => join(home, ".local/share/claude-ui/side", KEY);
+
+    it("unpacks without node/, runs the side on the found Node.js", async () => {
+      const { setupScript } = await import("../src/sides.ts");
+      const home = tmp("bh-");
+      const tar = await makeBundle(home, { noNode: true });
+      const r = runOn(home, setupScript(tar, KEY, "docker", "needed", F), nodeIn());
+      expect(r.stdout).toContain("CLAUDE_UI_PHASE installing");
+      expect(r.stdout).toContain("found node side started");
+      expect(existsSync(join(sideDir(home), "node"))).toBe(false);
+      expect(existsSync(join(sideDir(home), "node_modules/node-pty/prebuilds/linux-x64/pty.node"))).toBe(true);
+    });
+
+    it("an install made with the found Node.js is installed again with the pinned one when the Node.js is gone", async () => {
+      const { setupScript } = await import("../src/sides.ts");
+      const home = tmp("bh-");
+      runOn(home, setupScript(await makeBundle(home, { noNode: true }), KEY, "docker", "needed", F), nodeIn());
+      const r = runOn(home, setupScript(await makeBundle(home), KEY, "docker", "needed", B), "/nonexistent");
+      expect(r.stdout).toContain("CLAUDE_UI_PHASE installing");
+      expect(r.stdout).toContain("bundled side started");
+      expect(existsSync(join(sideDir(home), "node/bin/node"))).toBe(true);
+    });
+
+    it("a pinned install is kept when the container gains Node.js 22+", async () => {
+      const { setupScript } = await import("../src/sides.ts");
+      const home = tmp("bh-");
+      run(home, setupScript(await makeBundle(home), KEY, "docker", "needed", B));
+      const r = runOn(home, setupScript(await makeBundle(home, { noNode: true }), KEY, "docker", "needed", F), nodeIn());
+      expect(r.stdout).not.toContain("installing");
+      expect(r.stdout).toContain("bundled side started");
+    });
+
+    it("the Node.js is gone between the probe and the start: node_changed, nothing installed", async () => {
+      const { setupScript } = await import("../src/sides.ts");
+      const home = tmp("bh-");
+      const tar = await makeBundle(home, { noNode: true });
+      const r = runOn(home, setupScript(tar, KEY, "docker", "needed", F), "/nonexistent");
+      expect(r.stdout).toContain("CLAUDE_UI_SETUP node_changed");
+      expect(existsSync(tar)).toBe(false);
+      expect(existsSync(join(home, ".local/share/claude-ui/side"))).toBe(false);
+    });
   });
 
   it("a bundle that does not start is never swapped in; the old install stays", async () => {
