@@ -112,3 +112,81 @@ Then("the tab bar lists {int} sessions", async ({ page }, n: number) => {
   if (await page.getByTestId("tab-switcher").isVisible()) await expect(page.getByTestId("tab-switcher")).toContainText(String(n));
   else await expect(stripSessions(page)).toHaveCount(n);
 });
+
+// --- GH-503: the docked pane has the strip tab's features ---
+Then("the docked panel shows {string}", async ({ page }, name: string) => {
+  await expect(dockBody(page).getByRole("button", { name })).toBeVisible({ timeout: TURN_MS });
+});
+
+When("I click {string} in the docked panel", async ({ page }, name: string) => {
+  await dockBody(page).getByRole("button", { name }).first().click();
+});
+
+Then("the plan popup shows the docked session's plan", async ({ page }) => {
+  await expect(page.getByTestId("viewer-dialog")).toContainText(/\S/);
+});
+
+When("I select the docked reply text and click Quote", async ({ page }) => {
+  await dockTabs(page).first().click();
+  await dockBody(page).getByTestId("assistant-text").last().locator("p").first().evaluate((p) => {
+    document.getSelection()!.selectAllChildren(p);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.getByTestId("quote-button").click();
+});
+
+Then("the docked prompt box starts with {string}", async ({ page }, start: string) => {
+  await expect(dockPrompt(page)).toHaveValue(new RegExp(`^${start}`));
+});
+
+Then("the main prompt box is empty", async ({ page }) => {
+  await expect(mainPrompt(page)).toHaveValue("");
+});
+
+const dockLink = (page: Page) => dockBody(page).locator("button[title='Open in file dialog']").last();
+
+Then("the docked reply has a file link", async ({ page }) => {
+  await expect(dockLink(page)).toBeVisible({ timeout: TURN_MS });
+});
+
+When("I click the file link in the docked reply", async ({ page }) => {
+  await dockLink(page).click();
+});
+
+Then("the file dialog shows {string}", async ({ page }, name: string) => {
+  await expect(page.getByTestId("file-dialog")).toContainText(name);
+});
+
+When("I select the first session tab", async ({ page }) => {
+  await stripSessions(page).first().click();
+});
+
+Then("no plan tab is active", async ({ page }) => {
+  await expect(page.locator('[data-testid="tab-strip"] [data-testid="tab"][data-active][data-tab-id^="plan:"]')).toHaveCount(0);
+});
+
+When("I attach an image in the main prompt box", async ({ page }) => {
+  // 1x1 PNG.
+  const buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  await page.getByTestId("session-area").locator('input[type="file"]').first().setInputFiles({ name: "dot.png", mimeType: "image/png", buffer });
+  await expect(page.getByTestId("session-area").getByTestId("image-strip").locator("img")).toHaveCount(1);
+});
+
+Then("the docked prompt box shows {int} image(s)", async ({ page }, n: number) => {
+  await expect(dockBody(page).getByTestId("image-strip").locator("img")).toHaveCount(n);
+});
+
+Then("the main prompt box shows {int} image(s)", async ({ page }, n: number) => {
+  await expect(page.getByTestId("session-area").getByTestId("image-strip").locator("img:visible")).toHaveCount(n);
+});
+
+When("I open the command palette and search the docked session", async ({ page }) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByTestId("palette")).toBeVisible();
+  const title = (await dockTabs(page).first().innerText()).trim().split("\n")[0]!;
+  await page.getByTestId("palette").locator("input").first().fill(title);
+});
+
+Then("its palette row has the open mark", async ({ page }) => {
+  await expect(page.getByTestId("palette").getByRole("option").first().getByTestId("open-marker")).toBeAttached();
+});
