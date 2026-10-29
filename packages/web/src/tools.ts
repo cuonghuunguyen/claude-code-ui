@@ -122,3 +122,11 @@ export function artifactPreviewable(call: Pick<ToolCall, "tool" | "input" | "sta
   if ((i.action !== undefined && i.action !== "publish") || i.asset === true) return false;
   return typeof i.file_path === "string" && /\.html?$/i.test(i.file_path);
 }
+
+/** Title of an Artifact publish (the tab and card name): the input `title`, else the file's base name (either separator), else "". */
+export function artifactTitle(call: { input: unknown }): string {
+  const i = (call.input && typeof call.input === "object" ? call.input : {}) as Record<string, unknown>;
+  const title = typeof i.title === "string" ? i.title : "";
+  const file = typeof i.file_path === "string" ? i.file_path : "";
+  return title || file.split(/[\\/]/).pop() || file;
+}

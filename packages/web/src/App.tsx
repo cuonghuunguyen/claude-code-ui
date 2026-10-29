@@ -58,7 +58,9 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
-import { ArtifactConnectedContext, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactTab } from "./artifact-tab.tsx";
+import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
@@ -153,7 +155,7 @@ import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenR
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
-import { PER_CWD, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, pathOf, refOf } from "./pane-ref.ts";
+import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, partIdOf, pathOf, refOf } from "./pane-ref.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -498,6 +500,8 @@ export function App() {
   const [openFile, setOpenFile] = useState<{ path: string; line?: number; /** The editor takes the focus (an explicit "open in Files tab", #301). */ focus?: boolean }>();
   // GH-399 file tabs: the tab whose editor takes the focus (`seq` tells a repeat apart), and the Files tree's reveal request (a file, or a breadcrumb folder).
   const [fileFocus, setFileFocus] = useState<{ ref: string; seq: number }>();
+  /** Artifact tab titles the daemon told (the reply of artifact.preview) for a part that is not loaded in its view (GH-400). */
+  const [artTitles, setArtTitles] = useState<Record<string, string>>({});
   const [treeReveal, setTreeReveal] = useState<{ path: string; seq: number; dir?: boolean }>();
   /** File tree "Show changes": the Changes tab selects this path (`seq` tells a repeat apart). */
   const [changesReveal, setChangesReveal] = useState<{ path: string; seq: number }>();
@@ -996,7 +1000,7 @@ export function App() {
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string): boolean | void {
-    if (isItem(id)) {
+    if (kindOf(id) === "file") {
       if (!askDirtyFiles([id]).length) return false;
       if (editors.get().tabs[pathOf(id)!]?.item) editors.discard([pathOf(id)!]);
     }
@@ -1060,7 +1064,7 @@ export function App() {
   /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
   function closeGroup(ids: string[], asked = false) {
     if (!asked) ids = askDirtyFiles(ids);
-    editors.discard(ids.flatMap((id) => (isItem(id) && editors.get().tabs[pathOf(id)!]?.item ? [pathOf(id)!] : [])));
+    editors.discard(ids.flatMap((id) => (kindOf(id) === "file" && editors.get().tabs[pathOf(id)!]?.item ? [pathOf(id)!] : [])));
     const r = closeMany(tabsRef.current, ids, activeRef.current);
     setTabs(r.tabs);
     const left = tabsRef.current.filter((t) => !ids.includes(t));
@@ -1071,7 +1075,7 @@ export function App() {
   /** File tabs (GH-399) with unsaved edits ask once for all of `ids`; Cancel keeps those tabs. Returns the ids that may close. */
   const dirtyFiles = (ids: string[]) =>
     ids.filter((id) => {
-      const t = isItem(id) ? editors.get().tabs[pathOf(id)!] : undefined;
+      const t = kindOf(id) === "file" ? editors.get().tabs[pathOf(id)!] : undefined;
       return !!t && isDirty(t);
     });
   const dirtyFileCount = (ids: string[]) => dirtyFiles(ids).length;
@@ -1154,7 +1158,7 @@ export function App() {
       if (isPaneRef(id)) {
         const owner = listRef.current.find((s) => s.id === ownerOf(id));
         // A file tab with unsaved edits is a draft: no rule closes it (GH-399).
-        const fileTab = isItem(id) ? editors.get().tabs[pathOf(id)!] : undefined;
+        const fileTab = kindOf(id) === "file" ? editors.get().tabs[pathOf(id)!] : undefined;
         return { id, unread: false, draft: !!fileTab && isDirty(fileTab), listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !listFresh.current, lastUsed: usedAt(id) };
       }
       const item = listRef.current.find((s) => s.id === id);
@@ -1769,6 +1773,10 @@ export function App() {
   const paneTitle = (ref: string) => {
     const k = kindOf(ref)!;
     if (k === "file") return baseName(pathOf(ref)!);
+    if (k === "artifact") {
+      const part = views[ownerOf(ref)]?.parts.get(partIdOf(ref)!);
+      return (part?.type === "tool_call" && artifactTitle(part)) || artTitles[ref] || "Artifact";
+    }
     const c = PER_CWD.includes(k) ? cwdOfOwner(ownerOf(ref)) : undefined;
     return paneTabTitle(k, c ? (worktreeName(c, worktrees) ?? projectName(c)) : ownerTitle(ownerOf(ref)));
   };
@@ -1914,6 +1922,7 @@ export function App() {
                         }
                         onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
+                        onArtifactTab={(partId) => openArtifactTab(s.id, partId)}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -2336,6 +2345,8 @@ export function App() {
     open(ref);
     focusTabOf(ref);
   };
+  /** Open in tab of an Artifact card (GH-400): the page of `partId` as a main-area tab right of its session's tab, one tab per part. */
+  const openArtifactTab = (owner: string, partId: string) => openPaneTab(artifactRef(owner, partId));
   /** The shell takes the focus (GH-382 loud open), without a spawn. */
   const focusTerminal = (ref: string) => {
     setTermLoud(ref);
@@ -2394,6 +2405,25 @@ export function App() {
             />
           ) : (
             <p className="m-auto text-muted-foreground text-sm">Loading file…</p>
+          )}
+        </div>
+      );
+    }
+    if (kind === "artifact") {
+      const owner = ownerOf(ref);
+      return (
+        <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
+          {/* Mounted once the list names the owner (the connection is up by then): the first request needs the client. */}
+          {cwdOfOwner(owner) ? (
+            <ArtifactTab
+              partId={partIdOf(ref)!}
+              title={paneTitle(ref)}
+              load={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: owner, partId })}
+              connected={status === "connected"}
+              onTitle={(t) => setArtTitles((m) => (m[ref] === t ? m : { ...m, [ref]: t }))}
+            />
+          ) : (
+            <p className="m-auto text-muted-foreground text-sm">Loading preview…</p>
           )}
         </div>
       );
@@ -3221,7 +3251,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -4233,6 +4263,7 @@ export function SessionPane({
   onRewind,
   onMedia,
   onArtifactPreview,
+  onArtifactTab,
   onRespond,
   onAnswer,
   connected,
@@ -4302,6 +4333,8 @@ export function SessionPane({
   onMedia?: MediaLoader;
   /** Asks for the preview URL of an Artifact publish part (artifact.preview). */
   onArtifactPreview?: ArtifactPreviewLoader;
+  /** Open in tab of an Artifact card: opens the artifact tab of the part (GH-400). */
+  onArtifactTab?: (partId: string) => void;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
@@ -4409,12 +4442,15 @@ export function SessionPane({
   useEffect(() => void (card.current = dock.current?.parentElement ?? null), []);
   const [dockFocused, setDockFocused] = useState(false);
   const agentCtx = useMemo(() => ({ links, onOpenSession }), [links, onOpenSession]);
+  const [artifactOpened] = useState(() => new Set<string>()); // the card previews this session shows (ArtifactOpenedContext)
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
     <MediaContext value={onMedia}>
     <ArtifactPreviewContext value={onArtifactPreview}>
     <ArtifactConnectedContext value={connected}>
+    <ArtifactOpenedContext value={artifactOpened}>
+    <ArtifactTabContext value={onArtifactTab}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
     <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
@@ -4645,6 +4681,8 @@ export function SessionPane({
     </BackgroundShellContext>
     </OpenRunContext>
     </CwdContext>
+    </ArtifactTabContext>
+    </ArtifactOpenedContext>
     </ArtifactConnectedContext>
     </ArtifactPreviewContext>
     </MediaContext>

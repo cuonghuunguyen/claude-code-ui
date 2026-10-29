@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
-import { ArtifactPreviewContext } from "./artifact-preview.tsx";
+import { ArtifactPreviewContext, ArtifactTabContext } from "./artifact-preview.tsx";
 import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard } from "./tool-card.tsx";
 import { ViewerContext } from "./viewer.ts";
 
@@ -372,6 +372,22 @@ Live subscription: arming in the background.`));
     expect(withCtx({ ...done("Artifact", publish), status: "error" })).not.toContain("artifact-preview-toggle");
     expect(withCtx(done("Artifact", { ...publish, file_path: "/tmp/a.txt" }))).not.toContain("artifact-preview-toggle");
     expect(open(done("Artifact", publish), result("ok"))).not.toContain("artifact-preview-toggle");
+  });
+  it("Open in tab shows only for a done previewable publish with ArtifactTabContext", () => {
+    const withTab = (c: ToolCall) =>
+      renderToStaticMarkup(
+        <ArtifactTabContext value={() => {}}>
+          <ArtifactPreviewContext value={async () => ({ url: "/artifact/x/a.html", size: 1, mtime: 1 })}>
+            <ToolCard call={c} result={result("ok")} awaiting />
+          </ArtifactPreviewContext>
+        </ArtifactTabContext>,
+      );
+    const ok = withTab(done("Artifact", publish));
+    expect(ok).toContain("Open in tab");
+    expect(ok).toMatch(/min-h-11[^"]*md:min-h-0|md:min-h-0[^"]*min-h-11/);
+    expect(withTab({ ...done("Artifact", publish), status: "error" })).not.toContain("Open in tab");
+    expect(withTab(done("Artifact", { ...publish, file_path: "/tmp/a.txt" }))).not.toContain("Open in tab");
+    expect(open(done("Artifact", publish), result("ok"))).not.toContain("Open in tab");
   });
   it("a streaming call with empty input does not crash", () => {
     expect(renderToStaticMarkup(<ToolCard call={{ ...done("Artifact", {}), status: "pending" }} />)).toContain("Artifact");
