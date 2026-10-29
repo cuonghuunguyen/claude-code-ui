@@ -192,5 +192,12 @@ When("I click the Terminal tab of the {word} project", async ({ page, project },
 });
 
 Then("the terminal position hint mentions {string}", async ({ page }, text: string) => {
+  // The choose step closed Settings: open it again at the Terminal group.
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-terminal").click();
   await expect(page.locator("#settings-terminal-position-hint")).toContainText(text);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-terminal")).toHaveCount(0);
 });
