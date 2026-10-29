@@ -1059,6 +1059,12 @@ describe("daemon", () => {
     writeFileSync(join(webRoot, "proj", "notes.md"), "");
     const c = await client();
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "prnot" })).toMatchObject({ result: { paths: ["proj/notes.md"] } });
+    // An embedded repository: its files are found (the server passes the repositories of the cwd).
+    const ws = join(webRoot, "ws-nested");
+    mkdirSync(join(ws, "api/src"), { recursive: true });
+    writeFileSync(join(ws, "api/src/handler.ts"), "");
+    execFileSync("git", ["init", "-q"], { cwd: join(ws, "api") });
+    expect(await c.request({ type: "fs.search", cwd: ws, query: "handler" })).toMatchObject({ result: { paths: ["api/src/handler.ts"] } });
     expect(await c.request({ type: "fs.search", cwd: join(webRoot, ".."), query: "" })).toMatchObject({ code: "cwd_not_allowed" });
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
   });
