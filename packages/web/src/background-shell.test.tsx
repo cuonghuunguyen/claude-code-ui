@@ -63,3 +63,11 @@ it("a failed move's error does not show once the call has ended", async () => {
   await render(call({ status: "done" }), async () => {});
   expect(el.querySelector('[role="alert"]')).toBeNull();
 });
+
+it("Run in background shows on a subagent's running foreground Bash call (GH-492)", async () => {
+  const handler = vi.fn(async () => {});
+  await render(call({ parentId: "agent1" }), handler);
+  expect(button()).not.toBeNull();
+  await act(async () => button()!.click());
+  expect(handler).toHaveBeenCalledWith("t1");
+});

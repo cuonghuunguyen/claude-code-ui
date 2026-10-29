@@ -106,7 +106,7 @@ import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermi
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
-import { ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
+import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
@@ -5310,11 +5310,25 @@ function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
   const output = [part.stdout, part.stderr].filter(Boolean).join("\n");
   const call: ToolCall = { type: "tool_call", id: part.id, toolUseId: part.id, tool: "Bash", input: { command: part.command }, status: part.status === "running" ? "running" : "done" };
   const result = output ? { type: "tool_result" as const, id: `${part.id}:result`, toolUseId: part.id, output, isError: part.status === "error" } : undefined;
-  const status = part.status === "running" ? "Running…" : part.status === "stopped" ? "Stopped" : part.exitCode ? `Exit code ${part.exitCode}` : undefined;
+  const status = part.status === "running" ? (part.shell ? "Running in background" : "Running…") : part.status === "stopped" ? "Stopped" : part.exitCode ? `Exit code ${part.exitCode}` : undefined;
+  // Run in background (GH-485): at once while the command runs, the daemon keeps the process.
+  const toBackground = use(BackgroundShellContext);
+  const [moving, setMoving] = useState<{ error?: string }>();
+  const canBackground = !!toBackground && part.status === "running" && !part.shell;
   return (
-    <div data-testid="bash-card" data-status={part.status} className="space-y-1">
+    <div data-testid="bash-card" data-status={part.status} data-shell={part.shell} className="space-y-1">
       <ToolBody call={call} result={result} />
-      {status && <p className="text-muted-foreground text-xs">{status}</p>}
+      <div className="flex items-center gap-2">
+        {status && <p className="text-muted-foreground text-xs">{status}</p>}
+        {canBackground && (
+          <BackgroundButton pending={!!moving && !moving.error} onClick={() => (setMoving({}), toBackground!(part.id).catch((e: Error) => setMoving({ error: e.message })))} />
+        )}
+      </div>
+      {canBackground && moving?.error && (
+        <p role="alert" data-testid="run-in-background-error" className="text-destructive text-xs">
+          Could not run in background: {moving.error}
+        </p>
+      )}
     </div>
   );
 }

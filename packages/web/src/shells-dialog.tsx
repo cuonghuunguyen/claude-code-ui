@@ -7,8 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { duration, useNow } from "./agents.tsx";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { ConfirmDialog } from "./session-actions.tsx";
-import { isRunningShell, SHELL_STATUS, shellInput, shellsOf } from "./shells.ts";
-import type { SessionView, ToolCall } from "./store.ts";
+import { isRunningShell, SHELL_STATUS, shellInput, shellsOf, type Shell } from "./shells.ts";
+import type { SessionView } from "./store.ts";
 import { ToolBody } from "./tool-card.tsx";
 
 // shortcut: polls the output file every second while shown; a daemon file watch if many viewers make it heavy.
@@ -16,11 +16,11 @@ const SHELL_POLL_MS = 1000;
 
 const ROW = "flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11";
 
-const label = (c: ToolCall) => shellInput(c).description || shellInput(c).command || "Bash";
-const runTime = (c: ToolCall, now: number) => (c.startedAt === undefined ? undefined : duration((c.endedAt ?? now) - c.startedAt));
+const label = (c: Shell) => shellInput(c).description || shellInput(c).command || "Bash";
+const runTime = (c: Shell, now: number) => (c.startedAt === undefined ? undefined : duration((c.endedAt ?? now) - c.startedAt));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-function Output({ call, output }: { call: ToolCall; output: (toolUseId: string) => Promise<ShellOutputResult> }) {
+function Output({ call, output }: { call: Shell; output: (toolUseId: string) => Promise<ShellOutputResult> }) {
   const running = isRunningShell(call);
   const [out, setOut] = useState<ShellOutputResult>();
   const [error, setError] = useState<string>();
@@ -152,7 +152,14 @@ export function ShellsDialog({
             )}
           </div>
           {killError && <Banner kind="error">Could not kill: {killError}</Banner>}
-          <Output call={call} output={output} />
+          {call.text !== undefined ? (
+            // A bash mode shell: the card's own output, live through the part (no file read).
+            <div data-testid="shell-output">
+              <ToolBody call={call} result={call.text ? { type: "tool_result", id: `${call.id}:result`, toolUseId: call.toolUseId, output: call.text, isError: call.status === "error" } : undefined} tail />
+            </div>
+          ) : (
+            <Output call={call} output={output} />
+          )}
           <ConfirmDialog
             open={confirm}
             title="Kill shell?"

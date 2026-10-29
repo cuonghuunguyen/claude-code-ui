@@ -22,3 +22,9 @@ it("shellsOf lists a background shell started inside a subagent run", () => {
   const v = view({ ...bash("sub1", { command: "npm run dev", run_in_background: true }, "running"), parentId: "agent1" } as Part, bash("fg", { command: "ls" }, "done"));
   expect(shellsOf(v).map((c) => c.id)).toEqual(["sub1"]);
 });
+
+it("shellsOf lists a ! command moved to the background with its output; not a foreground one (GH-485)", () => {
+  const b = (id: string, shell?: "background"): Part => ({ type: "bash", id, command: `cmd-${id}`, stdout: "a", stderr: "", status: "running", ...(shell && { shell }) });
+  const v = view(b("fg"), b("bg", "background"));
+  expect(shellsOf(v)).toMatchObject([{ toolUseId: "bg", input: { command: "cmd-bg" }, status: "running", text: "a" }]);
+});

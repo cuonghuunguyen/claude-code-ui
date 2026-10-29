@@ -123,3 +123,16 @@ it("a finished shell has no Kill button; output not available shows an error", a
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Output not available: Output is not available");
   expect(q("shell-output")).toBeNull();
 });
+
+it("a ! shell shows the card's output without a request; Kill sends its part id (GH-485)", async () => {
+  const output = vi.fn(async () => ({ output: "x", truncated: false }));
+  const kill = vi.fn(async () => ({}));
+  const part: Part = { type: "bash", id: "b1", command: "sleep 99", stdout: "tick-1", stderr: "", status: "running", shell: "background" };
+  await render(view(part), { output, kill });
+  await click(q("shell-row"));
+  expect(output).not.toHaveBeenCalled();
+  expect(q("shell-output")?.textContent).toContain("tick-1");
+  await click(q("shell-kill"));
+  await click(q("shell-kill-confirm"));
+  expect(kill).toHaveBeenCalledWith("b1");
+});

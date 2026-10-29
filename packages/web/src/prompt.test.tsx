@@ -625,6 +625,21 @@ it("renders a bash part as a bash card: $ command, output, exit code line; stopp
   expect(b.$("bash-card")!.textContent).toContain("Stopped");
 });
 
+it("a running ! card shows Run in background and sends its part id; a moved one shows Running in background, no button, and the box is free (GH-485)", async () => {
+  const onBackgroundShell = vi.fn(async () => ({}));
+  const running = await render({ onBackgroundShell }, applyEvent(emptySession(), bashPart()));
+  const button = () => running.$("bash-card")!.querySelector<HTMLButtonElement>('[data-testid="run-in-background"]');
+  expect(button()).not.toBeNull();
+  await act(async () => button()!.click());
+  expect(onBackgroundShell).toHaveBeenCalledWith("b1");
+  unmount();
+  const moved = await render({ onBackgroundShell }, applyEvent(emptySession(), bashPart({ shell: "background" })));
+  expect(moved.$("bash-card")!.querySelector('[data-testid="run-in-background"]')).toBeNull();
+  expect(moved.$("bash-card")!.textContent).toContain("Running in background");
+  expect(moved.$("bash-card")!.getAttribute("data-shell")).toBe("background");
+  expect(moved.$("toolbar-stop")).toBeNull();
+});
+
 it("bash mode: an inserted quote leaves bash mode first, so it is never run as a command", async () => {
   const { $, rerender } = await render({ onBash: async () => {} });
   await key(document.querySelector("textarea")!, { key: "!" });

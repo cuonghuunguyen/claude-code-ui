@@ -1887,16 +1887,16 @@ describe("Session event log (GH-139)", () => {
 });
 
 describe("Session bash mode", () => {
-  type Run = { done: Promise<{ stdout: string; stderr: string; exitCode?: number; stopped: boolean }>; kill: () => void };
+  type Run = { done: Promise<{ stdout: string; stderr: string; exitCode?: number; stopped: boolean }>; kill: () => void; background: () => void };
   /** A runBash fake whose command ends when the test says so (or when it is killed). */
   const fakeRun = () => {
-    const ctl = { killed: 0, output: (_o: string, _e: string) => {}, finish: (_r: { stdout: string; stderr: string; exitCode?: number; stopped?: boolean }) => {} };
+    const ctl = { killed: 0, backgrounded: 0, output: (_o: string, _e: string) => {}, finish: (_r: { stdout: string; stderr: string; exitCode?: number; stopped?: boolean }) => {} };
     const runBash = (_cmd: string, _cwd: string, onOutput: (o: string, e: string) => void): Run => {
       ctl.output = onOutput;
       let resolve!: (r: { stdout: string; stderr: string; exitCode?: number; stopped: boolean }) => void;
       const done = new Promise<{ stdout: string; stderr: string; exitCode?: number; stopped: boolean }>((r) => (resolve = r));
       ctl.finish = (r) => resolve({ stopped: false, ...r });
-      return { done, kill: () => (ctl.killed++, resolve({ stdout: "partial", stderr: "", stopped: true })) };
+      return { done, kill: () => (ctl.killed++, resolve({ stdout: "partial", stderr: "", stopped: true })), background: () => void ctl.backgrounded++ };
     };
     return { ctl, runBash: runBash as never };
   };
@@ -2061,6 +2061,255 @@ describe("Session bash mode", () => {
     await r.sync();
     expect(r.externalTurnRunning()).toBe(true);
     expect(() => r.bash("x")).toThrow(/busy/);
+  });
+});
+
+describe("Session bash mode in the background (GH-485)", () => {
+  type R = { stdout: string; stderr: string; exitCode?: number; stopped: boolean };
+  const fakeRun = () => {
+    const ctl = { killed: 0, backgrounded: 0, output: (_o: string, _e: string) => {}, finish: (_r: Partial<R>) => {} };
+    const runBash = (_c: string, _d: string, onOutput: (o: string, e: string) => void) => {
+      ctl.output = onOutput;
+      let resolve!: (r: R) => void;
+      const done = new Promise<R>((r) => (resolve = r));
+      ctl.finish = (r) => resolve({ stdout: "", stderr: "", stopped: false, ...r });
+      return { done, kill: () => (ctl.killed++, resolve({ stdout: "partial", stderr: "", stopped: true })), background: () => void ctl.backgrounded++ };
+    };
+    return { ctl, runBash: runBash as never };
+  };
+  const setup = (query: unknown = fakeQuery) => {
+    const { ctl, runBash } = fakeRun();
+    const s = new Session("/tmp", { query: query as never, runBash });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    return { s, ctl, events };
+  };
+  const bashParts = (events: Event[]) => events.filter((e) => e.part.type === "bash").map((e) => e.part as Extract<Event["part"], { type: "bash" }>);
+  const notices = () => inputs.filter((m) => String(m.message.content).startsWith("<task-notification>"));
+  /** Starts `ls`, moves it to the background; returns the part id. */
+  const moved = async (t: ReturnType<typeof setup>) => {
+    t.s.bash("ls");
+    t.ctl.output("a", "");
+    const id = bashParts(t.events)[0]!.id;
+    expect(await t.s.backgroundShell(id)).toBe(true);
+    return id;
+  };
+
+  it("Run in background frees the session: part shell background, records appended without a turn, a prompt and the next ! run", async () => {
+    const t = setup();
+    const id = await moved(t);
+    expect(t.ctl.backgrounded).toBe(1);
+    expect(bashParts(t.events).at(-1)).toMatchObject({ status: "running", shell: "background", stdout: "a" });
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    const [a, b] = inputs.slice(-2);
+    expect([a!.shouldQuery, a!.message.content]).toEqual([false, "<bash-input>ls</bash-input>"]);
+    expect([b!.shouldQuery, String(b!.message.content)]).toEqual([false, expect.stringContaining(`Command was manually backgrounded by user with ID: ${id}.`)]);
+    expect(t.s.bashRunning()).toBe(false);
+    expect(t.s.working()).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.s.info().state).toBe("idle");
+    t.s.prompt("hi");
+    await until(t.events, (e) => e.part.type === "turn_result");
+    await until(t.events, () => t.s.info().state === "idle");
+    expect(() => t.s.bash("next")).not.toThrow();
+  });
+
+  it("the end of a backgrounded ! sends a task-notification with its output that starts a turn", async () => {
+    const t = setup();
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    t.ctl.finish({ stdout: "done\n", exitCode: 0 });
+    await until(t.events, () => notices().length > 0);
+    expect(bashParts(t.events).at(-1)).toMatchObject({ status: "done", shell: "background", stdout: "done\n" });
+    const n = notices().at(-1)!;
+    expect(String(n.message.content)).toContain(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>`);
+    expect(String(n.message.content)).toContain("<bash-stdout>done\n</bash-stdout>");
+    expect(n.shouldQuery).toBeUndefined();
+    await until(t.events, (e) => e.part.type === "turn_result");
+    expect(t.s.working()).toBe(false);
+  });
+
+  it("Kill of a backgrounded ! kills it; the notice waits for the next message (no turn)", async () => {
+    const t = setup();
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    expect(await t.s.stopShell(id)).toBe(true);
+    expect(t.ctl.killed).toBe(1);
+    await until(t.events, () => notices().length > 0);
+    expect(String(notices().at(-1)!.message.content)).toContain("<status>killed</status>");
+    expect(notices().at(-1)!.shouldQuery).toBe(false);
+    expect(t.s.info().state).toBe("idle");
+    expect(bashParts(t.events).at(-1)).toMatchObject({ status: "stopped", shell: "background" });
+  });
+
+  it("an unknown id goes to the CLI; close() kills a backgrounded command", async () => {
+    const t = setup(foregroundBashQuery);
+    t.s.prompt("go");
+    await until(t.events, (e) => e.part.type === "tool_call");
+    await t.s.backgroundShell("fg-1");
+    expect(backgrounded.at(-1)).toBe("fg-1");
+    expect(await t.s.stopShell("nope")).toBe(false);
+    const u = setup();
+    await moved(u);
+    await u.s.close();
+    expect(u.ctl.killed).toBe(1);
+  });
+
+  it("the 30 min limit never kills: it only ends the restart wait (working), the shell stays listed and killable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const t = setup();
+      await moved(t);
+      expect(t.s.working()).toBe(true);
+      vi.setSystemTime(Date.now() + 31 * 60_000);
+      expect(t.s.working()).toBe(false);
+      expect(t.ctl.killed).toBe(0);
+      expect(await t.s.stopShell(bashParts(t.events)[0]!.id)).toBe(true);
+      expect(t.ctl.killed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("after /clear the process keeps running and its end notice is dropped; the old session still lists it and can Kill it", async () => {
+    const t = setup(clearQuery);
+    t.s.prompt("hi");
+    await until(t.events, (e) => e.part.type === "turn_result");
+    await until(t.events, () => t.s.info().state === "idle");
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    t.s.prompt("/clear");
+    await until(t.events, (e) => e.part.type === "session_cleared");
+    const before = notices().length;
+    expect(bashParts(t.events).at(-1)).toMatchObject({ status: "running", shell: "background" });
+    expect(t.ctl.killed).toBe(0);
+    t.ctl.finish({ stdout: "late", exitCode: 0 });
+    await until(t.events, () => bashParts(t.events).at(-1)!.status === "done");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(notices().length).toBe(before);
+    // A second one: Kill through the old session after /clear.
+    const u = setup(clearQuery);
+    u.s.prompt("hi");
+    await until(u.events, (e) => e.part.type === "turn_result");
+    await until(u.events, () => u.s.info().state === "idle");
+    const id2 = await moved(u);
+    u.s.prompt("/clear");
+    await until(u.events, (e) => e.part.type === "session_cleared");
+    expect(await u.s.stopShell(id2)).toBe(true);
+    expect(u.ctl.killed).toBe(1);
+  });
+
+  type Seen = { uuid?: string; content: string; shouldQuery?: boolean };
+  /** A CLI that reads its input at once (steering); only the reply to "work" waits for `release()`. `emit` sends any SDK message. */
+  const steerQuery = () => {
+    const seen: Seen[] = [];
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    let emit!: (m: unknown) => void;
+    const query = ({ prompt }: { prompt: AsyncIterable<{ uuid?: string; shouldQuery?: boolean; message: { content: unknown } }> }) => {
+      const out: unknown[] = [];
+      let wake = () => {};
+      emit = (m: unknown) => (out.push(m), wake());
+      void (async () => {
+        for await (const m of prompt) {
+          seen.push({ uuid: m.uuid, content: String(m.message.content), shouldQuery: m.shouldQuery });
+          const end = { type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] };
+          if (m.shouldQuery === false) {
+            emit({ type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" });
+            emit({ ...m, session_id: "x", isReplay: true });
+            emit(end);
+          } else if (m.message.content === "work") void hold.then(() => emit(end));
+          else emit(end);
+        }
+      })();
+      return Object.assign(
+        (async function* () {
+          for (;;) {
+            while (out.length) yield out.shift() as never;
+            await new Promise<void>((r) => (wake = r));
+          }
+        })(),
+        { supportedCommands: async () => [], close() {} },
+      );
+    };
+    return { query, seen, release, emit: (m: unknown) => emit(m), noticesSeen: () => seen.filter((m) => m.content.startsWith("<task-notification>")) };
+  };
+
+  it("an end notice that arrives while a turn runs waits for the turn to end; it does not interrupt it", async () => {
+    const { query, seen, release } = steerQuery();
+    const t = setup(query);
+    await moved(t);
+    await new Promise((r) => setTimeout(r, 30));
+    t.s.prompt("work");
+    expect(t.s.info().state).toBe("running");
+    t.ctl.finish({ stdout: "x", exitCode: 0 });
+    await until(t.events, () => bashParts(t.events).at(-1)!.status === "done");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen.filter((m) => m.content.startsWith("<task-notification>"))).toHaveLength(0);
+    release();
+    await until(t.events, () => seen.some((m) => m.content.startsWith("<task-notification>")));
+    expect(seen.at(-1)!.shouldQuery).toBeUndefined();
+  });
+
+  it("a notice waits while the CLI starts its own turn on a Claude shell's end (cliTurn), then goes in (GH-485)", async () => {
+    const { query, release, emit, noticesSeen } = steerQuery();
+    release();
+    const t = setup(query);
+    await moved(t);
+    await new Promise((r) => setTimeout(r, 30));
+    emit({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: "k1", tool_use_id: "k1", status: "completed", output_file: "", summary: "" });
+    await new Promise((r) => setTimeout(r, 30));
+    t.ctl.finish({ stdout: "x", exitCode: 0 });
+    await until(t.events, () => bashParts(t.events).at(-1)!.status === "done");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(noticesSeen()).toHaveLength(0);
+    emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] });
+    await until(t.events, () => noticesSeen().length > 0);
+  });
+
+  it("a notice waits while a terminal CLI turn runs on the session, and goes in when that turn ends (GH-485)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { runBash, ctl } = fakeRun();
+      const { query, noticesSeen } = steerQuery();
+      let cli = true;
+      const cliMsg = { type: "user", uuid: "cli-p", session_id: "x", message: { role: "user", content: "from the terminal" }, parent_tool_use_id: null, parent_agent_id: null };
+      const s = Session.restore(randomUUID(), "/tmp", history, { query: query as never, runBash, cliTurnRunning: () => cli, readTranscript: async () => ({ main: [...history, cliMsg] as never, runs: [] }) });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.bash("ls");
+      const id = bashParts(events)[0]!.id;
+      expect(await s.backgroundShell(id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(10);
+      await s.sync();
+      expect(s.externalTurnRunning()).toBe(true);
+      ctl.finish({ stdout: "x", exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(noticesSeen()).toHaveLength(0);
+      cli = false;
+      await vi.advanceTimersByTimeAsync(EXTERNAL_TURN_QUIET_MS + 10);
+      expect(s.externalTurnRunning()).toBe(false);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(noticesSeen()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a killed notice moves the rewind fork point: a rewound prompt keeps it (GH-485)", async () => {
+    const t = setup();
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    await t.s.stopShell(id);
+    await until(t.events, () => notices().length > 0);
+    const notice = notices().at(-1)!.uuid;
+    t.s.prompt("q");
+    const prompt = t.events.filter((e) => e.part.type === "user_text").at(-1)!.part.id;
+    await until(t.events, (e) => e.part.type === "turn_result");
+    await until(t.events, () => t.s.info().state === "idle");
+    await t.s.rewind(prompt, "conversation");
+    t.s.prompt("again");
+    expect(calls.at(-1)).toMatchObject({ resume: t.s.id, resumeSessionAt: notice });
   });
 });
 

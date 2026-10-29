@@ -1850,7 +1850,7 @@ export function createDaemon(opts: {
           const s = await find(msg.sessionId);
           if (!s) return;
           try {
-            if (!(await s.stopSubagent(msg.toolUseId))) return fail("unknown_shell", "no running shell with that ID");
+            if (!(await s.stopShell(msg.toolUseId))) return fail("unknown_shell", "no running shell with that ID");
           } catch (e) {
             return fail("stop_failed", (e as Error).message);
           }

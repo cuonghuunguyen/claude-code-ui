@@ -10,7 +10,19 @@ export const BASH_KILL_GRACE_MS = 2_000;
 /** After the shell exited, a background process holding the pipes may still send output; this long, then the pipes are closed. */
 export const BASH_DRAIN_MS = 500;
 export type BashResult = { stdout: string; stderr: string; exitCode?: number; stopped: boolean };
-export type BashRun = { done: Promise<BashResult>; kill(): void };
+/**
+ * `background()` (GH-485): the command was moved to the background. It is never killed for time (the foreground timeout
+ * ends); from then on each stream keeps its last maxChars (rolling tail), so a long-running command shows its end.
+ */
+export type BashRun = { done: Promise<BashResult>; kill(): void; background(): void };
+
+/** Commands moved to the background that still run: ended with the daemon (Claude Code ends its background shells on exit too). */
+const moved = new Set<() => void>();
+let exitHook = false;
+/** Kills the process group of every moved command, at once (SIGKILL follows SIGTERM without the grace wait: the process is exiting). */
+export function killMovedShells() {
+  for (const k of [...moved]) k();
+}
 
 /** argv for `shell -c command`: POSIX `-c`; pwsh/powershell `-NoProfile -Command`; cmd `/d /s /c`. */
 export function shellArgs(shellPath: string, command: string): string[] {
@@ -36,7 +48,17 @@ export function runBash(
   let stopped = false;
   let closed = false;
   let note = "";
+  let tail = false;
   const feed = (key: "out" | "err") => (chunk: string) => {
+    if (tail) {
+      text[key] += chunk;
+      if (text[key].length > max) {
+        // shortcut: a stream cut before the move keeps its head, then the tail after it (the marker is the only sign of the gap); upgrade if that matters.
+        text[key] = text[key].slice(-max).replace(/^[\udc00-\udfff]/, "");
+        cut[key] = true;
+      }
+      return onOutput(shownOf("out"), shownOf("err"));
+    }
     const room = max - text[key].length;
     if (chunk.length > room) cut[key] = true;
     if (room <= 0) return;
@@ -48,6 +70,8 @@ export function runBash(
   };
   child.stdout.setEncoding("utf8").on("data", feed("out"));
   child.stderr.setEncoding("utf8").on("data", feed("err"));
+  const marker = (k: "out" | "err") => `… output truncated, showing the last ${max} characters\n`;
+  const shownOf = (k: "out" | "err") => (tail && cut[k] ? marker(k) : "") + text[k];
   const kill = () => {
     stopped = true;
     note ||= "Stopped by user";
@@ -63,7 +87,7 @@ export function runBash(
       }
     } catch { /* ESRCH: already gone */ }
   };
-  const timer = setTimeout(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
     note = `Timed out after ${Math.round((opts.timeoutMs ?? BASH_TIMEOUT_MS) / 1000)} s`;
     kill();
   }, opts.timeoutMs ?? BASH_TIMEOUT_MS).unref();
@@ -72,7 +96,7 @@ export function runBash(
       if (closed) return;
       clearTimeout(timer);
       closed = true;
-      const mark = (k: "out" | "err") => text[k] + (cut[k] ? `\n… output truncated at ${max} characters` : "");
+      const mark = (k: "out" | "err") => (tail ? shownOf(k) : text[k] + (cut[k] ? `\n… output truncated at ${max} characters` : ""));
       if (spawnError) return resolve({ stdout: "", stderr: spawnError.message, exitCode: 127, stopped: false });
       // A signal ends the shell without a code: 128 + signal number, as a shell reports it.
       const exitCode = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : undefined);
@@ -85,5 +109,19 @@ export function runBash(
       child.once("close", () => (clearTimeout(t), finish(code, signal)));
     });
   });
-  return { done, kill };
+  const background = () => {
+    tail = true;
+    clearTimeout(timer);
+    timer = undefined;
+    if (closed) return;
+    const end = () => {
+      kill();
+      if (!win && child.pid !== undefined) try { process.kill(-child.pid, "SIGKILL"); } catch { /* group gone */ }
+    };
+    moved.add(end);
+    void done.then(() => moved.delete(end));
+    // A hard crash (SIGKILL, power loss) skips this and may leave the process running.
+    if (!exitHook) (exitHook = true), process.on("exit", killMovedShells);
+  };
+  return { done, kill, background };
 }

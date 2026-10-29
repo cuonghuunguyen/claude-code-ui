@@ -160,3 +160,11 @@ it("GH-166: phone: one non-wrapping row of branch, diff and shells, without In /
     back();
   }
 });
+
+it("N shells counts a ! command moved to the background; foregroundShells lists a running ! command (GH-485)", async () => {
+  const b = (id: string, shell?: "background"): Part => ({ type: "bash", id, command: "sleep 9", stdout: "", stderr: "", status: "running", ...(shell && { shell }) });
+  expect(backgroundShells(view(b("m", "background"), b("f"))).map((c) => c.id)).toEqual(["m"]);
+  expect(foregroundShells(view(b("m", "background"), b("f"))).map((c) => c.id)).toEqual(["f"]);
+  const { text } = await render({ view: view(b("m", "background")), git: async () => null });
+  expect(text()).toContain("shells=1 shell");
+});

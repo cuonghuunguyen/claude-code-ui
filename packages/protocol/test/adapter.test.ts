@@ -833,6 +833,31 @@ describe("Bash call moved to the background (GH-440)", () => {
     expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ shell: "background", status: "done" });
   });
 
+  it("a subagent's foreground Bash call is a foreground task, moves to the background and ends by its task_notification (GH-492)", () => {
+    const messages = fixture("bash-backgrounded-subagent.jsonl");
+    const adapter = createAdapter();
+    const steps = messages.map((m) => adapter.convert(m as never));
+    const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
+    const last = (ps: Part[]) => calls(ps).filter((p) => p.tool === "Bash").at(-1)!;
+    const agentId = steps[0]!.find((p) => p.type === "subagent")!.id;
+    expect(last(at((m) => m.subtype === "task_started" && m.task_type === "local_bash"))).toMatchObject({ parentId: agentId, shell: "foreground", status: "running" });
+    expect(last(at((m) => m.subtype === "task_updated"))).toMatchObject({ shell: "background", status: "running" });
+    expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
+    expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ parentId: agentId, shell: "background", status: "done", exitCode: 0 });
+  });
+
+  it("a subagent's moved shell ends stopped when the subagent run ends first (GH-492)", () => {
+    const adapter = createAdapter();
+    const msgs = [
+      { type: "assistant", parent_tool_use_id: "ag1", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "tb2", name: "Bash", input: { command: "ping -c 40 127.0.0.1" } }] } },
+      { type: "system", subtype: "task_started", task_id: "b2", owned_by_subagent: true, tool_use_id: "tb2", description: "x", is_backgrounded: false, task_type: "local_bash", uuid: "u1" },
+      { type: "system", subtype: "task_updated", task_id: "b2", patch: { is_backgrounded: true }, uuid: "u2" },
+      { type: "system", subtype: "task_notification", task_id: "b2", tool_use_id: "tb2", status: "stopped", output_file: "/tmp/b2.output", summary: "Background command \"x\" was stopped", uuid: "u3" },
+    ];
+    const parts = msgs.flatMap((m) => adapter.convert(m as never));
+    expect(calls(parts).filter((p) => p.tool === "Bash").at(-1)).toMatchObject({ parentId: "ag1", shell: "background", status: "stopped" });
+  });
+
   it("a restored manually backgrounded Bash call is a background shell until its notification record", () => {
     const placeholder = "Command was manually backgrounded by user with ID: bg1. Output is being written to: /tmp/bg1.output. If it is still running after 30m in the background, it will be stopped and you will be notified.";
     const adapter = createAdapter();
@@ -929,5 +954,35 @@ describe("Bash call moved to the background (GH-440)", () => {
     adapter.convert(bashCall() as never);
     adapter.convert({ type: "system", subtype: "task_started", task_id: "bg1", tool_use_id: "tb1", is_backgrounded: false, task_type: "local_bash", uuid: "u1" } as never);
     expect(adapter.convert({ type: "system", subtype: "task_updated", task_id: "bg1", patch: { status: "completed" }, uuid: "u2" } as never)).toEqual([]);
+  });
+});
+
+describe("Bash mode command moved to the background (GH-485)", () => {
+  const user = (uuid: string, content: string) => ({ type: "user", uuid, message: { role: "user", content } });
+  const bashes = (ps: Part[]) => ps.filter((p): p is Extract<Part, { type: "bash" }> => p.type === "bash");
+  const moved = (id: string) => [user(id, "<bash-input>x</bash-input>"), user("o1", `<bash-stdout>Command was manually backgrounded by user with ID: ${id}. You will be notified with its output when it ends.</bash-stdout><bash-stderr></bash-stderr>`)];
+
+  it("a restored ! command moved to the background stays running until its notice; the notice sets status, exit code and output", () => {
+    const adapter = createAdapter();
+    const parts = moved("b1").flatMap((m) => adapter.convert(m as never));
+    expect(bashes(parts).at(-1)).toMatchObject({ id: "b1", status: "running", shell: "background" });
+    const notice = user("n1", '<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n<summary>Background command "x" failed with exit code 2</summary>\n</task-notification>\n<bash-stdout>out</bash-stdout><bash-stderr>err</bash-stderr><bash-exit-code>2</bash-exit-code>');
+    const ended = adapter.convert(notice as never);
+    expect(ended).toMatchObject([{ type: "bash", id: "b1", status: "error", shell: "background", exitCode: 2, stdout: "out", stderr: "err" }]);
+    expect(ended.some((p) => p.type === "user_text")).toBe(false);
+  });
+
+  it("a terminal CLI session's backgrounded ! command (2.1.312 records) ends by its task-notification", () => {
+    const parts = run(fixture("bang-backgrounded.jsonl"));
+    const b = bashes(parts);
+    expect(b.filter((p) => p.shell === "background").at(-1)).toMatchObject({ status: "done", shell: "background" });
+    expect(b.at(-1)).toMatchObject({ command: "echo second", status: "done", stdout: "second" });
+    expect(b.at(-1)!.shell).toBeUndefined();
+  });
+
+  it("endCalls stops a restored ! shell without a notice", () => {
+    const adapter = createAdapter();
+    moved("b2").forEach((m) => adapter.convert(m as never));
+    expect(bashes(adapter.endCalls())).toMatchObject([{ id: "b2", status: "stopped", shell: "background" }]);
   });
 });

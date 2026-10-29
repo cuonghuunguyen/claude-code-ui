@@ -90,11 +90,11 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.sendQueued"; sessionId: string; itemId: string }
   /** Stop agent: stops one running subagent run (`subagentId` = its subagent part id); the turn goes on. `unknown_subagent` when none runs. */
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
-  /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
+  /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Also the running bash mode command whose `bash` part id is `toolUseId` (GH-485): the session is free, the command runs on as a background shell. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
   | { type: "session.backgroundShell"; sessionId: string; toolUseId: string }
   /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file (stdout and stderr merged, at most MAX_BASH_OUTPUT_CHARS chars); reply ShellOutputResult. Error `no_output` (no file known, it lies outside the CLI's task folder, or it is gone). */
   | { type: "session.shellOutput"; sessionId: string; toolUseId: string }
-  /** Kill (GH-442): stops the running background shell `toolUseId` (`stopTask()`); its task_notification ends it. Errors `unknown_shell` (no task of that call runs), `stop_failed`. */
+  /** Kill (GH-442): stops the running background shell `toolUseId` (`stopTask()`); its task_notification ends it. Also a bash mode command moved to the background (kills its process group). Errors `unknown_shell` (no task of that call runs), `stop_failed`. */
   | { type: "session.stopShell"; sessionId: string; toolUseId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
