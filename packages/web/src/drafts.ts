@@ -63,8 +63,11 @@ export function saveDraft(key: string, text: string, store = defaultStore(), now
 const images = new Map<string, string[]>();
 export const loadDraftImages = (key: string): string[] => images.get(key) ?? [];
 export function saveDraftImages(key: string, imgs: string[]): void {
-  if (imgs.length) images.set(key, imgs);
-  else images.delete(key);
+  images.delete(key);
+  if (!imgs.length) return;
+  images.set(key, imgs);
+  // Same cap as the text drafts: the oldest saved key goes.
+  for (const k of images.keys()) if (images.size > MAX_DRAFTS) images.delete(k);
 }
 
 export function clearDrafts(store = defaultStore()): void {

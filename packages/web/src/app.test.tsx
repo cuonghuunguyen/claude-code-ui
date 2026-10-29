@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearDrafts, loadDraftImages } from "./drafts.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
 
@@ -88,6 +89,7 @@ const { App } = await import("./App.tsx");
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(async () => {
+  clearDrafts();
   width = 1440;
   location.hash = `#${ID}`;
   el = document.createElement("div");
@@ -398,6 +400,25 @@ it("/clear: an attached image and the focus stay in the same prompt box", async 
     expect(promptBox()).toBe(box);
     expect(thumbs()).toBe(1);
     expect(document.activeElement).toBe(box);
+  } finally {
+    restoreSubscribe();
+  }
+});
+
+it("/clear: the attached images move to the new draft key and the old key is dropped (GH-503)", async () => {
+  holdNext();
+  try {
+    const box = promptBox();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+    await act(async () => {
+      box.dispatchEvent(paste);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(loadDraftImages(ID)).toHaveLength(1);
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    expect(loadDraftImages(NEXT)).toHaveLength(1);
+    expect(loadDraftImages(ID)).toEqual([]);
   } finally {
     restoreSubscribe();
   }
@@ -6218,6 +6239,37 @@ describe("GH-401 docked session", () => {
     expect(tabIds()).toEqual([S2, ID]);
     expect(dockIds("side")).toEqual([S3]);
     expect(stored()).toContain(S3);
+  });
+
+  it("the viewer opens when every session is docked (no shown session)", async () => {
+    await remount({ tabs: [S3], docked: { [S3]: "side" }, active: S3 });
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await dockedCall(S3, "Edit", { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" });
+    await act(async () => inDock("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(document.querySelector("[data-testid=viewer-dialog]")).not.toBeNull();
+  });
+
+  const openDockedFile = async () => {
+    await remount({ list: withOtherCwd });
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/other/a.ts:1` now.", streaming: false } }));
+    await act(async () => inDock("button[title='Open in file dialog']")!.click());
+    await act(async () => {});
+    expect(fileDlg()).not.toBeNull();
+  };
+
+  it("Send selection to Claude in a docked session's file dialog goes to the docked prompt box", async () => {
+    await openDockedFile();
+    await act(async () => document.querySelector<HTMLElement>("[data-testid=send-selection]")!.click());
+    expect((prompt(S3) as HTMLTextAreaElement).value).toContain("@a.ts");
+    expect(el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!.value).toBe("");
+    expect(fileDlg()).toBeNull();
+  });
+
+  it("a docked session's file dialog hides the panel actions that would target the shown session", async () => {
+    await openDockedFile();
+    expect(document.querySelector("[data-testid=open-in-editor]")).toBeNull();
   });
 
   it("typed draft text survives docking and undocking", async () => {

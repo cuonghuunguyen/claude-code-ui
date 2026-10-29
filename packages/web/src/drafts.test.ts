@@ -71,3 +71,10 @@ it("GH-503 draft images: kept per key in memory, an empty save deletes, clearDra
   clearDrafts(memory());
   expect(loadDraftImages("k")).toEqual([]);
 });
+
+it("GH-503 draft images: the oldest key beyond MAX_DRAFTS is dropped", () => {
+  for (let i = 0; i <= MAX_DRAFTS; i++) saveDraftImages(`k${i}`, ["d"]);
+  expect(loadDraftImages("k0")).toEqual([]);
+  expect(loadDraftImages(`k${MAX_DRAFTS}`)).toEqual(["d"]);
+  clearDrafts(memory());
+});

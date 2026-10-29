@@ -52,7 +52,7 @@ export function FileDialog({
   repos?: RepoList;
   onShowGraph?: () => void;
   /** Open in editor: close the dialog and show the Files tab. */
-  onOpenInFiles: () => void;
+  onOpenInFiles?: () => void;
   /** Open in tab (GH-399): the caller closes the dialog and opens the file as a main-area tab. */
   onOpenTab?: (path: string) => void;
   /** A path that is a file tab already: the caller closes the dialog and focuses that tab. */

@@ -1046,6 +1046,7 @@ export function App() {
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string): boolean | void {
+    dockCtls.current.delete(id);
     if (kindOf(id) === "file") {
       if (!askDirtyFiles([id]).length) return false;
       if (editors.get().tabs[pathOf(id)!]?.item) editors.discard([pathOf(id)!]);
@@ -2299,6 +2300,7 @@ export function App() {
     flushDrafts();
     setDockRun((r) => without(r, id));
     setDockInsert((i) => without(i, id));
+    dockCtls.current.delete(id);
     saveDocked(undock(dockedRef.current, id));
     dockedRef.current = undock(dockedRef.current, id);
     open(id);
@@ -3941,15 +3943,15 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
-      {shown && client.current && (
+      {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
           opener={viewer?.opener}
           client={client.current}
-          cwd={viewer?.cwd ?? shown.cwd}
+          cwd={viewer?.cwd ?? shown!.cwd}
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
-          repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
+          repos={(viewer?.cwd ?? shown!.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
@@ -3964,14 +3966,15 @@ export function App() {
           status={status}
           cwd={fileDialog?.owner?.cwd ?? panelTarget!.cwd}
           store={editors}
-          gitStamp={treeStamp}
-          repos={repoList}
-          onShowGraph={() => (setFileDialog(undefined), reveal("graph"))}
+          // GH-503: opened from a docked session, the panels (Files, Changes, graph) are the shown session's: those actions are hidden, and Send goes to the docked prompt box.
+          gitStamp={fileDialog?.owner ? undefined : treeStamp}
+          repos={fileDialog?.owner && fileDialog.owner.cwd !== panelCwd ? undefined : repoList}
+          onShowGraph={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("graph"))}
           onClose={() => setFileDialog(undefined)}
-          onSend={(m) => (setFileDialog(undefined), setInsert(m), setPane("session"))}
+          onSend={(m) => (setFileDialog(undefined), fileDialog?.owner ? dockCtl(fileDialog.owner.id).quote(m) : (setInsert(m), setPane("session")))}
           onCopy={copyText}
-          onShowChanges={(path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
-          onOpenInFiles={() => (setFileDialog(undefined), reveal("files"))}
+          onShowChanges={fileDialog?.owner ? undefined : (path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+          onOpenInFiles={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("files"))}
           onOpenTab={(p) => openFileTab(p, fileDialog?.owner?.id)}
           onItem={focusFileTab}
         />
@@ -5071,7 +5074,11 @@ function PromptBox({
   latest.current = { text, pastes };
   const [images, setImages] = useState<string[]>(() => (draftKey ? loadDraftImages(draftKey) : []));
   // GH-503: kept in memory per draft key, so docking (a remount) keeps the attachments.
+  // A new key (the /clear handover) moves the images: the old key is dropped, like useDraft does for the text.
+  const imagesKey = useRef(draftKey);
   useEffect(() => {
+    if (imagesKey.current && imagesKey.current !== draftKey) saveDraftImages(imagesKey.current, []);
+    imagesKey.current = draftKey;
     if (draftKey) saveDraftImages(draftKey, images);
   }, [draftKey, images]);
   const [selected, setSelected] = useState(0);
@@ -5178,7 +5185,7 @@ function PromptBox({
     setCaret(t.length);
   };
   useEffect(() => {
-        if (!insert) return;
+    if (!insert) return;
     // A quote (GH-56) is prompt text, never part of a shell command.
     if (insert.startsWith(">")) setBash(false);
     const r = insert.startsWith(">") ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
