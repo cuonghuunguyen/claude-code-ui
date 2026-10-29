@@ -5027,6 +5027,8 @@ function PromptBox({
   // A box in a hidden Activity has no listener (its effects are off), so it also reads the draft when its effects come back.
   const storedNow = useRef(stored);
   storedNow.current = stored;
+  const seenDraft = useRef<string | undefined>(undefined);
+  const syncedKey = useRef<string | undefined>(undefined); // set by the first effect run: a mounting box already has its text (initialText), and sending cleared the stored draft
   useEffect(() => {
     if (!draftKey) return;
     const sync = () => {
@@ -5036,8 +5038,15 @@ function PromptBox({
       setText(p.text);
       setPastes(p.pastes);
     };
-    sync();
-    return onDraftWritten(draftKey, sync);
+    // A key change is the /clear handover (the box text moves with the key): never reload then. Same key as the last run = the pane shown again.
+    // Only a draft written while the effects were off counts: a box shown again keeps its own text when the stored draft is as it was left (a send clears it).
+    if (syncedKey.current === draftKey && loadDraft(draftKey) !== seenDraft.current) sync();
+    syncedKey.current = draftKey;
+    const off = onDraftWritten(draftKey, sync);
+    return () => {
+      off();
+      seenDraft.current = loadDraft(draftKey);
+    };
   }, [draftKey]);
   // Pastes stay while the box lives: a token that is cut, pasted back or undone must still find its text. Only a draft save and a send leave out the ones without a token; a send clears all.
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
