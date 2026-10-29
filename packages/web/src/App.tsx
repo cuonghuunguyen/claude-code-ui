@@ -552,7 +552,10 @@ export function App() {
   const requested = useRef(new Set<string>());
   /** Sessions subscribed holding on this connection: a tab shows them, the daemon keeps their CLI (docs/spec.md "Idle close"). */
   const held = useRef(new Set<string>());
-  const isShown = (id: string) => tabsRef.current.includes(id) || hashId() === id;
+  /** Open Aside popups, for the closure-held reconnect resubscribe (an Aside nobody holds is deleted by the daemon's idle cleanup). */
+  const asidesRef = useRef(asides);
+  asidesRef.current = asides;
+  const isShown = (id: string) => tabsRef.current.includes(id) || hashId() === id || asidesRef.current.some((a) => a.id === id);
   const titleRefreshed = useRef(0);
   /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
   const replayedTo = useRef<Record<string, number>>({});

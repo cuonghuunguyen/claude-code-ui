@@ -1601,7 +1601,8 @@ export function createDaemon(opts: {
             if (msg.addProject === true) addProject(s.cwd);
             unsubscribes.get(s.id)?.();
             // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
-            const hold = msg.background !== true;
+            // An Aside is held by any subscriber: its popup is open (a reconnect resubscribes in the background otherwise).
+            const hold = msg.background !== true || !!asideOf(s.id);
             const keep = (stop: () => void, release: () => void) => {
               if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
               unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
@@ -1938,7 +1939,12 @@ export function createDaemon(opts: {
           if (!owner) return;
           const text = msg.text.trim();
           const title = text.split("\n")[0]!.trim().slice(0, 80);
-          const main = owner.untitled() ? [] : (await readTranscript(owner.id, owner.cwd).catch(() => ({ main: [] }))).main;
+          let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
+          try {
+            if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
+          } catch (e) {
+            return fail("aside_failed", `Could not read the session: ${(e as Error).message}`);
+          }
           const at = asideForkPoint(main);
           if (!at) return fail("aside_unavailable", "An aside needs a reply in this session first");
           const dir = transcriptCwd(owner.id, owner.cwd);
@@ -2433,7 +2439,10 @@ export function createDaemon(opts: {
             // An Aside whose popup is gone (browser closed, reload): thrown away, not only its CLI closed.
             if (asideOf(s.id) && !holds.get(s.id) && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !["running", "needs_input"].includes(s.info().state)) {
               console.log(`session ${s.id}: aside without a popup for ${Math.round(idleCloseMs / 60_000)} min, deleted`);
-              void deleteSessionById(s.id, true);
+              void deleteSessionById(s.id, true).then(
+                (err) => console.log(`session ${s.id}: aside delete ${err ? `failed: ${err.message}` : "done"}`),
+                (e) => console.error(`session ${s.id}: aside delete failed:`, e),
+              );
               continue;
             }
             if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery())

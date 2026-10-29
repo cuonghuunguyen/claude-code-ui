@@ -4748,6 +4748,16 @@ describe("Aside popup (GH-465)", () => {
     expect(location.hash).toBe(`#${AS}`);
   });
 
+  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it)", async () => {
+    await typeInto("/btw which file?");
+    sent.length = 0;
+    await act(async () => reconnect());
+    await act(async () => {});
+    const sub = sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS);
+    expect(sub).toBeDefined();
+    expect(sub).not.toHaveProperty("background");
+  });
+
   it("the popup is hidden while another tab is shown and is back with its owner", async () => {
     await typeInto("/btw which file?");
     await press({ key: "s", code: "KeyS", ctrlKey: true, shiftKey: true });

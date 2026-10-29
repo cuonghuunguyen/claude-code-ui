@@ -124,6 +124,18 @@ describe("aside.open", () => {
     expect(t.transcripts.get(OWNER)!.messages).toBe(chain);
   });
 
+  it("a failing transcript read reports the real error, not 'needs a reply first'", async () => {
+    const t = await start();
+    // The owner restores once (first read); the fork point read after it fails.
+    let reads = 0;
+    const orig = t.transcripts.get(OWNER)!;
+    Object.defineProperty(orig, "messages", { get: () => { if (++reads > 1) throw new Error("EIO read failed"); return chain; } });
+    const r = await t.request({ type: "aside.open", sessionId: OWNER, text: "q" });
+    expect(r).toMatchObject({ type: "error", code: "aside_failed" });
+    expect((r as { message?: string }).message).toContain("EIO read failed");
+    expect(t.forks).toEqual([]);
+  });
+
   it("an unknown owner fails unknown_session", async () => {
     const t = await start();
     t.transcripts.delete(OWNER);
@@ -180,7 +192,16 @@ describe("leftovers", () => {
     const t = await start({ idleCloseMs: 50 });
     const { session } = (await t.request({ type: "aside.open", sessionId: OWNER, text: "q" })).result;
     await until(() => t.deleted.includes(session.id));
-    expect(linkOf(t.settingsFile, session.id)).toBeUndefined();
+    // The link goes after the transcript delete returns.
+    await until(() => linkOf(t.settingsFile, session.id) === undefined);
+  });
+
+  it("an Aside followed only by a background subscription (popup open after a reconnect) is not deleted by idle close", async () => {
+    const t = await start({ idleCloseMs: 50 });
+    const { session } = (await t.request({ type: "aside.open", sessionId: OWNER, text: "q" })).result;
+    await t.request({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0, paged: true, background: true });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(t.deleted).not.toContain(session.id);
   });
 
   it("a kept Session restores after a daemon restart and keeps readOnly", async () => {
