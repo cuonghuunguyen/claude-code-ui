@@ -360,3 +360,51 @@ it("the detail pane shows the last todo list of a finished (idle) session and th
   expect(rows()[0]!.dataset.kind).toBe("stuck");
   expect(el.querySelector('[data-testid="focus-tasks"]')!.textContent).toContain("Tasks · 2 of 3");
 });
+
+// ---- GH-305: nested worker rows ----
+const nested = (): State => ({
+  list: [item("c", { state: "idle", coordinator: true }), item("w1", { coordinatorId: "c", workerName: "one" }), item("w2", { coordinatorId: "c", workerName: "two", state: "closed" })],
+  views: { w1: view([bash("r1", "ls", NOW - 5000)]), w2: view([question("r2", NOW - 4000)]) },
+});
+const group = () => el.querySelector<HTMLElement>('[data-testid="focus-group"]');
+const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="focus-group-toggle"]')!;
+
+it("a worker's row nests under its coordinator's parent row; a closed worker's row is hidden", async () => {
+  localStorage.clear();
+  await render(nested());
+  expect(group()!.querySelectorAll('[data-testid="focus-row"]')).toHaveLength(1);
+  expect(group()!.textContent).toContain("Session c");
+  expect(group()!.textContent).toContain("1 worker");
+  expect(group()!.textContent).toContain("Permission");
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  expect(toggle().className).toContain("max-md:min-h-11");
+  expect(el.querySelector('[data-testid="focus-workers"]')!.className).toContain("pl-");
+});
+
+it("collapsing the group hides the worker rows, is kept in this browser and restored on remount", async () => {
+  localStorage.clear();
+  await render(nested());
+  await act(async () => toggle().click());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(rows()).toHaveLength(0);
+  expect(JSON.parse(localStorage.getItem("claude-ui.focusCollapsed")!)).toEqual(["c"]);
+  await render(nested());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(rows()).toHaveLength(0);
+  await act(async () => toggle().click());
+  expect(rows()).toHaveLength(1);
+  expect(JSON.parse(localStorage.getItem("claude-ui.focusCollapsed")!)).toEqual([]);
+});
+
+it("a coordinator with its own row shows it with the chevron beside it, outside the row button", async () => {
+  localStorage.clear();
+  const s = nested();
+  s.list[0]!.state = "needs_input";
+  s.views.c = view([question("rc", NOW - 9000)]);
+  await render(s);
+  expect(rows().map((r) => r.textContent!.includes("Session c"))).toEqual([true, false]);
+  expect(toggle().closest('[data-testid="focus-row"]')).toBeNull();
+  await act(async () => toggle().click());
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]!.textContent).toContain("Session c");
+});

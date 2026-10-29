@@ -1,6 +1,6 @@
 import type { Part, SessionListItem } from "@claude-ui/protocol";
-import { expect, it } from "vitest";
-import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, nextWaiting, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, loadFocusCollapsed, nestRows, nextWaiting, saveFocusCollapsed, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
 import { asideItem } from "./aside.ts";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 
@@ -286,4 +286,54 @@ it("an Aside's request is listed as 'Aside: title' through its synthetic list it
   expect(w.map((x) => x.sessionId)).toEqual(["as1"]);
   expect(list[1]!.title).toBe("Aside: why?");
   expect(waitingCount(w)).toBe(1);
+});
+
+// ---- GH-305: worker rows nest under their coordinator ----
+const r = (sessionId: string, tag = sessionId) => ({ sessionId, tag });
+const tags = (g: { own: { tag: string }[]; workers: { tag: string }[] }) => [g.own.map((x) => x.tag), g.workers.map((x) => x.tag)];
+
+it("nestRows: a worker's row goes under its coordinator; the group sits where its first row is, so the kind order holds", () => {
+  const list = [item("c", { coordinatorId: undefined }), item("w1", { coordinatorId: "c", workerName: "one" }), item("x")];
+  const groups = nestRows([r("w1"), r("x"), r("c")], list);
+  expect(groups.map((g) => [g.root, ...tags(g)])).toEqual([["c", ["c"], ["w1"]], ["x", ["x"], []]]);
+});
+
+it("nestRows: a coordinator without its own row gets a group with no own rows; a depth-2 worker goes to the root coordinator", () => {
+  const list = [item("c"), item("w1", { coordinatorId: "c" }), item("w2", { coordinatorId: "w1" })];
+  const [g, ...more] = nestRows([r("w2"), r("w1")], list);
+  expect(more).toEqual([]);
+  expect([g!.root, ...tags(g!)]).toEqual(["c", [], ["w2", "w1"]]);
+});
+
+it("nestRows: rows of closed workers are dropped; closed coordinators and other sessions stay", () => {
+  const list = [item("c", { state: "closed" }), item("w1", { coordinatorId: "c", state: "closed" }), item("w2", { coordinatorId: "c" })];
+  expect(nestRows([r("w1"), r("w2"), r("c")], list).map((g) => [g.root, ...tags(g)])).toEqual([["c", ["c"], ["w2"]]]);
+});
+
+it("nestRows: several own rows of a coordinator stay together as its own rows", () => {
+  const list = [item("c"), item("w1", { coordinatorId: "c" })];
+  const [g] = nestRows([r("c", "q1"), r("w1"), r("c", "q2")], list);
+  expect(tags(g!)).toEqual([["q1", "q2"], ["w1"]]);
+});
+
+it("nestRows: a worker whose coordinator is archived (not in the list) stays a plain row", () => {
+  const list = [item("c", { archived: true }), item("w1", { coordinatorId: "c" })];
+  expect(nestRows([r("w1")], list).map((g) => [g.root, ...tags(g)])).toEqual([["w1", ["w1"], []]]);
+});
+
+afterEach(() => vi.unstubAllGlobals());
+const store = (data: Record<string, string>) => vi.stubGlobal("localStorage", { getItem: (k: string) => data[k] ?? null, setItem: (k: string, v: string) => void (data[k] = v) });
+
+it("the collapsed groups load as a set; bad or blocked storage means none collapsed; save keeps only listed coordinators", () => {
+  expect(loadFocusCollapsed().size).toBe(0);
+  store({ "claude-ui.focusCollapsed": "{oops" });
+  expect(loadFocusCollapsed().size).toBe(0);
+  const data: Record<string, string> = { "claude-ui.focusCollapsed": '["a",3,"b"]' };
+  store(data);
+  expect([...loadFocusCollapsed()]).toEqual(["a", "b"]);
+  saveFocusCollapsed(new Set(["a", "b"]), [item("a")]);
+  expect(JSON.parse(data["claude-ui.focusCollapsed"]!)).toEqual(["a"]);
+  vi.stubGlobal("localStorage", { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+  expect(loadFocusCollapsed().size).toBe(0);
+  expect(() => saveFocusCollapsed(new Set(["a"]), [item("a")])).not.toThrow();
 });
