@@ -1250,8 +1250,10 @@ export class Session {
     }
     // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
     if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
-    for (const part of this.adapter.convert(m)) this.emit(part);
-    if (m.type === "prompt_suggestion") this.suggested = true;
+    // A CLI started while the setting was on goes on suggesting after it is turned off: no new chip then.
+    const late = m.type === "prompt_suggestion" && !this.opts.promptSuggestions?.();
+    if (!late) for (const part of this.adapter.convert(m)) this.emit(part);
+    if (m.type === "prompt_suggestion" && !late) this.suggested = true;
     if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
     if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.resetsAt) this.limitResetsAt = m.rate_limit_info.resetsAt * 1000;
     if (m.type === "assistant" && !m.parent_tool_use_id && m.error === "rate_limit") this.limitHit = true;

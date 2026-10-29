@@ -2966,6 +2966,20 @@ describe("Next for you (GH-305)", () => {
     expect(suggestions(t.events)).toEqual(["run the tests", null]);
   });
 
+  it("a suggestion that arrives while the setting is off is dropped (a session started while it was on)", async () => {
+    let on = true;
+    const t = await setup({ promptSuggestions: () => on });
+    t.next(result());
+    await until(t.events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    on = false;
+    t.next({ type: "prompt_suggestion", suggestion: "late", uuid: randomUUID(), session_id: "x" });
+    t.next({ type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(suggestions(t.events)).toEqual([]);
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual([]);
+  });
+
   it("clearSuggestion (setting turned off) clears a shown suggestion once and does nothing without one", async () => {
     const t = await setup({ promptSuggestions: () => true });
     t.s.clearSuggestion();
