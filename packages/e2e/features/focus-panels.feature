@@ -20,7 +20,7 @@ Feature: Switching to Focus or the New session tab moves no panel
     Then the panel layout is unchanged
     And I capture "back on the session"
 
-  Scenario: Maximize and Hide survive a switch to Focus
+  Scenario: Focus restores a maximized bottom panel; Hide survives the switch
     Given the viewport is 1440x900
     And the app is open
     And I open the scratch project
@@ -30,10 +30,9 @@ Feature: Switching to Focus or the New session tab moves no panel
     When I send "Reply with exactly: OK"
     Then the turn has finished
     When I maximize the bottom panel
-    And I note the panel layout
-    And I switch to Focus
-    Then the panel layout is unchanged
-    And I capture "focus maximized"
+    And I open Focus
+    Then the bottom panel is not maximized
+    And I capture "focus restores maximized"
     When I click the first session tab
     And I hide the bottom panel
     And I note the panel layout

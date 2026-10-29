@@ -1357,6 +1357,7 @@ export function App() {
   const needKey = waiting.filter((x) => visibleIds.includes(x.sessionId)).map((x) => x.part.id).join();
   useEffect(() => void (needKey && setBottomMax(false)), [needKey]);
   useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
+  useEffect(() => void (activeId === FOCUS_TAB && setBottomMax(false)), [activeId]);
   const everWaiting = useRef(false);
   if (waitingN > 0) everWaiting.current = true;
   useEffect(() => {
