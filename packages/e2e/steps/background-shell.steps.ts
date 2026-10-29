@@ -65,6 +65,10 @@ When("I click Run in background on the bash card", async ({ page }) => {
   await b.click();
 });
 
+Then("the bash card shows Run in background", async ({ page }) => {
+  await expect(lastBashCard(page).getByTestId("run-in-background")).toBeVisible();
+});
+
 Then("the bash card runs in the background", async ({ page }) => {
   const card = lastBashCard(page);
   await expect(card).toHaveAttribute("data-shell", "background");
@@ -103,6 +107,9 @@ When("I move the subagent Bash call {string} to the background", async ({ page, 
   while (Date.now() < end && !(await b.first().isVisible())) {
     const allowBtn = page.getByTestId("permission-panel").getByRole("button", { name: "Allow once" });
     if (await allowBtn.isVisible()) await allowBtn.click();
+    // The subagent group is collapsed: its nested Bash card is not in the page until opened.
+    const head = page.getByTestId("subagent").first().locator('button[aria-expanded="false"]').first();
+    if (await head.isVisible()) await head.click();
     await page.waitForTimeout(500);
   }
   await expect(b.first()).toBeVisible({ timeout: 1_000 });
