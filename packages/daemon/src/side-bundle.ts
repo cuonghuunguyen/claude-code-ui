@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { NODE_MIN } from "@claude-ui/protocol";
 import { REGISTRY } from "./update.ts";
 
 export type BundleTarget = "linux-x64" | "linux-arm64";
@@ -32,7 +33,7 @@ const MIN_GLIBC = [2, 28] as const;
  * Read-only sh lines that print the container's target as `CLAUDE_UI_CHECK` lines: arch (`uname -m`), libc (glibc, musl,
  * unknown), the glibc version and whether libstdc++ (the C++ runtime Node.js and node-pty link) is there. Part of the check script.
  */
-export const TARGET_PROBE_LINES = [
+const TARGET_PROBE_BASE = [
   "emit() { printf 'CLAUDE_UI_CHECK %s=%s\\n' \"$1\" \"$2\"; }",
   'emit arch "$(uname -m 2>/dev/null)"',
   'g=$(getconf GNU_LIBC_VERSION 2>/dev/null); m=; for f in /lib/ld-musl-* /usr/lib/ld-musl-*; do [ -e "$f" ] && m=1; done',
@@ -42,9 +43,35 @@ export const TARGET_PROBE_LINES = [
   "else emit libc unknown; fi",
   'c=0; for f in /lib/*/libstdc++.so.6 /usr/lib/*/libstdc++.so.6 /lib64/libstdc++.so.6 /usr/lib64/libstdc++.so.6 /lib/libstdc++.so.6 /usr/lib/libstdc++.so.6; do [ -e "$f" ] && c=1; done; emit cxxrt "$c"',
 ];
-export const TARGET_PROBE = TARGET_PROBE_LINES.join("\n");
 
-export type ContainerTarget = { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string; cxxRuntime: boolean };
+/** nvm, as the setup script of a container sources it (a WSL distro's bash -lic reads .bashrc itself). One line for setup, check and probe. */
+export const NVM_LINE = 'nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1';
+
+/**
+ * Run by the candidate node itself (`node -e`, args: minimum version, arch or ""): prints NODE_OK_TOKEN when it is in range, on Linux, of the
+ * bundle's arch (node-pty ships x64 and arm64 prebuilds only) and no Bun or Deno answering to the name `node`.
+ */
+export const NODE_OK_JS =
+  'const v=process.versions,a=v.node.split(".").map(Number),m=process.argv[1].split(".").map(Number);let c=0;for(let i=0;i<3&&!c;i++)c=(a[i]||0)-(m[i]||0);process.stdout.write(c>=0&&process.platform==="linux"&&(!process.argv[2]||process.arch===process.argv[2])&&!v.bun&&!v.deno?"claude-ui-node-ok":"no")';
+/** What NODE_OK_JS prints: the shell compares the output, not the exit code (a shim whose execPath is /bin/true exits 0 and prints nothing). */
+export const NODE_OK_TOKEN = "claude-ui-node-ok";
+/** `ver <node> <cli.js>`: the side's `--version` must print a version (a digit first), not just exit 0. */
+export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*) return 0;; esac; return 1; }';
+
+/**
+ * `usable_node <arch>`: sets `n` to the real binary of the `node` found by `command -v` (its `process.execPath`, not a shim) when
+ * that is a regular executable that runs by itself and passes NODE_OK_JS; else fails with `n` empty. The side later runs `$n` directly.
+ */
+export const USABLE_NODE_FN = `usable_node() { n=; command -v node >/dev/null 2>&1 || return 1; p=$(node -p process.execPath 2>/dev/null) && [ -f "$p" ] && [ -x "$p" ] && [ "$("$p" -e '${NODE_OK_JS}' '${NODE_MIN}' "$1" 2>/dev/null)" = '${NODE_OK_TOKEN}' ] && n=$p; }`;
+/** The arch name of the bundle target as `process.arch` says it (empty: unknown, no arch check). */
+const NODE_ARCH_LINES = 'case "$(uname -m)" in x86_64|amd64) na=x64;; aarch64|arm64) na=arm64;; *) na=;; esac';
+const NODE_PROBE_LINES = [USABLE_NODE_FN, NODE_ARCH_LINES, 'usable_node "$na" && emit foundnode 1 || emit foundnode 0'];
+export const TARGET_PROBE_LINES = [...TARGET_PROBE_BASE, ...NODE_PROBE_LINES];
+export const TARGET_PROBE = TARGET_PROBE_LINES.join("\n");
+/** The probe of a container: nvm first, like its setup script. */
+export const DOCKER_PROBE = [NVM_LINE, ...TARGET_PROBE_LINES].join("\n");
+
+export type ContainerTarget = { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string; cxxRuntime: boolean; /** A Node.js in range is in the target (the bundle then leaves its own out). */ node?: boolean };
 
 /** The target from `CLAUDE_UI_CHECK` lines (other lines are shell noise); undefined without an arch line. */
 export function parseTarget(out: string): ContainerTarget | undefined {
@@ -56,7 +83,7 @@ export function parseTarget(out: string): ContainerTarget | undefined {
   const arch = kv.get("arch");
   if (!arch) return undefined;
   const libc = kv.get("libc");
-  return { arch, libc: libc === "glibc" || libc === "musl" ? libc : "unknown", ...(kv.get("glibc") && { glibc: kv.get("glibc") }), cxxRuntime: kv.get("cxxrt") === "1" };
+  return { arch, libc: libc === "glibc" || libc === "musl" ? libc : "unknown", ...(kv.get("glibc") && { glibc: kv.get("glibc") }), cxxRuntime: kv.get("cxxrt") === "1", ...(kv.has("foundnode") && { node: kv.get("foundnode") === "1" }) };
 }
 
 /** The bundle that runs in a container, or why none does (a plain phrase: "the container uses musl ..."): then the side installs with npm. */
@@ -73,10 +100,10 @@ export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | 
 }
 
 /** Why a container or distro installs with npm when the bundle is not used, or the bundle target. `build`: this claude-ui's dist/side. */
-export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean, noun: "container" | "distro" = "container"): { method: "bundle"; target: BundleTarget } | { method: "npm"; reason: string } {
+export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean, noun: "container" | "distro" = "container"): { method: "bundle"; target: BundleTarget; node: "found" | "pinned" } | { method: "npm"; reason: string } {
   if (!build) return { method: "npm", reason: `this claude-ui build has no ${noun} bundle (build it again with npm start or npm run build)` };
   const t = bundleTargetOf(target ?? {}, noun);
-  return "target" in t ? { method: "bundle", target: t.target } : { method: "npm", reason: t.reason };
+  return "target" in t ? { method: "bundle", target: t.target, node: target?.node ? "found" : "pinned" } : { method: "npm", reason: t.reason };
 }
 
 /** Where the hub keeps verified parts: `$XDG_CACHE_HOME/claude-ui/side` (default ~/.cache), Windows `%LOCALAPPDATA%\claude-ui\cache\side`. */
@@ -91,9 +118,10 @@ export type Part = { file: string; label: string; url?: string; sha256?: string;
 export const nodeDirName = (target: BundleTarget) => `node-v${NODE.version}-${target}`;
 export const claudePackage = (target: BundleTarget) => `claude-agent-sdk-${target}`;
 
-export function partsFor(target: BundleTarget, o: { sdkVersion: string }): Part[] {
+/** `node: "found"`: the target has its own Node.js in range, so the Node.js part is left out (nothing is fetched from nodejs.org). */
+export function partsFor(target: BundleTarget, o: { sdkVersion: string; node?: "found" | "pinned" }): Part[] {
   return [
-    { file: "node.tar.gz", label: "Node.js", url: `https://nodejs.org/dist/v${NODE.version}/${nodeDirName(target)}.tar.gz`, sha256: NODE.sha256[target] },
+    ...(o.node === "found" ? [] : [{ file: "node.tar.gz", label: "Node.js", url: `https://nodejs.org/dist/v${NODE.version}/${nodeDirName(target)}.tar.gz`, sha256: NODE.sha256[target] }]),
     { file: "node-pty.tgz", label: "node-pty", registryPackage: { name: PTY.name, version: PTY.version }, integrity: PTY.integrity },
     { file: "sdk.tgz", label: "the Claude Agent SDK", registryPackage: { name: "@anthropic-ai/claude-agent-sdk", version: o.sdkVersion } },
     { file: "claude.tgz", label: "Claude Code", registryPackage: { name: `@anthropic-ai/${claudePackage(target)}`, version: o.sdkVersion } },
@@ -124,11 +152,11 @@ async function download(f: typeof fetch, url: string, to: string) {
  * downloaded (`onDownload` once, before the first download) into a `.partial` file, checked, then renamed. A registry part's
  * integrity comes from the pin or from the registry (kept as `<file>.integrity` so a cached part is checked offline too).
  * Rejects with "could not download <label>" (network) or "<label> ... checksum" (mismatch); a bad file is never kept.
- * Concurrent calls for the same `dir` (two distros, a distro and a container) share one run: each caller's `onDownload` is
+ * Concurrent calls for the same `dir` and the same parts (two distros, a distro and a container) share one run: each caller's `onDownload` is
  * called once when that run starts a download. The `.partial` file name is unique per run.
  */
 export function ensureParts(o: { dir: string; parts: Part[]; registry?: string; fetch?: typeof fetch; onDownload?: () => void }): Promise<Record<string, string>> {
-  const key = resolve(o.dir);
+  const key = `${resolve(o.dir)}|${o.parts.map((p) => p.file).join(",")}`;
   const running = inflight.get(key);
   if (running) {
     if (running.announced) o.onDownload?.();

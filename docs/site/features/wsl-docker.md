@@ -11,14 +11,14 @@ WSL and Docker sides stop about 15 seconds after they start, with "stopped (exit
 1. Start claude-code-ui on the host (on Windows: in Windows, not inside WSL).
 2. Click **Open project**.
 3. In **Where to open projects**, pick **WSL** (then a distro) or **Docker** (then a running container).
-4. The first time, click **Install**. claude-code-ui copies itself into the side (`~/.local/share/claude-ui/side`) and starts it there. In a Docker container it brings its own Node.js and Claude Code (see below).
+4. The first time, click **Install**. claude-code-ui copies itself into the side (`~/.local/share/claude-ui/side`) and starts it there. In a Docker container it brings Claude Code, and its own Node.js only when the container has none in range (see below).
 5. Pick a folder and open it.
 
 Later, **Check again** shows the side's state, and **Update** or **Reinstall** refreshes it.
 
 ## What the side needs
 
-Most Docker containers (Linux on x86_64 or arm64 with glibc 2.28+, for example Debian, Ubuntu or Fedora images) get a **bundle**: your computer downloads Node.js, the terminal support (node-pty) and Claude Code once, checks each against its published checksum, keeps them in `~/.cache/claude-ui/side`, and copies one file into the container. Other containers (Alpine and other musl images, other CPUs) install with npm inside the container.
+Most Docker containers (Linux on x86_64 or arm64 with glibc 2.28+, for example Debian, Ubuntu or Fedora images) get a **bundle**: your computer downloads the terminal support (node-pty) and Claude Code once (and Node.js only when the container or distro has no Node.js 22 or newer; one that has it is used as it is, also from nvm), checks each against its published checksum, keeps them in `~/.cache/claude-ui/side`, and copies one file into the container. Other containers (Alpine and other musl images, other CPUs) install with npm inside the container.
 
 A WSL distro with the same requirements (glibc 2.28+, x86_64 or arm64) uses the same checked parts. Nothing is copied: the distro reads them from the cache on Windows. A first install takes about 10 to 15 seconds. A new claude-code-ui build with the same parts takes about a second, because the distro reuses the files of its earlier install. Other distros (musl) install with npm in the distro. If the distro does not answer the first check, the dialog says so and claude-code-ui installs with npm.
 
@@ -27,7 +27,7 @@ A WSL distro on the bundle path needs `bash`, `tar` and `gzip` (not only `sh`), 
 | | WSL distro (bundle) | WSL distro (npm) | Docker container (bundle) | Docker container (npm, e.g. Alpine) |
 | --- | --- | --- | --- | --- |
 | `sh`, `tar`, `gzip` | Yes | | Yes | |
-| Node.js 22+ | No | Yes | No | Yes |
+| Node.js 22+ | Used when present, not required | Yes | Used when present, not required | Yes |
 | Claude login | `claude login` in the distro | Same | Copy `~/.claude/.credentials.json` in, run `claude login` in it, or set `CLAUDE_CODE_OAUTH_TOKEN` | Same |
 | Build tools for the terminal | No | `build-essential python3` | No | make, python3, g++ (Alpine: `apk add make python3 g++`) |
 | Network access to npm | No | Yes | No (`--network none` works) | Yes |

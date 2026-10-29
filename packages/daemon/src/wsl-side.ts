@@ -3,15 +3,16 @@
 // host's cache through /mnt: no npm, no network, no compile in the distro, nothing copied or assembled.
 import { join } from "node:path";
 import type { SideSetup, SidePhase } from "@claude-ui/protocol";
+import { wslArgs } from "./sides.ts";
 import { execRun, safeKey, type BundleSource, type Exec } from "./docker-side.ts";
 import { claudePackage, ensureParts, installMethodOf, NODE, nodeDirName, parseTarget, partsFor, pruneCache, PTY, sideBuild, TARGET_PROBE, type BundleTarget } from "./side-bundle.ts";
 import type { SideBundle } from "./sides.ts";
 
-/** The target probe in plain sh (no login shell: nothing of the user's profile runs); base64 keeps quotes and newlines off the Windows command line. */
-export const probeArgs = (distro: string) => ["-d", distro, "--exec", "sh", "-c", `echo ${Buffer.from(TARGET_PROBE).toString("base64")} | base64 -d | sh`];
+/** The target probe in bash -lic like the setup script (a Node.js from .bashrc, nvm included, is found the same way); base64 keeps quotes and newlines off the Windows command line. */
+export const probeArgs = (distro: string) => wslArgs(distro, TARGET_PROBE);
 
 /** What the parts are (Node.js, node-pty with its integrity, the SDK, the target): an install made from equal parts has an equal id. */
-export const partsIdOf = (target: BundleTarget, sdkVersion: string) => `node-${NODE.version}-${NODE.sha256[target]}|${PTY.name}-${PTY.version}-${PTY.integrity}|sdk-${sdkVersion}|${target}`;
+export const partsIdOf = (target: BundleTarget, sdkVersion: string, node: "found" | "pinned" = "pinned") => `${node === "found" ? "node-found" : `node-${NODE.version}-${NODE.sha256[target]}`}|${PTY.name}-${PTY.version}-${PTY.integrity}|sdk-${sdkVersion}|${target}`;
 
 /**
  * Before `wsl.exe` runs the setup script: probes the distro's target and makes the parts present and verified in the host's cache
@@ -23,6 +24,8 @@ export async function prepareWslSide(o: {
   distro: string;
   pkgDir: string;
   setup?: SideSetup;
+  /** Use the pinned Node.js although the distro has one (the found one did not start claude-ui). */
+  pinned?: boolean;
   exec?: Exec;
   onPhase?: (p: SidePhase) => void;
   onInstall?: (i: { bundle: true } | { fallback: string }) => void;
@@ -40,15 +43,16 @@ export async function prepareWslSide(o: {
   }
   const m = installMethodOf(target, !!build, "distro");
   if (m.method === "npm") return o.onInstall?.({ fallback: m.reason }), undefined;
+  if (o.pinned) m.node = "pinned";
   const src = o.bundle;
   const version = safeKey(src.version);
   const partsDir = join(src.cacheRoot, version, m.target);
   try {
-    await ensureParts({ dir: partsDir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
+    await ensureParts({ dir: partsDir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion, node: m.node }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
   } catch (e) {
     return o.onInstall?.({ fallback: `the host ${(e as Error).message} and has no verified copy of it` }), undefined;
   }
   pruneCache(src.cacheRoot, version);
   o.onInstall?.({ bundle: true });
-  return { target: m.target, nodeDir: nodeDirName(m.target), claudePackage: claudePackage(m.target), host: { partsDir, sideDir: build!.dir, version: src.version, partsId: partsIdOf(m.target, build!.sdkVersion) } };
+  return { target: m.target, ...(m.node === "pinned" && { nodeDir: nodeDirName(m.target) }), claudePackage: claudePackage(m.target), host: { partsDir, sideDir: build!.dir, version: src.version, partsId: partsIdOf(m.target, build!.sdkVersion, m.node) } };
 }

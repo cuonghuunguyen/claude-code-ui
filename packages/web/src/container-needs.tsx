@@ -1,8 +1,8 @@
 // "What this container needs" (Open project, Docker; docs/spec.md "Sides"): what the install path the container will use needs,
-// with a ✓ or ✗ per item once a check has run. Bundle path: the hub brings Node.js and Claude Code; npm path (musl, other CPUs,
+// with a ✓ or ✗ per item once a check has run. Bundle path: the hub brings Claude Code, and Node.js only when the container has none in range; npm path (musl, other CPUs,
 // no bundle): the container installs claude-ui itself.
 import { CheckIcon, XIcon } from "lucide-react";
-import type { SideCheck } from "@claude-ui/protocol";
+import { NODE_MIN, type SideCheck } from "@claude-ui/protocol";
 
 /** One item; `ok`: found (true), not found (false), not known (undefined: no check yet or not checkable). `optional`: a missing one is no problem. */
 export type NeedItem = { name: string; ok?: boolean; optional?: boolean };
@@ -21,6 +21,7 @@ export function needsOf(check?: SideCheck): Needs {
       needed: [
         { name: "sh, tar and gzip", ok: t ? t.tar && t.gzip : undefined },
         { name: "Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++", ok: f?.install ? true : undefined },
+        { name: `Node.js ${NODE_MIN} or newer (used when present, not required)`, ok: f ? !!f.nodeOk : undefined, optional: true },
         writable,
         git,
       ],
@@ -30,7 +31,7 @@ export function needsOf(check?: SideCheck): Needs {
     method,
     reason: f?.install?.reason,
     needed: [
-      { name: "Node.js 22 or newer", ok: f ? (f.node ? f.nodeOk : false) : undefined },
+      { name: `Node.js ${NODE_MIN} or newer`, ok: f ? (f.node ? f.nodeOk : false) : undefined },
       { name: "npm", ok: t?.npm },
       { name: "Network access to the npm registry", ok: f?.network },
       { name: "Build tools (make, python3, g++)", ok: tools },

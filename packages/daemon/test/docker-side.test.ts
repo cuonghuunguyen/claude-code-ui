@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -284,7 +285,7 @@ describe("folderPath / underDist", () => {
 
 describe("checkDockerSide (side.check of a container)", () => {
   const out = (lines: string[]) => lines.map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
-  const ALL = ["node=22.4.0", "make=1", "python3=1", "cxx=1", "credentials=1", "writable=/tmp", "installed=none"];
+  const ALL = ["node=22.4.0", "foundnode=1", "make=1", "python3=1", "cxx=1", "credentials=1", "writable=/tmp", "installed=none"];
   const running = { inspect: { code: 0, stdout: "true\n" } };
   const run = (answers: Record<string, Answer>, pkgDir = pkg()) => {
     const f = fake({ ...running, ...answers });
@@ -411,6 +412,26 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     const b = go({ cacheRoot: a.cacheRoot, fetch: offline });
     expect((await b.result).bundle?.target).toBe("linux-x64");
     expect(b.phases).toEqual(["packing", "copying"]);
+  });
+
+  it.skipIf(process.platform === "win32")("a container with Node.js 22+: the probe sources nvm, the tar has no node.tar.gz, nothing is fetched from nodejs.org", async () => {
+    const scripts: string[] = [];
+    const listed: string[] = [];
+    const exec: Exec = async (_cmd, args) => {
+      if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? WRITABLE : "true\n", stderr: "" };
+      if (args[0] === "exec" && args.some((x) => x.includes("uname -m"))) return scripts.push(args.at(-1)!), { code: 0, stdout: `${probeOut("x86_64")}\nCLAUDE_UI_CHECK foundnode=1`, stderr: "" };
+      if (args[0] === "cp") listed.push(...execFileSync("tar", ["-tf", args[1]!], { encoding: "utf8" }).split("\n").filter(Boolean));
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const urls: string[] = [];
+    const fetched = (async (u: string) => (urls.push(String(u)), new Response("x"))) as unknown as typeof fetch;
+    const seen: unknown[] = [];
+    const r = await prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(), key: "1.0.0-1", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm, bundle: { cacheRoot: dir("side-cache-"), version: "1.0.0", fetch: fetched, parts: (_t, o) => (seen.push(o.node), []) } });
+    expect(scripts[0]).toMatch(/^nvm=/);
+    expect(seen).toEqual(["found"]);
+    expect(r.bundle).toEqual({ target: "linux-x64", claudePackage: "claude-agent-sdk-linux-x64" });
+    expect(listed).not.toContain("node.tar.gz");
+    expect(urls.filter((u) => u.includes("nodejs.org"))).toEqual([]);
   });
 
   it("aarch64 picks the arm64 bundle", async () => {

@@ -11,11 +11,11 @@ import { homedir } from "node:os";
 import { join, posix } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { perf, type PerfSpanHandle } from "./perf.ts";
-import { LOCAL_SIDE, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
+import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
-import { installMethodOf, parseTarget, sideBuild, TARGET_PROBE_LINES, type ContainerTarget } from "./side-bundle.ts";
+import { installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -49,9 +49,11 @@ const isDocker = (id: string) => id.startsWith("docker:");
 export function setupMessage(code: string, detail: string, side: string, docker = false) {
   switch (code) {
     case "node_missing":
-      return docker ? `Node.js 22 or newer is not installed in ${side}. Use an image with Node.js 22+ (e.g. node:22) or install it in the container, then retry.` : `Node.js 22 or newer is not installed in ${side}. Install it there (e.g. nvm install 22), then retry.`;
+      return docker ? `Node.js ${NODE_MIN} or newer is not installed in ${side}. Use an image with Node.js ${NODE_MIN_MAJOR}+ (e.g. node:${NODE_MIN_MAJOR}) or install it in the container, then retry.` : `Node.js ${NODE_MIN} or newer is not installed in ${side}. Install it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`;
+    case "node_changed":
+      return `The Node.js in ${side} changed while it started. Retry: claude-ui then brings its own Node.js.`;
     case "node_old":
-      return docker ? `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Use an image with Node.js 22+ (e.g. node:22), then retry.` : `Node.js ${detail} in ${side} is too old: 22 or newer is needed. Update it there (e.g. nvm install 22), then retry.`;
+      return docker ? `Node.js ${detail} in ${side} is too old: ${NODE_MIN} or newer is needed. Use an image with Node.js ${NODE_MIN_MAJOR}+ (e.g. node:${NODE_MIN_MAJOR}), then retry.` : `Node.js ${detail} in ${side} is too old: ${NODE_MIN} or newer is needed. Update it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`;
     case "build_tools_missing":
       return `${side} needs make, python3 and g++ to build the terminal support (node-pty). Install them there (Debian/Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++), then retry.`;
     case "not_installed":
@@ -67,7 +69,7 @@ export function setupMessage(code: string, detail: string, side: string, docker 
 
 /**
  * Shell script run in the side: POSIX sh in a container (the image's environment; nvm sourced when present), bash -lic in a WSL
- * distro (nvm and PATH from .bashrc). Checks Node 22+, then installs this claude-ui's package once per
+ * distro (nvm and PATH from .bashrc). Checks the Node.js of `engines.node`, then installs this claude-ui's package once per
  * `key` (version and build), so no registry or unpublished version matters. wsl: `source` is the Windows package folder (read
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
@@ -80,7 +82,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
   const src = shq(source);
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
-    ...(docker ? ['nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1'] : []),
+    ...(docker ? [NVM_LINE] : []),
+    USABLE_NODE_FN,
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
@@ -91,9 +94,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
     // A bundle install of this build carries its own Node.js; running it needs none in the container or distro (force reinstalls with npm: it does).
     ...(mode !== "force" ? ['if [ -x "$dir/node/bin/node" ] && [ -f "$cli" ] && sdk "$dir"; then :; else'] : []),
-    "command -v node >/dev/null 2>&1 || say node_missing",
-    "v=$(node -p 'process.versions.node.split(\".\")[0]') || say node_missing",
-    "[ \"$v\" -ge 22 ] || say node_old \"$(node -v)\"",
+    // The side runs on the real binary of the found node (`$n`), never on a shim.
+    '  usable_node "" || { command -v node >/dev/null 2>&1 && say node_old "$(node -v 2>/dev/null)"; say node_missing; }',
     ...(mode !== "force" ? ["fi"] : []),
     ...(docker && !never ? [`src=${src}`] : []),
     ...(never
@@ -140,7 +142,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
 /** A Docker side's bundle (side-bundle.ts): its target and the names inside it. */
 export type SideBundle = {
   target: "linux-x64" | "linux-arm64";
-  nodeDir: string;
+  /** Absent: the target's own Node.js runs the side (nothing of Node.js is unpacked). */
+  nodeDir?: string;
   claudePackage: string;
   /** WSL: no tar is sent; the distro reads the host's cached parts and `dist/side` through /mnt (Windows paths). `partsId`: what the parts are (see wslBundleScript). */
   host?: { partsDir: string; sideDir: string; version: string; partsId: string };
@@ -153,17 +156,17 @@ const RUN_DOCKER = [
   '[ -n "$CLAUDE_UI_ROOTS" ] || case "$PWD" in /|"$HOME"|"$HOME"/*) export CLAUDE_UI_ROOTS="$HOME" ;; *) export CLAUDE_UI_ROOTS="$HOME:$PWD" ;; esac',
   "printf 'CLAUDE_UI_PHASE %s\\n' starting",
   'if [ -x "$dir/node/bin/node" ]; then exec "$dir/node/bin/node" "$cli" --side; fi',
-  'exec node "$cli" --side',
+  'exec "${n:-node}" "$cli" --side',
 ];
 
 /** WSL: the side runs on its own Node.js when the install carries one (a bundle install), else on the distro's. */
-const RUN_WSL = ["printf 'CLAUDE_UI_PHASE %s\\n' starting", 'if [ -x "$dir/node/bin/node" ]; then exec "$dir/node/bin/node" "$cli" --side; fi', 'exec node "$cli" --side'];
+const RUN_WSL = ["printf 'CLAUDE_UI_PHASE %s\\n' starting", 'if [ -x "$dir/node/bin/node" ]; then exec "$dir/node/bin/node" "$cli" --side; fi', 'exec "${n:-node}" "$cli" --side'];
 
 /** The unpack of the four parts found in `parts` (a folder: the unpacked Docker tar, or the host cache read by a WSL distro) into `$new`. */
-function unpackLines(parts: string) {
+function unpackLines(parts: string, withNode: boolean) {
   return [
-    '  mkdir -p "$new/node/bin" "$new/node_modules/@anthropic-ai" "$new/b/pty" "$new/b/claude" "$new/b/sdk" || fail "no folder could be made in $root"',
-    `  tar -xzf "${parts}/node.tar.gz" -C "$new/b" "$nd/bin/node" "$nd/LICENSE" 2>/dev/null && mv "$new/b/$nd/bin/node" "$new/node/bin/node" && mv "$new/b/$nd/LICENSE" "$new/node/LICENSE" || fail "Node.js could not be unpacked"`,
+    `  mkdir -p ${withNode ? '"$new/node/bin" ' : ""}"$new/node_modules/@anthropic-ai" "$new/b/pty" "$new/b/claude" "$new/b/sdk" || fail "no folder could be made in $root"`,
+    ...(withNode ? [`  tar -xzf "${parts}/node.tar.gz" -C "$new/b" "$nd/bin/node" "$nd/LICENSE" 2>/dev/null && mv "$new/b/$nd/bin/node" "$new/node/bin/node" && mv "$new/b/$nd/LICENSE" "$new/node/LICENSE" || fail "Node.js could not be unpacked"`] : []),
     `  tar -xzf "${parts}/node-pty.tgz" -C "$new/b/pty" 2>/dev/null && mv "$new/b/pty/package" "$new/node_modules/node-pty" || fail "node-pty could not be unpacked"`,
     // Only this target's prebuild stays (the package also carries Windows and macOS builds).
     '  for p in "$new/node_modules/node-pty/prebuilds"/*; do [ "${p##*/}" = "$tg" ] || rm -rf "$p"; done',
@@ -173,18 +176,24 @@ function unpackLines(parts: string) {
 }
 
 /** The common end of a bundle install: complete? starts on its own Node.js? then swap it in and sweep the other installs. `before`: lines run on `$new` first. */
-function finishLines(before: string[] = []) {
+function finishLines(found: boolean, before: string[] = []) {
   return [
     '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$new/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$new" || fail "the bundle is incomplete"',
     ...before,
-    // The new install must run on its own Node.js (a missing library shows here) before it replaces the old one.
-    "  e=$(\"$new/node/bin/node\" \"$new/node_modules/claude-code-ui/dist/cli.js\" --version 2>&1 >/dev/null) || fail \"the new install does not start: $(printf '%s' \"$e\" | tail -n 2 | tr '\\n' ' ')\"",
+    // The new install must run on its Node.js `$nb` (a missing library or a node-pty that does not load shows here) before it replaces the old one.
+    // It must print a version, not only exit 0. A found Node.js that fails here is not the end: the hub starts again with its own (`node_unusable`).
+    `  ver "$nb" "$new/node_modules/claude-code-ui/dist/cli.js" || { e=$("$nb" "$new/node_modules/claude-code-ui/dist/cli.js" --version 2>&1 | tail -n 2 | tr '\\n' ' '); ${found ? 'rm -rf "$new"; rm -f "$src"; say node_unusable "$e"' : 'fail "the new install does not start: $e"'}; }`,
     '  if [ -e "$dir" ]; then mv "$dir" "$old" || fail "the old install could not be moved aside"; fi',
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
     '  rm -rf "$old"',
     '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
   ];
 }
+
+/** The node of a bundle install: found (`$n`, set by usable_node in the target) or the bundle's own. `arch` is process.arch's name of the target. */
+const foundNodeLines = (b: SideBundle, docker: boolean) => (b.nodeDir ? [] : [...(docker ? [NVM_LINE] : []), USABLE_NODE_FN, `usable_node ${shq(b.target.slice(6))}`]);
+/** Keeps an install that has a Node.js of its own (also when the target has one now) or, in found mode, runs on the found one; else installs. */
+const keepCondition = (b: SideBundle) => `if [ ! -f "$cli" ] || ! sdk "$dir" || ${b.nodeDir ? '[ ! -x "$dir/node/bin/node" ]' : '{ [ ! -x "$dir/node/bin/node" ] && [ -z "$n" ]; }'}; then`;
 
 /**
  * Docker setup from the host-assembled bundle (`source`: the bundle tar in the container): needs sh, tar and gzip, no Node.js, npm,
@@ -199,21 +208,25 @@ function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundl
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
-    `src=${q(source)}; nd=${q(b.nodeDir)}; cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
+    `src=${q(source)}; ${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
-    mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir" || [ ! -x "$dir/node/bin/node" ]; then',
+    VER_FN,
+    ...foundNodeLines(b, true),
+    mode === "force" ? "if true; then" : keepCondition(b),
+    ...(b.nodeDir ? [] : ['  [ -n "$n" ] || { rm -f "$src"; say node_changed; }']),
     '  [ -f "$src" ] || say install_failed "the claude-ui bundle was not copied in"',
     "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
     "  { command -v tar && command -v gzip; } >/dev/null 2>&1 || { rm -f \"$src\"; say unpack_tools_missing \"$(for t in tar gzip; do command -v $t >/dev/null 2>&1 || printf '%s ' $t; done)\"; }",
     '  new="$root/.new-$$"; old="$root/.old-$$"',
+    b.nodeDir ? '  nb="$new/node/bin/node"' : '  nb="$n"',
     '  fail() { rm -rf "$new"; rm -f "$src"; say install_failed "$1"; }',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
     '  tar -xf "$src" -C "$new/b" 2>/dev/null || fail "the bundle could not be unpacked (is the disk full?)"',
     '  rm -f "$src"',
-    ...unpackLines('$new/b'),
+    ...unpackLines('$new/b', !!b.nodeDir),
     '  mv "$new/b/app" "$new/node_modules/claude-code-ui" || fail "the claude-ui files could not be unpacked"',
     '  rm -rf "$new/b"',
-    ...finishLines(),
+    ...finishLines(!b.nodeDir),
     "fi",
     'rm -f "$src" 2>/dev/null',
     ...RUN_DOCKER,
@@ -235,32 +248,36 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
-    `nd=${q(b.nodeDir)}; cp=${q(b.claudePackage)}; tg=${q(b.target)}; id=${q(h.partsId)}`,
+    `${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}; id=${q(h.partsId)}`,
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    VER_FN,
     // Another install made from the same parts, hard-linked into $new (any failure: the caller unpacks the parts). The hard links
     // assume installs are immutable: nothing writes in place inside node/ or node_modules/ after the swap (a new build is a new
     // folder), so a file shared by two installs never changes under one of them. The candidate must be complete and run.
-    `reuse() { for d in "$root"/*; do [ -d "$d" ] ${mode === "force" ? '&& [ "$d" != "$dir" ] ' : ""}&& [ "$(cat "$d/parts.id" 2>/dev/null)" = "$id" ] && [ -f "$d/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$d/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$d" && [ -x "$d/node/bin/node" ] && "$d/node/bin/node" --version >/dev/null 2>&1 || continue; mkdir -p "$new/node_modules" && cp -al "$d/node" "$new/node" && for m in "$d"/node_modules/* "$d"/node_modules/.[!.]*; do [ -e "$m" ] || continue; [ "\${m##*/}" = claude-code-ui ] || cp -al "$m" "$new/node_modules/" || return 1; done && return 0; return 1; done; return 1; }`,
-    mode === "force" ? "if true; then" : 'if [ ! -f "$cli" ] || ! sdk "$dir" || [ ! -x "$dir/node/bin/node" ]; then',
+    `reuse() { for d in "$root"/*; do [ -d "$d" ] ${mode === "force" ? '&& [ "$d" != "$dir" ] ' : ""}&& [ "$(cat "$d/parts.id" 2>/dev/null)" = "$id" ] && [ -f "$d/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$d/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$d" && ${b.nodeDir ? '[ -x "$d/node/bin/node" ] && "$d/node/bin/node" --version >/dev/null 2>&1' : '[ ! -e "$d/node" ]'} || continue; mkdir -p "$new/node_modules" && ${b.nodeDir ? 'cp -al "$d/node" "$new/node" && ' : ""}for m in "$d"/node_modules/* "$d"/node_modules/.[!.]*; do [ -e "$m" ] || continue; [ "\${m##*/}" = claude-code-ui ] || cp -al "$m" "$new/node_modules/" || return 1; done && return 0; return 1; done; return 1; }`,
+    ...foundNodeLines(b, false),
+    mode === "force" ? "if true; then" : keepCondition(b),
+    ...(b.nodeDir ? [] : ['  [ -n "$n" ] || say node_changed']),
     `  pd=$(wslpath -u ${q(h.partsDir)} 2>/dev/null) || say install_failed "the verified claude-ui parts were not found from the distro"`,
     `  sd=$(wslpath -u ${q(h.sideDir)} 2>/dev/null) && [ -f "$sd/cli.js" ] || say install_failed "the claude-ui side files were not found from the distro"`,
     "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
     "  { command -v tar && command -v gzip; } >/dev/null 2>&1 || say unpack_tools_missing \"$(for t in tar gzip; do command -v $t >/dev/null 2>&1 || printf '%s ' $t; done)\"",
     '  new="$root/.new-$$"; old="$root/.old-$$"',
+    b.nodeDir ? '  nb="$new/node/bin/node"' : '  nb="$n"',
     '  fail() { rm -rf "$new"; say install_failed "$1"; }',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
     // The app: the side JS and its licenses (dist/side without side.json), then package.json.
     `  app() { mkdir -p "$new/node_modules/claude-code-ui/dist" || return 1; for f in "$sd"/*.js "$sd/THIRD_PARTY_LICENSES.txt"; do [ -f "$f" ] && { cp "$f" "$new/node_modules/claude-code-ui/dist/" || return 1; }; done; printf '%s' ${shq(pkg)} > "$new/node_modules/claude-code-ui/package.json"; }`,
     // A reused install must start before it is trusted; if not, it is dropped and the parts are unpacked (once).
-    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && "$new/node/bin/node" "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1; then reused=1; rm -rf "$new/b"; fi',
+    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && ver "$nb" "$new/node_modules/claude-code-ui/dist/cli.js"; then reused=1; rm -rf "$new/b"; fi',
     '  if [ -z "$reused" ]; then',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
-    '  [ -f "$pd/node.tar.gz" ] || fail "the verified claude-ui parts were not found from the distro"',
-    ...unpackLines("$pd"),
+    '  [ -f "$pd/node-pty.tgz" ] || fail "the verified claude-ui parts were not found from the distro"',
+    ...unpackLines("$pd", !!b.nodeDir),
     '  rm -rf "$new/b"',
     '  app || fail "the claude-ui files could not be copied"',
     "  fi",
-    ...finishLines(['  printf \'%s\\n\' "$id" > "$new/parts.id" || fail "the new install could not be written"']),
+    ...finishLines(!b.nodeDir, ['  printf \'%s\\n\' "$id" > "$new/parts.id" || fail "the new install could not be written"']),
     "fi",
     ...RUN_WSL,
   ].join("\n");
@@ -279,7 +296,7 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
   const docker = kind === "docker";
   return [
     "emit() { printf 'CLAUDE_UI_CHECK %s=%s\\n' \"$1\" \"$2\"; }",
-    ...(docker ? ['nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1'] : []),
+    ...(docker ? [NVM_LINE] : []),
     "if command -v node >/dev/null 2>&1; then emit node \"$(node -p 'process.versions.node' 2>/dev/null || echo none)\"; else emit node none; fi",
     "command -v make >/dev/null 2>&1 && emit make 1 || emit make 0",
     "command -v python3 >/dev/null 2>&1 && emit python3 1 || emit python3 0",
@@ -313,6 +330,8 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
 
 type Checked = {
   node?: string;
+  /** A Node.js in range that the side can run on (the one rule of usable_node). */
+  foundNode?: boolean;
   make: boolean;
   python3: boolean;
   cxx: boolean;
@@ -341,6 +360,7 @@ export function parseCheck(out: string): Checked | undefined {
   const flag = (k: string) => kv.get(k) === "1";
   return {
     ...(node && node !== "none" && { node }),
+    ...(kv.has("foundnode") && { foundNode: flag("foundnode") }),
     make: flag("make"),
     python3: flag("python3"),
     cxx: flag("cxx"),
@@ -352,8 +372,6 @@ export function parseCheck(out: string): Checked | undefined {
     ...(kv.has("bundled") && { bundled: flag("bundled") }),
   };
 }
-
-const nodeMajor = (v: string) => Number(/^v?(\d+)/.exec(v)?.[1] ?? NaN);
 
 /** The user's next step for a blocked check, in plain words (same source as `setupMessage`). `side`: the label; `detail`: a version, a name or a short reason. */
 export function checkMessage(reason: SideCheckReason, side: string, o: { docker?: boolean; detail?: string; name?: string } = {}) {
@@ -370,9 +388,9 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
     case "package_unreadable":
       return `${side} cannot read the claude-ui files on Windows. Wait for a running build to finish, then check again.`;
     case "node_missing":
-      return o.docker ? `Node.js is not installed in ${side}. Use an image with Node.js 22 or newer (for example node:22), or install it in the container. Then check again.` : `Node.js is not installed in ${side}. Install version 22 or newer there (for example nvm install 22). Then check again.`;
+      return o.docker ? `Node.js is not installed in ${side}. Use an image with Node.js ${NODE_MIN} or newer (for example node:${NODE_MIN_MAJOR}), or install it in the container. Then check again.` : `Node.js is not installed in ${side}. Install version ${NODE_MIN} or newer there (for example nvm install ${NODE_MIN_MAJOR}). Then check again.`;
     case "node_old":
-      return o.docker ? `Node.js ${d} in ${side} is too old. Version 22 or newer is needed. Use an image with Node.js 22 or newer (for example node:22). Then check again.` : `Node.js ${d} in ${side} is too old. Version 22 or newer is needed. Update it there (for example nvm install 22). Then check again.`;
+      return o.docker ? `Node.js ${d} in ${side} is too old. Version ${NODE_MIN} or newer is needed. Use an image with Node.js ${NODE_MIN} or newer (for example node:${NODE_MIN_MAJOR}). Then check again.` : `Node.js ${d} in ${side} is too old. Version ${NODE_MIN} or newer is needed. Update it there (for example nvm install ${NODE_MIN_MAJOR}). Then check again.`;
     case "build_tools_missing":
       return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
     case "unpack_tools_missing":
@@ -392,7 +410,7 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
   const { checked: c, key, label } = o;
   const docker = o.kind === "docker";
   const bundleInstall = o.install?.method === "bundle";
-  const nodeOk = c.node ? nodeMajor(c.node) >= 22 : undefined;
+  const nodeOk = c.node ? !!c.foundNode : undefined;
   const facts: SideCheckFacts = {
     reachable: true,
     ...(docker && { running: true }),
@@ -412,7 +430,8 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
   const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name }) + (reason === "node_missing" || reason === "node_old" || reason === "build_tools_missing" ? why : ""), key, facts });
   const needsInstall = c.installed !== "current";
   // The container's Node.js matters only when the side runs on it: not for a bundle install, nor for an installed build that carries its own.
-  const ownNode = needsInstall ? bundleInstall : !!c.bundled;
+  // An installed build on a bundle target is not blocked when its Node.js is gone: the start installs the pinned one.
+  const ownNode = bundleInstall || (!needsInstall && !!c.bundled);
   if (!o.build) return blocked("no_build");
   if (!ownNode && !c.node) return blocked("node_missing");
   if (!ownNode && !nodeOk) return blocked("node_old", c.node);
@@ -510,7 +529,7 @@ export function createSides(opts: {
   /** Static sides (WSL distros). */
   targets: SideTarget[];
   /** `install`: a Docker start says how it installs: the bundle, or npm in the container and why (`fallback`). */
-  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
+  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; /** The Node.js found there did not start claude-ui: use the pinned one. */ pinned?: boolean; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
   /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
   check?: (id: string) => Promise<SideCheck>;
   key?: () => string;
@@ -636,7 +655,7 @@ export function createSides(opts: {
     changed();
   };
 
-  function start(id: string, setup: SideSetup = "needed"): Promise<void> {
+  function start(id: string, setup: SideSetup = "needed", nodeNote?: string): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
     if (s.state === "ready") return Promise.resolve();
@@ -644,6 +663,8 @@ export function createSides(opts: {
     delete s.phase;
     delete s.bundle;
     delete s.fallback;
+    delete s.nodeNote;
+    if (nodeNote) s.nodeNote = nodeNote;
     Object.assign(s, { state: "starting", message: undefined });
     changed();
     spans.set(s, { top: perf.span("side.start") });
@@ -653,6 +674,7 @@ export function createSides(opts: {
       try {
         proc = await opts.spawn(s.id, {
           setup,
+          ...(nodeNote && { pinned: true }),
           phase: (p) => setPhase(s, p),
           install: (i) => {
             if (s.state !== "starting") return;
@@ -677,6 +699,7 @@ export function createSides(opts: {
       s.proc = proc;
       let setupError: string | undefined;
       let setupCode: string | undefined;
+      let setupDetail = "";
       let stderr = "";
       // The tail below keeps 2000 chars; a long stack would push the crash line out, so it is remembered as it arrives
       // (`partial` carries an unfinished line over to the next chunk).
@@ -695,7 +718,7 @@ export function createSides(opts: {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
-        if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
+        if (setup) return void ((setupCode = setup[1]), (setupDetail = setup[2]!.trim()), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
         const parsed = parseSideFrame(line);
         if ("error" in parsed) {
           // Before the first frame this is shell start-up output (motd, .bashrc): not logged. Later lines are logged, at most 20 per run.
@@ -755,6 +778,15 @@ export function createSides(opts: {
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
         delete s.phase;
+        // The Node.js found there did not start claude-ui: once, start again with the pinned one (never a dead end).
+        if (!wasReady && setupCode === "node_unusable" && !nodeNote) {
+          const why = `it did not start claude-ui${setupDetail ? ` (${setupDetail.slice(0, 200)})` : ""}`;
+          console.error(`side ${s.id}: the Node.js found there ${why}; starting again with claude-ui's own Node.js`);
+          Object.assign(s, { state: "off", message: undefined, proc: undefined, starting: undefined });
+          s.conns.clear();
+          start(id, setup, why).then(resolve, reject);
+          return;
+        }
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         for (const [gid, c] of s.gits) {
@@ -900,7 +932,7 @@ export function createSides(opts: {
 
   return {
     /** Every side, local first. */
-    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }) }))],
+    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }) }))],
     docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
     check,
