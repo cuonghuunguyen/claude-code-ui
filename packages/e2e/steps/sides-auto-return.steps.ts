@@ -43,7 +43,22 @@ const killSide = () => {
 const group = (page: Page, project: string) => page.getByTestId("session-group").filter({ has: page.locator(`[data-testid="group-toggle"][title$="${project}"]`) });
 const status = (page: Page, project: string) => group(page, project).getByTestId("sidebar-side-status");
 const openSidebar = async (page: Page) => {
-  if (await page.getByTestId("open-drawer").isVisible()) await page.getByTestId("open-drawer").click();
+  // A phone drawer that is already open covers its own opener (click would be intercepted); a settled list is not needed.
+  const opener = page.getByTestId("open-drawer");
+  if (!(await opener.isVisible())) return;
+  const covered = await opener.evaluate((e) => {
+    const r = e.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!top && !e.contains(top);
+  });
+  if (!covered) await opener.click();
+};
+/** Settings › Sides; stays as is when the dialog is already open (it survives a daemon restart). */
+const openSides = async (page: Page) => {
+  if (await page.getByTestId("settings-sides").isVisible()) return;
+  await openSidebar(page);
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-sides").click();
 };
 
 /** A container "dev" listed by the fake docker, a side saved for it, and the project the side lists. */
@@ -112,9 +127,7 @@ When("the container {string} cannot start its side any more", async ({}, _name: 
 });
 
 When("I turn {string} for {string} in Settings", async ({ page }, state: string, name: string) => {
-  await openSidebar(page);
-  await page.getByTestId("open-settings").last().click();
-  await page.getByTestId("settings-group-sides").click();
+  await openSides(page);
   const sw = page.getByTestId(`settings-side-start-docker:${name}`);
   const want = state === "on";
   if ((await sw.getAttribute("aria-checked")) !== String(want)) await sw.click();
@@ -122,9 +135,7 @@ When("I turn {string} for {string} in Settings", async ({ page }, state: string,
 });
 
 When("I open Settings › Sides", async ({ page }) => {
-  await openSidebar(page);
-  await page.getByTestId("open-settings").last().click();
-  await page.getByTestId("settings-group-sides").click();
+  await openSides(page);
   await expect(page.getByTestId("settings-sides")).toBeVisible();
 });
 
