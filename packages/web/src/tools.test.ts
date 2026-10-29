@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, timeline } from "./store.ts";
-import { artifactPreviewable, artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { artifactPreviewable, artifactTitle, artifactSummary, claudeUrl, editFiles, filePath, isClaudeUrl, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 const call = (id: string, tool: string, input: unknown = {}): Part => ({
   type: "tool_call",
@@ -201,5 +201,14 @@ describe("artifact preview", () => {
     expect(artifactPreviewable(c({ file_path: "/t/a.txt" }))).toBe(false);
     expect(artifactPreviewable(c({}))).toBe(false);
     expect(artifactPreviewable(c({ file_path: "/t/a.html" }, "done", "ArtifactData"))).toBe(false);
+  });
+});
+
+describe("artifactTitle", () => {
+  it("is the input title, else the file base name (Windows path too), else empty", () => {
+    expect(artifactTitle({ input: { title: "Sales", file_path: "/t/a.html" } })).toBe("Sales");
+    expect(artifactTitle({ input: { file_path: "/t/dir/a.html" } })).toBe("a.html");
+    expect(artifactTitle({ input: { file_path: "C:\\t\\a.html" } })).toBe("a.html");
+    expect(artifactTitle({ input: {} })).toBe("");
   });
 });

@@ -1710,7 +1710,7 @@ export function createDaemon(opts: {
           }
           const nonce = nonceFor(`artifact\0${msg.sessionId}\0${msg.partId}`);
           media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path, page, confine, assets }, ws, used: Date.now() });
-          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, ...(unavailable.length > 0 && { unavailable }) });
+          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }) });
         }
         case "session.unsubscribe": {
           // No find(): this must not restore a session.

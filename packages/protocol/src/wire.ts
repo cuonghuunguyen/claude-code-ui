@@ -556,7 +556,8 @@ export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 /** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */
-export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[] };
+/** `title`: the publish's title (GH-400), else the file's base name: names an artifact tab whose part a paged snapshot did not load. */
+export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[]; title?: string };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };

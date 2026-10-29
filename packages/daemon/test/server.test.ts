@@ -5307,6 +5307,7 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     expect(r.type).toBe("reply");
     expect(r.result.url).toMatch(/^\/artifact\/[0-9a-f]{32}\/page\.html\?v=\d/);
     expect(r.result.size).toBe(pageBytes.length);
+    expect((r.result as { title?: string }).title).toBe("T");
     const g = await get(r.result.url);
     expect(g.status).toBe(200);
     expect(g.body.toString()).toBe(pageBytes);

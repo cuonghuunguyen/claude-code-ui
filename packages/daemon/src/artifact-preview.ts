@@ -1,5 +1,5 @@
 // Artifact publish preview (GH-175): which session part names a previewable file, and the headers of GET /artifact/<nonce>/<name>.
-import { extname, isAbsolute, resolve } from "node:path";
+import { basename, extname, isAbsolute, resolve } from "node:path";
 import type { Part } from "@claude-ui/protocol";
 import { MEDIA_TYPES } from "./media.ts";
 
@@ -31,7 +31,7 @@ export const ARTIFACT_HEADERS = {
 } as const;
 
 export type ArtifactAsset = { key: string; path: string; type: string };
-export type ArtifactFile = { path: string; assets: ArtifactAsset[]; unavailable: string[] } | { code: "unknown_part" | "unsupported_type"; message: string };
+export type ArtifactFile = { path: string; title: string; assets: ArtifactAsset[]; unavailable: string[] } | { code: "unknown_part" | "unsupported_type"; message: string };
 
 /** Largest number of supporting files of one preview (the Artifact tool keeps up to 511 per version). */
 export const ARTIFACT_ASSETS_MAX = 512;
@@ -152,11 +152,12 @@ export function assetRequestAllowed(h: { origin?: string; dest?: string; mode?: 
 export function artifactFileOf(part: Part | undefined, cwd: string): ArtifactFile {
   const no = (message = "not an Artifact publish of this session"): ArtifactFile => ({ code: "unknown_part", message });
   if (part?.type !== "tool_call" || part.tool !== "Artifact" || part.status !== "done") return no();
-  const input = part.input as { action?: unknown; asset?: unknown; file_path?: unknown; files?: unknown; root?: unknown } | null;
+  const input = part.input as { action?: unknown; asset?: unknown; file_path?: unknown; title?: unknown; files?: unknown; root?: unknown } | null;
   if (typeof input !== "object" || input === null) return no();
   if ((input.action !== undefined && input.action !== "publish") || input.asset === true) return no();
   const file = input.file_path;
   if (typeof file !== "string" || file === "" || file.includes("\0")) return no();
   if (!/^\.html?$/.test(extname(file).toLowerCase())) return { code: "unsupported_type", message: `not an HTML page: ${file}` };
-  return { path: isAbsolute(file) ? resolve(file) : resolve(cwd, file), ...artifactAssetsOf(input, cwd) };
+  const path = isAbsolute(file) ? resolve(file) : resolve(cwd, file);
+  return { path, title: typeof input.title === "string" && input.title !== "" ? input.title : basename(path), ...artifactAssetsOf(input, cwd) };
 }

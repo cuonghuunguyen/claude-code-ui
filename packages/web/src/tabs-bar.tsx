@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { AppWindowIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -74,6 +74,7 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
 
 function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; kind?: PaneKind; path?: string }) {
   if (kind === "file" && path) return <FileIcon path={path} className="size-4 shrink-0" />;
+  if (kind === "artifact") return <AppWindowIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
@@ -1200,7 +1201,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)
