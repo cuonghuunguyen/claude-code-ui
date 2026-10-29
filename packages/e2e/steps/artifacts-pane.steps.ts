@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
-import { startDaemon, type Daemon } from "../support/daemon.ts";
+import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
 import { runDir } from "../support/paths.ts";
 import { RECONNECT_MS, waitConnected } from "../support/ui.ts";
@@ -23,7 +23,7 @@ async function start(page: Page, project: { path: string }, workerIndex: number,
   const run = runDir();
   const configDir = join(run, `claude-config-w${workerIndex}`);
   transcript = writeTurnsTranscript({ sessionId: randomUUID(), cwd: project.path, configDir, run, turns, publishes });
-  own = await startDaemon(run, 1000 + workerIndex, { env: { CLAUDE_CONFIG_DIR: configDir } });
+  own = await startDaemon(run, 1000 + workerIndex, { port: await freePort(ownerPorts(), ""), env: { CLAUDE_CONFIG_DIR: configDir } });
   await openApp(page, own);
   await openProject(page, project.path);
   if (await page.getByTestId("open-drawer").isVisible()) await page.getByTestId("open-drawer").click();
@@ -82,7 +82,14 @@ When("I open the Artifacts pane", async ({ page }) => {
   await expect(pane(page)).toBeVisible();
 });
 
+/** A narrow pane shows the list or the preview, not both. */
+async function showList(page: Page): Promise<void> {
+  const back = pane(page).getByRole("button", { name: "All artifacts" });
+  if (await back.isVisible()) await back.click();
+}
+
 Then("the Artifacts pane lists {int} rows in the order {string}", async ({ page }, n: number, order: string) => {
+  await showList(page);
   await expect(rows(page)).toHaveCount(n, { timeout: 30_000 });
   const titles = await pane(page).getByTestId("artifact-row-title").allTextContents();
   expect(titles).toEqual(order.split(", "));
@@ -93,11 +100,17 @@ Then("each Artifacts row shows a relative time", async ({ page }) => {
 });
 
 When("I select the artifact {string} in the Artifacts pane", async ({ page }, name: string) => {
+  // A narrow pane (the side panel at 1440 px) shows the list or the preview, not both: go back to the list first.
+  const back = pane(page).getByRole("button", { name: "All artifacts" });
+  if (await back.isVisible()) await back.click();
   await rows(page).filter({ hasText: name }).click();
-  await expect(rows(page).filter({ hasText: name })).toHaveAttribute("aria-selected", "true");
+  await expect(pane(page).getByTestId("artifacts-preview")).toBeVisible();
 });
 
 Then("the Artifacts pane previews the page with the heading {string}", async ({ page }, text: string) => {
+  // Narrow pane showing the list: open the selected row.
+  const selected = rows(page).and(page.locator('[aria-selected="true"]'));
+  if (await selected.isVisible()) await selected.click();
   await expect(pane(page).frameLocator("iframe").getByRole("heading", { name: text })).toBeVisible({ timeout: 30_000 });
 });
 
@@ -115,6 +128,7 @@ Then("the artifact tab {string} is closed", async ({ page }, name: string) => {
 });
 
 Then("the Artifacts pane has {string} selected", async ({ page }, name: string) => {
+  await showList(page);
   await expect(rows(page).filter({ hasText: name })).toHaveAttribute("aria-selected", "true");
 });
 
