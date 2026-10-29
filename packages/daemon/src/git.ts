@@ -957,7 +957,7 @@ export async function removeWorktree(cwd: string, path: string, allowed: (path: 
       const st = (last = await statusOf(await repoFacts(main, true), w, path, allowed, true));
       const e = o.expect;
       if ((o.expectSafe && st.safety !== "safe") || st.blocked || (e && (st.uncommitted > e.uncommitted || st.ahead > e.ahead || (e.ignored !== undefined && (st.ignored ?? 0) > e.ignored))))
-        throw new WorktreeError("stale", `Changed since the list: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}${e?.ignored !== undefined && (st.ignored ?? 0) > e.ignored ? ` (counted ${e.ignored} ignored files; reload the page if this tab is from an older version)` : ""}`);
+        throw new WorktreeError("stale", `Changed since it was checked: ${st.uncommitted} files, ${st.ahead} commits${st.ignored ? `, ${st.ignored} ignored files` : ""}${e?.ignored !== undefined && (st.ignored ?? 0) > e.ignored ? ` (counted ${e.ignored} ignored files; reload the page if this tab is from an older version)` : ""}`);
     };
     await verify();
     await o.beforeRemove?.();
@@ -1104,7 +1104,7 @@ async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: str
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
-/** `cached`: a valid entry of the preview cache may answer (Clean up scans and warming only). The default is a fresh read: the Remove dialog must see the files as they are now. */
+/** `cached`: a valid entry of the preview cache may answer. No daemon request sets it: a plain edit of a tracked file moves no stat of the fingerprint, so every dialog reads fresh and the cache only feeds `cachedStatuses`. */
 export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean, o: { cached?: boolean } = {}): Promise<WorktreeStatusResult> {
   const gen = marks;
   const f = await repoFacts(cwd);
@@ -1125,8 +1125,8 @@ export async function worktreeStatus(cwd: string, path: string, allowed: (p: str
  * Last preview status of each worktree (GH-463). A valid entry is served without git; recomputed lazily on the next request, never by a sweep.
  * Coverage: the daemon marks entries stale at a session turn end and after its own git writes (`markWorktreeStale`, `markRepoStale`);
  * the fingerprint covers terminal tabs, the IDE and external git that changed refs, HEAD, the index or the reflog.
- * Known gap: a new untracked file and an edit of a tracked file change none of these. The UI shows the age; only Clean up scans and warming read the cache
- * (`worktreeStatus` `cached`), the Remove dialog reads fresh, and every removal with `expect`/`expectSafe` re-checks.
+ * Known gap: a new untracked file and an edit of a tracked file change none of these. So the cache is display only (`cachedStatuses`, shown as Checking…
+ * with its age); `worktree.status` always reads fresh and every Clean up / dialog removal sends `expect`/`expectSafe`, which re-checks.
  */
 type Cached = { fp: Fp; common: string; st: WorktreeStatusResult; stale: boolean };
 const previews = lru<Cached>(256);

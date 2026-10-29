@@ -285,6 +285,11 @@ When("I confirm Clean up", async ({ page }) => {
   await page.getByTestId("cleanup-confirm").click();
 });
 
+Then("the Clean up summary says {string} was not removed because it {string}", async ({ page }, branch: string, reason: string) => {
+  const li = page.getByTestId("cleanup-summary").getByRole("listitem").filter({ hasText: branch });
+  await expect(li).toContainText(reason, { timeout: 60_000 });
+});
+
 Then("the Clean up dialog fits the viewport", async ({ page }) => {
   const vw = page.viewportSize()!.width;
   const b = (await page.getByTestId("cleanup-dialog").boundingBox())!;

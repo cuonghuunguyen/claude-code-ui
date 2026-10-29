@@ -209,7 +209,7 @@ describe("worktree.cached and turn-end marks (GH-463)", () => {
     expect(await stale(paths[1]!)).toBeUndefined();
   });
 
-  it("the Remove dialog's status (no scan) reads fresh: a tracked edit and a new file after a Safe check show; a scan serves the cache; remove with expect refuses the stale count", async () => {
+  it("a plain tracked-file edit and a new file after a Safe check show in every worktree.status (dialog and scan); the cache is display only; remove with expectSafe refuses the cached Safe", async () => {
     const { root, repo, paths } = fixture(1, 0);
     const c = await client(await daemon({ root, repo }));
     const p = paths[0]!;
@@ -221,7 +221,12 @@ describe("worktree.cached and turn-end marks (GH-463)", () => {
     // Later, in the IDE: a tracked file edit and a new untracked file (neither moves a ref, the index or the reflog).
     writeFileSync(join(p, ".gitkeep"), "edited");
     writeFileSync(join(p, "notes.md"), "new work");
-    expect(await c.request({ type: "worktree.status", cwd: repo, path: p, scan: "s" })).toMatchObject({ result: { safety: "safe", uncommitted: 0 } }); // Clean up: cache, removal re-checks
+    // The cache (display only) still says Safe: no stat of the fingerprint moved.
+    expect(((await c.request({ type: "worktree.cached", cwd: repo, paths: [p] })) as { result: any }).result.statuses[p]).toMatchObject({ safety: "safe", uncommitted: 0 });
+    // A Clean up scan reads fresh too, and a removal built on the cached Safe is refused.
+    expect(await c.request({ type: "worktree.status", cwd: repo, path: p, scan: "s" })).toMatchObject({ result: { safety: "has_work", uncommitted: 2 } });
+    expect(await c.request({ type: "worktree.remove", cwd: repo, path: p, expectSafe: true, expect: { uncommitted: 0, ahead: 0 } })).toMatchObject({ type: "error", code: "stale" });
+    expect(existsSync(p)).toBe(true);
     expect(await c.request({ type: "worktree.status", cwd: repo, path: p })).toMatchObject({ result: { safety: "has_work", uncommitted: 2 } });
     // Confirm with the counts the dialog showed before the edit: refused, nothing removed.
     expect(await c.request({ type: "worktree.remove", cwd: repo, path: p, expect: { uncommitted: 0, ahead: 0 } })).toMatchObject({ type: "error", code: "stale" });

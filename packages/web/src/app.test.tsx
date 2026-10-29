@@ -1739,9 +1739,9 @@ describe("worktrees", () => {
         expect(dlg()).toBeNull();
         expect(removing()).toEqual([managed]);
         // Failure: the row is back and the message shows.
-        await act(async () => settle.fail(new Error("Changed since the list: 1 files, 0 commits")));
+        await act(async () => settle.fail(new Error("Changed since it was checked: 1 files, 0 commits")));
         expect(removing()).toEqual([]);
-        expect(el.textContent).toContain("Worktree worktree-x not removed: Changed since the list: 1 files, 0 commits");
+        expect(el.textContent).toContain("Worktree worktree-x not removed: Changed since it was checked: 1 files, 0 commits");
         expect(el.querySelector(`[data-path="${managed}"]`)).not.toBeNull();
         // Success: the refreshed list drops the row.
         await act(async () => trash().click());

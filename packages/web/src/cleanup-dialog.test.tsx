@@ -184,7 +184,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
       max = Math.max(max, active);
       await new Promise((r) => setTimeout(r, 5));
       active--;
-      if (m.type === "worktree.remove" && m.path === P("safe")) throw new Error("Changed since the list: 1 files, 0 commits");
+      if (m.type === "worktree.remove" && m.path === P("safe")) throw new Error("Changed since it was checked: 1 files, 0 commits");
       return {};
     },
   });
@@ -195,7 +195,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
   expect(max).toBe(1);
   expect(sent.filter((m) => !["worktree.status", "worktree.cached", "git.fetch", "worktree.cancel"].includes(m.type as string)).map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Removed 2, skipped 1");
-  expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since the list");
+  expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since it was checked");
   expect(document.activeElement).toBe(q("[data-testid=cleanup-close]"));
   expect(onDone).toHaveBeenCalledTimes(1);
   expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ removed: expect.any(Array), skipped: expect.any(Array) }));

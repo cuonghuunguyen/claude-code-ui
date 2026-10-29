@@ -72,3 +72,28 @@ Feature: Clean up scan and status cache
     And the cached row "wt-squash" was shown before the fetch finished
     And the row "wt-clean" showed Checking… with its checkbox disabled and then a fresh result
     And I capture "second open"
+
+  Scenario: A plain file edit from a terminal is seen when Clean up is reopened
+    Given I open the scratch project
+    When I open Clean up from the menu of the scratch project
+    Then Clean up has finished fetching
+    And the Clean up row "wt-clean" is "Safe"
+    When I close the Clean up dialog
+    And in a terminal I edit README.md in the worktree "wt-clean"
+    And I open Clean up from the menu of the scratch project
+    Then Clean up has finished fetching
+    And the Clean up row "wt-clean" is "Has work"
+    And I capture "plain edit seen"
+
+  Scenario: A file edited while Clean up is open stops the removal of that row
+    Given I open the scratch project
+    When I open Clean up from the menu of the scratch project
+    Then Clean up has finished fetching
+    And the Clean up row "wt-clean" is "Safe"
+    When I tick the Clean up row "wt-clean"
+    And in a terminal I edit README.md in the worktree "wt-clean"
+    And I confirm Clean up
+    Then the Clean up summary says "wt-clean" was not removed because it "Changed since it was checked"
+    And nothing of the worktree "wt-clean" was deleted
+    And I capture "edit refused"
+
