@@ -164,7 +164,7 @@ Feature: Split view with a session and one of its panes
     And I capture "split-terminal-cols"
 
   Scenario: A cramped split with a pane active shows the pane alone
-    Given the viewport is 1440x900
+    Given the viewport is 1700x900
     And a Haiku session in Plan mode with a plan waiting for approval
     When I move the Plan pane to the main area from its tab menu
     And I open the menu of the plan tab
@@ -175,6 +175,6 @@ Feature: Split view with a session and one of its panes
     And the split hint is shown
     And the plan tab is the selected tab
     And I capture "split-cramped-pane-1100"
-    Given the viewport is 1440x900
+    Given the viewport is 1700x900
     Then the session area is split
     And the active split shows the "Plan" tab
