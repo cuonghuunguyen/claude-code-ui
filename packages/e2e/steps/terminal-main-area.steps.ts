@@ -172,3 +172,24 @@ Then("the Terminal tab of the second project is the selected tab", async ({ page
   await expect(second.locator('[role="tab"]')).toHaveAttribute("aria-selected", "true");
   await expect(page.locator('[data-pane-tab-body^="terminal:"]:visible')).toHaveCount(1);
 });
+
+const shownBody = (page: Page) => page.locator('[data-pane-tab-body^="terminal:"]:visible');
+
+When("I select {string} in the Terminal tab", async ({ page }, name: string) => {
+  await shownBody(page).getByRole("tab", { name, exact: true }).click();
+});
+
+Then("the Terminal tab selects {string}", async ({ page }, name: string) => {
+  await expect(shownBody(page).getByRole("tab", { name, exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
+When("I click the Terminal tab of the {word} project", async ({ page, project }, which: string) => {
+  const second = which === "second";
+  const label = tab(page).filter(second ? { hasText: `${project.name}-b` } : { hasNotText: `${project.name}-b` });
+  await expect(label).toHaveCount(1);
+  await label.locator('[role="tab"]').click();
+});
+
+Then("the terminal position hint mentions {string}", async ({ page }, text: string) => {
+  await expect(page.locator("#settings-terminal-position-hint")).toContainText(text);
+});

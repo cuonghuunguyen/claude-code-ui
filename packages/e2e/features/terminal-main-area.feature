@@ -174,3 +174,29 @@ Feature: The terminal can live in the main area
     And I open the terminal with the shortcut
     Then the shell has the focus within 20 seconds
     And I capture "terminal-shortcut-focus-after-load"
+
+  Scenario: After a reload each project folder's Terminal tab selects its own terminal
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And I open the terminal with the shortcut
+    And I click the Terminal tab New terminal button
+    And I select "Terminal 1" in the Terminal tab
+    When I open a session in a second project folder with a finished reply
+    And I open the terminal with the shortcut
+    And I click the Terminal tab New terminal button
+    Then the Terminal tab selects "Terminal 2"
+    When I reload the page
+    And I click the Terminal tab of the first project
+    Then the Terminal tab selects "Terminal 1"
+    When I click the Terminal tab of the second project
+    Then the Terminal tab selects "Terminal 2"
+    And I capture "terminal-selected-per-folder"
+
+  Scenario: Narrow screens: Settings explains where the terminal shows with Main area
+    Given the viewport is 390x844
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    Then the terminal position hint mentions "with Main area, as the session's Terminal tab"
+    And the page has no horizontal scroll
+    And I capture "terminal-position-hint-narrow"

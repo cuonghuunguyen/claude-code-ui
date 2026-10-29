@@ -5261,4 +5261,101 @@ describe("GH-397 Terminal in the main area", () => {
       restore();
     }
   });
+
+  describe("terminal tabs of two folders (GH-491)", () => {
+    const shells: Record<string, { id: string; title: string }[]> = {
+      "/p/demo": [{ id: "t1a", title: "Terminal 1" }, { id: "t1b", title: "Terminal 2" }],
+      "/p/other": [{ id: "t2a", title: "Terminal 1" }, { id: "t2b", title: "Terminal 2" }],
+    };
+    const perFolder = { "terminal.list": (m: { cwd: string }) => ({ terminals: shells[m.cwd] ?? [] }) };
+    const TABS = [ID, TERM, OTHERP, TERM_O];
+    const attaches = () => reqs("terminal.attach") as unknown as { terminalId: string }[];
+    const selectedIn = (tab: string) => [...el.querySelectorAll(`[data-pane-tab-body="${tab}"] [role="tab"]`)].filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.textContent);
+
+    it("each terminal id is attached once per page across two folders", async () => {
+      const restore = await mount({ tabs: TABS, layout: HOME_MAIN, hash: TERM, extra: perFolder });
+      const spy = visible();
+      try {
+        for (const t of [TERM, TERM_O, TERM, TERM_O]) {
+          await hashTo(t);
+          await settle();
+        }
+        const ids = attaches().map((m) => m.terminalId);
+        expect([...new Set(ids)].sort()).toEqual(["t1a", "t1b", "t2a", "t2b"]);
+        expect(ids).toHaveLength(4);
+        expect(reqs("terminal.detach")).toHaveLength(0);
+      } finally {
+        spy.mockRestore();
+        restore();
+      }
+    });
+
+    it("Undo restores Terminal tabs that mount on first show only", async () => {
+      const restore = await mount({ tabs: TABS, layout: HOME_MAIN, hash: TERM, extra: perFolder });
+      const spy = visible();
+      try {
+        await settle();
+        await hashTo(TERM_O);
+        await settle();
+        await hashTo(TERM);
+        await settle();
+        await press({ key: "k", code: "KeyK", ctrlKey: true });
+        await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
+        await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-terminal"]')!.click());
+        await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
+        await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
+        await settle();
+        expect(toastEl()!.textContent).toContain("Closed 2 Terminal tabs");
+        sent.length = 0;
+        await act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+        await settle();
+        expect(tabIds()).toEqual(TABS);
+        expect(attaches().filter((m) => m.terminalId.startsWith("t2"))).toEqual([]);
+        await hashTo(TERM_O);
+        await settle();
+        expect(attaches().some((m) => m.terminalId.startsWith("t2"))).toBe(true);
+      } finally {
+        spy.mockRestore();
+        restore();
+      }
+    });
+
+    it("Narrow: the pane switcher's Terminal with home main opens the session's Terminal tab; Session returns, the tab stays", async () => {
+      width = 800;
+      const restore = await mount({ tabs: [ID], layout: HOME_MAIN });
+      const spy = visible();
+      try {
+        await settle();
+        await clickId("pane-terminal");
+        await settle();
+        expect(tabIds()).toEqual([ID, TERM]);
+        expect(location.hash).toBe(`#terminal%3A${ID}`);
+        expect(q("pane-terminal")!.getAttribute("aria-selected")).toBe("true");
+        await clickId("pane-session");
+        expect(location.hash).toBe(`#${ID}`);
+        expect(tabIds()).toContain(TERM);
+      } finally {
+        spy.mockRestore();
+        restore();
+      }
+    });
+
+    it("a restored split with a Terminal tab and another folder's hidden Terminal tab selects each folder's stored terminal", async () => {
+      localStorage.setItem("claude-ui.terminalActive", JSON.stringify({ "/p/demo": "t1b", "/p/other": "t2b" }));
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
+      const restore = await mount({ tabs: TABS, layout: HOME_MAIN, hash: ID, extra: perFolder });
+      const spy = visible();
+      try {
+        await settle();
+        expect(selectedIn(TERM)).toEqual(["Terminal 2"]);
+        await hashTo(TERM_O);
+        await settle();
+        expect(selectedIn(TERM_O)).toEqual(["Terminal 2"]);
+        expect(JSON.parse(localStorage.getItem("claude-ui.terminalActive")!)).toEqual({ "/p/demo": "t1b", "/p/other": "t2b" });
+      } finally {
+        spy.mockRestore();
+        restore();
+      }
+    });
+  });
 });
