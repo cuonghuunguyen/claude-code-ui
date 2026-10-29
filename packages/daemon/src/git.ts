@@ -3,7 +3,7 @@ import { constants, appendFileSync, existsSync, lstatSync, mkdirSync, readdirSyn
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import ignore from "ignore";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -196,7 +196,7 @@ export async function refsStamp(cwd: string): Promise<string> {
   if (!dirs) return "-";
   const parts = [await statOf(join(dirs.own, "HEAD")), await statOf(join(dirs.common, "packed-refs")), await statOf(join(dirs.common, "reftable", "tables.list"))];
   try {
-    for (const n of (await readdir(join(dirs.common, "worktrees"))).sort()) parts.push(`${n}:${await statOf(join(dirs.common, "worktrees", n, "HEAD"))}`);
+    for (const n of (await readdir(join(dirs.common, "worktrees"))).sort()) parts.push(`${n}:${await statOf(join(dirs.common, "worktrees", n, "HEAD"))}:${await statOf(join(dirs.common, "worktrees", n, "locked"))}`);
   } catch {
     // No linked worktree.
   }
@@ -781,7 +781,7 @@ async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions):
   }
   const holder = (await repoOf(main)).list.find((w) => w.branch === branch);
   if (holder) throw new WorktreeError("exists", `Branch ${branch} is checked out in worktree ${basename(holder.path)}`);
-  const name = branchFolder(branch);
+  const name = checkoutFolder(branch);
   const bad1 = worktreeNameError(name);
   if (bad1) throw new WorktreeError("bad_name", `Folder ${name}: ${bad1}`);
   const path = join(rdir, name);
@@ -1009,10 +1009,9 @@ export function parseStatusV2(out: string): { detached: boolean; uncommitted: nu
 type RefRow = { upstream: string; track: string; symref: string; tree: string };
 type Facts = { main: string; list: Listed[]; config: Map<string, string>; refs: Map<string, RefRow>; base?: string; baseTree?: string };
 const facts = lru<{ stamp: string; p: Promise<Facts> }>(32);
-const neverAborted = new AbortController().signal;
 /**
  * The worktree list, `config --list -z` and one `for-each-ref` of the repository (3 processes), memoized by a file-stat stamp (refs, config, worktree entries):
- * status requests of a scan share them, also while they are still being read. `fresh` re-reads (removal). Run in the low tier of a scan, but never cancelled: other requests share the read.
+ * status requests of a scan share them, also while they are still being read. `fresh` re-reads (removal). Read in the normal tier, also for a scan, and never cancelled: other requests share the read.
  */
 async function repoFacts(cwd: string, fresh = false): Promise<Facts> {
   const build = async (): Promise<Facts> => {
@@ -1033,7 +1032,8 @@ async function repoFacts(cwd: string, fresh = false): Promise<Facts> {
     const base = [refs.get("refs/remotes/origin/HEAD")?.symref, "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"].find((x): x is string => !!x && refs.has(x));
     return { main, list, config, refs, ...(base && { base, baseTree: refs.get(base)!.tree }) };
   };
-  const start = () => (lowTier.getStore() ? lowTier.run(neverAborted, build) : build());
+  // Shared by other requests and never cancelled: the normal tier, not the scan's low one (a waiting low read would stall every scan row behind the status bar).
+  const start = () => lowTier.exit(build);
   const top = (await gitTopOf(cwd)) ?? cwd;
   const dirs = await gitDirsOfAsync(top);
   if (!dirs) return start();
@@ -1104,14 +1104,12 @@ async function statusOf(f: Facts, w: Listed, requested: string, allowed: (p: str
 }
 
 /** What removing `path` loses and whether it may (WorktreeStatusResult). `allowed`: the roots check; sessions are the caller's. */
-/** `cached`: a valid entry of the preview cache may answer. No daemon request sets it: a plain edit of a tracked file moves no stat of the fingerprint, so every dialog reads fresh and the cache only feeds `cachedStatuses`. */
-export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean, o: { cached?: boolean } = {}): Promise<WorktreeStatusResult> {
+/** Always a fresh read: a plain edit of a tracked file moves no stat of the fingerprint, so the cache only feeds `cachedStatuses`. */
+export async function worktreeStatus(cwd: string, path: string, allowed: (p: string) => boolean): Promise<WorktreeStatusResult> {
   const gen = marks;
   const f = await repoFacts(cwd);
   const w = linked(f.list, path);
   const fp = await fingerprint(w.path);
-  const hit = previews.get(w.path);
-  if (o.cached && hit && !hit.stale && same(hit.fp, fp)) return hit.st;
   const st = await statusOf(f, w, path, allowed, false);
   // `git status` refreshes the index file itself: store the fingerprint after the read. Refs or the reflog moving during the read leave the entry stale.
   // shortcut: an index change during the read is not seen, the next index change or mark fixes it.

@@ -2561,7 +2561,7 @@ describe("GH-358 sidebar menus", () => {
   });
 
   it("Remove worker with 'Also remove worktree' ticked fetches the worktree status on open, then removes the worker and the worktree", async () => {
-    replies["worktree.status"] = { uncommitted: 1, commits: 0, branch: "worktree-x" };
+    replies["worktree.status"] = { uncommitted: 1, commits: 0, ahead: 0, safety: "has_work", branch: "worktree-x" };
     await mount([coord, worker(W1, "one", { live: false, cwd: managed }), { ...session, id: O1, title: "Other", cwd: managed }], { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] });
     const from = sent.length;
     await ctx(rowOf(W1));
@@ -2576,7 +2576,8 @@ describe("GH-358 sidebar menus", () => {
     await click("remove-worker-confirm");
     await flush();
     expect(bodies("worker.remove", from)).toEqual([{ type: "worker.remove", sessionId: W1 }]);
-    expect(bodies("worktree.remove", from)).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed }]);
+    // The shown status goes along: the daemon refuses (stale) when there is more work by now.
+    expect(bodies("worktree.remove", from)).toEqual([{ type: "worktree.remove", cwd: "/p/demo", path: managed, expectSafe: false, expect: { uncommitted: 1, ahead: 0 } }]);
   });
 
   it("unticked, Remove worker leaves the worktree alone", async () => {

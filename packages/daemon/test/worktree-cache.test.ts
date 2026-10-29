@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cachedStatuses, markRepoStale, markWorktreeStale, worktreeStatus } from "../src/git.ts";
+import type { WorktreeStatusResult } from "@claude-ui/protocol";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 
 afterEach(() => setGitRunner(undefined));
@@ -32,7 +33,11 @@ const spy = () => {
   setGitRunner((o) => (calls.push(o), threadRunner(o)));
   return calls;
 };
-const status = (main: string, p: string) => worktreeStatus(main, p, allowed, { cached: true });
+/** Cache first, as a caller of `cachedStatuses` would: a valid entry answers without git, else a fresh read refreshes it. */
+const status = async (main: string, p: string): Promise<WorktreeStatusResult> => {
+  const hit = (await cachedStatuses([p]))[p];
+  return hit && !hit.stale ? hit : worktreeStatus(main, p, allowed);
+};
 
 describe("worktree status cache", () => {
   it("an unchanged worktree is served from the cache with no git process", async () => {

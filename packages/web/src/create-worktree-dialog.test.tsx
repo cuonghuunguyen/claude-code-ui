@@ -34,11 +34,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mount(o: { jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string } = {}) {
+const LONG: BranchRow = { name: `${"a".repeat(60)}-PROJ-351-tail`, local: true };
+function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string } = {}) {
   const calls: Request[] = [];
   const request = vi.fn(async (m: Request) => {
     calls.push(m);
-    if (m.type === "worktree.branches") return { branches: BRANCHES, defaultBase: "origin/main", ...(m.fetch && (o.fetchError ? { fetchError: o.fetchError } : { fetched: true })) };
+    if (m.type === "worktree.branches") return { branches: o.long ? [...BRANCHES, LONG] : BRANCHES, defaultBase: "origin/main", ...(m.fetch && (o.fetchError ? { fetchError: o.fetchError } : { fetched: true })) };
     if (m.type === "settings.get") return { settings: { jira: o.jira ? { url: "https://acme.atlassian.net", email: "a@b.c", template: "{type}/{key}-{summary}", jql: o.jql ?? "" } : { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: !!o.jira };
     if (m.type === "worktree.pr") {
       if (m.url.includes("/other/")) throw new Error("Pull request #9 is in acme/other on github.com, not in this repository");
@@ -133,6 +134,18 @@ it("Branch: rows with Local / Remote, a branch in another worktree is disabled, 
   expect(onCreated).toHaveBeenCalled();
   // The tab is remembered in this browser.
   expect(localStorage.getItem("claude-ui.worktreeSource")).toBe("branch");
+});
+
+it("Branch: a branch whose folder cannot be cut below 64 characters without cutting its ticket key shows the problem and cannot be submitted", async () => {
+  const { calls } = mount({ long: true });
+  await flush();
+  await click(q("create-worktree-tab-branch"));
+  const row = [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-branch-row"]')].find((r) => r.dataset.name === LONG.name)!;
+  await click(row);
+  expect(q("create-worktree-problem")!.textContent).toMatch(/ticket key.*never cut/);
+  expect(q<HTMLButtonElement>("create-worktree-confirm")!.disabled).toBe(true);
+  await act(async () => void row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(calls.find((c) => c.type === "worktree.create")).toBeUndefined();
 });
 
 it("Branch: offline shows the local list with a hint", async () => {

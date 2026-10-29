@@ -1,4 +1,5 @@
 // Branch-name rules of the Create worktree modal (docs/spec.md "Worktrees", GH-447), shared by the daemon and the web app.
+import { jiraKeyInBranch } from "./pull-request.ts";
 import { worktreeNameError } from "./wire.ts";
 
 /** Longest normalized name (Name rule). */
@@ -54,6 +55,30 @@ const lowerName = (input: string) =>
 
 /** The worktree folder of a branch: `/` becomes `-` (`feat/x` → `feat-x`). */
 export const branchFolder = (branch: string) => branch.replaceAll("/", "-");
+
+/**
+ * The worktree folder when an existing branch is checked out: `branchFolder`, cut to 64 characters at a word (`-`) like the Ticket source's summary; a ticket key in the name is never cut.
+ * The branch name stays as is. A key that itself crosses the limit stays whole (the folder rule refuses it then).
+ */
+export function checkoutFolder(branch: string): string {
+  const folder = branchFolder(branch);
+  if (folder.length <= FOLDER_MAX) return folder;
+  const key = jiraKeyInBranch(branch);
+  const at = key ? folder.toUpperCase().indexOf(key) : -1;
+  const floor = at >= 0 ? at + key!.length : 0;
+  let s = folder.slice(0, Math.max(FOLDER_MAX, floor));
+  // A word cut never goes back into the prefix (`feature/` + one long word keeps characters of the word, not only `feature`).
+  const i = s.lastIndexOf("-");
+  if (folder[s.length] !== "-" && i > Math.max(floor, branch.lastIndexOf("/", s.length))) s = s.slice(0, i);
+  return s.replace(/[-.]+$/, "");
+}
+
+/** Why an existing branch cannot be checked out into its folder (the key crosses the 64-character limit); undefined when it may. */
+export function checkoutFolderError(branch: string): string | undefined {
+  const folder = checkoutFolder(branch);
+  const e = worktreeNameError(folder);
+  return e && `Folder ${folder}: ${e}. The ticket key in the branch name is never cut: rename the branch to check it out.`;
+}
 
 /** Quick checks of a new branch name before the daemon's `git check-ref-format --branch`; undefined when it may be valid. */
 export function branchNameError(branch: string): string | undefined {
