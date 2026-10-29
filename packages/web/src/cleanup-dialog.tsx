@@ -157,7 +157,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
       <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
       <Dialog.Popup
         onKeyDown={trapTab}
-        className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-640px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,720px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:rounded-none"
+        className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-640px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,720px)] flex-col rounded-2xl border bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:rounded-none"
         data-testid="cleanup-dialog"
         aria-modal="true"
       >

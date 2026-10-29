@@ -50,7 +50,7 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
       <Popover.Popup
         data-testid="context-breakdown"
-        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
+        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
         <Popover.Title className="font-medium">Context window</Popover.Title>
         <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">{tokens}</p>

@@ -25,7 +25,7 @@ export type GuideHost = GuideActions & {
 
 export const GUIDE_KEY = "claude-ui.guide";
 /** The only keys that do not make a browser non-fresh (written on every page load or by pairing). */
-const FRESH_IGNORED = new Set(["claude-ui.token", "claude-ui.theme"]);
+const FRESH_IGNORED = new Set(["claude-ui.token", "claude-ui.theme", "claude-ui.colorTheme"]);
 
 let freshBrowser = false;
 

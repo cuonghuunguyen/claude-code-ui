@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AVATAR_COLORS } from "./tabs.ts";
+import { THEMES, tokensOf, type Mode } from "./themes.ts";
 
 // WCAG contrast of every text/background token pair in index.css, light and dark (4.5:1 text, 3:1 icons).
 const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
@@ -28,9 +29,33 @@ const SURFACES = ["background", "card", "popover", "muted", "secondary"];
 const SYNTAX = ["comment", "punctuation", "parameter", "keyword", "type", "function", "variable", "builtin", "string", "number", "constant", "operator", "decorator", "tag", "attribute", "regexp", "escape", "critical"];
 const TEXT = ["foreground", "muted-foreground", "destructive", "success", "warning", "info"];
 
-for (const theme of [":root", ".dark"]) {
-  describe(`theme ${theme}`, () => {
-    const t = tokens(theme);
+// Default (index.css) plus every theme x mode: the theme's tokens over Default's (context, graph, avatar and elevation stay Default).
+const PAIRS = [
+  { name: "default light", mode: "light" as Mode, t: tokens(":root") },
+  { name: "default dark", mode: "dark" as Mode, t: tokens(".dark") },
+  ...THEMES.flatMap((th) =>
+    (["light", "dark"] as const).flatMap((mode) => {
+      const p = th[mode];
+      if (!p) return [];
+      const own = Object.fromEntries(Object.entries(tokensOf(p, mode)).map(([k, v]) => [k.slice(2), v]));
+      return [{ name: `${th.id} ${mode}`, mode, t: { ...tokens(mode === "light" ? ":root" : ".dark"), ...own } }];
+    }),
+  ),
+];
+
+// Decision (GH-468 issue: themes keep Default's --graph-* and --context-*): a few light themes have a darker side/background than Default, so
+// these Default colours fall under 3:1 there. Listed so a fix or a new gap fails the test; `it.fails` passes only while the pair is still short.
+const KNOWN_GAPS: Record<string, string[]> = {
+  "catppuccin light": ["context-4", "context-6"],
+  "tokyonight light": ["graph-2", "graph-4", "graph-5", "graph-6", "context-2", "context-4", "context-5", "context-6"],
+  "nord light": ["context-4", "context-6"],
+  "one light": ["context-4", "context-6"],
+};
+
+it("covers Default and every theme in both modes (Dracula: dark only)", () => expect(PAIRS).toHaveLength(2 + 5 * 2 + 1));
+
+for (const { name, mode, t } of PAIRS) {
+  describe(`theme ${name}`, () => {
     const solid = (name: string) => {
       expect(t[name], `--${name}`).toBeDefined();
       return over(t[name]!, t.card!);
@@ -52,8 +77,8 @@ for (const theme of [":root", ".dark"]) {
         for (const fg of ["accent-foreground", "muted-foreground"]) expect(contrast(solid(fg), over(t.accent!, t[bg]!))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("keybind chip: OpenCode bg-layer-03 (#eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
-      expect(t.kbd).toBe(theme === ":root" ? "#eeeeee" : "#3a3a3a");
+    it("keybind chip (Default: OpenCode bg-layer-03 #eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
+      if (name.startsWith("default")) expect(t.kbd).toBe(mode === "light" ? "#eeeeee" : "#3a3a3a");
       expect(contrast(solid("muted-foreground"), solid("kbd"))).toBeGreaterThanOrEqual(4.5);
     });
 
@@ -75,9 +100,14 @@ for (const theme of [":root", ".dark"]) {
       for (const bg of [...SURFACES, "ring-track"]) expect(contrast(solid("ring-progress"), solid(bg)), bg).toBeGreaterThanOrEqual(3);
     });
 
-    it.each([1, 2, 3, 4, 5, 6, 7, 8])("graph lane color %i reaches 3:1 against card, background, secondary and a hovered row", (i) => {
-      for (const bg of [t.card!, t.background!, t.secondary!, over(t.accent!, t.card!)]) expect(contrast(solid(`graph-${i}`), typeof bg === "string" ? over(bg, t.card!) : bg)).toBeGreaterThanOrEqual(3);
-    });
+    // A known gap must still fail; any other pair must pass.
+    const check = (id: string, run: () => void) => (KNOWN_GAPS[name]?.includes(id) ? expect(run).toThrow() : run());
+
+    it.each([1, 2, 3, 4, 5, 6, 7, 8])("graph lane color %i reaches 3:1 against card, background, secondary and a hovered row", (i) =>
+      check(`graph-${i}`, () => {
+        for (const bg of [t.card!, t.background!, t.secondary!, over(t.accent!, t.card!)]) expect(contrast(solid(`graph-${i}`), typeof bg === "string" ? over(bg, t.card!) : bg)).toBeGreaterThanOrEqual(3);
+      }),
+    );
 
     it.each(["local", "remote", "head"])("graph ref chip %s: text on its 18%% tint over card, background, secondary and a hovered row reaches 4.5:1", (name) => {
       const fg = solid(`ref-${name}`);
@@ -85,9 +115,11 @@ for (const theme of [":root", ".dark"]) {
       for (const bg of [solid("card"), over(t.background!, t.card!), solid("secondary"), over(t.accent!, t.card!), over(t.accent!, t.background!)]) expect(contrast(fg, tint(bg))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it.each([1, 2, 3, 4, 5, 6])("context category %i reaches 3:1 on the popover and on the breakdown bar track", (i) => {
-      for (const bg of ["popover", "secondary"]) expect(contrast(solid(`context-${i}`), solid(bg)), bg).toBeGreaterThanOrEqual(3);
-    });
+    it.each([1, 2, 3, 4, 5, 6])("context category %i reaches 3:1 on the popover and on the breakdown bar track", (i) =>
+      check(`context-${i}`, () => {
+        for (const bg of ["popover", "secondary"]) expect(contrast(solid(`context-${i}`), solid(bg)), bg).toBeGreaterThanOrEqual(3);
+      }),
+    );
 
     it.each(SYNTAX)("syntax %s reaches 4.5:1 in the editor (card) and on its active line (accent over card)", (name) => {
       expect(contrast(solid(`syntax-${name}`), solid("card"))).toBeGreaterThanOrEqual(4.5);

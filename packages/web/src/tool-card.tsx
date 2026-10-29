@@ -4,8 +4,8 @@ import { useMediaSrc } from "./media.ts";
 import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { useDark } from "./theme.ts";
-import { DIFF_THEMES } from "./code-palette.ts";
+import { useColorTheme, useDark } from "./theme.ts";
+import { DIFF_THEMES, diffThemes } from "./code-palette.ts";
 import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
@@ -473,9 +473,10 @@ export function InputDiff({
     return { oldFile: { ...f.oldFile, name }, newFile: { ...f.newFile, name } };
   }, [tool, input, cwd]);
   const dark = useDark();
+  const colorTheme = useColorTheme();
   const options = useMemo(
-    () => ({ ...DIFF_OPTIONS, diffStyle, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: !fileHeader }),
-    [dark, diffStyle, fileHeader],
+    () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: !fileHeader }),
+    [dark, colorTheme, diffStyle, fileHeader],
   );
   if (!files) return fallback;
   return (

@@ -7,6 +7,7 @@ import { TerminalPanel } from "./terminal-panel.tsx";
 import { TERMINAL_FONT, resetTerminalFont } from "./terminal-font.ts";
 import { MAX_TERMINAL_INPUT_BYTES } from "@claude-ui/protocol";
 import { bind, resetAll } from "./keymap.ts";
+import { terminalTheme } from "./themes.ts";
 
 // xterm draws on a canvas jsdom lacks; the stub records what the panel does with it.
 const xterm = vi.hoisted(() => ({ all: [] as FakeTerm[] }));
@@ -22,7 +23,7 @@ type FakeTerm = {
   disposed: boolean;
   parent?: HTMLElement;
   focused: number;
-  options?: { fontFamily?: string };
+  options?: { fontFamily?: string; theme?: Record<string, string> };
   /** Every fontFamily set after construction, in order. */
   fontSets: string[];
   fits: number;
@@ -512,4 +513,17 @@ it("AC9: without ensure an empty list spawns no shell; ensure after the empty li
   await render(client, "connected", () => {}, { ensure: true, onEnsured });
   await flush();
   expect(client.sent().filter((m) => m.type === "terminal.create")).toHaveLength(1);
+});
+
+it("GH-468: the terminal colors follow the colour theme: ANSI colors for Catppuccin, none for Default", async () => {
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  document.documentElement.removeAttribute("data-theme");
+  await render(client);
+  await flush();
+  expect(xterm.all[0]!.options!.theme).not.toHaveProperty("red");
+  await act(async () => void document.documentElement.setAttribute("data-theme", "catppuccin"));
+  expect(xterm.all[0]!.options!.theme).toEqual(terminalTheme("catppuccin", "light"));
+  await act(async () => void document.documentElement.setAttribute("data-theme", "default"));
+  expect(xterm.all[0]!.options!.theme).not.toHaveProperty("red");
+  document.documentElement.removeAttribute("data-theme");
 });

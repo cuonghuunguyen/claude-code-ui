@@ -210,7 +210,7 @@ export function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="relative flex max-h-[min(100dvh-96px,480px)] min-h-70 w-full max-w-160 flex-col self-start rounded-2xl bg-popover text-popover-foreground shadow-floating"
+        className="relative flex max-h-[min(100dvh-96px,480px)] min-h-70 w-full max-w-160 flex-col self-start rounded-2xl border bg-popover text-popover-foreground shadow-floating"
         data-testid="palette"
         onMouseDown={(e) => e.target !== input.current && e.preventDefault()}
       >

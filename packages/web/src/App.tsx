@@ -170,7 +170,7 @@ type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
-const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
+const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised";
 // xterm (~300 KB) loads with the first opened terminal panel, not with the app.
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
@@ -3968,7 +3968,7 @@ export function NewSession({
             </span>
             <SideBadge cwd={project} />
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-64 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-64 max-w-[calc(100vw-2rem)] p-0.5 shadow-floating! ring-0">
             {projects.map((p) => (
               <SelectItem key={p} value={p} className={ROW}>
                 <ProjectAvatar cwd={p} />
@@ -3997,7 +3997,7 @@ export function NewSession({
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
                 <span className="min-w-0 max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+              <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] p-0.5 shadow-floating! ring-0">
                 <SelectGroup>
                   <SelectLabel>Run session in</SelectLabel>
                   {runIn.map((w) => (

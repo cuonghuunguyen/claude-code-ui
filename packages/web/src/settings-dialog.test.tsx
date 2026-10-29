@@ -362,10 +362,10 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
   expect(onRestartGuide).toHaveBeenCalledTimes(1);
 });
 
-it("lists the groups: Timeline first, Guide after Tabs, the daemon's groups last", async () => {
+it("lists the groups: Appearance first, Timeline next, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Git", "Jira", "About"]);
+  expect(ids).toEqual(["Appearance", "Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Git", "Jira", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 
@@ -466,13 +466,13 @@ it("Keyboard has a Show shortcut tips switch, on by default, kept in this browse
 
 it("shows one group at a time: the first by default, picking another swaps the panel and the choice is remembered per browser", async () => {
   const { q, pick } = await render();
-  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Timeline");
-  expect(q("settings-timeline")).not.toBeNull();
+  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Appearance");
+  expect(q("settings-appearance")).not.toBeNull();
   expect(q("settings-tabs")).toBeNull();
-  expect(q("settings-panel")?.getAttribute("aria-labelledby")).toBe("settings-tab-timeline");
+  expect(q("settings-panel")?.getAttribute("aria-labelledby")).toBe("settings-tab-appearance");
   await pick("tabs");
   expect(q("settings-tabs")).not.toBeNull();
-  expect(q("settings-timeline")).toBeNull();
+  expect(q("settings-appearance")).toBeNull();
   expect(localStorage.getItem("claude-ui.settingsGroup")).toBe("tabs");
   act(() => root?.unmount());
   document.body.innerHTML = "";
@@ -483,29 +483,30 @@ it("shows one group at a time: the first by default, picking another swaps the p
 
 it("an unknown remembered group falls back to the first", async () => {
   const { q } = await render({ group: "nope" });
-  expect(q("settings-timeline")).not.toBeNull();
+  expect(q("settings-appearance")).not.toBeNull();
 });
 
 it("arrow keys move through the groups (roving tabindex), Home and End jump, and the panel follows", async () => {
   const { q } = await render();
   const key = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
-  await act(async () => q("settings-group-timeline")!.focus());
+  await act(async () => q("settings-group-appearance")!.focus());
   await key("ArrowDown");
-  expect(document.activeElement).toBe(q("settings-group-sending"));
+  expect(document.activeElement).toBe(q("settings-group-timeline"));
+  await key("ArrowDown");
   await key("ArrowDown");
   expect(document.activeElement).toBe(q("settings-group-notifications"));
   expect(q("settings-group-notifications")!.getAttribute("aria-selected")).toBe("true");
-  expect(q("settings-group-timeline")!.getAttribute("tabindex")).toBe("-1");
+  expect(q("settings-group-appearance")!.getAttribute("tabindex")).toBe("-1");
   expect(q("settings-group-notifications")!.getAttribute("tabindex")).toBe("0");
   expect(q("settings-notifications")).not.toBeNull();
   await key("End");
   expect(document.activeElement).toBe(q("settings-group-about"));
   await key("ArrowDown");
-  expect(document.activeElement).toBe(q("settings-group-timeline"));
+  expect(document.activeElement).toBe(q("settings-group-appearance"));
   await key("ArrowUp");
   expect(document.activeElement).toBe(q("settings-group-about"));
   await key("Home");
-  expect(document.activeElement).toBe(q("settings-group-timeline"));
+  expect(document.activeElement).toBe(q("settings-group-appearance"));
 });
 
 it("tapping a group moves the focus to the Back button of the drilled-in panel", async () => {
@@ -530,7 +531,7 @@ it("the Back button shows on the drill-in panel and returns the focus to the gro
 
 it("Signal only is a per-browser switch in the Timeline group, off by default, that saves at once and sends no settings.set (GH-205)", async () => {
   localStorage.clear();
-  const { q, calls } = await render();
+  const { q, calls } = await render({ group: "timeline" });
   const sw = q("settings-signal-only")!;
   expect(sw.getAttribute("role")).toBe("switch");
   expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -549,7 +550,7 @@ it("Signal only is a per-browser switch in the Timeline group, off by default, t
 it("the Signal only key hint is the live binding of signal.toggle and follows a rebinding", async () => {
   localStorage.clear();
   resetAll();
-  const { q } = await render();
+  const { q } = await render({ group: "timeline" });
   expect(q("settings-signal-keys")?.textContent).toMatch(/Alt\+S$/);
   await act(async () => bind("signal.toggle", "mod+alt+j"));
   expect(q("settings-signal-keys")?.textContent).toMatch(/Alt\+J$/);
@@ -559,7 +560,7 @@ it("the Signal only key hint is the live binding of signal.toggle and follows a 
 });
 
 it("Tab from the group list reaches the first visible control of the panel, not the hidden phone Back button (GH-214)", async () => {
-  const { q } = await render();
+  const { q } = await render({ group: "timeline" });
   // jsdom has no Tailwind: hide the Back button the way `md:hidden` does from md up.
   q("settings-back")!.style.display = "none";
   await act(async () => q("settings-group-timeline")!.focus());
@@ -817,4 +818,37 @@ it("list buttons are 44px below md", async () => {
   await act(async () => q(`${id}-add`)!.click());
   expect(q(`${id}-ok`)!.className).toContain("max-md:h-11");
   expect(q(`${id}-input`)!.className).toContain("max-md:h-11");
+});
+
+it("Appearance (GH-468): the theme list has 7 themes in order, each with a swatch; Dracula says dark only; a pick recolours without reload and is kept", async () => {
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
+  document.documentElement.classList.remove("dark");
+  const { q } = await render();
+  expect(q("settings-appearance")!.querySelector("h3")?.textContent).toBe("Appearance");
+  expect(q("settings-theme")!.querySelector('[data-testid="settings-theme-swatch"]')).not.toBeNull();
+  expect(q("settings-theme")!.textContent).toContain("Default");
+  await act(async () => q("settings-theme")!.click());
+  const items = [...document.querySelectorAll('[role=option]')];
+  expect(items.map((i) => i.textContent)).toEqual(["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula" + "dark only", "One"]);
+  for (const i of items) expect(i.querySelector('[data-testid="settings-theme-swatch"]')).not.toBeNull();
+  expect(q("settings-theme-dracula")!.textContent).toContain("dark only");
+  expect(q("settings-theme-nord")!.textContent).not.toContain("dark only");
+  await act(async () => q("settings-theme-catppuccin")!.click());
+  expect(document.documentElement.getAttribute("data-theme")).toBe("catppuccin");
+  expect(localStorage.getItem("claude-ui.colorTheme")).toBe("catppuccin");
+  expect(q("settings-theme")!.textContent).toContain("Catppuccin");
+});
+
+it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does not", async () => {
+  localStorage.clear();
+  document.documentElement.classList.remove("dark");
+  const { q } = await render();
+  await act(async () => q("settings-theme")!.click());
+  await act(async () => q("settings-theme-dracula")!.click());
+  expect(q("settings-theme-dracula-warning")!.textContent).toBe("Dracula has no light colors: light mode shows Default.");
+  await act(async () => void document.documentElement.classList.add("dark"));
+  expect(q("settings-theme-dracula-warning")).toBeNull();
+  document.documentElement.classList.remove("dark");
+  document.documentElement.removeAttribute("data-theme");
 });

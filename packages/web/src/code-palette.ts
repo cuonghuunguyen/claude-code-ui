@@ -1,5 +1,6 @@
 import type pierreLight from "@pierre/theme/pierre-light";
 import { registerCustomTheme, type ThemeRegistration } from "@pierre/diffs";
+import { SURFACE, themeById, THEMES, tokensOf, type Mode, type ThemeId } from "./themes.ts";
 
 /**
  * GH-394: the one code palette of the editor (`--syntax-*` in index.css, the CodeMirror HighlightStyle) and of every diff (a custom Shiki
@@ -8,10 +9,7 @@ import { registerCustomTheme, type ThemeRegistration } from "@pierre/diffs";
  * its added and removed lines. Measured in development-docs/GH-394/plan-adjust.mjs; code-palette.test.ts keeps it honest.
  * Not covered, by decision: the diff's changed-word highlight (about 3.2-4.5:1 on it).
  */
-type Mode = "light" | "dark";
-
-/** The app's `--card` and `--foreground` (index.css): the diff sits on the same surface as the editor. */
-export const SURFACE = { light: { bg: "#ffffff", fg: "#161616" }, dark: { bg: "#161616", fg: "#fafafa" } } as const;
+export { SURFACE };
 
 /** pierre foreground (lower case) -> adjusted foreground. Every colour of both pierre themes is a key; unchanged ones map to themselves. */
 export const ADJUST: Record<Mode, Record<string, string>> = {
@@ -84,24 +82,51 @@ const adjust = (mode: Mode, color: string) => ADJUST[mode][color.toLowerCase()] 
 const loadSource = (mode: Mode): Promise<Source> => (mode === "light" ? import("@pierre/theme/pierre-light") : import("@pierre/theme/pierre-dark")).then((m) => m.default as Source);
 type Source = typeof pierreLight;
 
-/** pierre with every foreground mapped through ADJUST and the editor background/foreground set to the app's card/foreground. */
-export function adjustTheme(mode: Mode, src: Source): ThemeRegistration {
+/** pierre with every foreground mapped through `map` (pierre colour -> theme colour); colours not in it stay. */
+function recolor(name: string, displayName: string, mode: Mode, src: Source, map: Record<string, string>, colors: Record<string, string>): ThemeRegistration {
+  const to = (color: string) => map[color.toLowerCase()] ?? color;
   return {
-    name: DIFF_THEMES[mode],
-    displayName: `Claude UI ${mode}`,
+    name,
+    displayName,
     type: mode,
-    colors: { ...src.colors, "editor.background": SURFACE[mode].bg, "editor.foreground": SURFACE[mode].fg },
-    tokenColors: src.tokenColors.map((rule) => (rule.settings.foreground ? { ...rule, settings: { ...rule.settings, foreground: adjust(mode, rule.settings.foreground) } } : { ...rule })),
+    colors: { ...src.colors, ...colors },
+    tokenColors: src.tokenColors.map((rule) => (rule.settings.foreground ? { ...rule, settings: { ...rule.settings, foreground: to(rule.settings.foreground) } } : { ...rule })),
     semanticTokenColors: Object.fromEntries(
-      Object.entries(src.semanticTokenColors).map(([k, v]) => [k, typeof v === "string" ? adjust(mode, v) : v.foreground ? { ...v, foreground: adjust(mode, v.foreground) } : { ...v }]),
+      Object.entries(src.semanticTokenColors).map(([k, v]) => [k, typeof v === "string" ? to(v) : v.foreground ? { ...v, foreground: to(v.foreground) } : { ...v }]),
     ),
   } as ThemeRegistration;
 }
 
+/** Default: pierre with every foreground mapped through ADJUST and the editor background/foreground set to the app's card/foreground. */
+export const adjustTheme = (mode: Mode, src: Source) =>
+  recolor(DIFF_THEMES[mode], `Claude UI ${mode}`, mode, src, ADJUST[mode], { "editor.background": SURFACE[mode].bg, "editor.foreground": SURFACE[mode].fg });
+
+/** Registered name of the diff theme for a colour theme and mode (Default's where the theme has no such mode). */
+export const diffThemeName = (id: ThemeId, mode: Mode) => (themeById(id)?.[mode] ? `claude-ui-${id}-${mode}` : DIFF_THEMES[mode]);
+export const diffThemes = (id: ThemeId) => ({ light: diffThemeName(id, "light"), dark: diffThemeName(id, "dark") });
+
+/** A theme's diff theme: pierre with each pierre colour replaced by the theme's `--syntax-*` value it stands for (SYNTAX_SOURCE), the text colour by fg. */
+export function paletteTheme(id: ThemeId, mode: Mode, src: Source): ThemeRegistration {
+  const p = themeById(id)![mode]!;
+  const tok = tokensOf(p, mode);
+  const map: Record<string, string> = {};
+  // Light pierre uses #636363 for punctuation and parameter; the first (punctuation) wins.
+  for (const [name, source] of Object.entries(SYNTAX_SOURCE)) map[source[mode]] ??= tok[`--syntax-${name}`]!;
+  map[(src.colors as Record<string, string>)["editor.foreground"]!.toLowerCase()] = p.fg;
+  return recolor(diffThemeName(id, mode), `Claude UI ${id} ${mode}`, mode, src, map, {
+    "editor.background": p.card,
+    "editor.foreground": p.fg,
+    "gitDecoration.addedResourceForeground": p.ok,
+    "gitDecoration.deletedResourceForeground": p.err,
+  });
+}
+
 let registered = false;
-/** Register both themes with @pierre/diffs (main thread: the app has no diffs worker pool). Safe to call more than once. */
+/** Register Default and every theme's diff themes with @pierre/diffs (main thread: the app has no diffs worker pool). Safe to call more than once. */
 export function registerDiffThemes() {
   if (registered) return;
   registered = true;
   for (const mode of ["light", "dark"] as const) registerCustomTheme(DIFF_THEMES[mode], () => loadSource(mode).then((src) => adjustTheme(mode, src)));
+  for (const t of THEMES)
+    for (const mode of ["light", "dark"] as const) if (t[mode]) registerCustomTheme(diffThemeName(t.id, mode), () => loadSource(mode).then((src) => paletteTheme(t.id, mode, src)));
 }

@@ -92,7 +92,7 @@ export function Chooser<T extends string>({
       </SelectTrigger>
       {/* OpenCode menu-v2: 2px padding, radius 6; item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
           `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 rounded-md p-0.5 shadow-floating! ring-0">
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 p-0.5 shadow-floating! ring-0">
         {items.map((i) => (
           <SelectItem
             key={i.value}
@@ -247,7 +247,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
           <Popover.Popup
             data-testid="session-settings-popup"
             aria-label="Session settings"
-            className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-xl bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+            className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
             <Chooser label="Model" testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
