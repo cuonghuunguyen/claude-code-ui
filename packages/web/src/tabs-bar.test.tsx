@@ -718,6 +718,37 @@ it("phone: the Focus tab comes first in the order; no wrap at either end", async
   expect(onSelect).not.toHaveBeenCalled();
 });
 
+// GH-507: the title follows the finger past the old 12 px clamp, then settles in one transition (none under reduced motion).
+it("phone: the switcher title follows the finger, then settles with one transition on a commit and on a spring-back", async () => {
+  const { el, onSelect } = await render();
+  trigger(el).getBoundingClientRect = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
+  const title = el.querySelector<HTMLElement>('[data-slot="tab-switcher-title"]')!.parentElement!;
+  tick(1000);
+  await touch(trigger(el), "pointerdown", 0, 100);
+  for (const y of [95, 85, 70]) (tick(100), await touch(trigger(el), "pointermove", 0, y));
+  expect(title.style.transform).toBe("translateY(-20px)");
+  expect(title.style.transition).toBe("none");
+  tick(100);
+  await touch(trigger(el), "pointermove", 0, 60);
+  tick(100);
+  await touch(trigger(el), "pointerup", 0, 60);
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith("d");
+  expect(title.style.transform).toBe("");
+  expect(title.style.transition).toBe("transform 200ms ease-out");
+  await swipeBy(trigger(el), 0, 400, 18);
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(title.style.transform).toBe("");
+  expect(title.style.transition).toBe("transform 200ms ease-out");
+  const mm = window.matchMedia;
+  window.matchMedia = (() => ({ matches: true })) as never;
+  try {
+    await swipeBy(trigger(el), 0, 300, -40);
+    expect(title.style.transition).toBe("none");
+  } finally {
+    window.matchMedia = mm;
+  }
+});
+
 it("phone: a 4px touch on the switcher button selects nothing, and the tap's mousedown opens the list", async () => {
   const { el, onSelect } = await render();
   await swipeBy(trigger(el), 0, 60, -4);
