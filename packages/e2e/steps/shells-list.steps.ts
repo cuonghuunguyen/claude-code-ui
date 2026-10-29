@@ -25,6 +25,13 @@ async function settle(page: Page): Promise<void> {
   throw new Error("the turn did not end");
 }
 
+// The /clear ended: the new session is idle, its box no longer says it clears, and no prompt of the old conversation is left.
+When("the conversation has been cleared", async ({ page }) => {
+  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toHaveCount(1, { timeout: TURN_MS });
+  await expect(page.locator('[data-testid="user-message"]:visible')).toHaveCount(0, { timeout: TURN_MS });
+  await expect(page.getByText("Clearing the conversation…")).toHaveCount(0);
+});
+
 When("I ask Claude to run {string} in the background", async ({ page }, cmd: string) => {
   await promptBox(page).fill(BG(cmd));
   await sendButton(page).click();

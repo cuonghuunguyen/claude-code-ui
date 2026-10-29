@@ -58,6 +58,21 @@ Feature: Manage background shells: list, view output, kill
     When I close the shells list
     Then the "tick-" tool call is killed
 
+  Scenario: The new session after /clear shows the output of a shell started before it
+    Given the viewport is 1440x900
+    When I ask Claude to run "for i in $(seq 1 90); do echo keep-$i; sleep 1; done" in the background
+    And I send "/clear"
+    And the conversation has been cleared
+    Then the status bar shows "1 shell"
+    When I open the shells list from the status bar
+    And I open the "keep-" shell
+    Then the shell details show "Running"
+    And the shell output shows "keep-"
+    And the shell output grows
+    And I capture "after-clear-output"
+    When I kill the shell and confirm
+    Then the shell details show "Killed"
+
   Scenario: After a kill Claude is told with the next message, not by a turn of its own
     Given the viewport is 1440x900
     When I ask Claude to run "for i in $(seq 1 300); do echo tick-$i; sleep 1; done" in the background

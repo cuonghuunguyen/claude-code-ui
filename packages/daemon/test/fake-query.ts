@@ -446,7 +446,7 @@ export function backgroundShellQuery({ prompt, options }: { prompt: AsyncIterabl
  * Fake query() for /clear (recorded in development-docs/GH-52/probe-clear.log): replays each input; "/clear" sends
  * conversation_reset, after which the CLI goes on under a new session_id (not new_conversation_id): a hook, init, the
  * /clear echo and a result of cost 0. Any other prompt runs the next fixture turn under the current session_id; "ask" first
- * asks canUseTool. "bg" starts background Bash call `bg` (task `bg-task`) and ends its turn; a /clear while it runs then
+ * asks canUseTool. "bg" (or "bgfile", with its output file) starts background Bash call `bg` (task `bg-task`) and ends its turn; a /clear while it runs then
  * waits for stopTask() of it, whose task_notification and the CLI's own turn after it come under the new session_id.
  * "notify" ends the background call with its task_notification.
  */
@@ -462,12 +462,21 @@ export function clearQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
     let turn = 0;
     for await (const m of prompt) {
       inputs.push(m);
-      if (m.message.content === "bg") {
+      if (m.message.content === "bg" || m.message.content === "bgfile") {
+        // "bgfile": the same, and the CLI's output file of the task exists in the task folder of the current session id.
+        let result = "Command running in background with ID: bg-task";
+        if (m.message.content === "bgfile") {
+          const dir = taskDirs(options!.cwd!, sid)[0]!;
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, "bgtask.output"), "out\n");
+          // The CLI's task IDs are \w+ (SHELL_PLACEHOLDER): no hyphen.
+          result = `Command running in background with ID: bgtask. Output is being written to: ${join(dir, "bgtask.output")}. You will be notified when it completes.`;
+        }
         bg = new Promise<void>((r) => (stop = r));
         yield { ...m, isReplay: true, session_id: sid } as SDKMessage;
         yield { type: "assistant", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { id: "msg_bg", content: [{ type: "tool_use", id: "bg", name: "Bash", input: { command: "sleep 60", run_in_background: true } }] } } as never as SDKMessage;
         yield { type: "system", subtype: "task_started", uuid: randomUUID(), session_id: sid, task_id: "bg-task", tool_use_id: "bg", description: "sleep 60", is_backgrounded: true } as never as SDKMessage;
-        yield { type: "user", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bg", content: "Command running in background with ID: bg-task" }] } } as SDKMessage;
+        yield { type: "user", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bg", content: result }] } } as SDKMessage;
         yield { ...empty, uuid: randomUUID(), session_id: sid } as never as SDKMessage;
         continue;
       }
