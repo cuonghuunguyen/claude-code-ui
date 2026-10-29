@@ -2185,8 +2185,11 @@ export function createDaemon(opts: {
         }
         case "worktree.cancel": {
           if (typeof msg.scan !== "string" || !msg.scan || msg.scan.length > 64) return fail("bad_request", "scan must be a string of at most 64 characters");
-          scans.get(msg.scan)?.abort();
-          scans.delete(msg.scan);
+          // The aborted id stays (a request that arrives later is cancelled too), the oldest ones go past 1000.
+          const ac = scans.get(msg.scan) ?? new AbortController();
+          ac.abort();
+          scans.set(msg.scan, ac);
+          if (scans.size > 1000) scans.delete(scans.keys().next().value!);
           return reply({});
         }
         case "worktree.cached": {
@@ -2231,6 +2234,7 @@ export function createDaemon(opts: {
                 // The ids are the client's: one per Clean up; requests with the same id share one abort.
                 const ac = scans.get(msg.scan) ?? new AbortController();
                 scans.set(msg.scan, ac);
+                if (ac.signal.aborted) return fail("cancelled", "cancelled");
                 st = await lowPriority(ac.signal, check);
                 if (ac.signal.aborted) return fail("cancelled", "cancelled");
               }

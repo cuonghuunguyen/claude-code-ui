@@ -2071,6 +2071,22 @@ describe("daemon", () => {
     }
   });
 
+  it("worktree.remove with the shown status refuses (stale) after a file was written since, and keeps the worktree", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtshown-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      const st = (await c.request({ type: "worktree.status", cwd: repo, path: wt }) as { result: { safety: string; uncommitted: number; ahead: number } }).result;
+      expect(st.safety).toBe("safe");
+      writeFileSync(join(wt, "late.txt"), "x");
+      const shown = { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } };
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, ...shown })).toMatchObject({ code: "stale" });
+      expect(existsSync(join(wt, "late.txt"))).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
   it.skipIf(process.platform === "win32")("worktree.status and worktree.remove refuse a symlinked path (not_removable)", async () => {
     const { root, repo, d, c } = await wtDaemon("wtlink-");
     try {

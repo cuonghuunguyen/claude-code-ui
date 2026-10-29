@@ -53,8 +53,6 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
   const closeRef = useRef<HTMLButtonElement>(null);
   const now = useMemo(() => Date.now(), []);
 
-  // One scan id for this dialog: the daemon queues its statuses behind the status bar and drops the queued ones on `worktree.cancel`.
-  const scan = useMemo(() => crypto.randomUUID(), []);
   const repos = useMemo(() => [...new Set(cands.worktrees.map((w) => w.project))], [cands]);
   const [fetches, setFetches] = useState<Record<string, FetchState>>({});
   const [clock, setClock] = useState(() => Date.now());
@@ -62,6 +60,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
 
   useEffect(() => {
     let live = true;
+    // One scan id per run of this effect: the daemon queues its statuses behind the status bar and drops them on `worktree.cancel`, and keeps a cancelled id cancelled.
+    const scan = crypto.randomUUID();
     const scanRepo = (repo: string) => {
       for (const w of cands.worktrees.filter((x) => x.project === repo))
         request<WorktreeStatusResult>({ type: "worktree.status", cwd: repo, path: w.path, scan }).then(
@@ -88,7 +88,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
       live = false;
       void request({ type: "worktree.cancel", scan }).catch(() => {});
     };
-  }, [cands, repos, request, scan]);
+  }, [cands, repos, request]);
 
   useEffect(() => {
     if (!fetched) return;
