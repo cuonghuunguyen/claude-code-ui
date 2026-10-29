@@ -5789,3 +5789,207 @@ describe("GH-399 a file as a tab", () => {
     }
   });
 });
+
+describe("GH-401 docked session", () => {
+  const S2 = "22222222-2222-3333-4444-555555555555";
+  const S3 = "33333333-2222-3333-4444-555555555555";
+  const S4 = "44444444-2222-3333-4444-555555555555";
+  const sessions = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third" }, { ...session, id: S4, title: "Fourth" }];
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const dockIds = (area: "side" | "bottom") => [...q(`${area}-panel`)!.querySelectorAll<HTMLElement>("[data-docked-tab]")].map((t) => t.dataset.dockedTab);
+  const stored = () => JSON.parse(localStorage.getItem("claude-ui.tabs") ?? "[]") as string[];
+  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const prompt = (id: string) => el.querySelector<HTMLElement>(`[data-docked-session="${id}"] textarea[aria-label="Prompt"]`);
+  async function remount({ tabs = [ID, S2, S3, S4], docked = { [S3]: "side" } as Record<string, string>, active = ID, list = sessions } = {}) {
+    act(() => root.unmount());
+    replies["session.list"] = { sessions: list, projects: ["/p/demo"] };
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: list.find((s) => s.id === m.sessionId) ?? session });
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(tabs));
+    localStorage.setItem("claude-ui.dockedSessions", JSON.stringify(docked));
+    // Every session was shown after its last output: no tab is unread.
+    localStorage.setItem("claude-ui.shown-activity", JSON.stringify(Object.fromEntries(list.map((s) => [s.id, 1e15]))));
+    location.hash = `#${active}`;
+    root = createRoot(el);
+    await act(async () => root.render(<App />));
+    await act(async () => {});
+  }
+  const tabMenu = async (id: string) => {
+    await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
+  };
+  const unaffected = () => {
+    expect(stored()).toContain(S3);
+    expect(dockIds("side")).toEqual([S3]);
+    expect(tabIds()).not.toContain(S3);
+    expect(sent.filter((m) => ["session.close", "session.delete", "session.archive", "session.interrupt"].includes(m.type))).toEqual([]);
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+    sent.length = 0;
+    width = 1440;
+  });
+
+  it("a docked session is no strip tab: the side panel has its tab, timeline and prompt box; the main area keeps the active tab", async () => {
+    await remount();
+    expect(tabIds()).toEqual([ID, S2, S4]);
+    expect(dockIds("side")).toEqual([S3]);
+    expect(prompt(S3)).not.toBeNull();
+    expect(location.hash).toBe(`#${ID}`);
+    expect(stored()).toEqual([ID, S2, S3, S4]);
+  });
+
+  it("Move to side panel (strip tab menu) on the active tab docks it and shows its right neighbour", async () => {
+    await remount({ docked: {}, active: S2 });
+    expect(dockIds("side")).toEqual([]);
+    await (await tabMenu(S2))("Move to side panel");
+    expect(tabIds()).toEqual([ID, S3, S4]);
+    expect(dockIds("side")).toEqual([S2]);
+    expect(location.hash).toBe(`#${S3}`);
+    expect(prompt(S2)).not.toBeNull();
+    expect(JSON.parse(localStorage.getItem("claude-ui.dockedSessions")!)).toEqual({ [S2]: "side" });
+  });
+
+  it("opening a docked session (a sidebar row) selects its dock tab; the hash, the active tab and the other dock tabs stay", async () => {
+    await remount();
+    await act(async () => q("side-panel")!.querySelector<HTMLElement>('[data-pane-tab="changes"]')!.click());
+    expect(q("side-panel")!.querySelector('[data-docked-tab][aria-selected="true"]')).toBeNull();
+    await act(async () => el.querySelector<HTMLElement>(`[data-testid="session-item"][data-session-id="${S3}"]`)!.click());
+    expect(q("side-panel")!.querySelector<HTMLElement>('[aria-selected="true"]')!.dataset.dockedTab).toBe(S3);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(tabIds()).toEqual([ID, S2, S4]);
+  });
+
+  it("Esc in the docked prompt interrupts the docked session only; Esc in the main prompt does not interrupt it", async () => {
+    await remount();
+    for (const [i, id] of [ID, S3].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    sent.length = 0;
+    await press({ key: "Escape" }, prompt(S3)!);
+    expect((sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[]).map((m) => m.sessionId)).toEqual([S3]);
+    sent.length = 0;
+    await press({ key: "Escape" }, el.querySelector<HTMLElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!);
+    expect((sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[]).map((m) => m.sessionId)).toEqual([ID]);
+  });
+
+  it("narrow: the docked session is a normal strip tab, and returns to its dock on wide", async () => {
+    await remount();
+    width = 390;
+    await rerender();
+    expect(tabIds()).toContain(S3);
+    expect(el.querySelector("[data-docked-tab]")).toBeNull();
+    width = 1440;
+    await rerender();
+    expect(tabIds()).not.toContain(S3);
+    expect(dockIds("side")).toEqual([S3]);
+  });
+
+  it("closing the active strip tab shows the next strip tab, not a docked neighbour", async () => {
+    await remount({ active: S2 });
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(location.hash).toBe(`#${S4}`);
+    expect(dockIds("side")).toEqual([S3]);
+  });
+
+  // The strip actions: none of them may close, move or stop a docked session.
+  it("Close others keeps the docked session", async () => {
+    await remount();
+    await (await tabMenu(S2))("Close others");
+    expect(tabIds()).toEqual([S2]);
+    expect(toast()?.textContent).toContain("Closed 2 tabs");
+    unaffected();
+  });
+
+  it("Close to the right keeps the docked session", async () => {
+    await remount({ active: S2 });
+    await (await tabMenu(S2))("Close to the right");
+    expect(tabIds()).toEqual([ID, S2]);
+    expect(toast()?.textContent).toContain("Closed Fourth");
+    unaffected();
+  });
+
+  it("Close all keeps the docked session; the main area shows the New session tab", async () => {
+    await remount();
+    await (await tabMenu(S2))("Close all");
+    expect(tabIds()).toEqual(["new"]);
+    unaffected();
+    expect(prompt(S3)).not.toBeNull();
+  });
+
+  it("Undo of a Close all brings the strip back and keeps the docked session docked", async () => {
+    await remount();
+    await (await tabMenu(S2))("Close all");
+    await act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+    // The New session tab that took the main area while the strip was empty stays.
+    expect(tabIds().filter((t) => t !== "new")).toEqual([ID, S2, S4]);
+    expect(dockIds("side")).toEqual([S3]);
+  });
+
+  it("Clean up tabs (idle) closes idle read strip tabs and never the docked one", async () => {
+    await remount();
+    await (await tabMenu(ID))("Clean up tabs");
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-cleanup-idle"]')!.click());
+    expect(tabIds()).toEqual([ID]);
+    unaffected();
+  });
+
+  it("Auto-close idle tabs never closes the docked session", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old, [S4]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    await remount();
+    await act(async () => {});
+    expect(tabIds()).toEqual([ID]);
+    unaffected();
+    localStorage.removeItem("claude-ui.tabAutoClose");
+  });
+
+  it("Reopen closed tab brings back the closed strip tab; the docked session stays docked", async () => {
+    await remount();
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] button[aria-label^="Close"]`)!.click());
+    expect(tabIds()).toEqual([ID, S4]);
+    await (await tabMenu(ID))("Reopen closed tab");
+    expect(tabIds()).toEqual([ID, S2, S4]);
+    unaffected();
+  });
+
+  it("Close tab on the dock tab closes the docked session's tab only: the strip and the active tab stay", async () => {
+    await remount();
+    await act(async () => void el.querySelector(`[data-docked-tab="${S3}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => menuItem("docked-close").click());
+    expect(stored()).toEqual([ID, S2, S4]);
+    expect(tabIds()).toEqual([ID, S2, S4]);
+    expect(el.querySelector("[data-docked-tab]")).toBeNull();
+    expect(location.hash).toBe(`#${ID}`);
+  });
+
+  it("Move to main area (dock tab menu) puts it in the strip and shows it", async () => {
+    await remount();
+    await act(async () => void el.querySelector(`[data-docked-tab="${S3}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => menuItem("docked-move-main").click());
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+    expect(location.hash).toBe(`#${S3}`);
+    expect(el.querySelector("[data-docked-tab]")).toBeNull();
+  });
+
+  it("Reset layout puts the docked session back in the strip; Undo docks it again", async () => {
+    await remount();
+    await clickId("dock-menu-side");
+    await act(async () => menuItem("dock-reset").click());
+    expect(tabIds()).toEqual([ID, S2, S3, S4]);
+    expect(localStorage.getItem("claude-ui.dockedSessions")).toBeNull();
+    await act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+    expect(tabIds()).toEqual([ID, S2, S4]);
+    expect(dockIds("side")).toEqual([S3]);
+  });
+
+  it("a page load on the docked session's hash opens it in its dock and shows the first strip tab", async () => {
+    await remount({ active: S3 });
+    expect(dockIds("side")).toEqual([S3]);
+    expect(q("side-panel")!.querySelector<HTMLElement>('[aria-selected="true"]')!.dataset.dockedTab).toBe(S3);
+    expect(tabIds()).toEqual([ID, S2, S4]);
+    expect(location.hash).toBe(`#${ID}`);
+  });
+});

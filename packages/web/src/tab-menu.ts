@@ -7,7 +7,7 @@ export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote
 const entry = (id: TabMenuEntry["id"], label: string, disabled = false): TabMenuEntry => ({ id, label, disabled, testId: `tab-menu-${id}` });
 
 /** Sections of the tab context menu, a separator between sections: move, close, pin, copy and reveal, then split. The New session tab (`session` false) has the first two only. */
-export function tabMenuSections(s: { session: boolean; /** Absent: pinning is not offered. */ pinned?: boolean; first: boolean; last: boolean; canOthers: boolean; canRight: boolean; canAll: boolean; canReopen: boolean; hasCwd: boolean; /** A pane tab (GH-395): move to a dock, go to its session; no copy or reveal. */ pane?: { label: string; /** GH-399: a file tab: no dock; Move to Files, copy paths, Reveal in Files. */ item?: boolean }; /** Split view (GH-356): absent on narrow screens, where there is no split. */ split?: { can: boolean; /** Git graph: the reason line follows the disabled items. */ whole?: boolean } }): TabMenuEntry[][] {
+export function tabMenuSections(s: { session: boolean; /** Absent: pinning is not offered. */ pinned?: boolean; first: boolean; last: boolean; canOthers: boolean; canRight: boolean; canAll: boolean; canReopen: boolean; hasCwd: boolean; /** GH-401: wide screens: a session tab can move to the side or bottom panel. */ dock?: boolean; /** A pane tab (GH-395): move to a dock, go to its session; no copy or reveal. */ pane?: { label: string; /** GH-399: a file tab: no dock; Move to Files, copy paths, Reveal in Files. */ item?: boolean }; /** Split view (GH-356): absent on narrow screens, where there is no split. */ split?: { can: boolean; /** Git graph: the reason line follows the disabled items. */ whole?: boolean } }): TabMenuEntry[][] {
   const sections = [
     [entry("moveLeft", "Move left", s.first), entry("moveRight", "Move right", s.last)],
     [entry("close", "Close tab"), entry("closeOthers", "Close others", !s.canOthers), entry("closeRight", "Close to the right", !s.canRight), entry("closeAll", "Close all", !s.canAll), entry("reopen", "Reopen closed tab", !s.canReopen)],
@@ -20,7 +20,8 @@ export function tabMenuSections(s: { session: boolean; /** Absent: pinning is no
   }
   const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
   const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can)]] : [];
-  return [...sections, ...pin, [entry("copyId", "Copy session ID"), entry("copyCwd", "Copy cwd path", !s.hasCwd), entry("reveal", "Reveal in sidebar")], ...split];
+  const dock = s.dock ? [[entry("moveSide", "Move to side panel"), entry("moveBottom", "Move to bottom panel")]] : [];
+  return [...sections, ...pin, ...dock, [entry("copyId", "Copy session ID"), entry("copyCwd", "Copy cwd path", !s.hasCwd), entry("reveal", "Reveal in sidebar")], ...split];
 }
 
 /** The first item of the newest open menu that is not disabled. */

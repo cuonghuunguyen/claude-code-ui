@@ -44,12 +44,12 @@ export type TabInfo = {
   /** A file tab (GH-399): its absolute path (icon by file type, tooltip). */
   path?: string;
 };
-type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
+export type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
-const status = (id: string, t: TabInfo): TabStatus =>
+export const status = (id: string, t: TabInfo): TabStatus =>
   id === NEW_TAB ? "new" : t.state === "running" ? "running" : t.state === "needs_input" ? "needs_input" : t.unread ? "unread" : "idle";
 
-const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
+export const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
 
 /** The states only the session header showed (GH-165): error and closed, noted in the switcher below md where the header row is gone. */
 const stateNote = (t: TabInfo) => (t.state === "error" || t.state === "closed" ? t.state : "");
@@ -72,7 +72,7 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
   );
 }
 
-function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; kind?: PaneKind; path?: string }) {
+export function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; kind?: PaneKind; path?: string }) {
   if (kind === "file" && path) return <FileIcon path={path} className="size-4 shrink-0" />;
   if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
@@ -1203,7 +1203,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

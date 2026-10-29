@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
+import { STATUS_LABEL, TabIcon, type TabInfo, status } from "./tabs-bar.tsx";
 
 export const PANE_DRAG_TYPE = "application/x-claude-ui-pane";
 /** Where a dragged pane would land: the end of `area`, or before the tab `before`. */
@@ -36,6 +37,10 @@ export function useAreaDrop(on: DropHandlers) {
     };
   }, []);
 }
+
+/** GH-401: what a dock session tab's menu asks for: the other panel, the main area, or closing the tab. */
+export type DockedCommand = "moveSide" | "moveBottom" | "main" | "close";
+export type DockedSession = TabInfo & { id: string };
 
 /** Menus opened from the keyboard (Enter, Space, Shift+F10) put the focus on the first item, so Enter works at once. */
 function useKeyboardOpen() {
@@ -108,6 +113,10 @@ export function DockHeader({
   dropAt,
   onDrag,
   onDropAt,
+  sessions,
+  activeSession,
+  onSelectSession,
+  onSessionCommand,
 }: {
   area: DockArea;
   panes: PaneId[];
@@ -124,6 +133,11 @@ export function DockHeader({
   dropAt?: DropAt;
   onDrag: (p?: PaneId) => void;
   onDropAt: (d?: DropAt) => void;
+  /** GH-401: sessions docked here, in strip order: a tab each after the pane tabs; `activeSession` is the selected one (no pane tab is then). */
+  sessions?: DockedSession[];
+  activeSession?: string;
+  onSelectSession?: (id: string) => void;
+  onSessionCommand?: (id: string, c: DockedCommand) => void;
 }) {
   const other: DockArea = area === "side" ? "bottom" : "side";
   // A menu that moved a pane does not return the focus (Base UI `finalFocus` false): App focuses the moved tab once the move is
@@ -146,7 +160,7 @@ export function DockHeader({
             <ContextMenu.Trigger className="contents">
               <Button
                 size="sm"
-                variant={p === active ? "secondary" : "ghost"}
+                variant={p === active && !activeSession ? "secondary" : "ghost"}
                 className="pointer-coarse:h-11 relative data-drop-before:before:absolute data-drop-before:before:inset-y-1 data-drop-before:before:-left-1 data-drop-before:before:w-0.5 data-drop-before:before:rounded-full data-drop-before:before:bg-primary"
                 draggable
                 {...ctxKb.trigger}
@@ -175,7 +189,7 @@ export function DockHeader({
                   onMove(d, area, p);
                 }}
                 role="tab"
-                aria-selected={p === active}
+                aria-selected={p === active && !activeSession}
                 onClick={() => onSelect(p)}
                 data-testid={`pane-${p}`}
                 data-pane-tab={p}
@@ -204,6 +218,46 @@ export function DockHeader({
             </ContextMenu.Portal>
           </ContextMenu.Root>
         ))}
+        {sessions?.map((t) => {
+          const label = STATUS_LABEL[status(t.id, t)];
+          return (
+            <ContextMenu.Root key={t.id} {...opening(ctxKb.root)}>
+              <ContextMenu.Trigger className="contents">
+                <Button
+                  size="sm"
+                  variant={t.id === activeSession ? "secondary" : "ghost"}
+                  className="pointer-coarse:h-11 max-w-48 shrink-0"
+                  {...ctxKb.trigger}
+                  role="tab"
+                  aria-selected={t.id === activeSession}
+                  onClick={() => onSelectSession?.(t.id)}
+                  data-testid="docked-tab"
+                  data-docked-tab={t.id}
+                  title={t.title}
+                >
+                  <TabIcon s={status(t.id, t)} cwd={t.cwd} />
+                  <span className="truncate">{t.title}</span>
+                  {label && <span className="sr-only">{label}</span>}
+                </Button>
+              </ContextMenu.Trigger>
+              <ContextMenu.Portal>
+                <ContextMenu.Positioner className="z-50">
+                  <ContextMenu.Popup ref={ctxKb.popup} className={POPUP} finalFocus={finalFocus}>
+                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(t.id, other === "side" ? "moveSide" : "moveBottom"))} data-testid="docked-move">
+                      Move to {AREA_LABEL[other].toLowerCase()}
+                    </ContextMenu.Item>
+                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(t.id, "main"))} data-testid="docked-move-main">
+                      Move to main area
+                    </ContextMenu.Item>
+                    <ContextMenu.Item className={ITEM} onClick={() => onSessionCommand?.(t.id, "close")} data-testid="docked-close">
+                      Close tab
+                    </ContextMenu.Item>
+                  </ContextMenu.Popup>
+                </ContextMenu.Positioner>
+              </ContextMenu.Portal>
+            </ContextMenu.Root>
+          );
+        })}
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {extra}
