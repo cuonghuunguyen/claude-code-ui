@@ -281,6 +281,8 @@ export function createDaemon(opts: {
   uploadDir?: string;
   /** Orphan sweep of the upload parent: first run after 60 s, then every `uploadSweepMs` (default 6 h); 0 = off (tests). */
   uploadSweepMs?: number;
+  /** Period of the pass that deletes Asides of daemons on other ports that stopped (default 60 s); tests shorten it. */
+  asideSweepMs?: number;
   /** Delay of the first sweep (default 60 s); tests shorten it. */
   uploadSweepFirstMs?: number;
   projectsDir?: string;
@@ -1119,19 +1121,19 @@ export function createDaemon(opts: {
    */
   let cleaningAsides = false;
   async function cleanupAsides({ foreignOnly = false } = {}) {
-    if (cleaningAsides) return;
+    // No port of its own (a --side daemon): it cannot tell its links from the hub's, whose live Asides it would delete.
+    const port = (http.address() as AddressInfo | null)?.port;
+    if (cleaningAsides || port === undefined) return;
     cleaningAsides = true;
     try {
-      const port = (http.address() as AddressInfo | null)?.port;
-      const dead = new Map<number, boolean>();
-      for (const [id, l] of settings.entries()) {
-        if (!l.ownerId || sessions.has(id)) continue;
+      for (const [id] of [...settings.entries()]) {
+        const l = settings.get(id);
+        if (!l?.ownerId || sessions.has(id)) continue;
         const foreign = l.port !== undefined && l.port !== port;
         if (foreignOnly && !foreign) continue;
-        if (foreign) {
-          if (!dead.has(l.port!)) dead.set(l.port!, !(await portListening(l.port!)));
-          if (!dead.get(l.port!)) continue;
-        }
+        // Probed right before the delete, on the link as it is now: a daemon may have started on that port since the pass began.
+        if (foreign && (await portListening(l.port!))) continue;
+        if (settings.get(id)?.port !== l.port || sessions.has(id)) continue;
         try {
           const err = await deleteSessionById(id, true);
           if (err?.code === "unknown_session") saveSettings(() => settings.delete([id]));
@@ -2530,7 +2532,6 @@ export function createDaemon(opts: {
     idleCloseMs > 0
       ? setInterval(() => {
           const now = Date.now();
-          void cleanupAsides({ foreignOnly: true });
           for (const s of sessions.values()) {
             // An Aside whose popup is gone (browser closed, reload): thrown away, not only its CLI closed.
             if (asideOf(s.id) && !holds.get(s.id) && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !["running", "needs_input"].includes(s.info().state)) {
@@ -2546,6 +2547,8 @@ export function createDaemon(opts: {
           }
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
+  // Links of daemons that stopped: every minute, whether idle close is on or not.
+  const asideSweeper = setInterval(() => void cleanupAsides({ foreignOnly: true }), opts.asideSweepMs ?? IDLE_CHECK_MS).unref();
   const sweepMs = opts.uploadSweepMs ?? UPLOAD_SWEEP_MS;
   const sweepUploads = () =>
     uploads
@@ -2554,7 +2557,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

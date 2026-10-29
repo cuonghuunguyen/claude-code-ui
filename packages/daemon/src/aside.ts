@@ -34,7 +34,7 @@ export function asideForkPoint(chain: SessionMessage[]): string | undefined {
 }
 
 /** Whether something listens on a local port. Only ECONNREFUSED means no: a timeout or another error counts as listening (the safe side, nothing is deleted). */
-export const portListening = (port: number, host = "127.0.0.1", timeoutMs = 1000) =>
+export const portListening = (port: number, host = "127.0.0.1", timeoutMs = 3000) =>
   new Promise<boolean>((resolve) => {
     const sock = connect({ port, host });
     const done = (v: boolean) => (sock.destroy(), resolve(v));
