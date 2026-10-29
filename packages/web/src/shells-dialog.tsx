@@ -74,6 +74,8 @@ export function ShellsDialog({
   const [confirm, setConfirm] = useState(false);
   const [killing, setKilling] = useState(false);
   const [killError, setKillError] = useState<string>();
+  // The shells this dialog killed: the CLI starts no turn for a killed shell, Claude is told with the next message.
+  const [told, setTold] = useState<string[]>([]);
   const shells = view ? shellsOf(view) : [];
   const call = shells.find((c) => c.toolUseId === selected);
   const now = useNow(open && shells.some(isRunningShell));
@@ -143,6 +145,11 @@ export function ShellsDialog({
             {SHELL_STATUS[call.status]}
             {call.exitCode !== undefined && ` · exit code ${call.exitCode}`}
             {runTime(call, now) && ` · ${runTime(call, now)}`}
+            {!running && told.includes(call.toolUseId) && (
+              <span data-testid="shell-told" className="block">
+                Claude will be told on your next message.
+              </span>
+            )}
           </div>
           {killError && <Banner kind="error">Could not kill: {killError}</Banner>}
           <Output call={call} output={output} />
@@ -158,7 +165,7 @@ export function ShellsDialog({
               setConfirm(false);
               setKilling(true);
               setKillError(undefined);
-              kill(call.toolUseId).catch((e) => (setKilling(false), setKillError(message(e))));
+              kill(call.toolUseId).then(() => setTold((t) => [...t, call.toolUseId]), (e) => (setKilling(false), setKillError(message(e))));
             }}
           />
         </>

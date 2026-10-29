@@ -44,7 +44,7 @@ Feature: Manage background shells: list, view output, kill
     And the shell has no Kill button
     And I capture "finished-output"
 
-  Scenario: Kill with confirm stops a running shell and Claude gets the notification turn
+  Scenario: Kill with confirm stops a running shell
     Given the viewport is 1440x900
     When I ask Claude to run "for i in $(seq 1 300); do echo tick-$i; sleep 1; done" in the background
     And I open the shells list from the status bar
@@ -58,17 +58,18 @@ Feature: Manage background shells: list, view output, kill
     When I close the shells list
     Then the "tick-" tool call is killed
 
-  Scenario: Claude gets a notification turn after a shell is killed
+  Scenario: After a kill Claude is told with the next message, not by a turn of its own
     Given the viewport is 1440x900
     When I ask Claude to run "for i in $(seq 1 300); do echo tick-$i; sleep 1; done" in the background
-    And I note the reply count
     And I open the shells list from the status bar
     And I open the "tick-" shell
     And I kill the shell and confirm
     Then the shell details show "Killed"
-    And Claude replies after the shell ended
-    And the turn has finished
-    And I capture "notification-turn"
+    And the shell details show "Claude will be told on your next message"
+    When I close the shells list
+    And I send "Reply with one word: ok"
+    Then the turn has finished
+    And I capture "notification-next-message"
 
   Scenario: The list survives a reload and a daemon restart
     Given the viewport is 1440x900

@@ -2164,13 +2164,13 @@ describe("Session background work", () => {
     }
   });
 
-  it("a stopped notification that gets no CLI turn leaves the session idle; working clears after the wait", async () => {
+  it("a stopped notification gets no CLI turn while idle (probe, GH-442): working clears at once, no wait", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const { events, send } = await setup();
       await bg(send);
       await send(result(), ["running", "idle+working"]);
-      await send(done("t1", "agent-bg", "stopped"), ["running", "idle+working", "idle+working"]);
+      await send(done("t1", "agent-bg", "stopped"), ["running", "idle+working", "idle"]);
       vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
       expect(log(events).at(-1)).toBe("idle");
       expect(log(events)).not.toContain("running+working");

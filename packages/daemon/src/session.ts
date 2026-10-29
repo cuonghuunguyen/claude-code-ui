@@ -1136,7 +1136,8 @@ export class Session {
       const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
       if (id) this.tasks.delete(id);
       this.ambientTasks.delete(m.task_id);
-      this.cliTurn = true;
+      // A stopped task (Kill, Stop agent) gets no turn of its own while the session is idle: the CLI hands the notice to Claude with the next message (probe, GH-442).
+      this.cliTurn = m.status !== "stopped";
       // Idle: `working` may end now. The CLI's own turn, if any, shows running from its first assistant message.
       if (this.state === "idle") this.setState("idle");
       // ponytail: a stopped or killed task may get no CLI turn, so no result clears cliTurn; give up after 10 s. Upgrade: clear on a CLI signal if one exists.
