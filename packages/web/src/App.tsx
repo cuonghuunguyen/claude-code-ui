@@ -2242,6 +2242,13 @@ export function App() {
     window.addEventListener("drop", end);
     return () => (window.removeEventListener("dragend", end), window.removeEventListener("drop", end));
   }, []);
+  const NO_MAIN_TAB = {
+    files: "Files moved to the main area. Its tab opens when a session shows.",
+    graph: "Git graph moved to the main area. Its tab opens for a git project.",
+    terminal: "Terminal moved to the main area. Its tab opens when a session shows.",
+    artifacts: "Artifacts moved to the main area. Its tab opens when the session has artifacts.",
+    plan: "Plan moved to the main area. Its tab opens when the session has a plan.",
+  };
   const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
   /** Back to a dock: the pane's main tabs close, one toast with Undo (the layout comes back first). */
   const leaveMain = (p: PaneId) => {
@@ -2249,24 +2256,21 @@ export function App() {
     const prev = loadLayout();
     closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
   };
-  const move = (p: PaneId, to: Area, before?: PaneId) => {
+  /** Moves `p` to `to`. Into the main area it returns the tab it opened (undefined: none could open, a toast says why). `focus` false: the caller focuses the tab's content. */
+  const move = (p: PaneId, to: Area, before?: PaneId, focus = true): string | undefined => {
     if (to === "main") {
       // The main area: a tab of the current session (Changes never lives there).
       if (!canMain(p)) return;
       saveLayout(movePane(layout, p, "main"));
-      if (p === "files") return paneOwner ? showKind("files") : (focusShownPrompt(), setToast("Files moved to the main area. Its tab opens when a session shows."));
-      if (p === "graph") return paneOwner && isGit ? showKind("graph") : (focusShownPrompt(), setToast("Git graph moved to the main area. Its tab opens for a git project."));
-      if (p === "terminal") {
-        if (!paneOwner) return (focusShownPrompt(), setToast("Terminal moved to the main area. Its tab opens when a session shows."));
-        // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder.
-        setTermCarry(termMounted && panelCwd === cwdOfOwner(paneOwner) ? panelCwd : undefined);
-        return openPaneTab(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner)); // the instance is quiet: no termLoud
+      const ref = mainTab(p);
+      if (!ref) {
+        focusShownPrompt();
+        setToast(NO_MAIN_TAB[p as keyof typeof NO_MAIN_TAB]);
+        return;
       }
-      const owner = currentId && isSession(currentId) ? currentId : undefined;
-      if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? openPaneTab(refOf({ kind: "artifacts", owner })) : (focusShownPrompt(), setToast("Artifacts moved to the main area. Its tab opens when the session has artifacts."));
-      if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
-      else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
-      return;
+      // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder; the instance is quiet: no termLoud.
+      if (p === "terminal") setTermCarry(termMounted && panelCwd === cwdOfOwner(paneOwner!) ? panelCwd : undefined);
+      return openPaneTab(ref, focus);
     }
     leaveMain(p);
     const n = movePane(layout, p, to, before);
@@ -2530,10 +2534,11 @@ export function App() {
     requestAnimationFrame(() => focus(60));
   };
   /** Opens (or focuses) a pane tab right of its owner's tab. */
-  const openPaneTab = (ref: string) => {
+  const openPaneTab = (ref: string, focus = true) => {
     setTabs((t) => insertPaneTab(t, ref, groupOfTab));
     open(ref);
-    focusTabOf(ref);
+    if (focus) focusTabOf(ref);
+    return ref;
   };
   /** Open in tab of an Artifact card (GH-400): the page of `partId` as a main-area tab right of its session's tab, one tab per part. */
   const openArtifactTab = (owner: string, partId: string) => openPaneTab(artifactRef(owner, partId));
@@ -3112,17 +3117,19 @@ export function App() {
     else if (r.do === "toArtifacts") moveToArtifacts(r.ref);
     else dockSession(r.id, a);
   };
-  const tabDrop = (a: DockArea) => ({ accepts: takes(a), onDropTab: (_e: unknown, before?: PaneId) => dropTab(a, before), onDragDocked: (id?: string) => setStripDrag(id ? { docked: id } : undefined) });
+  // "before": only a pane move honours the tab it is dropped on; everything else lands in the area.
+  const tabDrop = (a: DockArea) => ({ accepts: (e: { dataTransfer: DataTransfer | null }) => takes(a)(e) && (dockDrop(stripDrag!, a, dropCtx)?.do === "movePane" ? ("before" as const) : true), onDropTab: (_e: unknown, before?: PaneId) => dropTab(a, before), onDragDocked: (id?: string) => setStripDrag(id ? { docked: id } : undefined) });
   /** Executes a drop on the tab strip or the session area: only existing commands (Move to main area, Split right / down, Show in split). */
   function runMain(r: MainDrop | undefined) {
     if (!r || "refused" in r) return;
     const shownSplit = (o?: number) => o !== undefined && !!splitRef.current && splitOnRef.current;
     if (r.do === "move" || r.do === "moveSplit") {
-      move(r.p, "main");
-      const ref = mainTab(r.p);
-      if (!ref) return;
+      // The split's content takes the focus, not the strip tab `move` would focus.
+      const split = r.do === "moveSplit" || shownSplit(r.over);
+      const ref = move(r.p, "main", undefined, !split);
+      if (!ref || !split) return;
       if (r.do === "moveSplit") splitTab(ref, r.dir, r.before);
-      else if (shownSplit(r.over)) showInSplit(ref, r.over!);
+      else showInSplit(ref, r.over!);
       return;
     }
     undockSession(r.id);

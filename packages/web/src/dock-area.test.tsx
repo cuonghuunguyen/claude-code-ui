@@ -299,9 +299,20 @@ it("GH-402 a docked session tab is draggable, carries its id and reports the dra
   expect(onDragDocked).toHaveBeenLastCalledWith(undefined);
 });
 
+it("GH-402 `accepts` returning true fills the whole area (no insertion mark); \"before\" marks the tab", async () => {
+  const { fns, render } = h("side", { accepts: (e) => !!e.dataTransfer?.types.includes(TAB) });
+  await render();
+  fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);
+  expect(fns.onDropAt).toHaveBeenLastCalledWith({ area: "side", before: undefined });
+  const marked = h("side", { accepts: () => "before" });
+  await marked.render();
+  fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);
+  expect(marked.fns.onDropAt).toHaveBeenLastCalledWith({ area: "side", before: "changes" });
+});
+
 it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop calls onDropTab with the tab it is before", async () => {
   const onDropTab = vi.fn();
-  const { fns, render } = h("side", { accepts: (e) => !!e.dataTransfer?.types.includes(TAB), onDropTab, dropAt: { area: "side", before: "graph" } });
+  const { fns, render } = h("side", { accepts: (e) => (e.dataTransfer?.types.includes(TAB) ? "before" : false), onDropTab, dropAt: { area: "side", before: "graph" } });
   await render();
   expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
   const over = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);

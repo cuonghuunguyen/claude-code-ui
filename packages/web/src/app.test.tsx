@@ -3053,6 +3053,45 @@ describe("GH-356 split view", () => {
     return a;
   };
 
+  // GH-402: the App wiring of dock and strip drags (dropTab, runMain, mainRefusal).
+  const dockDrag = (target: Element, type: string, types: string[], data: string, x = 0, y = 0) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { clientX: x, clientY: y, dataTransfer: { types, getData: () => data, setData() {}, effectAllowed: "", dropEffect: "none" } });
+    return act(async () => void target.dispatchEvent(e));
+  };
+
+  it("GH-402 a session strip tab dropped on the side panel docks it (Move to side panel)", async () => {
+    await remount(ID, [ID, S2, S3]);
+    const tab = el.querySelector(`[data-tab-id="${S3}"]`)!;
+    await dockDrag(tab, "dragstart", [], "");
+    const side = el.querySelector('[data-testid="side-panel"]')!;
+    await dockDrag(side, "dragover", ["application/x-claude-ui-tab"], S3);
+    expect(side.hasAttribute("data-drop-target")).toBe(true);
+    await dockDrag(side, "drop", ["application/x-claude-ui-tab"], S3);
+    expect(JSON.parse(localStorage.getItem("claude-ui.dockedSessions")!)).toEqual({ [S3]: "side" });
+    expect(side.querySelector(`[data-docked-tab="${S3}"]`)).not.toBeNull();
+  });
+
+  it("GH-402 the Files dock tab dropped on the right edge moves it to the main area and splits there; Changes is refused", async () => {
+    await remount(ID, [ID, S2]);
+    const side = el.querySelector('[data-testid="side-panel"]')!;
+    await dockDrag(side.querySelector('[data-pane-tab="changes"]')!, "dragstart", [], "");
+    await dockDrag(area(), "dragover", ["application/x-claude-ui-pane"], "changes", 880, 300);
+    expect(overlay()?.dataset.refused).toBe("changes");
+    expect(overlay()!.textContent).toBe("Changes stays in a panel");
+    await dockDrag(side.querySelector('[data-pane-tab="changes"]')!, "dragend", [], "");
+    await dockDrag(side.querySelector('[data-pane-tab="files"]')!, "dragstart", [], "");
+    await dockDrag(area(), "dragover", ["application/x-claude-ui-pane"], "files", 880, 300);
+    expect(overlay()?.dataset.refused).toBeUndefined();
+    await dockDrag(area(), "drop", ["application/x-claude-ui-pane"], "files", 880, 300);
+    expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toEqual(["files"]);
+    expect(labels()).toEqual(["Demo, split 1 of 2", "Files · demo, split 2 of 2, active"]);
+    expect(el.querySelector('[data-testid="side-panel"] [data-pane-tab="files"]')).toBeNull();
+    // The split's content has the focus, not the strip tab.
+    for (let i = 0; i < 5; i++) await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+    expect(document.activeElement?.closest(`[data-pane-tab-body="files:${ID}"]`)).not.toBeNull();
+  });
+
   it("dragging a tab over the right edge shows the overlay on the right half; dropping splits right with that tab; dragleave clears", async () => {
     await remount(ID);
     await drag(area(), "dragover", 880, 300);

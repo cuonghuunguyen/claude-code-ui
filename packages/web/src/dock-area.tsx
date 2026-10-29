@@ -139,8 +139,8 @@ export function DockHeader({
   dropAt?: DropAt;
   onDrag: (p?: PaneId) => void;
   onDropAt: (d?: DropAt) => void;
-  /** GH-402: drags other than a dock pane tab (a strip tab, a docked session tab) that a pane tab accepts, and what dropping one before pane tab `before` does. Absent: only dock pane tabs. */
-  accepts?: (e: DragEv) => boolean;
+  /** GH-402: drags other than a dock pane tab (a strip tab, a docked session tab) that a pane tab accepts, and what dropping one before pane tab `before` does. `"before"`: the drop honours the position (marks the tab); `true`: it lands in the area (the whole area is the target). Absent: only dock pane tabs. */
+  accepts?: (e: DragEv) => boolean | "before";
   onDropTab?: (e: DragEv, before: PaneId) => void;
   /** GH-402: a docked session tab starts (id) or ends (undefined) a drag. */
   onDragDocked?: (id?: string) => void;
@@ -185,11 +185,13 @@ export function DockHeader({
                 }}
                 onDragEnd={() => (onDrag(undefined), onDropAt(undefined))}
                 onDragOver={(e) => {
-                  if (!isPaneDrag(e) && !accepts?.(e)) return;
+                  const ok = isPaneDrag(e) ? "before" : accepts?.(e);
+                  if (!ok) return;
                   e.preventDefault();
                   e.stopPropagation();
                   e.dataTransfer.dropEffect = "move";
-                  if (dropAt?.area !== area || dropAt.before !== p) onDropAt({ area, before: p });
+                  const before = ok === "before" ? p : undefined;
+                  if (dropAt?.area !== area || dropAt.before !== before) onDropAt({ area, before });
                 }}
                 onDrop={(e) => {
                   const d = droppedPane(e);
