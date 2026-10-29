@@ -2,7 +2,7 @@
 import type { Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
@@ -40,7 +40,7 @@ document.body.append(el);
 const root = createRoot(el);
 afterEach(() => act(() => root.render(<></>)));
 
-const render = (v: SessionView) =>
+const render = (v: SessionView, onShells?: () => void) =>
   act(async () =>
     root.render(
       <SessionPane
@@ -61,6 +61,7 @@ const render = (v: SessionView) =>
         onRewind={async () => {}}
         onRespond={noop}
         onAnswer={noop}
+        onShells={onShells}
       />,
     ),
   );
@@ -259,4 +260,14 @@ it("TodoWrite card: summary counts completed todos and the expanded card lists e
   expect(rows.map((r) => r.textContent)).toEqual(["Completed: Inspect", "In progress: Test", "Pending: Ship"]);
   expect(rows[1]!.className).toContain("font-medium");
   expect(rows[0]!.className).toContain("line-through");
+});
+
+it("the status bar shells field of a pane calls that pane's own onShells (split view: never the active session's list)", async () => {
+  const shell: Part = { ...call("bg", "Bash", { command: "ping localhost", run_in_background: true }, "running") };
+  const mine = vi.fn();
+  await render(view([shell]), mine);
+  const field = el.querySelector<HTMLElement>('[data-field="shells"]')!;
+  expect(field.tagName).toBe("BUTTON");
+  await act(async () => field.click());
+  expect(mine).toHaveBeenCalledTimes(1);
 });

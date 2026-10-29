@@ -2889,6 +2889,7 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
+                        onShells={() => openShells(s.id)}
                         signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
@@ -3832,6 +3833,7 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  onShells,
   signalOnly = false,
 }: {
   /** Split view: only the active split stops its turn on Esc. */
@@ -3901,6 +3903,8 @@ export function SessionPane({
   onGitStatus?: () => Promise<GitStatus | null>;
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
+  /** The status bar's shells field: opens the list of this pane's own session (split view: not the active one's). */
+  onShells?: () => void;
 }) {
   const phone = usePhone();
   const current = runOf(view, run);
@@ -4220,7 +4224,7 @@ export function SessionPane({
             />
           </>
         )}
-        <StatusBar view={view} git={onGitStatus} onShells={onDialog ? () => onDialog("shells") : undefined} />
+        <StatusBar view={view} git={onGitStatus} onShells={onShells} />
       </div>
     </AgentLinksContext>
     </BackgroundShellContext>

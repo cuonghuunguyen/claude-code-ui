@@ -1,9 +1,9 @@
 // Shells list (GH-442): reads the end of a CLI task output file, only from the CLI's own task folder.
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { open } from "node:fs/promises";
+import { closeSync, fstatSync, readSync } from "node:fs";
 import { MAX_BASH_OUTPUT_CHARS } from "./bash.ts";
-import { OPEN_READ, real } from "./fd-check.ts";
+import { openChecked, OPEN_READ, real } from "./fd-check.ts";
 
 const TAIL_CHARS = 256 * 1024;
 
@@ -31,19 +31,26 @@ export async function readTail(path: string, dirs: readonly string[], max = MAX_
     return rel !== "" && rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel);
   };
   if (!file || !dirs.some(inside)) return undefined;
-  const fh = await open(file, OPEN_READ).catch((e: NodeJS.ErrnoException) => { if (e.code === "ENOENT") return undefined; throw e; });
-  if (!fh) return undefined;
+  let fd: number;
   try {
-    const st = await fh.stat();
-    if (!st.isFile()) return undefined;
+    // openChecked: the fd must be the canonical file (a parent swapped to a link after the realpath is refused).
+    fd = openChecked(file, OPEN_READ);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw e;
+  }
+  try {
+    const st = fstatSync(fd);
+    // A hard link to a file elsewhere would pass the folder check.
+    if (!st.isFile() || st.nlink !== 1) return undefined;
     // Bytes: at most 4 per char, capped (a huge file is never read whole).
     const start = Math.max(0, st.size - Math.min(max * 4, TAIL_CHARS));
     const buf = Buffer.alloc(st.size - start);
-    const { bytesRead } = await fh.read(buf, 0, buf.length, start);
+    const bytesRead = readSync(fd, buf, 0, buf.length, start);
     const text = buf.toString("utf8", 0, bytesRead);
     const truncated = start > 0 || text.length > max;
     return { output: truncated ? text.slice(-max) : text, truncated };
   } finally {
-    await fh.close();
+    closeSync(fd);
   }
 }

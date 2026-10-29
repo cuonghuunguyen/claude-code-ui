@@ -150,7 +150,9 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     const id = (taskId ? tasks.get(taskId) : undefined) ?? toolUseId;
     // A transcript records a stopped task as "killed" (CLI 2.1.285); live it is "stopped".
     const parts = id ? setStatus(id, status === "completed" ? "done" : status === "stopped" || status === "killed" ? "stopped" : "error", true) : [];
-    const code = /\bexit code (\d+)/.exec(summary ?? "")?.[1];
+    // The CLI's own endings only ("... failed with exit code N", "... completed (exit code N)"): the command text before them may say anything.
+    const m = status === "stopped" || status === "killed" ? null : /(?:failed with exit code (\d+)|completed \(exit code (\d+)\))$/.exec(summary ?? "");
+    const code = m?.[1] ?? m?.[2];
     const call = id ? calls.get(id) : undefined;
     if (code === undefined || call?.type !== "tool_call") return parts;
     const next = { ...call, exitCode: Number(code) };

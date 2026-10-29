@@ -17,3 +17,8 @@ it("shellsOf lists background shells of any status, running first, newest first;
   );
   expect(shellsOf(v).map((c) => c.id)).toEqual(["run2", "run1", "moved", "old"]);
 });
+
+it("shellsOf lists a background shell started inside a subagent run", () => {
+  const v = view({ ...bash("sub1", { command: "npm run dev", run_in_background: true }, "running"), parentId: "agent1" } as Part, bash("fg", { command: "ls" }, "done"));
+  expect(shellsOf(v).map((c) => c.id)).toEqual(["sub1"]);
+});

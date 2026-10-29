@@ -879,6 +879,18 @@ describe("Bash call moved to the background (GH-440)", () => {
     expect(calls(ended).at(-1)!.exitCode).toBeUndefined();
   });
 
+  it("the exit code is the CLI's own ending of the summary, not a phrase inside the command", () => {
+    const code = (command: string, status: string, summary: string) => {
+      const adapter = createAdapter();
+      adapter.convert({ type: "assistant", message: { id: "m", role: "assistant", content: [{ type: "tool_use", id: "tb1", name: "Bash", input: { command, run_in_background: true } }] } } as never);
+      adapter.convert(started as never);
+      return calls(adapter.convert(notice(status, summary) as never)).at(-1)!.exitCode;
+    };
+    expect(code("echo exit code 5", "completed", 'Background command "echo exit code 5" completed (exit code 0)')).toBe(0);
+    expect(code("echo exit code 5", "failed", 'Background command "echo exit code 5" failed with exit code 2')).toBe(2);
+    expect(code("echo failed with exit code 5", "stopped", "echo failed with exit code 5")).toBeUndefined();
+  });
+
   it("a restored run_in_background call stays running until its task-notification record, which gives its exit code", () => {
     const adapter = createAdapter();
     adapter.convert(bgCall() as never);

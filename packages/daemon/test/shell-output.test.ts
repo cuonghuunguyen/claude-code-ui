@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -48,6 +48,27 @@ describe("readTail", () => {
     symlinkSync(join(dir, "real.output"), join(dir, "inside.output"));
     // A link inside the folder resolves to a file inside it: allowed (the real path is what is read).
     expect(await readTail(join(dir, "inside.output"), [dir])).toEqual({ output: "ok", truncated: false });
+  });
+});
+
+describe("readTail files that look inside but are not", () => {
+  it("refuses a hard link to a file outside the folder", async () => {
+    writeFileSync(join(root, "secret.txt"), "secret");
+    linkSync(join(root, "secret.txt"), join(dir, "x.output"));
+    expect(await readTail(join(dir, "x.output"), [dir])).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a folder component swapped to a link between the check and the open (openChecked)", async () => {
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "a.output"), "ok");
+    mkdirSync(join(root, "evil"));
+    writeFileSync(join(root, "evil", "a.output"), "evil");
+    const fd = await import("../src/fd-check.ts");
+    const file = fd.real(join(dir, "sub", "a.output"))!;
+    // The swap: sub becomes a link to a folder outside; the canonical path of the open file no longer matches.
+    renameSync(join(dir, "sub"), join(dir, "sub-old"));
+    symlinkSync(join(root, "evil"), join(dir, "sub"));
+    expect(() => fd.openChecked(file, fd.OPEN_READ)).toThrow();
   });
 });
 
