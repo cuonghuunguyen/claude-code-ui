@@ -19,7 +19,8 @@ export async function watchTerminalCreates(page: Page): Promise<() => number> {
 /** Selected pane tab names and boxes of both panels, plus the number of shells: what "nothing jumps" compares. */
 async function layoutOf(page: Page) {
   const box = async (id: string) => {
-    const b = await page.getByTestId(id).boundingBox();
+    // A hidden panel may be unmounted: no box, instead of waiting for it.
+    const b = (await page.getByTestId(id).count()) ? await page.getByTestId(id).boundingBox() : null;
     return b ? { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) } : null;
   };
   const selected = async (id: string) => page.getByTestId(id).locator('[role="tab"][aria-selected="true"]').allInnerTexts();
@@ -31,6 +32,14 @@ async function layoutOf(page: Page) {
     shells: await shells(page).count(),
   };
 }
+
+When("I maximize the bottom panel", async ({ page }) => {
+  await page.getByTestId("dock-maximize").click();
+});
+
+When("I hide the bottom panel", async ({ page }) => {
+  await page.getByTestId("dock-hide").click();
+});
 
 When("I toggle the terminal from the titlebar", async ({ page }) => {
   await page.getByTestId("terminal-toggle-titlebar").click();
