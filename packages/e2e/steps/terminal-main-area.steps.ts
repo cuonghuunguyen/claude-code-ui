@@ -63,7 +63,8 @@ Then("the Terminal tab shows no shell and offers New terminal", async ({ page })
 });
 
 When("I click the Terminal tab New terminal button", async ({ page }) => {
-  await body(page).getByTestId("terminal-new").click();
+  // Another folder's Terminal tab body stays mounted but hidden: click the shown one.
+  await body(page).getByTestId("terminal-new").locator("visible=true").click();
 });
 
 When("I close the last shell of the Terminal tab", async ({ page }) => {
