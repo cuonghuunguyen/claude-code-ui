@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { NODE_MIN, nodeMinOf } from "@claude-ui/protocol";
 import { describe, expect, it } from "vitest";
-import { assembleBundle, bundleTargetOf, ensureParts, installMethodOf, NODE_OK_JS, parseTarget, partsFor, sideCacheDir, TARGET_PROBE, USABLE_NODE_FN, writeTar, type Part } from "../src/side-bundle.ts";
+import { assembleBundle, bundleTargetOf, ensureParts, installMethodOf, NODE_OK_JS, NODE_OK_TOKEN, parseTarget, partsFor, sideCacheDir, TARGET_PROBE, USABLE_NODE_FN, writeTar, type Part } from "../src/side-bundle.ts";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 const hasTar = spawnSync("tar", ["--version"]).status === 0 && process.platform !== "win32";
@@ -49,10 +49,10 @@ describe("target", () => {
 
   describe("NODE_OK_JS (the rule the candidate node runs)", () => {
     const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string }) => {
-      let code: number | undefined;
-      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? ""], platform: o.platform ?? "linux", arch: o.arch ?? "x64", exit: (c: number) => (code = c) };
+      let out: string | undefined;
+      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? ""], platform: o.platform ?? "linux", arch: o.arch ?? "x64", stdout: { write: (t: string) => (out = t) } };
       runInNewContext(NODE_OK_JS, { process });
-      return code === 0;
+      return out === NODE_OK_TOKEN;
     };
     it("version: full x.y.z compare against the minimum", () => {
       expect(ok({})).toBe(true);
@@ -79,7 +79,7 @@ describe("target", () => {
   it.skipIf(!hasTar)("usable_node: the real binary behind a shim; refuses a node that fails the rule or whose real path is not a runnable file", () => {
     const bin = tmp("un-");
     const real = join(bin, "real-node");
-    const fake = (path: string, o: { exec: string; ok?: boolean }) => writeFileSync(path, `#!/bin/sh\ncase "$1" in -e) exit ${o.ok === false ? 1 : 0};; -p) echo '${o.exec}';; esac\n`, { mode: 0o755 });
+    const fake = (path: string, o: { exec: string; ok?: boolean }) => writeFileSync(path, `#!/bin/sh\ncase "$1" in -e) ${o.ok === false ? "echo no" : "echo claude-ui-node-ok"};; -p) echo '${o.exec}';; esac\n`, { mode: 0o755 });
     fake(real, { exec: real });
     const shim = join(bin, "shim");
     mkdirSync(shim);
@@ -92,6 +92,9 @@ describe("target", () => {
     fake(join(shim, "node"), { exec: join(bin, "missing") });
     expect(n(shim)).toBe("rc=1 n=");
     fake(join(shim, "node"), { exec: bin });
+    expect(n(shim)).toBe("rc=1 n=");
+    // A shim whose execPath is /bin/true exits 0 for every argument and prints nothing: not usable.
+    fake(join(shim, "node"), { exec: "/bin/true" });
     expect(n(shim)).toBe("rc=1 n=");
     expect(n("/nonexistent")).toBe("rc=1 n=");
   });
@@ -265,12 +268,12 @@ describe.skipIf(!hasTar)("tar", () => {
 describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", () => {
   const KEY = "1.2.3-1";
   const B = { target: "linux-x64" as const, nodeDir: "node-v9.9.9-linux-x64", claudePackage: "claude-agent-sdk-linux-x64" };
-  function makeBundle(home: string, o: { nodeFails?: boolean; noNode?: boolean } = {}) {
+  function makeBundle(home: string, o: { nodeFails?: boolean; noNode?: boolean; silent?: boolean } = {}) {
     const w = mkdtempSync(join(tmpdir(), "bw-"));
     const nd = join(w, "n", B.nodeDir);
     mkdirSync(join(nd, "bin"), { recursive: true });
     // The fake Node.js: --version of the side passes (or fails), --side prints a marker.
-    writeFileSync(join(nd, "bin", "node"), `#!/bin/sh\nfor a in "$@"; do case "$a" in --version) ${o.nodeFails ? "echo 'libstdc++.so.6: cannot open' >&2; exit 127" : "echo 1.2.3; exit 0"};; --side) echo "bundled side started"; exit 0;; esac; done\n`, { mode: 0o755 });
+    writeFileSync(join(nd, "bin", "node"), `#!/bin/sh\nfor a in "$@"; do case "$a" in --version) ${o.nodeFails ? "echo 'libstdc++.so.6: cannot open' >&2; exit 127" : o.silent ? "exit 0" : "echo 1.2.3; exit 0"};; --side) echo "bundled side started"; exit 0;; esac; done\n`, { mode: 0o755 });
     writeFileSync(join(nd, "LICENSE"), "node license");
     writeFileSync(join(nd, "bin", "npm"), "unused");
     execFileSync("tar", ["-czf", join(w, "node.tar.gz"), "-C", join(w, "n"), B.nodeDir]);
@@ -317,7 +320,7 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
     /** A node on PATH that passes the usable_node rule and answers the side's --version and --side. */
     const nodeIn = () => {
       const bin = tmp("fn-");
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) exit 0;; -p) echo "$0";; esac\nfor a in "$@"; do case "$a" in --version) echo 1.2.3; exit 0;; --side) echo "found node side started"; exit 0;; esac; done\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) echo "$0";; esac\nfor a in "$@"; do case "$a" in --version) echo 1.2.3; exit 0;; --side) echo "found node side started"; exit 0;; esac; done\n`, { mode: 0o755 });
       return bin;
     };
     const runOn = (home: string, script: string, path: string) => spawnSync("sh", ["-c", script], { cwd: home, encoding: "utf8", env: { PATH: `${path}:/usr/bin:/bin`, HOME: home, ANTHROPIC_API_KEY: "x" } });
@@ -332,6 +335,23 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
       expect(r.stdout).toContain("found node side started");
       expect(existsSync(join(sideDir(home), "node"))).toBe(false);
       expect(existsSync(join(sideDir(home), "node_modules/node-pty/prebuilds/linux-x64/pty.node"))).toBe(true);
+    });
+
+    it("the new install must print a version: a node that exits 0 and prints nothing is node_unusable (found) or install_failed (pinned), never swapped in", async () => {
+      const { setupScript } = await import("../src/sides.ts");
+      const silent = tmp("fs-");
+      writeFileSync(join(silent, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) echo "$0";; esac\nexit 0\n`, { mode: 0o755 });
+      const home = tmp("bh-");
+      const tar = await makeBundle(home, { noNode: true });
+      const r = runOn(home, setupScript(tar, KEY, "docker", "needed", F), silent);
+      expect(r.stdout).toMatch(/^CLAUDE_UI_SETUP node_unusable/m);
+      expect(existsSync(sideDir(home))).toBe(false);
+      expect(existsSync(tar)).toBe(false);
+      // Pinned: its own node exits 0 and prints nothing for --version: install_failed, old install untouched.
+      const home2 = tmp("bh-");
+      const r2 = run(home2, setupScript(await makeBundle(home2, { silent: true }), KEY, "docker", "needed", B));
+      expect(r2.stdout).toMatch(/^CLAUDE_UI_SETUP install_failed the new install does not start/m);
+      expect(existsSync(sideDir(home2))).toBe(false);
     });
 
     it("an install made with the found Node.js is installed again with the pinned one when the Node.js is gone", async () => {

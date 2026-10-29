@@ -122,6 +122,8 @@ export async function prepareDockerSide(o: {
   exec?: Exec;
   npm?: Runner;
   setup?: SideSetup;
+  /** Use the pinned Node.js although the container has one (the found one did not start claude-ui). */
+  pinned?: boolean;
   onPhase?: (p: SidePhase) => void;
   onInstall?: (i: { bundle: true } | { fallback: string }) => void;
   bundle?: BundleSource;
@@ -146,11 +148,12 @@ export async function prepareDockerSide(o: {
 }
 
 /** The bundle path of prepareDockerSide: `{fallback}` when the container is not covered or the parts cannot be had (the npm path follows). */
-async function sendBundle(exec: Exec, o: { name: string; pkgDir: string; key: string; onPhase?: (p: SidePhase) => void; onInstall?: (i: { bundle: true }) => void }, src: BundleSource, label: string): Promise<{ path: string; bundle: SideBundle } | { fallback: string }> {
+async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDir: string; key: string; onPhase?: (p: SidePhase) => void; onInstall?: (i: { bundle: true }) => void }, src: BundleSource, label: string): Promise<{ path: string; bundle: SideBundle } | { fallback: string }> {
   const build = sideBuild(o.pkgDir);
   const probe = build ? await exec("docker", ["exec", o.name, "sh", "-c", DOCKER_PROBE], 15_000) : undefined;
   const m = installMethodOf(probe ? parseTarget(probe.stdout) : undefined, !!build);
   if (m.method === "npm") return { fallback: m.reason };
+  if (o.pinned) m.node = "pinned";
   const version = safeKey(src.version);
   const dir = join(src.cacheRoot, version, m.target);
   let parts: Record<string, string>;

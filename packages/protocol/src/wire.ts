@@ -505,6 +505,8 @@ export type SideInfo = {
   bundle?: boolean;
   /** Docker, while starting or after a failed start: why the install uses npm in the container instead of the bundle. */
   fallback?: string;
+  /** While starting: why the Node.js found in the container or distro was not used (it did not start claude-ui), so claude-ui brings its own. */
+  nodeNote?: string;
 };
 /** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). `downloading`: the hub fetches bundle parts. */
 export type SidePhase = "downloading" | "packing" | "copying" | "installing" | "starting";

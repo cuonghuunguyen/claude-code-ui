@@ -171,7 +171,7 @@ describe("sides", () => {
       const npm = `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "$p" >> '${log}'\nfresh=1; [ -d "$p/node_modules" ] && fresh=0\nmkdir -p "$p/node_modules/claude-code-ui/dist"\n${fail ? 'echo partial > "$p/node_modules/partial"' : `echo '${cliSource}' > "$p/node_modules/claude-code-ui/dist/cli.js"`}${failNow}\n${writeBinary}\n`;
       writeFileSync(join(bin, "npm"), npm, { mode: 0o755 });
       // The host node is no "linux" node on macOS: a node that passes the usable_node rule and runs the rest on the host's.
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) exit 0;; -p) case "$2" in *execPath*) echo "$0";; *) exec '${process.execPath}' "$@";; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) case "$2" in *execPath*) echo "$0";; *) exec '${process.execPath}' "$@";; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
       const tgz = join(home, "side.tgz");
       writeFileSync(tgz, "");
       const r = spawnSync("sh", ["-c", setupScript(tgz, key, "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test" } });
@@ -265,7 +265,7 @@ describe("sides", () => {
         if (nodeH) writeFileSync(join(prefix, "include/node/node.h"), "");
         writeFileSync(join(prefix, "include/node/node_version.h"), `#define NODE_MAJOR_VERSION ${maj}\n#define NODE_MINOR_VERSION ${min}\n#define NODE_PATCH_VERSION ${pat}\n`);
       }
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -e) exit 0;; -p) case "$2" in *split*) echo 22;; *execPath*) echo "$(dirname "$(readlink -f "$0")")/node";; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -e) echo claude-ui-node-ok;; -p) case "$2" in *split*) echo 22;; *execPath*) echo "$(dirname "$(readlink -f "$0")")/node";; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
       // symlinked: node reaches PATH through a link in a folder without headers (Volta, asdf, /usr/bin/node -> /opt/node/bin/node)
       let nodeBin = bin;
       if (symlinked) {
@@ -315,6 +315,27 @@ describe("sides", () => {
       for (const part of ["/usr /usr/local", 'dirname "$(dirname "$(node -p process.execPath 2>/dev/null)")"', "include/node/node.h", "npm_config_nodedir"]) expect(s).toContain(part);
       expect(s.indexOf("npm_config_nodedir")).toBeLessThan(s.indexOf('npm install --prefix "$new"'));
     });
+  });
+
+  it("a found Node.js that does not start claude-ui: the hub starts again once with the pinned one, with the reason as a note; no error", async () => {
+    const calls: { pinned?: boolean }[] = [];
+    const notes: (string | undefined)[] = [];
+    let list: () => { nodeNote?: string; state: string }[] = () => [];
+    const spawn = vi.fn(async (_id: string, o: { pinned?: boolean }) => {
+      calls.push({ pinned: o.pinned });
+      notes.push(list().find((x) => x.state === "starting")?.nodeNote);
+      return o.pinned ? inProcessSide() : failingSide("node_unusable");
+    });
+    const two = createSides({ targets: [wslSide("Ubuntu")], spawn: spawn as never, posixLocal: true });
+    list = () => two.list() as never;
+    await two.start("wsl:Ubuntu");
+    expect(calls).toEqual([{ pinned: undefined }, { pinned: true }]);
+    expect(notes[1]).toMatch(/did not start claude-ui/);
+    expect(two.list().find((x) => x.id === "wsl:Ubuntu")).toMatchObject({ state: "ready" });
+    // The pinned start fails too: an error, no third try.
+    spawn.mockClear();
+    const three = createSides({ targets: [wslSide("Ubuntu")], spawn: (async () => failingSide("node_unusable")) as never, posixLocal: true });
+    await expect(three.start("wsl:Ubuntu")).rejects.toThrow();
   });
 
   it("the minimum Node.js comes from engines.node: messages carry it, no script hard-codes a version", () => {

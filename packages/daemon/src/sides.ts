@@ -15,7 +15,7 @@ import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayl
 import type { Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
-import { installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, type ContainerTarget } from "./side-bundle.ts";
+import { installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -176,12 +176,13 @@ function unpackLines(parts: string, withNode: boolean) {
 }
 
 /** The common end of a bundle install: complete? starts on its own Node.js? then swap it in and sweep the other installs. `before`: lines run on `$new` first. */
-function finishLines(before: string[] = []) {
+function finishLines(found: boolean, before: string[] = []) {
   return [
     '  [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && [ -f "$new/node_modules/@anthropic-ai/claude-agent-sdk/package.json" ] && sdk "$new" || fail "the bundle is incomplete"',
     ...before,
     // The new install must run on its Node.js `$nb` (a missing library or a node-pty that does not load shows here) before it replaces the old one.
-    "  e=$(\"$nb\" \"$new/node_modules/claude-code-ui/dist/cli.js\" --version 2>&1 >/dev/null) || fail \"the new install does not start: $(printf '%s' \"$e\" | tail -n 2 | tr '\\n' ' ')\"",
+    // It must print a version, not only exit 0. A found Node.js that fails here is not the end: the hub starts again with its own (`node_unusable`).
+    `  ver "$nb" "$new/node_modules/claude-code-ui/dist/cli.js" || { e=$("$nb" "$new/node_modules/claude-code-ui/dist/cli.js" --version 2>&1 | tail -n 2 | tr '\\n' ' '); ${found ? 'rm -rf "$new"; rm -f "$src"; say node_unusable "$e"' : 'fail "the new install does not start: $e"'}; }`,
     '  if [ -e "$dir" ]; then mv "$dir" "$old" || fail "the old install could not be moved aside"; fi',
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
     '  rm -rf "$old"',
@@ -209,6 +210,7 @@ function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundl
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `src=${q(source)}; ${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    VER_FN,
     ...foundNodeLines(b, true),
     mode === "force" ? "if true; then" : keepCondition(b),
     ...(b.nodeDir ? [] : ['  [ -n "$n" ] || { rm -f "$src"; say node_changed; }']),
@@ -224,7 +226,7 @@ function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundl
     ...unpackLines('$new/b', !!b.nodeDir),
     '  mv "$new/b/app" "$new/node_modules/claude-code-ui" || fail "the claude-ui files could not be unpacked"',
     '  rm -rf "$new/b"',
-    ...finishLines(),
+    ...finishLines(!b.nodeDir),
     "fi",
     'rm -f "$src" 2>/dev/null',
     ...RUN_DOCKER,
@@ -248,6 +250,7 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}; id=${q(h.partsId)}`,
     'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    VER_FN,
     // Another install made from the same parts, hard-linked into $new (any failure: the caller unpacks the parts). The hard links
     // assume installs are immutable: nothing writes in place inside node/ or node_modules/ after the swap (a new build is a new
     // folder), so a file shared by two installs never changes under one of them. The candidate must be complete and run.
@@ -266,7 +269,7 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     // The app: the side JS and its licenses (dist/side without side.json), then package.json.
     `  app() { mkdir -p "$new/node_modules/claude-code-ui/dist" || return 1; for f in "$sd"/*.js "$sd/THIRD_PARTY_LICENSES.txt"; do [ -f "$f" ] && { cp "$f" "$new/node_modules/claude-code-ui/dist/" || return 1; }; done; printf '%s' ${shq(pkg)} > "$new/node_modules/claude-code-ui/package.json"; }`,
     // A reused install must start before it is trusted; if not, it is dropped and the parts are unpacked (once).
-    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && "$nb" "$new/node_modules/claude-code-ui/dist/cli.js" --version >/dev/null 2>&1; then reused=1; rm -rf "$new/b"; fi',
+    '  reused=; if reuse && app && [ -f "$new/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$new" && ver "$nb" "$new/node_modules/claude-code-ui/dist/cli.js"; then reused=1; rm -rf "$new/b"; fi',
     '  if [ -z "$reused" ]; then',
     '  rm -rf "$new"; mkdir -p "$new/b" || fail "no folder could be made in $root"',
     '  [ -f "$pd/node-pty.tgz" ] || fail "the verified claude-ui parts were not found from the distro"',
@@ -274,7 +277,7 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     '  rm -rf "$new/b"',
     '  app || fail "the claude-ui files could not be copied"',
     "  fi",
-    ...finishLines(['  printf \'%s\\n\' "$id" > "$new/parts.id" || fail "the new install could not be written"']),
+    ...finishLines(!b.nodeDir, ['  printf \'%s\\n\' "$id" > "$new/parts.id" || fail "the new install could not be written"']),
     "fi",
     ...RUN_WSL,
   ].join("\n");
@@ -526,7 +529,7 @@ export function createSides(opts: {
   /** Static sides (WSL distros). */
   targets: SideTarget[];
   /** `install`: a Docker start says how it installs: the bundle, or npm in the container and why (`fallback`). */
-  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
+  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; /** The Node.js found there did not start claude-ui: use the pinned one. */ pinned?: boolean; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
   /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
   check?: (id: string) => Promise<SideCheck>;
   key?: () => string;
@@ -652,7 +655,7 @@ export function createSides(opts: {
     changed();
   };
 
-  function start(id: string, setup: SideSetup = "needed"): Promise<void> {
+  function start(id: string, setup: SideSetup = "needed", nodeNote?: string): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
     if (s.state === "ready") return Promise.resolve();
@@ -660,6 +663,8 @@ export function createSides(opts: {
     delete s.phase;
     delete s.bundle;
     delete s.fallback;
+    delete s.nodeNote;
+    if (nodeNote) s.nodeNote = nodeNote;
     Object.assign(s, { state: "starting", message: undefined });
     changed();
     spans.set(s, { top: perf.span("side.start") });
@@ -669,6 +674,7 @@ export function createSides(opts: {
       try {
         proc = await opts.spawn(s.id, {
           setup,
+          ...(nodeNote && { pinned: true }),
           phase: (p) => setPhase(s, p),
           install: (i) => {
             if (s.state !== "starting") return;
@@ -693,6 +699,7 @@ export function createSides(opts: {
       s.proc = proc;
       let setupError: string | undefined;
       let setupCode: string | undefined;
+      let setupDetail = "";
       let stderr = "";
       // The tail below keeps 2000 chars; a long stack would push the crash line out, so it is remembered as it arrives
       // (`partial` carries an unfinished line over to the next chunk).
@@ -711,7 +718,7 @@ export function createSides(opts: {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
-        if (setup) return void ((setupCode = setup[1]), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
+        if (setup) return void ((setupCode = setup[1]), (setupDetail = setup[2]!.trim()), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
         const parsed = parseSideFrame(line);
         if ("error" in parsed) {
           // Before the first frame this is shell start-up output (motd, .bashrc): not logged. Later lines are logged, at most 20 per run.
@@ -771,6 +778,15 @@ export function createSides(opts: {
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
         delete s.phase;
+        // The Node.js found there did not start claude-ui: once, start again with the pinned one (never a dead end).
+        if (!wasReady && setupCode === "node_unusable" && !nodeNote) {
+          const why = `it did not start claude-ui${setupDetail ? ` (${setupDetail.slice(0, 200)})` : ""}`;
+          console.error(`side ${s.id}: the Node.js found there ${why}; starting again with claude-ui's own Node.js`);
+          Object.assign(s, { state: "off", message: undefined, proc: undefined, starting: undefined });
+          s.conns.clear();
+          start(id, setup, why).then(resolve, reject);
+          return;
+        }
         Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         for (const [gid, c] of s.gits) {
@@ -916,7 +932,7 @@ export function createSides(opts: {
 
   return {
     /** Every side, local first. */
-    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }) }))],
+    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }) }))],
     docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
     check,

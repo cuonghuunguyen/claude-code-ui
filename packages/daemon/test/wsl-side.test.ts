@@ -239,14 +239,14 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     tar("node-pty.tgz", "pty", "package");
     tar("sdk.tgz", "sdk", "package");
     tar("claude.tgz", "claude", "package");
-    writeFileSync(join(sideDir, "cli.js"), 'if (process.argv.includes("--version")) process.exit(0); console.log("side started");');
+    writeFileSync(join(sideDir, "cli.js"), 'if (process.argv.includes("--version")) { console.log("1.0.0"); process.exit(0); } console.log("side started");');
     writeFileSync(join(sideDir, "chunk.js"), "");
     writeFileSync(join(sideDir, "side.json"), '{"sdk":"1"}');
     writeFileSync(join(sideDir, "THIRD_PARTY_LICENSES.txt"), "licenses");
     writeFileSync(join(bin, "wslpath"), '#!/bin/sh\nprintf "%s\\n" "$2"\n', { mode: 0o755 });
     const root = join(home, ".local/share/claude-ui/side");
     // A node that passes the usable_node rule (the host's is no linux node on macOS) and runs the rest on the host's.
-    writeFileSync(join(bin, "found-node"), `#!/bin/sh\ncase "$1" in -e) exit 0;; -p) echo "$0";; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+    writeFileSync(join(bin, "found-node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) echo "$0";; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
     const run = (key: string, mode: "needed" | "force" | "never", id = "id-1", extra: Record<string, string> = {}, found = false) => {
       if (found) copyFileSync(join(bin, "found-node"), join(bin, "node"));
       else rmSync(join(bin, "node"), { force: true });

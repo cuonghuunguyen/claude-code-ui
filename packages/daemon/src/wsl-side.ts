@@ -24,6 +24,8 @@ export async function prepareWslSide(o: {
   distro: string;
   pkgDir: string;
   setup?: SideSetup;
+  /** Use the pinned Node.js although the distro has one (the found one did not start claude-ui). */
+  pinned?: boolean;
   exec?: Exec;
   onPhase?: (p: SidePhase) => void;
   onInstall?: (i: { bundle: true } | { fallback: string }) => void;
@@ -41,6 +43,7 @@ export async function prepareWslSide(o: {
   }
   const m = installMethodOf(target, !!build, "distro");
   if (m.method === "npm") return o.onInstall?.({ fallback: m.reason }), undefined;
+  if (o.pinned) m.node = "pinned";
   const src = o.bundle;
   const version = safeKey(src.version);
   const partsDir = join(src.cacheRoot, version, m.target);

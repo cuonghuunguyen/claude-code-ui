@@ -215,7 +215,7 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     if (o.install === "other") pkg("0.4.0-1", true);
     if (o.credentials !== false) (mkdirSync(join(home, ".claude")), writeFileSync(join(home, ".claude/.credentials.json"), "SECRET-DO-NOT-READ"));
     // A fake node answers `-p` (the version), `-v` and `--version`; run as the side it prints a marker.
-    if (o.node !== false) writeFileSync(join(bin, "node"), `#!/bin/sh\necho "node $*" >> '${log}'\ncase "$1" in -e) [ "${(o.node ?? "22.4.0").split(".")[0]}" -ge 22 ];; -p) case "$2" in *execPath*) echo "$0";; *split*) echo ${(o.node ?? "22.4.0").split(".")[0]};; *) echo ${o.node ?? "22.4.0"};; esac;; -v) echo v${o.node ?? "22.4.0"};; *) echo side started;; esac\n`, { mode: 0o755 });
+    if (o.node !== false) writeFileSync(join(bin, "node"), `#!/bin/sh\necho "node $*" >> '${log}'\ncase "$1" in -e) if [ "${(o.node ?? "22.4.0").split(".")[0]}" -ge 22 ]; then echo claude-ui-node-ok; fi;; -p) case "$2" in *execPath*) echo "$0";; *split*) echo ${(o.node ?? "22.4.0").split(".")[0]};; *) echo ${o.node ?? "22.4.0"};; esac;; -v) echo v${o.node ?? "22.4.0"};; *) echo side started;; esac\n`, { mode: 0o755 });
     if (o.tools !== false) for (const t of ["make", "python3", "g++"]) writeFileSync(join(bin, t), "#!/bin/sh\n", { mode: 0o755 });
     // npm only logs (and fakes a complete install into the --prefix).
     writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "npm $*" >> '${log}'\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\nmkdir -p "$p/node_modules/claude-code-ui/dist" "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"\necho x > "$p/node_modules/claude-code-ui/dist/cli.js"\n`, { mode: 0o755 });

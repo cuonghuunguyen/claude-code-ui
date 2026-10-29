@@ -48,17 +48,21 @@ const TARGET_PROBE_BASE = [
 export const NVM_LINE = 'nvm="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$nvm" ] && . "$nvm" >/dev/null 2>&1';
 
 /**
- * Run by the candidate node itself (`node -e`, args: minimum version, arch or ""): exit 0 when it is in range, on Linux, of the
+ * Run by the candidate node itself (`node -e`, args: minimum version, arch or ""): prints NODE_OK_TOKEN when it is in range, on Linux, of the
  * bundle's arch (node-pty ships x64 and arm64 prebuilds only) and no Bun or Deno answering to the name `node`.
  */
 export const NODE_OK_JS =
-  'const v=process.versions,a=v.node.split(".").map(Number),m=process.argv[1].split(".").map(Number);let c=0;for(let i=0;i<3&&!c;i++)c=(a[i]||0)-(m[i]||0);process.exit(c>=0&&process.platform==="linux"&&(!process.argv[2]||process.arch===process.argv[2])&&!v.bun&&!v.deno?0:1)';
+  'const v=process.versions,a=v.node.split(".").map(Number),m=process.argv[1].split(".").map(Number);let c=0;for(let i=0;i<3&&!c;i++)c=(a[i]||0)-(m[i]||0);process.stdout.write(c>=0&&process.platform==="linux"&&(!process.argv[2]||process.arch===process.argv[2])&&!v.bun&&!v.deno?"claude-ui-node-ok":"no")';
+/** What NODE_OK_JS prints: the shell compares the output, not the exit code (a shim whose execPath is /bin/true exits 0 and prints nothing). */
+export const NODE_OK_TOKEN = "claude-ui-node-ok";
+/** `ver <node> <cli.js>`: the side's `--version` must print a version (a digit first), not just exit 0. */
+export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*) return 0;; esac; return 1; }';
 
 /**
  * `usable_node <arch>`: sets `n` to the real binary of the `node` found by `command -v` (its `process.execPath`, not a shim) when
  * that is a regular executable that runs by itself and passes NODE_OK_JS; else fails with `n` empty. The side later runs `$n` directly.
  */
-export const USABLE_NODE_FN = `usable_node() { n=; command -v node >/dev/null 2>&1 || return 1; p=$(node -p process.execPath 2>/dev/null) && [ -f "$p" ] && [ -x "$p" ] && "$p" -e '${NODE_OK_JS}' '${NODE_MIN}' "$1" >/dev/null 2>&1 && n=$p; }`;
+export const USABLE_NODE_FN = `usable_node() { n=; command -v node >/dev/null 2>&1 || return 1; p=$(node -p process.execPath 2>/dev/null) && [ -f "$p" ] && [ -x "$p" ] && [ "$("$p" -e '${NODE_OK_JS}' '${NODE_MIN}' "$1" 2>/dev/null)" = '${NODE_OK_TOKEN}' ] && n=$p; }`;
 /** The arch name of the bundle target as `process.arch` says it (empty: unknown, no arch check). */
 const NODE_ARCH_LINES = 'case "$(uname -m)" in x86_64|amd64) na=x64;; aarch64|arm64) na=arm64;; *) na=;; esac';
 const NODE_PROBE_LINES = [USABLE_NODE_FN, NODE_ARCH_LINES, 'usable_node "$na" && emit foundnode 1 || emit foundnode 0'];

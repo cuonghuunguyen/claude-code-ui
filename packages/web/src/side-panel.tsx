@@ -198,6 +198,11 @@ export function SidePanel({
             <Elapsed />
           </p>
         ) : null}
+        {inProgress && side.nodeNote ? (
+          <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-node-note">
+            The Node.js in the {noun} was not used: {side.nodeNote}. claude-ui installs its own Node.js.
+          </p>
+        ) : null}
         {inProgress && side.fallback ? (
           <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-fallback">
             Installing with npm in the {noun} because {side.fallback}.
