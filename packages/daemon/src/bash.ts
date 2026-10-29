@@ -16,6 +16,14 @@ export type BashResult = { stdout: string; stderr: string; exitCode?: number; st
  */
 export type BashRun = { done: Promise<BashResult>; kill(): void; background(): void };
 
+/** Commands moved to the background that still run: ended with the daemon (Claude Code ends its background shells on exit too). */
+const moved = new Set<() => void>();
+let exitHook = false;
+/** Kills the process group of every moved command, at once (SIGKILL follows SIGTERM without the grace wait: the process is exiting). */
+export function killMovedShells() {
+  for (const k of [...moved]) k();
+}
+
 /** argv for `shell -c command`: POSIX `-c`; pwsh/powershell `-NoProfile -Command`; cmd `/d /s /c`. */
 export function shellArgs(shellPath: string, command: string): string[] {
   const exe = win32.basename(shellPath.replace(/\//g, "\\")).toLowerCase().replace(/\.exe$/, "");
@@ -101,6 +109,19 @@ export function runBash(
       child.once("close", () => (clearTimeout(t), finish(code, signal)));
     });
   });
-  const background = () => (tail = true, clearTimeout(timer), (timer = undefined));
+  const background = () => {
+    tail = true;
+    clearTimeout(timer);
+    timer = undefined;
+    if (closed) return;
+    const end = () => {
+      kill();
+      if (!win && child.pid !== undefined) try { process.kill(-child.pid, "SIGKILL"); } catch { /* group gone */ }
+    };
+    moved.add(end);
+    void done.then(() => moved.delete(end));
+    // A hard crash (SIGKILL, power loss) skips this and may leave the process running.
+    if (!exitHook) (exitHook = true), process.on("exit", killMovedShells);
+  };
   return { done, kill, background };
 }

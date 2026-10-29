@@ -2199,15 +2199,17 @@ describe("Session bash mode in the background (GH-485)", () => {
     expect(u.ctl.killed).toBe(1);
   });
 
-  it("an end notice that arrives while a turn runs waits for the turn to end; it does not interrupt it", async () => {
-    const seen: { uuid?: string; content: string; shouldQuery?: boolean }[] = [];
+  type Seen = { uuid?: string; content: string; shouldQuery?: boolean };
+  /** A CLI that reads its input at once (steering); only the reply to "work" waits for `release()`. `emit` sends any SDK message. */
+  const steerQuery = () => {
+    const seen: Seen[] = [];
     let release!: () => void;
     const hold = new Promise<void>((r) => (release = r));
-    // The CLI reads its input at once (steering); only the reply to "work" waits for the test.
+    let emit!: (m: unknown) => void;
     const query = ({ prompt }: { prompt: AsyncIterable<{ uuid?: string; shouldQuery?: boolean; message: { content: unknown } }> }) => {
       const out: unknown[] = [];
       let wake = () => {};
-      const emit = (m: unknown) => (out.push(m), wake());
+      emit = (m: unknown) => (out.push(m), wake());
       void (async () => {
         for await (const m of prompt) {
           seen.push({ uuid: m.uuid, content: String(m.message.content), shouldQuery: m.shouldQuery });
@@ -2230,6 +2232,11 @@ describe("Session bash mode in the background (GH-485)", () => {
         { supportedCommands: async () => [], close() {} },
       );
     };
+    return { query, seen, release, emit: (m: unknown) => emit(m), noticesSeen: () => seen.filter((m) => m.content.startsWith("<task-notification>")) };
+  };
+
+  it("an end notice that arrives while a turn runs waits for the turn to end; it does not interrupt it", async () => {
+    const { query, seen, release } = steerQuery();
     const t = setup(query);
     await moved(t);
     await new Promise((r) => setTimeout(r, 30));
@@ -2242,6 +2249,67 @@ describe("Session bash mode in the background (GH-485)", () => {
     release();
     await until(t.events, () => seen.some((m) => m.content.startsWith("<task-notification>")));
     expect(seen.at(-1)!.shouldQuery).toBeUndefined();
+  });
+
+  it("a notice waits while the CLI starts its own turn on a Claude shell's end (cliTurn), then goes in (GH-485)", async () => {
+    const { query, release, emit, noticesSeen } = steerQuery();
+    release();
+    const t = setup(query);
+    await moved(t);
+    await new Promise((r) => setTimeout(r, 30));
+    emit({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: "x", task_id: "k1", tool_use_id: "k1", status: "completed", output_file: "", summary: "" });
+    await new Promise((r) => setTimeout(r, 30));
+    t.ctl.finish({ stdout: "x", exitCode: 0 });
+    await until(t.events, () => bashParts(t.events).at(-1)!.status === "done");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(noticesSeen()).toHaveLength(0);
+    emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] });
+    await until(t.events, () => noticesSeen().length > 0);
+  });
+
+  it("a notice waits while a terminal CLI turn runs on the session, and goes in when that turn ends (GH-485)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { runBash, ctl } = fakeRun();
+      const { query, noticesSeen } = steerQuery();
+      let cli = true;
+      const cliMsg = { type: "user", uuid: "cli-p", session_id: "x", message: { role: "user", content: "from the terminal" }, parent_tool_use_id: null, parent_agent_id: null };
+      const s = Session.restore(randomUUID(), "/tmp", history, { query: query as never, runBash, cliTurnRunning: () => cli, readTranscript: async () => ({ main: [...history, cliMsg] as never, runs: [] }) });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.bash("ls");
+      const id = bashParts(events)[0]!.id;
+      expect(await s.backgroundShell(id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(10);
+      await s.sync();
+      expect(s.externalTurnRunning()).toBe(true);
+      ctl.finish({ stdout: "x", exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(noticesSeen()).toHaveLength(0);
+      cli = false;
+      await vi.advanceTimersByTimeAsync(EXTERNAL_TURN_QUIET_MS + 10);
+      expect(s.externalTurnRunning()).toBe(false);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(noticesSeen()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a killed notice moves the rewind fork point: a rewound prompt keeps it (GH-485)", async () => {
+    const t = setup();
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    await t.s.stopShell(id);
+    await until(t.events, () => notices().length > 0);
+    const notice = notices().at(-1)!.uuid;
+    t.s.prompt("q");
+    const prompt = t.events.filter((e) => e.part.type === "user_text").at(-1)!.part.id;
+    await until(t.events, (e) => e.part.type === "turn_result");
+    await until(t.events, () => t.s.info().state === "idle");
+    await t.s.rewind(prompt, "conversation");
+    t.s.prompt("again");
+    expect(calls.at(-1)).toMatchObject({ resume: t.s.id, resumeSessionAt: notice });
   });
 });
 

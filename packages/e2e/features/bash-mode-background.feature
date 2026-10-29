@@ -11,14 +11,14 @@ Feature: A running ! command can be moved to the background
     And I click Run in background on the bash card
     Then the bash card runs in the background
     And the status bar shows "1 shell"
-    When I send "Reply with exactly: FREE"
+    When I note the reply count
+    And I send "Reply with exactly: FREE"
     And the turn has finished
     And I capture "bang-backgrounded"
-    And I note the reply count
     Then a bash card shows "bang-42"
     And the bash card is finished
     And the status bar shows no shells
-    And Claude replies after the shell ended
+    And Claude has replied 2 times since the noted count
     And the page has no horizontal scroll
     And I capture "bang-notified"
 

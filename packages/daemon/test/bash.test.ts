@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BASH_KILL_GRACE_MS, runBash, shellArgs } from "../src/bash.ts";
+import { BASH_KILL_GRACE_MS, killMovedShells, runBash, shellArgs } from "../src/bash.ts";
 
 const posix = it.skipIf(process.platform === "win32");
 const dir = () => realpathSync(mkdtempSync(join(tmpdir(), "bash-")));
@@ -82,6 +82,18 @@ describe("runBash background() (GH-485)", () => {
     const short = runBash("echo hi", dir(), () => {});
     short.background();
     expect((await short.done).stdout).toBe("hi\n");
+  });
+
+  posix("daemon shutdown kills the process group of a moved command, not of a foreground one or a finished one", async () => {
+    const moved = runBash("sleep 30 & sleep 30; wait", dir(), () => {});
+    moved.background();
+    const fg = runBash("sleep 1; echo fg", dir(), () => {});
+    const finished = runBash("echo hi", dir(), () => {});
+    finished.background();
+    await finished.done;
+    killMovedShells();
+    expect((await moved.done).stopped).toBe(true);
+    expect(await fg.done).toMatchObject({ stdout: "fg\n", stopped: false });
   });
 
   posix("kill() still stops a moved command", async () => {

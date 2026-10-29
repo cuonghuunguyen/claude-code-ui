@@ -40,6 +40,11 @@ Then("Claude replies after the shell ended", async ({ page, memo }) => {
   await expect.poll(() => page.getByTestId("assistant-text").count(), { timeout: TURN_MS }).toBeGreaterThan(memo.texts ?? 0);
 });
 
+// The count is noted before the prompt that frees the session: its reply and the reply to the end notice are the two.
+Then("Claude has replied {int} times since the noted count", async ({ page, memo }, n: number) => {
+  await expect.poll(() => page.getByTestId("assistant-text").count(), { timeout: TURN_MS }).toBeGreaterThanOrEqual((memo.texts ?? 0) + n);
+});
+
 // Absent means absent after the registration delay too, so wait past it first.
 Then("the {string} tool card has no Run in background button", async ({ page }, text: string) => {
   await expect(toolCard(page, text)).toBeVisible();
@@ -80,6 +85,10 @@ Then("no Claude reply starts for {int} seconds", async ({ page, memo }, s: numbe
 
 Then("the shell output starts with the truncation marker and ends with {string}", async ({ page }, last: string) => {
   const out = page.getByTestId("shells-dialog").getByTestId("shell-output");
+  // The list shows the last 20 lines until expanded; the marker is the first line of the tail.
+  const more = out.getByRole("button", { name: /^Show all \d+ lines$/ });
+  await expect(more).toBeVisible({ timeout: 60_000 });
+  await more.click();
   await expect(out).toContainText("showing the last 30000 characters", { timeout: 60_000 });
   await expect(out).toContainText(last);
   const text = (await out.innerText()).replace(/\s+/g, " ");

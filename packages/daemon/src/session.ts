@@ -422,7 +422,7 @@ export class Session {
    */
   async close() {
     this.bashRun?.kill();
-    for (const b of this.bashShells.values()) b.run.kill();
+    for (const b of this.bashShells.values()) ((b.cleared = true), b.run.kill());
     clearTimeout(this.externalQuiet);
     clearTimeout(this.staleTimer);
     this.generation++;
@@ -536,7 +536,8 @@ export class Session {
       if (bg) this.bashShells.delete(id);
       else this.bashRun = undefined;
       part({ stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, status: r.stopped ? "stopped" : r.exitCode ? "error" : "done" });
-      if (!this.isLive() || generation !== this.generation) return;
+      // A moved command outlives a dropped query (sync, rewind); close() and /clear mark it `cleared`.
+      if (!this.isLive() || (!bg && generation !== this.generation)) return;
       if (bg) return shell?.cleared ? undefined : this.bashEnded(id, command, r);
       this.appendBashRecords([id, outId], bashRecords(command, r.stdout, r.stderr, r.exitCode));
       this.flushBashNotices();
@@ -570,13 +571,15 @@ export class Session {
   }
 
   private flushBashNotices() {
-    if (!this.bashNotices.length || this.state !== "idle" || this.pending.size || this.rewinding || this.bashRun || !this.isLive()) return;
+    if (!this.bashNotices.length || !this.takesQueued()) return;
     for (const { status, content } of this.bashNotices.splice(0)) {
       const uuid = randomUUID();
       this.known.add(uuid);
       this.own.add(uuid);
       this.timeline.push(uuid);
       const turn = status !== "killed";
+      // No reply follows a killed notice: it is the rewind fork point like the other records.
+      if (!turn) this.lastAssistant = uuid;
       if (!this.query) this.start(turn);
       if (turn) this.setState("running");
       this.input.push({ type: "user", uuid, ...(!turn && { shouldQuery: false }), message: { role: "user", content }, parent_tool_use_id: null });
@@ -903,6 +906,7 @@ export class Session {
     if (running === this.externalTurn) return;
     this.externalTurn = running;
     this.emit({ type: "external_turn", id: "external_turn", running });
+    if (!running) this.flushBashNotices();
   }
 
   /** The query to send control requests to, started (resumed) without a prompt if none runs. */
