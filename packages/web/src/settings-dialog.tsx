@@ -229,6 +229,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
   const [jiraToken, setJiraToken] = useState(false);
+  const [jiraTokenReset, setJiraTokenReset] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
   const [layout, setLayout] = useState(() => loadSidebarView().layout);
@@ -259,7 +260,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -272,6 +273,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       setSettings(r.settings);
       setDaemon(r.daemon);
       setJiraToken(!!r.jiraToken);
+      setJiraTokenReset(!!r.jiraTokenReset);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -605,7 +607,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
-      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setError(undefined))} onError={setError} /> }]
+      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
