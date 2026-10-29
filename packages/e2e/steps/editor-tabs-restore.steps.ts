@@ -7,6 +7,15 @@ import { Then, When } from "./fixtures.ts";
 const files = (page: Page): Locator => page.getByTestId("files-panel");
 const tab = (page: Page, name: string): Locator => files(page).getByTestId("editor-tab").filter({ hasText: name });
 
+/** In the drawer layout the opened tree covers the editor: close it first. */
+async function closeTreeDrawer(page: Page): Promise<void> {
+  const drawer = page.getByTestId("file-tree-drawer");
+  if (await drawer.isVisible()) {
+    await page.getByTestId("toggle-tree").click();
+    await expect(drawer).toBeHidden();
+  }
+}
+
 When("I double click the Files editor tab {string}", async ({ page }, name: string) => {
   await tab(page, name).dblclick();
 });
@@ -27,10 +36,12 @@ When("I change the project file {string} to {string}", async ({ project }, rel: 
 });
 
 When("I save the Files editor", async ({ page }) => {
+  await closeTreeDrawer(page);
   await files(page).getByTestId("editor-save").click();
 });
 
 When("I click Reload from disk in the Files editor", async ({ page }) => {
+  await closeTreeDrawer(page);
   await files(page).getByRole("button", { name: "Reload from disk" }).click();
 });
 

@@ -15,6 +15,9 @@ Given("the scratch project has the Markdown file {string} with a table of {int} 
 
 When("I open the tree file {string}", async ({ page }, rel: string) => {
   const row = page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`).first();
+  // Opening a file folds the tree away; show it again for the next file.
+  const toggle = page.getByTestId("toggle-tree");
+  if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.click();
   await expect(page.getByTestId("file-path-header")).toBeVisible();
