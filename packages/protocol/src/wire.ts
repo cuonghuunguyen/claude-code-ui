@@ -160,6 +160,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "side.start"; side: string; setup?: SideSetup }
   /** Read-only look at a side (nothing is installed or started; the hub answers it, a side never sees it): reply `SideCheck`, error `unknown_side`. */
   | { type: "side.check"; side: string }
+  /** "Start with Claude UI" (`start`: the hub starts the side with itself) and "Update automatically" (`update`) of a side; reply `{}`; error `unknown_side`, `bad_request`. */
+  | { type: "side.prefs"; side: string; start?: boolean; update?: boolean }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
@@ -510,6 +512,14 @@ export type SideInfo = {
   fallback?: string;
   /** While starting: why the Node.js found in the container or distro was not used (it did not start claude-ui), so claude-ui brings its own. */
   nodeNote?: string;
+  /** Saved: the hub starts this side with itself ("Start with Claude UI"). */
+  autoStart?: true;
+  /** Only `false`: the hub does not update this side's claude-ui by itself. */
+  autoUpdate?: false;
+  /** `off` and the installed claude-ui is not this build: an update is needed (Update). */
+  update?: true;
+  /** A saved side the hub does not list now (a Docker container that is not running); named for Settings and the sidebar. */
+  missing?: true;
 };
 /** What a starting side is doing (`SideInfo.phase`, only while `state` is `starting`). `downloading`: the hub fetches bundle parts. */
 export type SidePhase = "downloading" | "packing" | "copying" | "installing" | "starting";

@@ -126,8 +126,10 @@ export async function prepareDockerSide(o: {
   pinned?: boolean;
   onPhase?: (p: SidePhase) => void;
   onInstall?: (i: { bundle: true } | { fallback: string }) => void;
+  /** An automatic update: when the bundle cannot be used, `onInstall({fallback})` and `never: true` (nothing packed or copied, no npm). */
+  bundleOnly?: boolean;
   bundle?: BundleSource;
-}): Promise<{ path: string; bundle?: SideBundle }> {
+}): Promise<{ path: string; bundle?: SideBundle; never?: true }> {
   const exec = o.exec ?? execRun;
   const label = `Docker: ${o.name}`;
   const st = await exec("docker", ["inspect", "-f", "{{.State.Running}}", o.name], 10_000);
@@ -139,6 +141,7 @@ export async function prepareDockerSide(o: {
     const sent = await sendBundle(exec, o, o.bundle, label);
     if ("path" in sent) return sent;
     o.onInstall?.({ fallback: sent.fallback });
+    if (o.bundleOnly) return { path: "", never: true };
   }
   o.onPhase?.("packing");
   mkdirSync(o.cacheDir, { recursive: true });

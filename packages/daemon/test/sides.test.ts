@@ -14,7 +14,7 @@ import { SideGone } from "../src/wsl-git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
-import { checkMessage, checkScript, createRouter, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupMessage, setupScript, wslArgs, wslSide, type SideProcess } from "../src/sides.ts";
+import { checkMessage, checkScript, createRouter, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupMessage, setupScript, wslArgs, wslSide, type SavedSide, type SideProcess } from "../src/sides.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -64,12 +64,12 @@ function failingSide(code: string): SideProcess {
 const hasSh = spawnSync("sh", ["-c", "true"]).status === 0;
 
 const pushes: PushPayload[] = [];
-let saved: string[] = [];
+let saved: SavedSide[] = [];
 const sides = createSides({
   targets: [wslSide("Ubuntu"), wslSide("Old")],
   spawn: (id) => (id === "wsl:Ubuntu" ? inProcessSide() : failingSide("node_old")),
   onPush: (p) => pushes.push(p),
-  save: (ids) => (saved = ids),
+  save: (x) => (saved = x),
   posixLocal: true,
 });
 const hub = createDaemon({ webRoot, token, roots: [winRoot], query: fakeQuery as never, projects: createProjects(), history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, sides });
@@ -360,7 +360,7 @@ describe("sides", () => {
     expect(before.result.sessions).toEqual([]);
 
     expect(await c.request({ type: "side.start", side: "wsl:Ubuntu" })).toMatchObject({ type: "reply" });
-    expect(saved).toEqual(["wsl:Ubuntu"]);
+    expect(saved.map((x) => x.id)).toEqual(["wsl:Ubuntu"]);
     // The side's folders, from the picker's side chooser.
     expect((await c.request({ type: "fs.list", side: "wsl:Ubuntu" })).result.entries).toEqual([{ name: wslRoot, path: wslRoot, isDir: true }]);
     expect((await c.request({ type: "fs.list" })).result.entries).toEqual([{ name: winRoot, path: winRoot, isDir: true }]);
@@ -370,7 +370,7 @@ describe("sides", () => {
     expect(after.result.projects).toEqual([wslRoot]);
     expect(after.result.sessions).toMatchObject([{ id: sideSession, cwd: wslRoot, title: "side work" }]);
     expect(after.result.cwdSides).toEqual({ [wslRoot]: "wsl:Ubuntu" });
-    expect(after.result.sides[1]).toEqual({ id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" });
+    expect(after.result.sides[1]).toEqual({ id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready", autoStart: true });
     c.ws.close();
   });
 
@@ -676,7 +676,7 @@ const dockSession = "6e2f3a4b-5c6d-4e7f-8091-92b3c4d5e6f7";
 // These route by POSIX paths (the side's roots are POSIX): they run where the daemon runs, on Linux and macOS.
 describe.skipIf(process.platform === "win32")("docker sides", () => {
   const localRoot = dir("dock-host-");
-  let dockSaved: string[] = [];
+  let dockSaved: SavedSide[] = [];
   let containers = ["dev", "stopped"];
   let dockerState: "ok" | "down" | "empty" | undefined = "ok";
   let devProc: SideProcess;
@@ -685,11 +685,12 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     targets: [],
     localLabel: "Linux",
     posixLocal: true,
+    restartMs: [],
     discoverMs: 0,
     discover: async () => containers.map(dockerSide),
     dockerState: () => dockerState,
     spawn: async (id) => (id === "docker:dev" ? (devProc = inProcessSide(dockRoot, dockSession, (d) => (sideDaemon = d))) : Promise.reject(new Error("Docker: stopped is not running. Start it (docker start stopped), then retry."))),
-    save: (ids) => (dockSaved = ids),
+    save: (x) => (dockSaved = x),
   });
   const dhub = createDaemon({ webRoot, token, roots: [localRoot], query: fakeQuery as never, projects: createProjects(), appSettings: createSettings(), history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, sides: dsides });
   const ready = new Promise<void>((r) => dhub.listen(0, "127.0.0.1", r));
@@ -733,7 +734,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   it("starts a container side from the chooser; its projects and sessions route to it", async () => {
     const c = await client(await dport());
     expect(await c.request({ type: "side.start", side: "docker:dev" })).toMatchObject({ type: "reply" });
-    expect(dockSaved).toEqual(["docker:dev"]);
+    expect(dockSaved.map((x) => x.id)).toEqual(["docker:dev"]);
     expect((await c.request({ type: "fs.list", side: "docker:dev" })).result.entries).toEqual([{ name: dockRoot, path: dockRoot, isDir: true }]);
     expect(await c.request({ type: "project.open", cwd: dockRoot, side: "docker:dev" })).toMatchObject({ result: { cwd: dockRoot } });
     await c.request({ type: "session.list" });
@@ -820,21 +821,21 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     devProc.kill();
     await expect
       .poll(async () => (await c.request({ type: "session.list" })).result.sides.find((s: { id: string }) => s.id === "docker:dev"))
-      .toEqual({ id: "docker:dev", label: "Docker: dev", state: "error", message: "Docker: dev stopped (exit code 0). Retry to start it again." });
+      .toEqual({ id: "docker:dev", label: "Docker: dev", state: "error", autoStart: true, message: "Docker: dev stopped (exit code 0). Retry to start it again." });
     c.ws.close();
   });
 });
 
 describe("docker side discovery", () => {
   it("a saved container side starts when discovery lists it", async () => {
-    let s2: string[] = [];
+    let s2: SavedSide[] = [];
     const spawn = vi.fn(async () => inProcessSide(dockRoot, dockSession));
-    const s = createSides({ targets: [], saved: ["docker:dev", "wsl:Gone"], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn, save: (ids) => (s2 = ids) });
-    expect(s.list().some((x) => x.id.startsWith("docker:"))).toBe(false);
+    const s = createSides({ targets: [], saved: [{ id: "docker:dev" }, { id: "wsl:Gone" }], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn, save: (x) => (s2 = x) });
+    expect(s.list().find((x) => x.id === "docker:dev")).toMatchObject({ missing: true });
     expect(spawn).not.toHaveBeenCalled();
     await s.refresh();
     await expect.poll(() => s.list().find((x) => x.id === "docker:dev")?.state).toBe("ready");
-    expect(s2).toEqual(expect.arrayContaining(["docker:dev", "wsl:Gone"]));
+    expect(s2.map((x) => x.id)).toEqual(expect.arrayContaining(["docker:dev", "wsl:Gone"]));
     await s.refresh();
     expect(spawn).toHaveBeenCalledTimes(1);
     s.close();
@@ -863,7 +864,7 @@ describe("a ready side that exits (GH-263)", () => {
   /** Runs a ready side that dies with `stderrText`; resolves with the side's message. */
   async function messageAfter(stderrText: string | string[], code = 1) {
     const side = dyingSide(stderrText, code);
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
     side.die();
     await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
@@ -916,7 +917,7 @@ describe("a ready side that exits (GH-263)", () => {
 
   it("a non-zero exit with no stderr keeps the short message", async () => {
     const side = dyingSide("", 1);
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
     side.die();
     await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
@@ -1043,7 +1044,7 @@ describe("git frames", () => {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=a", "-c", "user.email=a@x.test", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
     const side = gitSide(runGit);
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
     expect(s.wslReady("ubuntu")).toBe("wsl:Ubuntu");
     const r = await s.git("wsl:Ubuntu", { cwd: repo, args: ["cat-file", "--batch"], env: { GIT_TERMINAL_PROMPT: "0" }, input: "HEAD\n" });
@@ -1054,7 +1055,7 @@ describe("git frames", () => {
 
   it("git to a side that is not ready rejects SideGone; a side that exits fails its pending git with SideGone", async () => {
     const side = gitSide(() => new Promise(() => {}));
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     expect(s.wslReady("Ubuntu")).toBeUndefined();
     await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toBeInstanceOf(SideGone);
     await s.start("wsl:Ubuntu");
@@ -1066,7 +1067,7 @@ describe("git frames", () => {
 
   it("a side without a git runner answers an error instead of hanging", async () => {
     const side = gitSide();
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => side.proc });
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     await s.start("wsl:Ubuntu");
     await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toThrow("no git");
     s.close();

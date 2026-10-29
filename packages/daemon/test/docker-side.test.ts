@@ -392,12 +392,12 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
   }
   // The cache root is named like the real one: pruneCache only touches claude-ui's side cache.
   const sideRoot = () => join(dir("home-"), "claude-ui", "side");
-  const go = (o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; probe?: Answer }) => {
+  const go = (o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; probe?: Answer; bundleOnly?: boolean }) => {
     const d = docker(o.arch, o.libc, o.probe);
     const phases: string[] = [];
     const installs: unknown[] = [];
     const cacheRoot = o.cacheRoot ?? sideRoot();
-    const result = prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(o.withSide), key: "1.0.0-1", cacheDir: dir("cache-"), exec: d.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts } });
+    const result = prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(o.withSide), key: "1.0.0-1", cacheDir: dir("cache-"), exec: d.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), ...(o.bundleOnly && { bundleOnly: true }), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts } });
     return { ...d, phases, installs, result, cacheRoot };
   };
 
@@ -453,6 +453,23 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
       expect(g.installs).toEqual([{ fallback: expect.stringMatching(why) }]);
       expect(g.phases.slice(-2)).toEqual(["packing", "copying"]);
     }
+  });
+
+  it("bundleOnly: a target not covered, no dist/side, offline cold cache or a failed probe: the fallback is told, nothing is packed or copied, the result is as for never", async () => {
+    for (const [o, why] of [
+      [{ libc: "musl" }, /musl/],
+      [{ withSide: false }, /no container bundle/],
+      [{ fetch: offline }, /could not download Node\.js/],
+      [{ probe: { code: null } }, /did not answer the target probe/],
+    ] as const) {
+      const g = go({ ...o, bundleOnly: true });
+      expect(await g.result).toEqual({ path: "", never: true });
+      expect(g.installs).toEqual([{ fallback: expect.stringMatching(why) }]);
+      expect(g.calls.some((c) => c[0] === "cp")).toBe(false);
+      expect(g.phases).not.toContain("packing");
+    }
+    // A covered container still gets the bundle.
+    expect((await go({ bundleOnly: true }).result).bundle?.target).toBe("linux-x64");
   });
 
   const DAY = 24 * 3_600_000;
