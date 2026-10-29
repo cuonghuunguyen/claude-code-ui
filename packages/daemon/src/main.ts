@@ -12,7 +12,7 @@ import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
-import { sideCacheDir } from "./side-bundle.ts";
+import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
@@ -99,6 +99,8 @@ if (side) {
   const sidePackage = sidePackageDir();
   const sideKey = () => sideKeyOf(sidePackage);
   const docker = dockerCli();
+  // A hub that never starts a side keeps its parts from another hub's prune (7 days unused).
+  if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(), safeKey(version));
   /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
   const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean): Promise<SideProcess> => {
     const key = sideKey();
@@ -129,7 +131,7 @@ if (side) {
           spawn: (id, { setup, phase, install, pinned }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install, pinned) : spawnWsl(id.slice("wsl:".length), setup, phase, install, pinned)),
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
-          check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey() }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun })),
+          check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey(), bundle: { cacheRoot: sideCacheDir(), version, registry } }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: { cacheRoot: sideCacheDir(), version, registry } })),
           onPush: forwardSidePush(push),
           saved: readSaved(sidesFile),
           save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),

@@ -12,10 +12,10 @@ import { join, posix } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
-import type { Exec } from "./docker-side.ts";
+import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
-import { installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
+import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -461,7 +461,7 @@ export const blockedCheck = (key: string, label: string, reason: SideCheckReason
 });
 
 /** WSL: runs the check script in the distro (`wsl.exe` boots a stopped distro, nothing else changes). */
-export async function checkWslSide(o: { distro: string; pkgDir: string; key: string; exec: Exec; timeoutMs?: number }): Promise<SideCheck> {
+export async function checkWslSide(o: { distro: string; pkgDir: string; key: string; exec: Exec; timeoutMs?: number; bundle?: BundleSource }): Promise<SideCheck> {
   const label = wslSide(o.distro).label;
   const r = await o.exec("wsl.exe", wslArgs(o.distro, checkScript(o.key, "wsl", o.pkgDir)), o.timeoutMs ?? 30_000);
   const checked = parseCheck(r.stdout);
@@ -471,7 +471,7 @@ export async function checkWslSide(o: { distro: string; pkgDir: string; key: str
   }
   // The install method follows the distro's target and whether this build has dist/side (the bundle's JS), like a container's.
   const m = installMethodOf(checked.target, !!sideBuild(o.pkgDir), "distro");
-  return verdictOf({ key: o.key, label, kind: "wsl", build: hasBuild(o.pkgDir, false), checked, install: m.method === "bundle" ? { method: "bundle" } : m });
+  return verdictOf({ key: o.key, label, kind: "wsl", build: hasBuild(o.pkgDir, false), checked, install: m.method === "bundle" ? { method: "bundle", ...(o.bundle && { parts: bundleParts(o.bundle, m, sideBuild(o.pkgDir)!.sdkVersion) }) } : m });
 }
 
 /** Arguments for wsl.exe: the script travels base64-encoded (no quotes or newlines in the Windows command line) and is sourced. */

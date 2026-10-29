@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, utimesSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -35,6 +35,9 @@ const offline = (async () => {
   throw new TypeError("fetch failed");
 }) as unknown as typeof fetch;
 
+// Named like the real cache: pruneCache only touches claude-ui's side cache.
+const sideRoot = () => join(dir("wsl-home-"), "claude-ui", "side");
+
 describe("prepareWslSide", () => {
   function go(o: { foundnode?: string; seen?: unknown[]; arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; setup?: "never" | "needed" | "force" }) {
     const calls: string[][] = [];
@@ -44,7 +47,7 @@ describe("prepareWslSide", () => {
     };
     const phases: string[] = [];
     const installs: unknown[] = [];
-    const cacheRoot = o.cacheRoot ?? dir("wsl-cache-");
+    const cacheRoot = o.cacheRoot ?? sideRoot();
     const result = prepareWslSide({ distro: "Ubuntu", pkgDir: sideBuildPkg(o.withSide), setup: o.setup, exec, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts: o.seen ? (_t, p) => (o.seen!.push(p.node), p.node === "found" ? [] : parts()) : parts } });
     return { calls, phases, installs, result, cacheRoot };
   }
@@ -110,7 +113,7 @@ describe("prepareWslSide", () => {
     ] as const) {
       const installs: unknown[] = [];
       const exec: Exec = async () => r;
-      expect(await prepareWslSide({ distro: "U", pkgDir: sideBuildPkg(), exec, onInstall: (i) => installs.push(i), bundle: { cacheRoot: dir("wsl-cache-"), version: "1.0.0", fetch: okFetch, parts } })).toBeUndefined();
+      expect(await prepareWslSide({ distro: "U", pkgDir: sideBuildPkg(), exec, onInstall: (i) => installs.push(i), bundle: { cacheRoot: sideRoot(), version: "1.0.0", fetch: okFetch, parts } })).toBeUndefined();
       expect(installs).toEqual([{ fallback: why }]);
     }
     for (const [arch, libc] of [["armv7l", "glibc"], ["x86_64", "musl"]] as const) {
@@ -119,6 +122,33 @@ describe("prepareWslSide", () => {
       expect(JSON.stringify(g.installs)).toMatch(/the distro/);
       expect(JSON.stringify(g.installs)).not.toMatch(/container/);
     }
+  });
+
+  it("a checksum mismatch falls back with the full sentence", async () => {
+    const g = go({ fetch: (async () => new Response("evil")) as unknown as typeof fetch });
+    await g.result;
+    expect(g.installs).toEqual([{ fallback: "the Node.js the host downloaded does not match its checksum (it was not used) and the host has no verified copy of it" }]);
+  });
+
+  it("marks this version used, then prunes by the 7-day rule: a version used 2 days ago stays, one unused for 8 days goes", async () => {
+    const cacheRoot = sideRoot();
+    for (const [v, days] of [["0.9.0", 2], ["0.8.0", 8]] as const) {
+      mkdirSync(join(cacheRoot, v), { recursive: true });
+      writeFileSync(join(cacheRoot, v, ".used"), "");
+      const t = new Date(Date.now() - days * 24 * 3_600_000);
+      utimesSync(join(cacheRoot, v, ".used"), t, t);
+    }
+    await go({ cacheRoot }).result;
+    expect(readdirSync(cacheRoot).sort()).toEqual(["0.9.0", "1.0.0"]);
+    expect(existsSync(join(cacheRoot, "1.0.0", ".used"))).toBe(true);
+  });
+
+  it("this version is marked used before the parts are fetched", async () => {
+    const cacheRoot = sideRoot();
+    let markedAtFetch: boolean | undefined;
+    const spy = (async () => ((markedAtFetch ??= existsSync(join(cacheRoot, "1.0.0", ".used"))), new Response("node"))) as unknown as typeof fetch;
+    await go({ cacheRoot, fetch: spy }).result;
+    expect(markedAtFetch).toBe(true);
   });
 
   it("the parts id includes the Node.js checksum", () => {
@@ -195,6 +225,19 @@ describe("checkWslSide: the install method follows the distro's target and this 
     const r = await run(glibc);
     expect(r.verdict).toBe("install");
     expect(r.facts).toMatchObject({ install: { method: "bundle" }, bundled: false, target: { arch: "x86_64", libc: "glibc" } });
+  });
+
+  it("the parts fact: cold cache says download, every part file cached says cached; without a bundle source there is none", async () => {
+    const cacheRoot = join(dir("wsl-home-"), "claude-ui", "side");
+    const d = pkgWith(true);
+    const exec = async () => ({ code: 0, stdout: lines(["make=0", "python3=0", "cxx=0", "credentials=1", "package=1", ...glibc, "tar=1", "gzip=1", "git=1", "npm=1", "bundled=0", "installed=none"]), stderr: "" });
+    const src = { cacheRoot, version: "1.0.0", parts };
+    const at = (bundle?: typeof src) => checkWslSide({ distro: "Ubuntu", pkgDir: d, key: "1-1", exec, ...(bundle && { bundle }) });
+    expect((await at(src)).facts.install).toEqual({ method: "bundle", parts: "download" });
+    mkdirSync(join(cacheRoot, "1.0.0", "linux-x64"), { recursive: true });
+    writeFileSync(join(cacheRoot, "1.0.0", "linux-x64", "node.tar.gz"), "x");
+    expect((await at(src)).facts.install).toEqual({ method: "bundle", parts: "cached" });
+    expect((await at()).facts.install).toEqual({ method: "bundle" });
   });
 
   it("musl or a build without dist/side: npm, so Node.js is needed and the reason is told", async () => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { SideSetup, SidePhase } from "@claude-ui/protocol";
 import { wslArgs } from "./sides.ts";
 import { execRun, safeKey, type BundleSource, type Exec } from "./docker-side.ts";
-import { claudePackage, ensureParts, installMethodOf, NODE, nodeDirName, parseTarget, partsFor, pruneCache, PTY, sideBuild, TARGET_PROBE, type BundleTarget } from "./side-bundle.ts";
+import { claudePackage, ensureParts, installMethodOf, NODE, nodeDirName, markUsed, parseTarget, partsFor, probeFailReason, pruneCache, PTY, sideBuild, TARGET_PROBE, type BundleTarget } from "./side-bundle.ts";
 import type { SideBundle } from "./sides.ts";
 
 /** The target probe in bash -lic like the setup script (a Node.js from .bashrc, nvm included, is found the same way); base64 keeps quotes and newlines off the Windows command line. */
@@ -38,8 +38,7 @@ export async function prepareWslSide(o: {
   const target = probe ? parseTarget(probe.stdout) : undefined;
   if (probe && !target) {
     // wsl.exe did not run the probe (timeout, no such distro, a failed start): not a distro the bundle does not cover.
-    const err = probe.stderr.replace(/\0/g, "").trim().split(/\r?\n/).pop()?.trim().replace(/\.$/, "");
-    return o.onInstall?.({ fallback: `the distro did not answer the target probe (${probe.code === null ? err || "no answer in time" : err || `exit code ${probe.code}`})` }), undefined;
+    return o.onInstall?.({ fallback: probeFailReason(probe, "distro") }), undefined;
   }
   const m = installMethodOf(target, !!build, "distro");
   if (m.method === "npm") return o.onInstall?.({ fallback: m.reason }), undefined;
@@ -47,10 +46,12 @@ export async function prepareWslSide(o: {
   const src = o.bundle;
   const version = safeKey(src.version);
   const partsDir = join(src.cacheRoot, version, m.target);
+  // Marked before the fetch: a slow cold download must not let another version's hub prune this folder meanwhile.
+  markUsed(src.cacheRoot, version);
   try {
     await ensureParts({ dir: partsDir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion, node: m.node }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
   } catch (e) {
-    return o.onInstall?.({ fallback: `the host ${(e as Error).message} and has no verified copy of it` }), undefined;
+    return o.onInstall?.({ fallback: (e as Error).message }), undefined;
   }
   pruneCache(src.cacheRoot, version);
   o.onInstall?.({ bundle: true });

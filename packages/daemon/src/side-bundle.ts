@@ -6,9 +6,9 @@
 // this build was made with, npm registry, the registry's integrity). The side JS is this build's dist/side (build.mjs), with its
 // inlined packages' license texts. Nothing is re-hosted: the hub downloads, the container gets a copy.
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { NODE_MIN } from "@claude-ui/protocol";
@@ -151,7 +151,7 @@ async function download(f: typeof fetch, url: string, to: string) {
  * Makes every part present and verified in `dir`: a cached part that matches is used as it is; a missing or mismatching one is
  * downloaded (`onDownload` once, before the first download) into a `.partial` file, checked, then renamed. A registry part's
  * integrity comes from the pin or from the registry (kept as `<file>.integrity` so a cached part is checked offline too).
- * Rejects with "could not download <label>" (network) or "<label> ... checksum" (mismatch); a bad file is never kept.
+ * Rejects with a full sentence naming the cause (could not download, checksum mismatch, could not keep it in the cache); a bad file is never kept.
  * Concurrent calls for the same `dir` and the same parts (two distros, a distro and a container) share one run: each caller's `onDownload` is
  * called once when that run starts a download. The `.partial` file name is unique per run.
  */
@@ -171,54 +171,100 @@ export function ensureParts(o: { dir: string; parts: Part[]; registry?: string; 
 const inflight = new Map<string, { announced: boolean; listeners: (() => void)[]; promise: Promise<Record<string, string>> }>();
 let partialSeq = 0;
 
+/** Removes the files of `dir` that start with `prefix` and are older than `ageMs` (leftovers of a killed run: no live run writes one that old). */
+export function removeStale(dir: string, prefix: string, ageMs: number) {
+  try {
+    for (const n of readdirSync(dir)) if (n.startsWith(prefix) && Date.now() - statSync(join(dir, n)).mtimeMs > ageMs) rmSync(join(dir, n), { force: true });
+  } catch {
+    // No folder, or a file that is gone already.
+  }
+}
+
+const NO_COPY = "has no verified copy of it";
 async function ensureOnce(o: { dir: string; parts: Part[]; registry?: string; fetch?: typeof fetch; onDownload?: () => void }): Promise<Record<string, string>> {
   const f = o.fetch ?? fetch;
   const registry = (o.registry ?? REGISTRY).replace(/\/+$/, "");
-  mkdirSync(o.dir, { recursive: true });
   const out: Record<string, string> = {};
   let announced = false;
-  for (const p of o.parts) {
-    const file = join(o.dir, p.file);
-    const saved = join(o.dir, `${p.file}.integrity`);
-    const partial = `${file}.partial-${process.pid}-${++partialSeq}`;
-    const known = p.sha256 || p.integrity ? { sha256: p.sha256, integrity: p.integrity } : existsSync(saved) ? { integrity: readFileSync(saved, "utf8").trim() } : undefined;
-    if (known && existsSync(file) && (await matches(file, known))) {
-      out[p.file] = file;
-      continue;
-    }
-    if (!announced) (announced = true), o.onDownload?.();
-    // Leftovers of a run that was killed mid-download (unique names, so nothing overwrites them); an hour old: no live run writes it.
-    for (const n of readdirSync(o.dir)) if (n.startsWith(`${p.file}.partial-`) && Date.now() - statSync(join(o.dir, n)).mtimeMs > 3_600_000) rmSync(join(o.dir, n), { force: true });
-    let url = p.url;
-    let check = known && (p.sha256 || p.integrity) ? known : undefined;
-    try {
-      if (p.registryPackage) {
-        const r = await f(`${registry}/${p.registryPackage.name.replace("/", "%2f")}/${p.registryPackage.version}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const meta = (await r.json()) as { dist?: { tarball?: string; integrity?: string } };
-        url = meta.dist?.tarball;
-        if (!url || !/^https?:\/\//.test(url)) throw new Error("the registry answer has no tarball");
-        // A pinned integrity wins over the registry's.
-        if (!check) {
-          if (!meta.dist?.integrity?.startsWith("sha512-")) throw new Error("the registry answer has no sha512 integrity");
-          check = { integrity: meta.dist.integrity };
-        }
+  let label = "the parts";
+  try {
+    mkdirSync(o.dir, { recursive: true });
+    for (const p of o.parts) {
+      label = p.label;
+      const file = join(o.dir, p.file);
+      const saved = join(o.dir, `${p.file}.integrity`);
+      const partial = `${file}.partial-${process.pid}-${++partialSeq}`;
+      const known = p.sha256 || p.integrity ? { sha256: p.sha256, integrity: p.integrity } : existsSync(saved) ? { integrity: readFileSync(saved, "utf8").trim() } : undefined;
+      if (known && existsSync(file) && (await matches(file, known))) {
+        out[p.file] = file;
+        continue;
       }
-      await download(f, url!, partial);
-    } catch (e) {
-      rmSync(partial, { force: true });
-      throw new Error(`could not download ${p.label} (${(e as Error).message.replace(/\.$/, "")})`);
+      if (!announced) (announced = true), o.onDownload?.();
+      removeStale(o.dir, `${p.file}.partial-`, 3_600_000);
+      let url = p.url;
+      let check = known && (p.sha256 || p.integrity) ? known : undefined;
+      try {
+        if (p.registryPackage) {
+          const r = await f(`${registry}/${p.registryPackage.name.replace("/", "%2f")}/${p.registryPackage.version}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const meta = (await r.json()) as { dist?: { tarball?: string; integrity?: string } };
+          url = meta.dist?.tarball;
+          if (!url || !/^https?:\/\//.test(url)) throw new Error("the registry answer has no tarball");
+          // A pinned integrity wins over the registry's.
+          if (!check) {
+            if (!meta.dist?.integrity?.startsWith("sha512-")) throw new Error("the registry answer has no sha512 integrity");
+            check = { integrity: meta.dist.integrity };
+          }
+        }
+        await download(f, url!, partial);
+      } catch (e) {
+        rmSync(partial, { force: true });
+        if (isFsError(e)) throw e;
+        throw new Partless(`the host could not download ${p.label} (${(e as Error).message.replace(/\.$/, "")}) and ${NO_COPY}`);
+      }
+      if (!check || !(await matches(partial, check))) {
+        rmSync(partial, { force: true });
+        throw new Partless(`the ${p.label} the host downloaded does not match its checksum (it was not used) and the host ${NO_COPY}`);
+      }
+      // rename replaces atomically: another hub may have put the same part there meanwhile, and a reader never sees a gap.
+      try {
+        renameSync(partial, file);
+      } catch (e) {
+        // Windows: the target is open by a reader. A verified file already there is as good.
+        rmSync(partial, { force: true });
+        if (!existsSync(file) || !(await matches(file, check))) throw e;
+      }
+      if (!p.sha256 && !p.integrity) writeFileSync(saved, check.integrity!);
+      out[p.file] = file;
     }
-    if (!check || !(await matches(partial, check))) {
-      rmSync(partial, { force: true });
-      throw new Error(`the downloaded ${p.label} does not match its checksum; it was not used`);
-    }
-    rmSync(file, { force: true });
-    renameSync(partial, file);
-    if (!p.sha256 && !p.integrity) writeFileSync(saved, check.integrity!);
-    out[p.file] = file;
+  } catch (e) {
+    if (e instanceof Partless) throw new Error(e.message);
+    const err = e as NodeJS.ErrnoException;
+    throw new Error(`the host could not keep ${label} in its cache ${o.dir} (${err.code ?? err.message})`);
   }
   return out;
+}
+/** An error that already is the final sentence (not a file system error to wrap). */
+class Partless extends Error {}
+/** A file system error (has a syscall); network and HTTP errors have none. */
+const isFsError = (e: unknown) => typeof (e as NodeJS.ErrnoException).syscall === "string";
+
+/** Whether every part file is in `dir` (a registry part without a pinned integrity also has its `.integrity`). No hashing: the start verifies. */
+export function partsCached(dir: string, parts: Part[]): boolean {
+  return parts.every((p) => existsSync(join(dir, p.file)) && (p.sha256 || p.integrity || existsSync(join(dir, `${p.file}.integrity`))));
+}
+
+export const safeKey = (key: string) => key.replace(/[^\w.-]/g, "_");
+
+/** The bundle's parts of a check (`install.parts`): in the host's cache, or the start downloads them. */
+export function bundleParts(src: { cacheRoot: string; version: string; parts?: typeof partsFor }, m: { target: BundleTarget; node: "found" | "pinned" }, sdkVersion: string): "cached" | "download" {
+  return partsCached(join(src.cacheRoot, safeKey(src.version), m.target), (src.parts ?? partsFor)(m.target, { sdkVersion, node: m.node })) ? "cached" : "download";
+}
+
+/** The reason text of a probe that did not run (`code` null: no answer in time): wsl.exe or docker exec failed, not "target not covered". */
+export function probeFailReason(probe: { code: number | null; stderr: string }, noun: "container" | "distro"): string {
+  const err = probe.stderr.replace(/\0/g, "").trim().split(/\r?\n/).pop()?.trim().replace(/\.$/, "");
+  return `the ${noun} did not answer the target probe (${probe.code === null ? err || "no answer in time" : err || `exit code ${probe.code}`})`;
 }
 
 /** One tar entry: a file on disk or bytes. Names are ASCII, at most 100 characters. */
@@ -296,10 +342,44 @@ export function sideBuild(pkgDir: string): { dir: string; sdkVersion: string } |
   return undefined;
 }
 
-/** Removes cached parts of other claude-ui versions (`<cacheRoot>/<version>`): a new version gets new parts. */
-export function pruneCache(cacheRoot: string, keep: string) {
+const PRUNE_AFTER_MS = 7 * 24 * 3_600_000;
+/** Marks `<cacheRoot>/<version>` as used now (a prune of another hub leaves it for 7 days). Never throws. */
+export function markUsed(cacheRoot: string, version: string) {
   try {
-    for (const n of readdirSync(cacheRoot)) if (n !== keep) rmSync(join(cacheRoot, n), { recursive: true, force: true });
+    mkdirSync(join(cacheRoot, version), { recursive: true });
+    const mark = join(cacheRoot, version, ".used");
+    writeFileSync(mark, "");
+    utimesSync(mark, new Date(), new Date());
+  } catch {
+    // The cache is read-only or gone: the mark is a convenience.
+  }
+}
+
+/** claude-ui's own side cache only (`.../claude-ui/side`, Windows `...\claude-ui\cache\side`): a prune deletes folders, so any other path is refused. */
+const isSideCache = (root: string) => basename(root) === "side" && resolve(root).split(sep).includes("claude-ui");
+
+/**
+ * Removes the version folders of `cacheRoot` (`<cacheRoot>/<version>`) that were not used for 7 days. Never `keep` (the current
+ * version), never anything that is not a real folder directly in `cacheRoot` (files, symlinks), never any other root.
+ * Last use: mtime of `<n>/.used`, else of the folder (caches of older builds). A running side never reads the cache (Docker got a
+ * tar copy, WSL unpacked or hard-linked into the distro), so 7 days unused is safe; a wrong prune costs one re-download.
+ */
+export function pruneCache(cacheRoot: string, keep: string, now = Date.now()) {
+  if (!keep || !isSideCache(cacheRoot)) return;
+  try {
+    for (const n of readdirSync(cacheRoot)) {
+      if (n === keep || n === "." || n === ".." || n !== basename(n)) continue;
+      const d = join(cacheRoot, n);
+      const st = lstatSync(d);
+      if (!st.isDirectory()) continue;
+      let used = st.mtimeMs;
+      try {
+        used = statSync(join(d, ".used")).mtimeMs;
+      } catch {
+        // No mark: the folder's own time.
+      }
+      if (now - used > PRUNE_AFTER_MS) rmSync(d, { recursive: true, force: true });
+    }
   } catch {
     // No cache yet.
   }

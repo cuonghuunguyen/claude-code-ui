@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -380,21 +380,23 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
   const offline = (async () => {
     throw new TypeError("fetch failed");
   }) as unknown as typeof fetch;
-  function docker(arch = "x86_64", libc = "glibc") {
+  function docker(arch = "x86_64", libc = "glibc", probe?: Answer) {
     const calls: string[][] = [];
     const exec: Exec = async (_cmd, args) => {
       calls.push(args);
       if (args[0] === "inspect") return { code: 0, stdout: isMounts(args) ? WRITABLE : "true\n", stderr: "" };
-      if (args[0] === "exec" && args.some((a) => a.includes("uname -m"))) return { code: 0, stdout: probeOut(arch, libc), stderr: "" };
+      if (args[0] === "exec" && args.some((a) => a.includes("uname -m"))) return probe ? ({ stdout: "", stderr: "", ...probe } as { code: number | null; stdout: string; stderr: string }) : { code: 0, stdout: probeOut(arch, libc), stderr: "" };
       return { code: 0, stdout: "", stderr: "" };
     };
     return { calls, exec };
   }
-  const go = (o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean }) => {
-    const d = docker(o.arch, o.libc);
+  // The cache root is named like the real one: pruneCache only touches claude-ui's side cache.
+  const sideRoot = () => join(dir("home-"), "claude-ui", "side");
+  const go = (o: { arch?: string; libc?: string; fetch?: typeof fetch; cacheRoot?: string; withSide?: boolean; probe?: Answer }) => {
+    const d = docker(o.arch, o.libc, o.probe);
     const phases: string[] = [];
     const installs: unknown[] = [];
-    const cacheRoot = o.cacheRoot ?? dir("side-cache-");
+    const cacheRoot = o.cacheRoot ?? sideRoot();
     const result = prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(o.withSide), key: "1.0.0-1", cacheDir: dir("cache-"), exec: d.exec, npm: fakeNpm().npm, onPhase: (p) => phases.push(p), onInstall: (i) => installs.push(i), bundle: { cacheRoot, version: "1.0.0", fetch: o.fetch ?? okFetch, parts } });
     return { ...d, phases, installs, result, cacheRoot };
   };
@@ -426,7 +428,7 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     const urls: string[] = [];
     const fetched = (async (u: string) => (urls.push(String(u)), new Response("x"))) as unknown as typeof fetch;
     const seen: unknown[] = [];
-    const r = await prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(), key: "1.0.0-1", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm, bundle: { cacheRoot: dir("side-cache-"), version: "1.0.0", fetch: fetched, parts: (_t, o) => (seen.push(o.node), []) } });
+    const r = await prepareDockerSide({ name: "dev", pkgDir: sideBuildPkg(), key: "1.0.0-1", cacheDir: dir("cache-"), exec, npm: fakeNpm().npm, bundle: { cacheRoot: sideRoot(), version: "1.0.0", fetch: fetched, parts: (_t, o) => (seen.push(o.node), []) } });
     expect(scripts[0]).toMatch(/^nvm=/);
     expect(seen).toEqual(["found"]);
     expect(r.bundle).toEqual({ target: "linux-x64", claudePackage: "claude-agent-sdk-linux-x64" });
@@ -442,7 +444,7 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     for (const [o, why] of [
       [{ libc: "musl" }, /musl/],
       [{ withSide: false }, /no container bundle/],
-      [{ fetch: offline }, /could not download Node\.js.*no verified copy/],
+      [{ fetch: offline }, /^the host could not download Node\.js \(fetch failed\) and has no verified copy of it$/],
     ] as const) {
       const g = go(o);
       const r = await g.result;
@@ -453,10 +455,133 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     }
   });
 
-  it("an older version's cached parts are removed", async () => {
-    const cacheRoot = dir("side-cache-");
-    mkdirSync(join(cacheRoot, "0.9.0", "linux-x64"), { recursive: true });
+  const DAY = 24 * 3_600_000;
+  const oldVersion = (cacheRoot: string, name: string, daysOld: number) => {
+    const d = join(cacheRoot, name);
+    mkdirSync(join(d, "linux-x64"), { recursive: true });
+    writeFileSync(join(d, ".used"), "");
+    const t = new Date(Date.now() - daysOld * DAY);
+    utimesSync(join(d, ".used"), t, t);
+  };
+
+  it("another version's parts used within 7 days survive a start; one unused for 8 days is removed; this version is marked used", async () => {
+    const cacheRoot = sideRoot();
+    oldVersion(cacheRoot, "0.9.0", 2);
+    oldVersion(cacheRoot, "0.8.0", 8);
     await go({ cacheRoot }).result;
-    expect(readdirSync(cacheRoot).sort()).toEqual(["1.0.0"]);
+    expect(readdirSync(cacheRoot).sort()).toEqual(["0.9.0", "1.0.0"]);
+    expect(existsSync(join(cacheRoot, "1.0.0", ".used"))).toBe(true);
+  });
+
+  it("two concurrent cold-cache starts of the same target both install from the bundle: one download per part, two tars copied, no .partial", async () => {
+    const cacheRoot = sideRoot();
+    const urls: string[] = [];
+    const counted = (async (u: string) => (urls.push(String(u)), new Response("node"))) as unknown as typeof fetch;
+    const a = go({ cacheRoot, fetch: counted });
+    const b = go({ cacheRoot, fetch: counted });
+    const [ra, rb] = await Promise.all([a.result, b.result]);
+    expect(ra.bundle?.target).toBe("linux-x64");
+    expect(rb.bundle?.target).toBe("linux-x64");
+    expect(urls).toEqual(["https://n/node"]);
+    expect([a, b].map((x) => x.calls.filter((c) => c[0] === "cp").length)).toEqual([1, 1]);
+    expect([a.installs, b.installs]).toEqual([[{ bundle: true }], [{ bundle: true }]]);
+    expect(readdirSync(join(cacheRoot, "1.0.0", "linux-x64")).filter((f) => f.includes(".partial"))).toEqual([]);
+    expect(readdirSync(join(cacheRoot, "1.0.0", ".tmp"))).toEqual([]);
+  });
+
+  it("the target probe docker exec fails: the fallback says the container did not answer the probe, with the cause", async () => {
+    for (const [probe, why] of [
+      [{ code: 1, stderr: "OCI runtime exec failed: exec failed" }, "the container did not answer the target probe (OCI runtime exec failed: exec failed)"],
+      [{ code: null }, "the container did not answer the target probe (no answer in time)"],
+      [{ code: 126 }, "the container did not answer the target probe (exit code 126)"],
+    ] as const) {
+      const g = go({ probe });
+      const r = await g.result;
+      expect(r.bundle).toBeUndefined();
+      expect(g.installs).toEqual([{ fallback: why }]);
+    }
+  });
+
+  it("a checksum mismatch falls back with the full sentence", async () => {
+    const g = go({ fetch: (async () => new Response("evil")) as unknown as typeof fetch });
+    await g.result;
+    expect(g.installs).toEqual([{ fallback: "the Node.js the host downloaded does not match its checksum (it was not used) and the host has no verified copy of it" }]);
+  });
+
+  it("a cache the host cannot write falls back with could not keep, naming the folder", async () => {
+    const home = dir("home-");
+    mkdirSync(join(home, "claude-ui"), { recursive: true });
+    writeFileSync(join(home, "claude-ui", "side"), "a file where the cache folder should be");
+    const g = go({ cacheRoot: join(home, "claude-ui", "side") });
+    const r = await g.result;
+    expect(r.bundle).toBeUndefined();
+    expect(g.installs).toEqual([{ fallback: expect.stringMatching(/^the host could not keep .* in its cache /) }]);
+  });
+
+  it("this version is marked used before the parts are fetched (a slow cold download must not let another hub prune it)", async () => {
+    const cacheRoot = sideRoot();
+    let markedAtFetch: boolean | undefined;
+    const spy = (async () => ((markedAtFetch ??= existsSync(join(cacheRoot, "1.0.0", ".used"))), new Response("node"))) as unknown as typeof fetch;
+    await go({ cacheRoot, fetch: spy }).result;
+    expect(markedAtFetch).toBe(true);
+  });
+
+  it("a tar that cannot be assembled falls back to npm with a full-sentence reason", async () => {
+    const cacheRoot = sideRoot();
+    mkdirSync(join(cacheRoot, "1.0.0"), { recursive: true });
+    writeFileSync(join(cacheRoot, "1.0.0", ".tmp"), "a file where the tar folder should be");
+    const g = go({ cacheRoot });
+    const r = await g.result;
+    expect(r.bundle).toBeUndefined();
+    expect(r.path).toMatch(/\.tgz$/);
+    expect(g.installs.at(-1)).toEqual({ fallback: expect.stringMatching(/^the host could not assemble the bundle tar \(.+\)$/) });
+  });
+
+  it("a .tmp tar older than an hour is removed before assembling; a fresh one stays", async () => {
+    const cacheRoot = sideRoot();
+    const tmpDir = join(cacheRoot, "1.0.0", ".tmp");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, "bundle-1-1.tar"), "x");
+    writeFileSync(join(tmpDir, "bundle-2-2.tar"), "x");
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(join(tmpDir, "bundle-1-1.tar"), old, old);
+    await go({ cacheRoot }).result;
+    expect(readdirSync(tmpDir).sort()).toEqual(["bundle-2-2.tar"]);
   });
 });
+
+describe("checkDockerSide: the bundle's parts fact", () => {
+  const lines = (l: string[]) => l.map((x) => `CLAUDE_UI_CHECK ${x}`).join("\n");
+  const stdout = lines(["arch=x86_64", "libc=glibc", "glibc=2.36", "cxxrt=1", "foundnode=0", "credentials=1", "writable=/tmp", "installed=none"]);
+  const pkgSide = (side = true) => {
+    const d = pkg();
+    if (side) {
+      mkdirSync(join(d, "dist", "side"));
+      writeFileSync(join(d, "dist", "side", "cli.js"), "side");
+      writeFileSync(join(d, "dist", "side", "side.json"), JSON.stringify({ sdk: "0.3.1" }));
+    }
+    return d;
+  };
+  const check = (o: { cacheRoot?: string; side?: boolean; stdout?: string }) => {
+    const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: o.stdout ?? stdout } });
+    return checkDockerSide({ name: "dev", pkgDir: pkgSide(o.side), key: "1.0.0-1", exec: f.exec, bundle: o.cacheRoot ? { cacheRoot: o.cacheRoot, version: "1.0.0", parts: () => [{ file: "node.tar.gz", label: "Node.js", url: "https://n/node", sha256: "x" }] } : undefined });
+  };
+
+  it("every part file in the cache: cached; a cold cache: download; nothing is downloaded or written", async () => {
+    const cacheRoot = join(dir("home-"), "claude-ui", "side");
+    const cold = await check({ cacheRoot });
+    expect(cold.facts.install).toEqual({ method: "bundle", parts: "download" });
+    expect(existsSync(cacheRoot)).toBe(false);
+    mkdirSync(join(cacheRoot, "1.0.0", "linux-x64"), { recursive: true });
+    writeFileSync(join(cacheRoot, "1.0.0", "linux-x64", "node.tar.gz"), "x");
+    expect((await check({ cacheRoot })).facts.install).toEqual({ method: "bundle", parts: "cached" });
+  });
+
+  it("no bundle source or the npm method: no parts field", async () => {
+    expect((await check({})).facts.install).toEqual({ method: "bundle" });
+    const npm = await check({ cacheRoot: dir("home-"), side: false });
+    expect(npm.facts.install).toMatchObject({ method: "npm" });
+    expect(npm.facts.install).not.toHaveProperty("parts");
+  });
+});
+

@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { NODE_MIN, nodeMinOf } from "@claude-ui/protocol";
 import { describe, expect, it } from "vitest";
-import { assembleBundle, bundleTargetOf, ensureParts, installMethodOf, NODE_OK_JS, NODE_OK_TOKEN, parseTarget, partsFor, sideCacheDir, TARGET_PROBE, USABLE_NODE_FN, writeTar, type Part } from "../src/side-bundle.ts";
+import { assembleBundle, bundleTargetOf, ensureParts, installMethodOf, markUsed, NODE_OK_JS, NODE_OK_TOKEN, parseTarget, partsCached, partsFor, probeFailReason, pruneCache, removeStale, sideCacheDir, TARGET_PROBE, USABLE_NODE_FN, writeTar, type Part } from "../src/side-bundle.ts";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 const hasTar = spawnSync("tar", ["--version"]).status === 0 && process.platform !== "win32";
@@ -217,14 +217,170 @@ describe("parts", () => {
   it("a download that does not match its checksum is refused and not kept", async () => {
     const dir = tmp("parts-");
     await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({ ...files, "https://n/node.tgz": "evil" }) })).rejects.toThrow(/Node\.js.*checksum/);
+    await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({ ...files, "https://n/node.tgz": "evil" }) })).rejects.toThrow(
+      "the Node.js the host downloaded does not match its checksum (it was not used) and the host has no verified copy of it",
+    );
     expect(readdirSync(dir).filter((f) => f.startsWith("node"))).toEqual([]);
   });
 
   it("offline with an empty cache fails naming the part; with a warm cache it works", async () => {
     const dir = tmp("parts-");
-    await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}) })).rejects.toThrow(/could not download Node\.js/);
+    await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}) })).rejects.toThrow("the host could not download Node.js (fetch failed) and has no verified copy of it");
     await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files) });
     await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch({}) })).resolves.toBeDefined();
+  });
+
+  it("another process finishing the same part first: the run ends with a verified file and no .partial", async () => {
+    const dir = tmp("parts-");
+    const other = (async (url: string) => {
+      // The other hub renames its finished part into place while this run still downloads.
+      if (String(url) === "https://n/node.tgz") writeFileSync(join(dir, "node.tar.gz"), node);
+      const body = files[String(url) as keyof typeof files];
+      return new Response(typeof body === "string" ? body : new Uint8Array(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    const got = await ensureParts({ dir, parts: parts(), registry: "https://r", fetch: other });
+    expect(readFileSync(got["node.tar.gz"]!)).toEqual(node);
+    expect(readdirSync(dir).filter((f) => f.includes(".partial"))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a cache folder that cannot be written: could not keep the part in its cache", async () => {
+    const dir = tmp("parts-");
+    chmodSync(dir, 0o500);
+    try {
+      await expect(ensureParts({ dir, parts: parts(), registry: "https://r", fetch: fakeFetch(files) })).rejects.toThrow(/^the host could not keep Node\.js in its cache .* \(EACCES/);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  it("a cache folder that is a file: could not keep the part in its cache", async () => {
+    const root = tmp("parts-");
+    writeFileSync(join(root, "f"), "x");
+    await expect(ensureParts({ dir: join(root, "f"), parts: parts(), registry: "https://r", fetch: fakeFetch(files) })).rejects.toThrow(/^the host could not keep the parts in its cache /);
+  });
+
+  it("removeStale removes files with the prefix older than the age; others stay", () => {
+    const dir = tmp("stale-");
+    for (const n of ["bundle-old", "bundle-new", "other-old"]) writeFileSync(join(dir, n), "x");
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    for (const n of ["bundle-old", "other-old"]) utimesSync(join(dir, n), old, old);
+    removeStale(dir, "bundle-", 3_600_000);
+    removeStale(join(dir, "missing"), "bundle-", 1);
+    expect(readdirSync(dir).sort()).toEqual(["bundle-new", "other-old"]);
+  });
+
+  it("partsCached: every file there, and a registry part without a pinned integrity also has its .integrity; nothing is hashed", () => {
+    const dir = tmp("parts-");
+    expect(partsCached(dir, parts())).toBe(false);
+    writeFileSync(join(dir, "node.tar.gz"), "not even the right bytes");
+    writeFileSync(join(dir, "claude.tgz"), "x");
+    expect(partsCached(dir, parts())).toBe(false);
+    writeFileSync(join(dir, "claude.tgz.integrity"), sha512(claude));
+    expect(partsCached(dir, parts())).toBe(true);
+    expect(partsCached(join(dir, "none"), parts())).toBe(false);
+  });
+
+  it("probeFailReason: NUL stripped, last stderr line, no answer in time, exit code", () => {
+    expect(probeFailReason({ code: null, stderr: "" }, "container")).toBe("the container did not answer the target probe (no answer in time)");
+    expect(probeFailReason({ code: 1, stderr: "a\nW\0S\0L\0 failed.\n" }, "distro")).toBe("the distro did not answer the target probe (WSL failed)");
+    expect(probeFailReason({ code: 126, stderr: "" }, "container")).toBe("the container did not answer the target probe (exit code 126)");
+  });
+});
+
+// Deletes folders: only claude-ui's own side cache, never the current version's folder.
+describe("pruneCache and markUsed", () => {
+  const DAY = 24 * 3_600_000;
+  const root = () => join(tmp("home-"), "claude-ui", "side");
+  const folder = (cache: string, name: string, daysOld?: number, mark = false) => {
+    const d = join(cache, name);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "part"), "x");
+    const t = new Date(Date.now() - (daysOld ?? 0) * DAY);
+    if (mark) (writeFileSync(join(d, ".used"), ""), utimesSync(join(d, ".used"), t, t));
+    utimesSync(d, t, t);
+    return d;
+  };
+
+  it("keeps the current version however old, and versions used within 7 days; removes older ones", () => {
+    const c = root();
+    folder(c, "1.0.0", 100);
+    folder(c, "0.9.0", 3, true);
+    folder(c, "0.8.0", 8, true);
+    folder(c, "0.7.0", 30, true);
+    pruneCache(c, "1.0.0");
+    expect(readdirSync(c).sort()).toEqual(["0.9.0", "1.0.0"]);
+  });
+
+  it("the .used mark decides, else the folder's own time (a cache of an older build)", () => {
+    const c = root();
+    folder(c, "recent-mark-old-folder", 30);
+    writeFileSync(join(c, "recent-mark-old-folder", ".used"), "");
+    folder(c, "old-mark-new-folder", 20, true);
+    utimesSync(join(c, "old-mark-new-folder"), new Date(), new Date());
+    folder(c, "no-mark-old", 8);
+    folder(c, "no-mark-new", 1);
+    pruneCache(c, "1.0.0");
+    expect(readdirSync(c).sort()).toEqual(["no-mark-new", "recent-mark-old-folder"]);
+  });
+
+  it("the now argument moves the cut-off", () => {
+    const c = root();
+    folder(c, "0.9.0", 3, true);
+    pruneCache(c, "1.0.0", Date.now() + 5 * DAY);
+    expect(readdirSync(c)).toEqual([]);
+  });
+
+  it("touches nothing outside the cache folder: files, symlinks (and their targets), siblings and the parent", () => {
+    const c = root();
+    const outside = folder(join(c, ".."), "outside", 100);
+    const target = folder(tmp("target-"), "precious", 100);
+    folder(c, "0.8.0", 100);
+    writeFileSync(join(c, "loose-file"), "x");
+    symlinkSync(target, join(c, "link"), "dir");
+    pruneCache(c, "1.0.0");
+    expect(existsSync(join(target, "part"))).toBe(true);
+    expect(existsSync(join(outside, "part"))).toBe(true);
+    expect(existsSync(join(c, "loose-file"))).toBe(true);
+    expect(lstatSync(join(c, "link")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(c, "0.8.0"))).toBe(false);
+  });
+
+  it("refuses a folder that is not claude-ui's side cache, and an empty keep: nothing is removed", () => {
+    const home = tmp("home-");
+    for (const bad of [home, join(home, "Documents"), join(home, ".cache"), join(home, "side"), join(home, "other", "side"), join(home, "claude-ui")]) {
+      folder(bad, "old", 100);
+      pruneCache(bad, "1.0.0");
+      expect(existsSync(join(bad, "old", "part"))).toBe(true);
+    }
+    const c = root();
+    folder(c, "old", 100);
+    pruneCache(c, "");
+    expect(existsSync(join(c, "old", "part"))).toBe(true);
+    expect(() => pruneCache(join(c, "missing"), "1.0.0")).not.toThrow();
+  });
+
+  it("the real cache location passes the guard (Linux, macOS and Windows forms)", () => {
+    for (const p of ["linux", "darwin", "win32"] as const) {
+      const base = tmp("home-");
+      const c = sideCacheDir({ XDG_CACHE_HOME: join(base, "xdg"), LOCALAPPDATA: join(base, "local") }, base, p);
+      folder(c, "0.8.0", 100);
+      pruneCache(c, "1.0.0");
+      expect(existsSync(c) && readdirSync(c)).toEqual([]);
+    }
+  });
+
+  it("markUsed writes <root>/<version>/.used (refreshed on a later call) and never throws", () => {
+    const c = root();
+    markUsed(c, "1.0.0");
+    const mark = join(c, "1.0.0", ".used");
+    expect(existsSync(mark)).toBe(true);
+    const old = new Date(Date.now() - 5 * DAY);
+    utimesSync(mark, old, old);
+    markUsed(c, "1.0.0");
+    expect(Date.now() - lstatSync(mark).mtimeMs).toBeLessThan(60_000);
+    const file = join(tmp("f-"), "file");
+    writeFileSync(file, "x");
+    expect(() => markUsed(join(file, "sub"), "1.0.0")).not.toThrow();
   });
 });
 
