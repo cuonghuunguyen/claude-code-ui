@@ -422,6 +422,12 @@ export function createDaemon(opts: {
   const terminals = createTerminals();
   /** `git.repos` replies: dropped whenever the session list or the settings change (docs/spec.md "git.repos"). */
   const reposCache = createReposCache();
+  /** git.repos of `cwd`, cached 10 s; fs.search uses it too (an error there: no nested repositories). */
+  const reposOf = (cwd: string, open: string[], fresh = false) => {
+    const settings = appSettings.get().git;
+    const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
+    return reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), fresh);
+  };
   const broadcast = (m: ServerMessage) => {
     if (m.type === "sessions.changed" || m.type === "settings_changed") reposCache.clear();
     connections.forEach((ws) => send(ws, m));
@@ -2076,7 +2082,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: (await searchFiles(cwd, msg.query)).filter((p) => allowed(join(cwd, p))) });
+          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, []).then((r) => r.repos, () => [])))).filter((p) => allowed(join(cwd, p))) });
         }
         case "sessions.search": {
           // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.
@@ -2122,9 +2128,7 @@ export function createDaemon(opts: {
           const files = msg.openFiles;
           if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) return fail("bad_request", "openFiles must be at most 50 paths");
           const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
-          const settings = appSettings.get().git;
-          const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
-          return reply(await reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), msg.fresh === true));
+          return reply(await reposOf(cwd, open, msg.fresh === true));
         }
         case "git.log":
         case "git.diff":
