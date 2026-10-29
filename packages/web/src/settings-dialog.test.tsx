@@ -53,14 +53,18 @@ async function render({ failGet = false, tokenReset = false, group, daemon = { h
   prompt.setAttribute("aria-label", "Prompt");
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   document.body.append(el, prompt);
+  let bump = () => {};
   function Host() {
     const [open, set] = useState(true);
+    const [changed, setChanged] = useState(0);
+    bump = () => setChanged((n) => n + 1);
     const [grouping, setGrouping] = useState<TabGrouping>("project");
     const [compact, setCompact] = useState(false);
     const [auto, setAuto] = useState<"off" | "1h" | "1d">("off");
     return (
       <SettingsDialog
         open={open}
+        changed={changed}
         onShortcuts={onShortcuts}
         push={{ ...push, toggle }}
         request={request as never}
@@ -88,7 +92,7 @@ async function render({ failGet = false, tokenReset = false, group, daemon = { h
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
+  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -141,6 +145,26 @@ it("Orchestration shows Maximum tree depth and Maximum workers per coordinator a
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
+});
+
+it("two number fields edited before the refetch of the first save both keep their edit (GH-498)", async () => {
+  const { q, calls, pick, bump } = await render();
+  await pick("orchestration");
+  const type = async (id: string, v: string) => {
+    const input = q(id) as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return input;
+  };
+  const first = await type("settings-orchestration-maxDepth", "3");
+  const second = await type("settings-orchestration-maxChildren", "5");
+  await act(async () => first.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await bump(); // settings_changed of the first save arrives: the dialog refetches
+  expect((q("settings-orchestration-maxChildren") as HTMLInputElement).value).toBe("5");
+  await act(async () => second.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: unknown }).patch)).toEqual([{ orchestration: { maxDepth: 3 } }, { orchestration: { maxChildren: 5 } }]);
 });
 
 it("Maximum workers in total shows 0 = no limit and saves a patch of its field", async () => {

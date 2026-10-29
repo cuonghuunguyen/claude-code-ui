@@ -257,10 +257,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   ask.current = request;
 
   useEffect(() => {
-    if (!open) return;
+    // A refetch (the own save's settings_changed included) keeps the drafts: a field still being edited is not overwritten.
+    if (!open) return void setDraft({});
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined)),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
