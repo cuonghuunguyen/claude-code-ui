@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -118,6 +118,15 @@ it("the file keeps only fields that differ from their default", () => {
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true, coordinatorPermissions: true } });
   s.set({ orchestration: { enabled: false } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { coordinatorPermissions: true } });
+});
+
+it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean (GH-305)", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().focus).toEqual({ nextForYou: false });
+  s.set({ focus: { nextForYou: true } });
+  expect(createSettings({ file: f }).get().focus).toEqual({ nextForYou: true });
+  expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
 });
 
 it("usageLimit.autoContinue defaults off, is saved when on, refuses a non-boolean", () => {

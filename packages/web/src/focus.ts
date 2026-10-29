@@ -111,6 +111,8 @@ export type AttentionRow = {
   /** Line 3, optional: the coordinator's reason (escalated) or the task summary (finished). */
   detail?: string;
   request?: PermissionRequest | QuestionRequest;
+  /** Finished rows: "Next for you", the predicted next prompt of the session. */
+  suggestion?: string;
   action: "answer" | "cancel_continue" | "open";
 };
 
@@ -214,7 +216,7 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
     } else if (view.state === "idle" && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
       const text = lastOf(topLevel(view), (p) => p.type === "assistant_text");
       const line = text?.type === "assistant_text" ? lastLine(text.text) : undefined;
-      rows.push(row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)));
+      rows.push({ ...row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)), ...(view.suggestion && { suggestion: view.suggestion }) });
     }
   }
   const order = new Map(rows.map((r, n) => [r, n]));

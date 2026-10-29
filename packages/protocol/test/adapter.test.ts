@@ -332,6 +332,10 @@ describe("adapter on CLI markup in a transcript (getSessionMessages, SDK 0.3.285
 });
 
 describe("adapter on unknown messages", () => {
+  it("a prompt_suggestion message becomes the prompt_suggestion head part, not a raw part (GH-305)", () => {
+    expect(run([{ type: "prompt_suggestion", suggestion: "run the tests", uuid: "p1", session_id: "s" }])).toEqual([{ type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }]);
+  });
+
   it("wraps an unknown SDK message in a raw part keyed by uuid", () => {
     const m = { type: "system", subtype: "some_future_subtype", uuid: "c1" };
     expect(run([m])).toEqual([{ type: "raw", id: "c1", message: m }]);

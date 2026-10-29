@@ -135,6 +135,13 @@ it("usage limit without a scheduled continue (auto-continue off): an Open sessio
   expect(attentionRows(input([item("a")], { a: view([stop(NOW), { type: "limit_stop", id: "limit_stop", stopped: false }]) }))).toEqual([]);
 });
 
+it("finished row carries the Next for you suggestion of the view (GH-305)", () => {
+  const list = [item("a", { lastActivity: NOW - min })];
+  const withSuggestion = view([state("running"), reply("done"), state("idle"), { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }]);
+  expect(attentionRows(input(list, { a: withSuggestion }, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", suggestion: "run the tests" });
+  expect(attentionRows(input(list, { a: view([state("running"), reply("done"), state("idle")]) }, { unread: ["a"] }))[0]).not.toHaveProperty("suggestion", expect.anything());
+});
+
 it("stuck: running, nothing pending, no running call, quiet 5 min; quiet 4 min or a running call gives none", () => {
   const list = [item("a")];
   const v = view([user, call("c1", "Read", "done", { file_path: "/p/a.ts" }), state("running")]);

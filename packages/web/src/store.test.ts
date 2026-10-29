@@ -59,6 +59,13 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "limit_stop", id: "limit_stop", stopped: false })).limitStop).toBeUndefined();
   });
 
+  it("prompt_suggestion sets and clears the suggestion and adds no timeline item (GH-305)", () => {
+    const s = applyEvent(emptySession(), ev(1, { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }));
+    expect(s.suggestion).toBe("run the tests");
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "prompt_suggestion", id: "prompt_suggestion", text: null })).suggestion).toBeUndefined();
+  });
+
   it("auto_continue sets and clears continueAt and adds no timeline item", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "auto_continue", id: "auto_continue", at: 5000 }));
     expect(s.continueAt).toBe(5000);

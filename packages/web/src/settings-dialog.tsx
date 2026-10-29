@@ -189,6 +189,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     ],
   },
   {
+    id: "focus",
+    title: "Focus",
+    rows: [
+      { key: "nextForYou", kind: "switch", label: "Next for you", hint: "After a turn, Claude predicts your next prompt; finished rows on Focus show it as a chip. Uses a small extra request per turn that reuses the prompt cache: nearly free, not free. Applies to sessions started or resumed after the change." },
+    ],
+  },
+  {
     id: "usageLimit",
     title: "Usage limits",
     rows: [

@@ -3,6 +3,7 @@ import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { FocusPage, FocusRow } from "./focus-page.tsx";
 import { waitingRequests } from "./focus.ts";
 import type { PermissionAnswer } from "./permission.tsx";
@@ -407,4 +408,41 @@ it("a coordinator with its own row shows it with the chevron beside it, outside 
   await act(async () => toggle().click());
   expect(rows()).toHaveLength(1);
   expect(rows()[0]!.textContent).toContain("Session c");
+});
+
+// ---- GH-305: Next for you chip ----
+const withChip = (): State => ({
+  list: [item("f", { state: "idle", lastActivity: NOW })],
+  views: { f: view([{ type: "user_text", id: "u", text: "go", images: [] }, { type: "session_state", id: "st", state: "running" }, { type: "assistant_text", id: "r", text: "Done.", streaming: false }, { type: "session_state", id: "st", state: "idle" }, { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }]) },
+  unread: ["f"],
+});
+const chip = () => el.querySelector<HTMLButtonElement>('[data-testid="focus-suggestion"]');
+const draftKey = "claude-ui.draft.f";
+
+it("a finished row shows the Next for you chip; a click saves the suggestion as the draft and opens the session", async () => {
+  localStorage.clear();
+  open.mockClear();
+  await render(withChip());
+  expect(chip()!.textContent).toBe("Next for you: run the tests");
+  expect(chip()!.title).toBe("run the tests");
+  expect(chip()!.closest('[data-testid="focus-row"]')).toBeNull();
+  expect(chip()!.className).toContain("max-md:min-h-11");
+  await act(async () => chip()!.click());
+  expect(localStorage.getItem(draftKey)).toContain("run the tests");
+  expect(open).toHaveBeenCalledWith("f");
+});
+
+it("with a draft the suggestion is appended after a blank line", async () => {
+  localStorage.clear();
+  await render(withChip());
+  saveDraft("f", "fix the typo");
+  await act(async () => chip()!.click());
+  expect(loadDraft("f")).toBe("fix the typo\n\nrun the tests");
+});
+
+it("no chip without a suggestion", async () => {
+  const s = withChip();
+  s.views.f = view([{ type: "session_state", id: "st", state: "running" }, { type: "session_state", id: "st", state: "idle" }]);
+  await render(s);
+  expect(chip()).toBeNull();
 });

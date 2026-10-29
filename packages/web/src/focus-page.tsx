@@ -4,6 +4,7 @@ import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -197,9 +198,20 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     const button = target && [...page.current!.querySelectorAll<HTMLElement>("[data-row-id]")].find((b) => b.dataset.rowId === target);
     (button || heading.current)?.focus();
   });
+  // The suggestion goes into the session's draft (after a blank line when there is one); the prompt box reads it when it mounts.
+  const pickSuggestion = (id: string, text: string) => {
+    const d = loadDraft(id);
+    saveDraft(id, d ? `${d}\n\n${text}` : text);
+    onOpenSession(id);
+  };
   const renderRow = (r: AttentionRow) => (
     <li key={r.id}>
       <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? ((pendingFocus.current = { id: r.id, before: shownIds }), onCancelContinue(r.sessionId)) : onOpenSession(r.sessionId))} />
+      {r.suggestion && (
+        <button type="button" title={r.suggestion} className="mt-1 ml-2.5 flex max-w-[calc(100%-0.625rem)] cursor-pointer items-center rounded-full border px-2.5 py-1 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => pickSuggestion(r.sessionId, r.suggestion!)} data-testid="focus-suggestion">
+          <span className="truncate">Next for you: {r.suggestion}</span>
+        </button>
+      )}
     </li>
   );
   // Worker rows nest under their coordinator (the display only; Next waiting keeps the flat order). Folded groups are kept per browser.
