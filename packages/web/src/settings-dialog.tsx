@@ -344,7 +344,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                 value={draft[id] ?? String(value)}
                 onChange={(e) => setDraft((d) => ({ ...d, [id]: e.target.value }))}
                 onBlur={() => id in draft && void save(patch(draft[id] === "" ? NaN : Number(draft[id])), id)}
-                onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && e.currentTarget.blur()}
+                onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())} // preventDefault: on a phone the focus falls to Back and this Enter would click it
                 className="h-8 w-16 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
                 data-testid={id}
               />

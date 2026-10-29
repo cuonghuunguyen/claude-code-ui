@@ -114,7 +114,6 @@ Feature: Settings › Jira protects the token (GH-451)
     When I restart the daemon
     And I open Settings › Jira
     And I set the Jira URL to the fake Jira
-    And I open the Jira group again
     Then Settings › Jira says the saved token was cleared by a security update
     And the page has no horizontal scroll
     And I capture "phone token reset notice"

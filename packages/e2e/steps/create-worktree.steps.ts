@@ -373,9 +373,3 @@ When("I save the Jira token {string}", async ({ page }, value: string) => {
 Then("Settings › Jira shows no token reset notice", async ({ page }) => {
   await expect(page.getByTestId("settings-jira-token-reset")).toHaveCount(0);
 });
-
-// On a phone the dialog returns to the list of groups after the URL save (not part of GH-487): open Jira again.
-When("I open the Jira group again", async ({ page }) => {
-  const g = page.getByTestId("settings-group-jira");
-  if (await g.isVisible()) await g.click();
-});

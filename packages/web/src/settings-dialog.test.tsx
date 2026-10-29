@@ -167,6 +167,19 @@ it("two number fields edited before the refetch of the first save both keep thei
   expect(calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: unknown }).patch)).toEqual([{ orchestration: { maxDepth: 3 } }, { orchestration: { maxChildren: 5 } }]);
 });
 
+it("Enter in a field commits it without a keypress that can activate the Back button the focus falls to on a phone (GH-500)", async () => {
+  const { q, pick } = await render();
+  await pick("jira");
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  await act(async () => void q("settings-jira-url")!.dispatchEvent(enter));
+  expect(enter.defaultPrevented).toBe(true);
+  await pick("orchestration");
+  const enter2 = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  await act(async () => void q("settings-orchestration-maxDepth")!.dispatchEvent(enter2));
+  expect(enter2.defaultPrevented).toBe(true);
+  expect(q("settings-panel")!.className).not.toContain("max-md:hidden");
+});
+
 it("Maximum workers in total shows 0 = no limit and saves a patch of its field", async () => {
   const { q, calls, pick } = await render();
   await pick("orchestration");
