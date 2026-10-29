@@ -3,14 +3,16 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitRepo } from "@claude-ui/protocol";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { repoSafetyAsync } from "../src/git-readonly.ts";
-import { searchFiles } from "../src/search.ts";
+import { clearSearchCache, searchFiles } from "../src/search.ts";
 
 const UNC = "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo";
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 afterEach(() => (setGitRunner(undefined), vi.restoreAllMocks()));
+beforeEach(() => clearSearchCache());
 
 describe("GH-298 search and git-readonly of a UNC WSL project", () => {
   it("file search of a UNC WSL cwd lists files through the git runner", async () => {
@@ -19,6 +21,17 @@ describe("GH-298 search and git-readonly of a UNC WSL project", () => {
     const paths = await searchFiles(UNC, "");
     expect(calls.some((c) => c.cwd === UNC && c.args.includes("ls-files"))).toBe(true);
     expect(paths).toContain("src/a.ts");
+  });
+
+  it("file search of a UNC WSL cwd lists nested repositories through the runner, cached", async () => {
+    const calls: GitRunOptions[] = [];
+    setGitRunner(async (o) => (calls.push(o), { stdout: Buffer.from(o.args.includes("--deleted") ? "" : o.cwd === UNC ? "a.ts\0" : "x.ts\0"), stderr: "" }));
+    const repos = [{ rel: "", path: UNC }, { rel: "api", path: `${UNC}\\api`, kind: "nested" }] as GitRepo[];
+    expect(await searchFiles(UNC, "", 50, repos)).toEqual(expect.arrayContaining(["a.ts", "api/", "api/x.ts"]));
+    expect(calls.filter((c) => c.cwd === `${UNC}\\api`)).toHaveLength(2);
+    const n = calls.length;
+    await searchFiles(UNC, "x", 50, repos);
+    expect(calls.length).toBe(n);
   });
 
   it("file search pins the repository (#317): every ls-files gets GIT_DIR and GIT_WORK_TREE", async () => {

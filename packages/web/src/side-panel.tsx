@@ -88,7 +88,7 @@ function rowsOf(c: SideCheck, docker = true): Row[] {
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const t = f.target;
     const target = t ? `${t.arch}, ${t.libc}${t.glibc ? ` ${t.glibc}` : ""}` : "Linux";
-    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle` : target, status: "ok" }, build];
+    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle${f.install.parts === "download" ? ", if the host can download the parts" : ""}` : target, status: "ok" }, build];
   }
   return [
     { name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" },

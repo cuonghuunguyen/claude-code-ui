@@ -1059,8 +1059,43 @@ describe("daemon", () => {
     writeFileSync(join(webRoot, "proj", "notes.md"), "");
     const c = await client();
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "prnot" })).toMatchObject({ result: { paths: ["proj/notes.md"] } });
+    // An embedded repository: its files are found (the server passes the repositories of the cwd).
+    const ws = join(webRoot, "ws-nested");
+    mkdirSync(join(ws, "api/src"), { recursive: true });
+    writeFileSync(join(ws, "api/src/handler.ts"), "");
+    execFileSync("git", ["init", "-q"], { cwd: join(ws, "api") });
+    expect(await c.request({ type: "fs.search", cwd: ws, query: "handler" })).toMatchObject({ result: { paths: ["api/src/handler.ts"] } });
     expect(await c.request({ type: "fs.search", cwd: join(webRoot, ".."), query: "" })).toMatchObject({ code: "cwd_not_allowed" });
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: 42 })).toMatchObject({ code: "bad_query" });
+  });
+
+  it("fs.search reuses the git.repos scan of the client's open files", async () => {
+    const ws = join(webRoot, "ws-reuse");
+    mkdirSync(join(ws, "api"), { recursive: true });
+    writeFileSync(join(ws, "api/x.ts"), "");
+    execFileSync("git", ["init", "-q"], { cwd: join(ws, "api") });
+    const c = await client();
+    const scans: string[][] = [];
+    setGitRunner((o) => (scans.push(o.args), threadRunner(o)));
+    try {
+      await c.request({ type: "git.repos", cwd: ws, openFiles: [join(ws, "api/x.ts")] });
+      const before = scans.filter((a) => !a.includes("ls-files")).length;
+      expect(await c.request({ type: "fs.search", cwd: ws, query: "x.ts" })).toMatchObject({ result: { paths: ["api/x.ts"] } });
+      expect(scans.filter((a) => !a.includes("ls-files")).length).toBe(before);
+    } finally {
+      setGitRunner(undefined);
+    }
+  });
+
+  it("a file created by fs.create is found by the next fs.search", async () => {
+    const ws = join(webRoot, "ws-create");
+    mkdirSync(ws, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: ws });
+    writeFileSync(join(ws, "a.txt"), "");
+    const c = await client();
+    expect(await c.request({ type: "fs.search", cwd: ws, query: "fresh" })).toMatchObject({ result: { paths: [] } });
+    await c.request({ type: "fs.create", path: join(ws, "fresh.txt") });
+    expect(await c.request({ type: "fs.search", cwd: ws, query: "fresh" })).toMatchObject({ result: { paths: ["fresh.txt"] } });
   });
 
   it("answers git.status for a cwd inside the roots only", async () => {
