@@ -164,18 +164,22 @@ The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending 
 _Avoid_: inbox, queue page
 
 **Side panel**:
-The dock area on the right or left of the session view; its tabs are panes (Changes, Files, Git graph, Plan, Terminal).
+The dock area on the right or left of the session view; its tabs are panes (Changes, Files, Git graph, Plan, Artifacts, Terminal).
 _Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
 
 **Pane**:
-Something of one session that the user can show and place: a kind, an owner session. Plan, Files, Git graph and Terminal can also be main-area tabs (`plan:<session>`, `files:<session>`, `graph:<session>`, `terminal:<session>`).
+Something of one session that the user can show and place: a kind, an owner session. Plan, Artifacts, Files, Git graph and Terminal can also be main-area tabs (`plan:<session>`, `artifacts:<session>`, `files:<session>`, `graph:<session>`, `terminal:<session>`).
 _Avoid_: view, panel (a panel is a dock area), widget, document
 
 **Owner session**:
 The session a pane belongs to; a session pane owns itself. It is fixed. Closing the owner's tab does not close its other panes.
 
 **Kind home**:
-Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph, Plan and Terminal can be main; Changes never.
+Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph, Plan, Artifacts and Terminal can be main; Changes never.
+
+**Artifacts pane**:
+The pane that lists the artifacts one session published (one row per artifact, newest first) and previews the selected one. An artifact tab (`artifact:<session>:<part>`) is one item of it opened on its own.
+_Avoid_: artifact browser, gallery
 
 **Pane identity**:
 What "already open" compares: the owner's folder for Files, Git graph and Terminal (one tab per project folder), the owner session for Plan.

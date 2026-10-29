@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { projectsDirOf, slugOf, writePublishTranscript } from "../support/fake-transcript.ts";
+import { projectsDirOf, slugOf, writePublishTranscript, writeTurnsTranscript } from "../support/fake-transcript.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "fake-transcript-")));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -43,5 +43,24 @@ describe("fake publish transcript (GH-400 e2e fixture)", () => {
   it("the project folder name and the transcript root", () => {
     expect(slugOf("/a/b c_d")).toBe("-a-b-c-d");
     expect(projectsDirOf(join(tmp, "cfg"), tmp)).toBe(join(tmp, "cfg", "projects"));
+  });
+  it("GH-176 a turns transcript restores every turn and the publishes of the chosen turns, with timestamps", async () => {
+    const cwd = join(tmp, "turns project");
+    mkdirSync(cwd);
+    const configDir = join(tmp, "config-turns");
+    const old = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const sessionId = "5b2c3d4e-5f60-4718-8a9b-0a1b2c3d4e5f";
+    try {
+      writeTurnsTranscript({ sessionId, cwd, configDir, run: tmp, turns: 3, publishes: { 1: { file: "/x/a.html", url: base.url }, 3: { file: "/x/b.md", title: "B", url: base.url } } });
+      const msgs = await getSessionMessages(sessionId, { dir: cwd });
+      const prompts = msgs.filter((m) => m.type === "user" && typeof (m.message as { content: unknown }).content === "string");
+      expect(prompts).toHaveLength(3);
+      const uses = msgs.flatMap((m) => (m.message as { content: { type: string; name?: string; input?: unknown }[] }).content).filter((b) => b?.type === "tool_use");
+      expect(uses.map((u) => u.input)).toEqual([{ file_path: "/x/a.html" }, { file_path: "/x/b.md", title: "B" }]);
+    } finally {
+      if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = old;
+    }
   });
 });
