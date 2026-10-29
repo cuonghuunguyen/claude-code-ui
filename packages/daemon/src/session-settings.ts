@@ -15,7 +15,12 @@ export const PRUNE_GRACE_MS = 24 * 60 * 60 * 1000;
  * Orchestration links (orchestration.ts): a worker has its coordinator's ID, its name, its cwd and the port of the daemon that
  * started it. A coordinator is any session that has a worker. (Files from before may still hold `role: "coordinator"`: ignored.)
  */
-export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?: number; /** Qualified agent type name the worker runs as (worker_start `agent`). */ agent?: string };
+export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?: number; /** Qualified agent type name the worker runs as (worker_start `agent`). */ agent?: string;
+  /** Aside (docs/spec.md "Aside"): the owner session while not kept. */
+  ownerId?: string;
+  /** Aside: until the user changes its permission mode (stays after Keep as session). */
+  readOnly?: true;
+};
 /** `saved`: when the entry last changed (ms); absent in files written before GH-91. */
 type Entry = Partial<SessionSettings> & Link & { saved?: number };
 const SETTINGS: (keyof SessionSettings)[] = ["model", "permissionMode", "effort"];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeCommand, choose, insertSlash, dialogArg, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
+import { ASIDE_COMMAND, activeCommand, asideOf, choose, insertSlash, dialogArg, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
 
 const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
 const all = [cmd("review", "<pr>"), cmd("compact"), cmd("code-review"), cmd("init")];
@@ -67,7 +67,7 @@ describe("dialog commands", () => {
     expect(dialogOf("/mcp list")).toBeUndefined();
     expect(dialogOf("/mcpx")).toBeUndefined();
     const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
-    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"]]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
     expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
   });
 
@@ -77,7 +77,7 @@ describe("dialog commands", () => {
     expect(dialogOf("/plugin", [cmd("plugin")])).toBeUndefined();
     expect(dialogOf("/plugins", [cmd("plugin")])).toBe("plugins");
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
-    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "resume"]);
+    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "resume", "btw"]);
     expect(withDialogCommands([cmd("plugins")]).filter((r) => r.name === "plugins").map((r) => r.description)).toEqual(["plugins desc"]);
     expect(matchCommands(withDialogCommands([]), "/market")!.map((c) => c.name)).toEqual(["plugins"]);
   });
@@ -94,8 +94,8 @@ describe("/skills and /help", () => {
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
   });
   it("the picker lists /skills with the extension's description unless the CLI has it", () => {
-    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"]]);
-    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "Resume a previous session"]);
+    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
+    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "Resume a previous session", ASIDE_COMMAND.description]);
   });
 });
 
@@ -125,5 +125,21 @@ describe("slash token at the caret", () => {
     expect(insertSlash(text, t, "rv-skill")).toEqual({ text: "run /rv-skill now", caret: 14 });
     expect(activeCommand("/re-x", 3)!.lead).toBe(true);
     expect(activeCommand("/re-x tail", 3)!.lead).toBe(false);
+  });
+});
+
+describe("/btw", () => {
+  it("asideOf gives the question, \"\" for a bare /btw, undefined for other text", () => {
+    expect(asideOf("/btw why?")).toBe("why?");
+    expect(asideOf("/btw")).toBe("");
+    expect(asideOf("/btw   ")).toBe("");
+    expect(asideOf("/btwx a")).toBeUndefined();
+    expect(asideOf("hello /btw x")).toBeUndefined();
+    expect(asideOf("/btw line 1\nline 2")).toBe("line 1\nline 2");
+  });
+  it("the picker lists /btw once, also when the CLI has a command of that name", () => {
+    const rows = withDialogCommands([{ name: "btw", description: "cli", argumentHint: "" }]);
+    expect(rows.filter((c) => c.name === "btw")).toEqual([ASIDE_COMMAND]);
+    expect(choose(ASIDE_COMMAND)).toEqual({ text: "/btw " });
   });
 });

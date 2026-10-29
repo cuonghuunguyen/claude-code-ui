@@ -46,6 +46,11 @@ export function choose(c: SlashCommand, typed = ""): { send: string } | { text: 
   return c.argumentHint && !full ? { text: `/${c.name} ` } : { send: `/${c.name}` };
 }
 
+/** /btw (docs/spec.md "Aside"): the question after it ("" when none); undefined for any other text. Handled by the web app, never sent. */
+export const asideOf = (text: string) => /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim())?.[1]?.trim() ?? (text.trim() === "/btw" ? "" : undefined);
+/** The picker row of /btw. */
+export const ASIDE_COMMAND: SlashCommand = { name: "btw", description: "Ask an aside: a read-only side conversation forked from this session", argumentHint: "<question>" };
+
 /** The dialogs the web app opens itself. */
 export type DialogName = "mcp" | "skills" | "plugins" | "resume";
 
@@ -64,8 +69,9 @@ const has = (commands: SlashCommand[], name: string) => commands.some((c) => c.n
 
 /** The picker's rows: the session's commands plus the dialog commands (a CLI row of the same name gives way to `always` ones). */
 export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => [
-  ...commands.filter((c) => !DIALOG_COMMANDS.some((d) => d.always && d.name === c.name)),
+  ...commands.filter((c) => c.name !== ASIDE_COMMAND.name && !DIALOG_COMMANDS.some((d) => d.always && d.name === c.name)),
   ...DIALOG_COMMANDS.filter((d) => d.always || !has(commands, d.name)),
+  ASIDE_COMMAND,
 ];
 
 /** The dialog a prompt opens instead of being sent: `/mcp` alone; `/resume` alone or with text; `/skills`, `/help`, `/plugins`, `/plugin`, `/marketplace` alone unless the CLI has a command of that name. */

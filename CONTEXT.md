@@ -152,6 +152,10 @@ _Avoid_: persona, role session. Not a Subagent run.
 A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
 _Avoid_: hierarchy, manager chain
 
+**Aside**:
+A Session forked from an owner session with `/btw` (or palette Ask aside), shown in a floating popup over the owner. Read-only by default (no Edit, Write, NotebookEdit until the user changes its permission mode) and without the orchestration tools. Linked to its owner by `ownerId` in `sessions.json`; never listed; thrown away when the popup closes, unless kept with Keep as session (then an ordinary Session). Forked at the owner's last complete main-thread message, so it works while the owner's turn runs.
+_Avoid_: side question (Claude Code's tool-less `/btw`), side chat, branch, fork session. Not a Subagent run, not a Worker.
+
 **Escalation**:
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
 

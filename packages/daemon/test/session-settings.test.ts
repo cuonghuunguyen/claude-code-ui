@@ -138,4 +138,13 @@ describe("session settings (sessions.json)", () => {
     expect(s.get("s1")).toMatchObject({ model: "haiku" });
     expect(s.ids()).toEqual(["s1"]);
   });
+
+  it("set with ownerId undefined removes the key from the file (Keep as session)", () => {
+    const f = file();
+    const s = createSessionSettings({ file: f });
+    s.set("a", { ownerId: "o", readOnly: true, model: "haiku" });
+    s.set("a", { ownerId: undefined }, ["ownerId"]);
+    expect(createSessionSettings({ file: f }).get("a")).toMatchObject({ readOnly: true, model: "haiku" });
+    expect("ownerId" in createSessionSettings({ file: f }).get("a")!).toBe(false);
+  });
 });
