@@ -6,7 +6,7 @@ import { openApp } from "../support/flow.ts";
 import { After, Given, Then, When } from "./fixtures.ts";
 
 // A target the bundle covers, as the check script prints it.
-const COVERED = ["arch=x86_64", "libc=glibc", "glibc=2.36", "cxxrt=1", "foundnode=0", "credentials=1", "writable=/tmp", "installed=none"].map((l) => `CLAUDE_UI_CHECK ${l}\n`).join("");
+const COVERED = ["arch=x86_64", "libc=glibc", "glibc=2.36", "cxxrt=1", "foundnode=0", "credentials=1", "writable=/tmp", "tar=1", "gzip=1", "git=1", "npm=1", "installed=none"].map((l) => `CLAUDE_UI_CHECK ${l}\n`).join("");
 const PROBE_OK = COVERED.split("\n").slice(0, 4).join("\n") + "\n";
 
 const config = (name: string, probe: FakeDockerConfig["probe"]): FakeDockerConfig => ({

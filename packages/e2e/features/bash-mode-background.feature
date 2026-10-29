@@ -7,7 +7,7 @@ Feature: A running ! command can be moved to the background
 
   Scenario Outline: A running ! command moves to the background, frees the session and Claude answers its end at <width>x<height>
     Given the viewport is <width>x<height>
-    When I run the shell command "for i in $(seq 1 20); do echo tick-$i; sleep 1; done; echo bang-$((6*7))"
+    When I run the shell command "for i in $(seq 1 10); do echo tick-$i; sleep 1; done; echo bang-$((6*7))"
     And I click Run in background on the bash card
     Then the bash card runs in the background
     And the status bar shows "1 shell"
@@ -41,7 +41,7 @@ Feature: A running ! command can be moved to the background
 
   Scenario: A backgrounded ! command survives a reload of the transcript
     Given the viewport is 1440x900
-    When I run the shell command "for i in $(seq 1 20); do echo tick-$i; sleep 1; done; echo bang-$((6*7))"
+    When I run the shell command "for i in $(seq 1 10); do echo tick-$i; sleep 1; done; echo bang-$((6*7))"
     And I click Run in background on the bash card
     Then a bash card shows "bang-42"
     And the bash card is finished
@@ -53,6 +53,7 @@ Feature: A running ! command can be moved to the background
   Scenario: The shortcut moves a running ! command to the background
     Given the viewport is 1440x900
     When I run the shell command "for i in $(seq 1 15); do echo key-$i; sleep 1; done"
+    And the bash card shows Run in background
     And I press "ControlOrMeta+Shift+B"
     Then the bash card runs in the background
     And the status bar shows "1 shell"

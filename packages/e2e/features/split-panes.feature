@@ -116,6 +116,7 @@ Feature: Split view with a session and one of its panes
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open Settings and choose the terminal position "Main area"
+    And I hide the side panel
     And I open the terminal with the shortcut
     And I click the Terminal tab New terminal button
     And I select "Terminal 1" in the Terminal tab
