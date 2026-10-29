@@ -72,6 +72,17 @@ describe("What this container needs", () => {
 describe("side panel, Docker", () => {
   const side = (o: Partial<SideInfo> = {}): SideInfo => ({ id: "docker:dev", label: "Docker: dev", state: "off", ...o });
 
+  it("bundle with parts download says the host must download them; cached or unknown shows the plain bundle", async () => {
+    const rowOf = async (parts?: "cached" | "download") => {
+      document.body.innerHTML = "";
+      await mount(<SidePanel side={side()} state={{ check: { ...bundleCheck, facts: { ...bundleCheck.facts, install: { method: "bundle", ...(parts && { parts }) } } } }} onRun={() => {}} onCheck={() => {}} />);
+      return [...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent)[1];
+    };
+    expect(await rowOf("download")).toBe("Containerx86_64, glibc 2.36: bundle, if the host can download the parts");
+    expect(await rowOf("cached")).toBe("Containerx86_64, glibc 2.36: bundle");
+    expect(await rowOf()).toBe("Containerx86_64, glibc 2.36: bundle");
+  });
+
   it("bundle check: no Node.js or build tools rows; the guide shows; WSL has no guide", async () => {
     await mount(<SidePanel side={side()} state={{ check: bundleCheck }} onRun={() => {}} onCheck={() => {}} />);
     const r = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent);

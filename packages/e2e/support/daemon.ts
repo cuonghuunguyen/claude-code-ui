@@ -3,9 +3,9 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { configHome, daemonConfigDir, localAppData, projectsRoot } from "./paths.ts";
+import { cacheHome, configHome, daemonConfigDir, localAppData, projectsRoot } from "./paths.ts";
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 export const DEFAULT_PORT = 4280;
@@ -19,18 +19,24 @@ export type Daemon = {
   root: string;
   log: string;
   readonly pid: number;
-  restart(): Promise<void>;
+  /** `pathPrefix`: a folder put first on the daemon's PATH from this start on (a fake docker); none: the normal PATH. */
+  restart(o?: { pathPrefix?: string }): Promise<void>;
+  /** The PATH prefix of the current start (a fake docker), if any. */
+  readonly pathPrefix?: string;
   stop(): Promise<void>;
 };
 
 /** The config dirs of the owner's real install: where a test run must never write. */
-export function realConfigDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
+export function realConfigDirs(env: NodeJS.ProcessEnv = process.env, home = homedir(), platform: NodeJS.Platform = process.platform): string[] {
   const dirs = [join(home, ".config", "claude-ui")];
   if (env.APPDATA) dirs.push(join(env.APPDATA, "claude-ui"));
   // The runner's own XDG_CONFIG_HOME is the owner's real config dir, unless it is the run's (a nested run).
   const own = env.E2E_RUN_DIR ? daemonConfigDir(env.E2E_RUN_DIR) : "";
   const xdg = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "claude-ui") : "";
   if (xdg && xdg !== own && !dirs.includes(xdg)) dirs.push(xdg);
+  // The owner's side part cache (daemonEnv gives the run its own): listed so a leak into it is a breach too.
+  const cache = platform === "win32" ? join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "claude-ui", "cache", "side") : join(env.XDG_CACHE_HOME || join(home, ".cache"), "claude-ui", "side");
+  if (cache !== (env.E2E_RUN_DIR ? join(cacheHome(env.E2E_RUN_DIR), "claude-ui", "side") : "")) dirs.push(cache);
   return dirs;
 }
 
@@ -123,7 +129,7 @@ export async function killTreeAsync(pid: number): Promise<void> {
 }
 
 /** The daemon's environment: own config dir and port, subscription login only, Haiku. */
-export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, platform: NodeJS.Platform = process.platform, pathPrefix?: string): NodeJS.ProcessEnv {
   const env = { ...base };
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
@@ -132,6 +138,9 @@ export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, pl
   return {
     ...env,
     XDG_CONFIG_HOME: configHome(run),
+    // The Docker and WSL side parts (side-bundle.ts sideCacheDir) go under the run, never the owner's ~/.cache.
+    XDG_CACHE_HOME: cacheHome(run),
+    ...(pathPrefix ? { PATH: `${pathPrefix}${delimiter}${env.PATH ?? ""}` } : {}),
     // On Windows the daemon keeps uploads under LOCALAPPDATA whatever XDG_CONFIG_HOME says, and has no option for it (uploads.ts defaultUploadsDir).
     ...(platform === "win32" ? { LOCALAPPDATA: localAppData(run) } : {}),
     PORT: String(port),
@@ -177,7 +186,7 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
   const log = join(run, `daemon-w${worker}.log`);
   const pidFile = join(run, `daemon-w${worker}.pid`);
   const configDir = daemonConfigDir(run);
-  const state: { child?: ChildProcess; token: string } = { token: "" };
+  const state: { child?: ChildProcess; token: string; pathPrefix?: string } = { token: "" };
 
   async function launch(): Promise<void> {
     const fd = openSync(log, "a");
@@ -185,7 +194,7 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     const child = spawn(
       process.execPath,
       ["--import", "tsx", "packages/daemon/src/main.ts", "--port", String(port), "--roots", projectsRoot(run), "--no-open", "--no-update-check", "--no-os-notify"],
-      { cwd: REPO_ROOT, env: daemonEnv(process.env, run, port), stdio: ["ignore", "pipe", fd], windowsHide: true, detached: process.platform !== "win32" },
+      { cwd: REPO_ROOT, env: daemonEnv(process.env, run, port, process.platform, state.pathPrefix), stdio: ["ignore", "pipe", fd], windowsHide: true, detached: process.platform !== "win32" },
     );
     closeSync(fd);
     state.child = child;
@@ -257,12 +266,16 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     configDir,
     root: projectsRoot(run),
     log,
+    get pathPrefix() {
+      return state.pathPrefix;
+    },
     get pid() {
       return state.child?.pid ?? 0;
     },
     stop,
-    async restart() {
+    async restart(o) {
       await stop();
+      state.pathPrefix = o?.pathPrefix;
       for (let attempt = 1; ; attempt++) {
         try {
           await launch();

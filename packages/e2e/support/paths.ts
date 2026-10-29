@@ -17,6 +17,8 @@ export function runDir(env: NodeJS.ProcessEnv = process.env, now = new Date(), p
 }
 
 export const configHome = (run: string) => join(run, "ui-config");
+/** The daemon's XDG_CACHE_HOME: its side part cache lives here, not in the owner's ~/.cache. */
+export const cacheHome = (run: string) => join(run, "cache");
 export const daemonConfigDir = (run: string) => join(configHome(run), "claude-ui");
 /** Windows only: the daemon keeps its uploads under LOCALAPPDATA, so the run gets its own. */
 export const localAppData = (run: string) => join(run, "localappdata");
