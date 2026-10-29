@@ -5,7 +5,7 @@ import { expect, type Page } from "@playwright/test";
 import { fakeJira } from "../support/fake-jira.ts";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
 import { sendPrompt } from "../support/flow.ts";
-import { runDir } from "../support/paths.ts";
+import { daemonConfigDir, runDir } from "../support/paths.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
 const modal = (page: Page) => page.getByTestId("create-worktree");
@@ -16,13 +16,15 @@ const TOKEN = "e2e-jira-token";
 // The Settings button of the sidebar (a drawer on a phone); Control+, is not the shortcut on macOS.
 async function openJiraSettings(page: Page) {
   const drawer = page.getByTestId("open-drawer");
+  const settings = page.getByTestId("open-settings").last(); // the drawer copy on a phone
   if (await drawer.isVisible()) {
+    // The drawer slides in: click Settings inside the retry so a click during the slide is repeated; open the drawer only when it is shut.
     await expect(async () => {
-      await drawer.click();
-      await expect(page.getByTestId("open-settings").last()).toBeInViewport({ timeout: 1500 });
-    }).toPass({ timeout: 15_000 });
-  }
-  await page.getByTestId("open-settings").last().click(); // the drawer copy on a phone
+      const shut = await expect(settings).toBeInViewport({ timeout: 300 }).then(() => false, () => true);
+      if (shut) await drawer.click();
+      await settings.click({ timeout: 2000 });
+    }).toPass({ timeout: 20_000 });
+  } else await settings.click();
   await page.getByTestId("settings-group-jira").click();
 }
 
@@ -244,6 +246,7 @@ Given("the scratch project has gitignored files listed in .worktreeinclude", asy
   git(dir, "add", ".gitignore", ".worktreeinclude");
   git(dir, "add", "-f", "tracked.env");
   git(dir, "commit", "-m", "worktreeinclude fixture");
+  git(dir, "push", "origin", "main"); // a new worktree branches from origin/main, so the fixture commit must be there
   memo.envValue = `secret-${randomUUID()}`;
   writeFileSync(join(dir, "tracked.env"), "edited in the main checkout\n");
   writeFileSync(join(dir, ".env"), `${memo.envValue}\n`);
@@ -350,4 +353,29 @@ Then("the Jira token is set", async ({ page }) => {
 Then("the Ticket tab asks to set up Jira", async ({ page }) => {
   await expect(page.getByTestId("create-worktree-no-jira")).toBeVisible();
   await expect(page.getByTestId("create-worktree-ticket-row")).toHaveCount(0);
+});
+
+// GH-487: a token of the old format (no host saved next to it) is dropped; Settings says why.
+Given("the daemon's saved Jira token has the old format without a host", async () => {
+  writeFileSync(join(daemonConfigDir(runDir()), "secrets.json"), JSON.stringify({ jiraToken: TOKEN }), { mode: 0o600 });
+});
+
+Then("Settings › Jira says the saved token was cleared by a security update", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-reset")).toBeVisible();
+  await expect(page.getByTestId("settings-jira-token-reset")).toHaveText("Your saved token was cleared by a security update. Enter it again.");
+});
+
+When("I save the Jira token {string}", async ({ page }, value: string) => {
+  await page.getByTestId("settings-jira-token").fill(value);
+  await page.getByTestId("settings-jira-token-save").click();
+});
+
+Then("Settings › Jira shows no token reset notice", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-reset")).toHaveCount(0);
+});
+
+// On a phone the dialog returns to the list of groups after the URL save (not part of GH-487): open Jira again.
+When("I open the Jira group again", async ({ page }) => {
+  const g = page.getByTestId("settings-group-jira");
+  if (await g.isVisible()) await g.click();
 });

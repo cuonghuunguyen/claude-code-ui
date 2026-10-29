@@ -81,6 +81,15 @@ describe("Bash card", () => {
     expect(html).toContain("Show all 25 lines");
   });
 
+  it("tail: the collapsed output keeps the last 20 lines (live shell output)", () => {
+    const out = Array.from({ length: 25 }, (_, i) => `line${i + 1}`).join("\n");
+    const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "seq 25" })} result={result(out)} tail />);
+    expect(html).toContain("line25");
+    expect(html).toContain("line6");
+    expect(html).not.toContain("line5<");
+    expect(html).toContain("Show all 25 lines");
+  });
+
   it("shows no expand button for short output, and errors in the error style", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "false" })} result={result("boom", true)} />);
     expect(html).not.toContain("Show all");

@@ -65,3 +65,56 @@ Feature: Settings › Jira protects the token (GH-451)
     When I set the Jira URL to ""
     Then the Jira token is not set
     And I capture "token cleared by empty url"
+
+  Scenario: A token saved before the update is cleared and Settings says why
+    Given a fake Jira with my tickets PRJ-1 and PRJ-2 and another ticket PRJ-3
+    And the daemon's saved Jira token has the old format without a host
+    And I open the scratch project
+    When I restart the daemon
+    And I open Settings › Jira
+    And I set the Jira URL to the fake Jira
+    Then the Jira token is not set
+    And Settings › Jira says the saved token was cleared by a security update
+    And I capture "token reset notice"
+    When I close Settings
+    And I click the new worktree button of the scratch project
+    And I open the "ticket" tab of the modal
+    Then the Ticket tab asks to set up Jira
+    When I close Settings
+    And I open Settings › Jira
+    And I save the Jira token "e2e-jira-token"
+    Then the Jira token is set
+    And Settings › Jira shows no token reset notice
+    And I capture "token reset notice gone"
+    When I close Settings
+    And I click the new worktree button of the scratch project
+    And I open the "ticket" tab of the modal
+    Then the ticket rows are "PRJ-1, PRJ-2"
+    And I capture "ticket search works after token saved"
+
+  Scenario: A token saved before any URL binds to the first URL set in Settings
+    Given a fake Jira with my tickets PRJ-1 and PRJ-2 and another ticket PRJ-3
+    And I open the scratch project
+    When I open Settings › Jira
+    And I set the Jira URL to ""
+    And I save the Jira token "e2e-jira-token"
+    And I set the Jira URL to the fake Jira
+    Then the Jira token is set
+    When I close Settings
+    And I click the new worktree button of the scratch project
+    And I open the "ticket" tab of the modal
+    Then the ticket rows are "PRJ-1, PRJ-2"
+    And I capture "token before url bound"
+
+  Scenario: The token reset notice fits a phone screen
+    Given the viewport is 390x844
+    And a fake Jira with my tickets PRJ-1 and PRJ-2 and another ticket PRJ-3
+    And the daemon's saved Jira token has the old format without a host
+    And I open the scratch project
+    When I restart the daemon
+    And I open Settings › Jira
+    And I set the Jira URL to the fake Jira
+    And I open the Jira group again
+    Then Settings › Jira says the saved token was cleared by a security update
+    And the page has no horizontal scroll
+    And I capture "phone token reset notice"

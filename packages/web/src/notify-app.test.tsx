@@ -265,7 +265,7 @@ it("GH-356 a session shown in the other split makes no card", async () => {
 
 // GH-387: Settings › Orchestration › Notifications from workers.
 const W = "33333333-2222-3333-4444-555555555555";
-const orch = (workerNotifications: boolean) => ({ orchestration: { enabled: true, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications } });
+const orch = (workerNotifications: boolean) => ({ orchestration: { enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications } });
 const withWorker = async (workerNotifications: boolean, run: () => Promise<void>) => {
   sessions.push({ ...mk(W, "Worker one"), coordinatorId: A } as SessionListItem);
   replies["settings.get"] = { settings: orch(workerNotifications) };

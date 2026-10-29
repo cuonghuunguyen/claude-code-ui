@@ -36,6 +36,8 @@ export type CommandContext = {
   cleanUp?: () => void;
   /** Moves the shown session's running foreground Bash calls to the background (GH-440); none while there is none. */
   runInBackground?: () => void;
+  /** Opens the shells list of the shown session (GH-442). */
+  openShells?: () => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
   /** Closes the active tab's group (asks first for 2 or more tabs); none while the active tab is in no named group. */
@@ -64,7 +66,7 @@ export type CommandContext = {
   toggleTerminal: () => void;
   /** Shows the side panel pane (files, changes, git graph); where it already shows, focus goes back to the prompt. */
   showPane: (pane: "files" | "changes" | "graph") => void;
-  /** Adds a terminal to the terminal panel (opens the panel first). */
+  /** Adds a terminal to the terminal panel (opens the panel or the terminal tab first). */
   newTerminal: () => void;
   resetLayout: () => void;
   /** Moves the side panel to the other side of the session view. */
@@ -82,8 +84,8 @@ export type CommandContext = {
   /** GH-395: reveals the current session's plan (its tab in the main area, or the dock Plan pane). Absent without a plan. */
   showPlan?: () => void;
   /** Where the Plan, Files and Git graph panes live, and the move to another home; absent: no move rows. Changes never moves. */
-  homes?: Partial<Record<"plan" | "files" | "graph", Area>>;
-  moveKind?: (p: "plan" | "files" | "graph", to: Area) => void;
+  homes?: Partial<Record<"plan" | "files" | "graph" | "terminal", Area>>;
+  moveKind?: (p: "plan" | "files" | "graph" | "terminal", to: Area) => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -109,6 +111,8 @@ export type CommandContext = {
   startGuide: () => void;
   /** Clears the key promoter's counters and turns tips on (GH-234). */
   resetKeyTips: () => void;
+  /** Ask aside (docs/spec.md "Aside"): puts `/btw ` in the shown session's prompt box; none without a session tab. */
+  askAside?: () => void;
   /** Opens the MCP servers dialog of the shown project; none without a project. */
   openMcp?: () => void;
   /** Opens the "Slash commands" dialog of the shown project; none without a project. */
@@ -178,7 +182,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
-    ...(c.moveKind && c.homes ? (["plan", "files", "graph"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
     c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
@@ -186,6 +190,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("layout.reset", "Reset layout", c.resetLayout),
     c.panels && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
     s && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
+    c.askAside && cmd("aside.ask", "Ask aside", c.askAside),
     s &&
       c.models.length > 0 &&
       page(
@@ -224,6 +229,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
       ),
     s?.running && { ...cmd("session.stop", "Stop", c.stop), keys: "escape" },
     c.runInBackground && cmd("shell.background", "Run in background", c.runInBackground),
+    c.openShells && { id: "shells.open", group: "Session", keys: specOf("shells.open"), title: "Background shells", description: "List, view and kill background shells (/tasks)", run: c.openShells },
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", group: "Customize", keys: specOf("mcp.open"), title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
     c.openSkills && { id: "skills.open", group: "Customize", keys: specOf("skills.open"), title: "Slash commands", description: "Browse slash commands", run: c.openSkills },

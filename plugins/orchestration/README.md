@@ -30,7 +30,7 @@ Start one with the claude-ui `worker_start` tool: `agent: "orchestration:reviewe
 
 ## Requirements
 
-- claude-ui with Settings › Orchestration › Enable orchestration on, and **Maximum tree depth** 2 or more (default 2) for the tree flow. **Maximum workers per coordinator** (default 4) and **Maximum workers** apply.
+- claude-ui with Settings › Orchestration › Enable orchestration on, and **Maximum tree depth** 2 or more (default 2) for the tree flow. **Maximum workers per coordinator** (default 4) and **Maximum workers per tree** (default 4) and, when set, **Maximum workers in total** apply.
 - Skills installed separately: `pr-review` (reviewer), `playwright-cli` (ui-tester), `tdd` (implementer, soft).
 - A repo playbook (this repo: `.claude/skills/implement-issue`).
 

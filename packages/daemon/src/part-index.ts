@@ -119,7 +119,7 @@ export class PartIndex {
     return this.byId.get(id)?.pos;
   }
 
-  /** Parts before `beforePos` that whole-session features need: subagents, turn results, running background Bash calls, the newest ExitPlanMode call, and the plan file behind it (the newest plan-file Write and the Edit / MultiEdit calls of that file after it). `dirs`: the session's plan folders. */
+  /** Parts before `beforePos` that whole-session features need: subagents, turn results, background Bash calls (any status), the newest ExitPlanMode call, and the plan file behind it (the newest plan-file Write and the Edit / MultiEdit calls of that file after it). `dirs`: the session's plan folders. */
   aux(beforePos: number, dirs?: readonly string[]): PosPart[] {
     // Recent CLIs call ExitPlanMode with an empty input and keep the plan in a file the model wrote and revised.
     const keep = new Set<string>();
@@ -138,7 +138,7 @@ export class PartIndex {
         }
       }
     }
-    return this.scan(beforePos, (p) => keep.has(p.id) || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && p.status === "running" && isBackgroundShell(p)));
+    return this.scan(beforePos, (p) => keep.has(p.id) || p.type === "subagent" || p.type === "turn_result" || (p.type === "tool_call" && isBackgroundShell(p)));
   }
 
   /** The plan of the ExitPlanMode call `toolUseId` (see planOfCall; a call not indexed yet counts as the newest part). */

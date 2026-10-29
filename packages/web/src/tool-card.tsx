@@ -252,8 +252,8 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
   return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
-export function ToolBody({ call, result, plan: folded }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string }) {
-  const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} />;
+export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
+  const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} tail={tail} />;
   switch (call.tool) {
     case "Bash":
       // OpenCode shell anatomy: `$ command` and the output as plain text in one bordered box.
@@ -487,11 +487,11 @@ export function InputDiff({
 
 const MAX_LINES = 20;
 
-/** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. */
-function Lines({ id, text, error, plain = false, wrap = false }: { id: string; text: string; error: boolean; plain?: boolean; wrap?: boolean }) {
+/** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. `tail`: the cut keeps the last lines (live shell output). */
+function Lines({ id, text, error, plain = false, wrap = false, tail = false }: { id: string; text: string; error: boolean; plain?: boolean; wrap?: boolean; tail?: boolean }) {
   const { open: all, onOpenChange: setAll } = useExpanded(`lines:${id}`);
   const lines = text.replace(/\n$/, "").split("\n");
-  const shown = all ? lines.join("\n") : lines.slice(0, MAX_LINES).join("\n");
+  const shown = all ? lines.join("\n") : (tail ? lines.slice(-MAX_LINES) : lines.slice(0, MAX_LINES)).join("\n");
   return (
     <div>
       <pre

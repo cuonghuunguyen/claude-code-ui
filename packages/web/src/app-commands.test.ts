@@ -203,6 +203,14 @@ it("lists Slash commands in the Customize group while a project is shown", () =>
   expect(openSkills).toHaveBeenCalled();
 });
 
+it("lists Background shells while a session shows", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "shells.open")).toBeUndefined();
+  const openShells = vi.fn();
+  const item = run(ctx({ openShells }), "shells.open");
+  expect(item).toMatchObject({ title: "Background shells" });
+  expect(openShells).toHaveBeenCalled();
+});
+
 it("lists Manage plugins in the Customize group while a project is shown", () => {
   expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
   const openPlugins = vi.fn();
@@ -487,6 +495,20 @@ it("GH-396 move rows per kind list the two other homes: files, graph (git only) 
   expect(c.moveKind).toHaveBeenCalledWith("files", "main");
   expect(ids(c).some((i) => i.startsWith("changes."))).toBe(false);
   expect(ids(ctx({ homes, moveKind: vi.fn() })).some((i) => i.startsWith("graph."))).toBe(false);
+});
+
+it("Ask aside is a command only while a session tab is shown, and puts /btw in its prompt", () => {
+  const askAside = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "aside.ask")).toBe(false);
+  run(ctx({ askAside }), "aside.ask");
+  expect(askAside).toHaveBeenCalledOnce();
+  expect(appCommands(ctx({ askAside })).find((i) => i.id === "aside.ask")).toMatchObject({ title: "Ask aside", keys: undefined });
+});
+
+it("palette moves the terminal between its homes (GH-397)", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.startsWith("terminal.move"));
+  expect(ids(ctx({ homes: { terminal: "bottom" }, moveKind: vi.fn() }))).toEqual(["terminal.move.main", "terminal.move.side"]);
+  expect(ids(ctx({ homes: { terminal: "main" }, moveKind: vi.fn() }))).toEqual(["terminal.move.side", "terminal.move.bottom"]);
 });
 
 it("Run in background is listed only while a foreground shell runs, with Ctrl+Shift+B", () => {

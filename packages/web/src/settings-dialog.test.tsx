@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -29,23 +29,24 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
+  let jiraTokenReset = tokenReset;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
     if (msg.type === "settings.set") {
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
-      if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
+      if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
       settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
-    if (msg.type === "jira.token") jiraToken = msg.token !== null;
+    if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
     if (msg.type === "jira.test") return { user: "Ann Example" };
-    return { settings, ...(daemon && { daemon }), jiraToken };
+    return { settings, ...(daemon && { daemon }), jiraToken, ...(jiraTokenReset && { jiraTokenReset: true }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -97,12 +98,12 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("false");
   expect(q("settings-orchestration-coordinatorPermissions")?.getAttribute("aria-checked")).toBe("true");
   expect((q("settings-orchestration-workerCap") as HTMLInputElement).value).toBe("4");
-  expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Maximum workers");
+  expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Maximum workers per tree");
   // Short accessible name; the hint is the description.
   const desc = (id: string) => document.getElementById(q(id)!.getAttribute("aria-describedby")!)?.textContent;
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Enable orchestration");
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
-  expect(desc("settings-orchestration-workerCap")).toContain("1 to 20");
+  expect(desc("settings-orchestration-workerCap")).toContain("root coordinator's tree");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-label")).toBe("Notifications from workers");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("true");
@@ -142,6 +143,21 @@ it("Orchestration shows Maximum tree depth and Maximum workers per coordinator a
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
 });
 
+it("Maximum workers in total shows 0 = no limit and saves a patch of its field", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  expect((q("settings-orchestration-workerCapTotal") as HTMLInputElement).value).toBe("0");
+  expect(document.querySelector('label[for="settings-orchestration-workerCapTotal"]')?.textContent).toBe("Maximum workers in total");
+  expect(document.getElementById(q("settings-orchestration-workerCapTotal")!.getAttribute("aria-describedby")!)?.textContent).toContain("0 = no limit");
+  const input = q("settings-orchestration-workerCapTotal") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "6");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerCapTotal: 6 } } });
+});
+
 it("an out-of-range cap shows the daemon's error in a Banner", async () => {
   const { q, pick } = await render();
   await pick("orchestration");
@@ -151,7 +167,7 @@ it("an out-of-range cap shows the daemon's error in a Banner", async () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
-  expect(q("banner-error")?.textContent).toContain("Maximum workers must be a whole number");
+  expect(q("banner-error")?.textContent).toContain("Maximum workers per tree must be a whole number");
 });
 
 it("Compact tabs is a switch that applies at once, and is disabled with a hint while grouping is None", async () => {
@@ -246,6 +262,17 @@ it("Terminal position: Bottom by default, Side panel saved per browser", async (
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.side).toContain("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Side panel");
+  localStorage.removeItem("claude-ui.layout");
+});
+
+it("Terminal position offers Main area (GH-397)", async () => {
+  localStorage.removeItem("claude-ui.layout");
+  const { q, pick } = await render();
+  await pick("terminal");
+  await act(async () => q("settings-terminal-position")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
+  expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
+  expect(q("settings-terminal-position")?.textContent).toContain("Main area");
   localStorage.removeItem("claude-ui.layout");
 });
 
@@ -355,6 +382,24 @@ it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only 
   await act(async () => q("settings-jira-token-clear")!.click());
   expect(calls.filter((c) => c.type === "jira.token").at(-1)).toEqual({ type: "jira.token", token: null });
   expect(q("settings-jira-token-set")).toBeNull();
+});
+
+it("Jira: a token cleared by the security update says so under the token field until a token is saved (GH-487)", async () => {
+  const { q, pick } = await render({ tokenReset: true });
+  await pick("jira");
+  expect(q("settings-jira-token-reset")!.textContent).toBe("Your saved token was cleared by a security update. Enter it again.");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(q("settings-jira-token"), "tok-123");
+    q("settings-jira-token")!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("settings-jira-token-save")!.click());
+  expect(q("settings-jira-token-reset")).toBeNull();
+});
+
+it("Jira: no notice when no token was cleared (GH-487)", async () => {
+  const { q, pick } = await render();
+  await pick("jira");
+  expect(q("settings-jira-token-reset")).toBeNull();
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {

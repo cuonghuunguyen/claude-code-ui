@@ -23,7 +23,7 @@ function fakeSession(id: string, live = true): any {
   });
 }
 
-type Cfg = { enabled: boolean; workerCap: number; maxDepth: number; maxChildren: number; coordinatorPermissions: boolean; workerMode: string; workerNotifications: boolean };
+type Cfg = { enabled: boolean; workerCap: number; workerCapTotal: number; maxDepth: number; maxChildren: number; coordinatorPermissions: boolean; workerMode: string; workerNotifications: boolean };
 
 function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const sessions = new Map<string, any>();
@@ -31,7 +31,7 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const created: { cwd: string; s: any; init: any }[] = [];
   const agentCalls: string[] = [];
   const agentBox: { list: string[]; fail?: string } = { list: ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer", "a:dup", "b:dup", "local-x"] };
-  const settings: Cfg = { enabled: true, workerCap: 10, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, ...cfg };
+  const settings: Cfg = { enabled: true, workerCap: 10, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, ...cfg };
   const removed: string[] = [];
   const o = createOrchestration({
     links,
@@ -57,7 +57,12 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
     projects: () => ["/repo"],
     worktrees: async () => undefined,
     removing: () => false,
-    createWorktree: async (repo, opt) => ({ path: `/wt/${opt.branch}`, branch: opt.branch! }),
+    createWorktree: async (repo, opt) => {
+      await tick(); // a worktree takes time: parallel starts meet at this await
+      const r = { path: `/wt/${opt.branch}`, branch: opt.branch! };
+      opt.onCreated?.(r as any);
+      return r;
+    },
     port: () => 1,
     heldElsewhere: () => false,
     models: () => [],
@@ -92,6 +97,8 @@ function tree(o: ReturnType<typeof setup>, depth = 2) {
 }
 
 const start = (name: string, extra: object = {}) => ({ name, cwd: "/tmp", prompt: "go", ...extra });
+/** A start that creates a worktree first (an await between the cap check and the link: the reservation counts). */
+const wt = (name: string) => ({ name, project: "/repo", branch: `b-${name}`, prompt: "go" });
 
 describe("worker tree: orchestration for workers", () => {
   it("a worker's query start gets the orchestration server while orchestration is on", () => {
@@ -147,10 +154,77 @@ describe("worker tree: orchestration for workers", () => {
     expect(rs.filter((r) => r.name).length).toBe(1);
   });
 
-  it("the worker cap counts workers at every depth", async () => {
+  it("the worker cap counts the root's tree at every depth", async () => {
     const t = setup(undefined, { workerCap: 2 });
     tree(t); // W1, W2 live
-    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers\)/);
+    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers per tree/);
+  });
+
+  it("two coordinators each run up to their own cap", async () => {
+    const t = setup(undefined, { workerCap: 2 });
+    tree(t);
+    t.sessions.set("D", fakeSession("D"));
+    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers per tree/);
+    expect(await call(t.o, "D", "worker_start", start("a"))).toMatchObject({ name: "a" });
+    expect(await call(t.o, "D", "worker_start", start("b"))).toMatchObject({ name: "b" });
+    expect((await call(t.o, "D", "worker_start", start("c"))).error).toMatch(/Maximum workers per tree/);
+    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers per tree/);
+  });
+
+  it("a depth-2 worker counts in its root's tree", async () => {
+    const t = setup(undefined, { workerCap: 2 });
+    tree(t, 1);
+    t.sessions.set("D", fakeSession("D"));
+    expect(await call(t.o, "W1", "worker_start", start("x"))).toMatchObject({ name: "x" });
+    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers per tree/);
+    expect((await call(t.o, "W1", "worker_start", start("y"))).error).toMatch(/Maximum workers per tree/);
+    expect(await call(t.o, "D", "worker_start", start("a"))).toMatchObject({ name: "a" });
+  });
+
+  it("the total maximum counts every tree; 0 is no limit", async () => {
+    const t = setup(undefined, { workerCap: 10, workerCapTotal: 3 });
+    tree(t);
+    t.sessions.set("D", fakeSession("D"));
+    expect(await call(t.o, "D", "worker_start", start("a"))).toMatchObject({ name: "a" });
+    expect((await call(t.o, "D", "worker_start", start("b"))).error).toMatch(/Maximum workers in total/);
+    t.settings.workerCapTotal = 0;
+    expect(await call(t.o, "D", "worker_start", start("b"))).toMatchObject({ name: "b" });
+  });
+
+  it("parallel worker_start of two coordinators: one passes per tree", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    t.sessions.set("C", fakeSession("C"));
+    t.sessions.set("D", fakeSession("D"));
+    const rs = await Promise.all([
+      call(t.o, "C", "worker_start", wt("a")),
+      call(t.o, "C", "worker_start", wt("b")),
+      call(t.o, "D", "worker_start", wt("a")),
+      call(t.o, "D", "worker_start", wt("b")),
+    ]);
+    expect(rs.filter((r) => r.error).length).toBe(2);
+    for (const r of rs.filter((r) => r.error)) expect(r.error).toMatch(/Maximum workers per tree/);
+    const ok = rs.filter((r) => r.name);
+    expect(ok.length).toBe(2);
+    expect(t.links.entries().map(([, l]) => l.coordinatorId).sort()).toEqual(["C", "D"]);
+  });
+
+  it("parallel worker_start at the total maximum: exactly one passes", async () => {
+    const t = setup(undefined, { workerCap: 10, workerCapTotal: 1 });
+    t.sessions.set("C", fakeSession("C"));
+    t.sessions.set("D", fakeSession("D"));
+    const rs = await Promise.all([call(t.o, "C", "worker_start", wt("a")), call(t.o, "D", "worker_start", wt("a"))]);
+    expect(rs.filter((r) => r.name).length).toBe(1);
+    expect(rs.filter((r) => r.error)[0].error).toMatch(/Maximum workers in total/);
+  });
+
+  it("worker_send to a closed worker counts its root's tree only", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    for (const id of ["C", "A", "B", "D", "E"]) t.sessions.set(id, fakeSession(id, id !== "B" && id !== "E"));
+    t.links.set("A", { coordinatorId: "C", name: "a", cwd: "/tmp", port: 1 });
+    t.links.set("B", { coordinatorId: "C", name: "b", cwd: "/tmp", port: 1 });
+    t.links.set("E", { coordinatorId: "D", name: "e", cwd: "/tmp", port: 1 });
+    expect((await call(t.o, "C", "worker_send", { name: "b", text: "hi" })).error).toMatch(/Maximum workers per tree/);
+    expect(await call(t.o, "D", "worker_send", { name: "e", text: "hi" })).toMatchObject({ name: "e" });
   });
 
   it("worker_send to a closed worker checks the children limit", async () => {
@@ -236,6 +310,62 @@ describe("worker tree: orchestration for workers", () => {
     t.o.observe(W2, turnEnd);
     await tick();
     expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
+  });
+
+  it("a notice to a worker coordinator without a CLI is not held by another tree at the cap", async () => {
+    const t = setup(undefined, { workerCap: 2 });
+    const [, W1, W2] = tree(t);
+    W1.live = false;
+    for (const id of ["D", "Y", "Z"]) t.sessions.set(id, fakeSession(id));
+    t.links.set("Y", { coordinatorId: "D", name: "y", cwd: "/tmp", port: 1 });
+    t.links.set("Z", { coordinatorId: "D", name: "z", cwd: "/tmp", port: 1 });
+    t.o.observe(W2, turnEnd);
+    await tick();
+    expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
+  });
+
+  it("a notice to a worker coordinator without a CLI is held at the total maximum", async () => {
+    const t = setup(undefined, { workerCap: 10, workerCapTotal: 2 });
+    const [, W1, W2] = tree(t);
+    W1.live = false;
+    for (const id of ["D", "Y"]) t.sessions.set(id, fakeSession(id));
+    t.links.set("Y", { coordinatorId: "D", name: "y", cwd: "/tmp", port: 1 }); // W2 and Y run: 2 of 2
+    t.o.observe(W2, turnEnd);
+    await tick();
+    expect(t.prompts).toEqual([]);
+    t.settings.workerCapTotal = 0;
+    t.o.observe(W2, turnEnd);
+    await tick();
+    expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
+  });
+
+  it("a /clear during worker_start's awaits: the second cap check counts the tree under the new ID", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    t.sessions.set("C", fakeSession("C"));
+    t.sessions.set("C2", fakeSession("C2"));
+    const b = { id: "C" };
+    const ws = t.o.tools(b).find((x) => x.name === "worker_start")!;
+    const p = ws.handler(start("a", { agent: "Explore" }) as never, {}) as Promise<any>; // passes the first check, then awaits the agent list
+    t.o.handOver("C", "C2");
+    b.id = "C2";
+    expect(await call(t.o, "C2", "worker_start", start("b"))).toMatchObject({ name: "b" });
+    expect((await p).isError).toBe(true);
+    expect(t.links.entries().filter(([, l]) => l.coordinatorId === "C2").length).toBe(1);
+  });
+
+  it("a /clear during worker_send's await: the cap check counts the tree under the new ID", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    for (const id of ["C", "C2", "A", "B"]) t.sessions.set(id, fakeSession(id, id !== "B"));
+    t.links.set("A", { coordinatorId: "C", name: "a", cwd: "/tmp", port: 1 });
+    t.links.set("B", { coordinatorId: "C", name: "b", cwd: "/tmp", port: 1 });
+    const b = { id: "C" };
+    const send = t.o.tools(b).find((x) => x.name === "worker_send")!;
+    const p = send.handler({ name: "b", text: "hi" } as never, {}) as Promise<any>;
+    t.o.handOver("C", "C2");
+    b.id = "C2";
+    const r = await p;
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/Maximum workers per tree/);
   });
 
   it("/clear of a worker coordinator moves its workers and its own link", () => {
@@ -393,7 +523,9 @@ describe("worker tree: limits are refused before the card", () => {
     expect(pre(t, "C")).toMatch(/Maximum workers per coordinator/); // W1 is C's live child
     t.settings.workerCap = 2;
     t.settings.maxChildren = 4;
-    expect(pre(t, "C")).toMatch(/Maximum workers\)/); // W1 and W2 run
+    expect(pre(t, "C")).toMatch(/Maximum workers per tree/); // W1 and W2 run
+    t.sessions.set("D", fakeSession("D"));
+    expect(pre(t, "D")).toBeUndefined(); // another tree
     t.settings.workerCap = 10;
     expect(pre(t, "C")).toBeUndefined();
     expect(pre(t, "W1")).toBeUndefined();

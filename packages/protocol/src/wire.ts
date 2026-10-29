@@ -92,6 +92,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
   | { type: "session.backgroundShell"; sessionId: string; toolUseId: string }
+  /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file (stdout and stderr merged, at most MAX_BASH_OUTPUT_CHARS chars); reply ShellOutputResult. Error `no_output` (no file known, it lies outside the CLI's task folder, or it is gone). */
+  | { type: "session.shellOutput"; sessionId: string; toolUseId: string }
+  /** Kill (GH-442): stops the running background shell `toolUseId` (`stopTask()`); its task_notification ends it. Errors `unknown_shell` (no task of that call runs), `stop_failed`. */
+  | { type: "session.stopShell"; sessionId: string; toolUseId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".
@@ -136,6 +140,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.delete"; sessionId: string }
   /** Web app Close worker (docs/spec.md "Orchestration"): as `worker_close` for the worker's own coordinator. Reply `{}`; errors not_worker, unknown_worker, unknown_session, held_elsewhere, stop_timeout, has_workers. */
   | { type: "worker.close"; sessionId: string }
+  /** /btw (docs/spec.md "Aside"): forks the session into an Aside and sends `text` there. Reply AsideOpenResult; errors bad_prompt, unknown_session, aside_unavailable, aside_failed. */
+  | { type: "aside.open"; sessionId: string; text: string }
+  /** Closes the Aside popup: stops its CLI, deletes its transcript and link. Reply `{}`; errors not_an_aside. */
+  | { type: "aside.close"; sessionId: string }
+  /** Keep as session: the Aside becomes a listed Session (link to its owner dropped). Reply `{}`; errors unknown_session, not_an_aside. */
+  | { type: "aside.keep"; sessionId: string }
   /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, has_workers, delete_failed. Broadcasts `sessions.changed`. */
   | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
@@ -386,6 +396,8 @@ export const MIN_SEARCH_CHARS = 2;
 export const MAX_SEARCH_CHARS = 200;
 
 export type CreateResult = { session: SessionInfo };
+/** `from`: the Aside question's user_text part id: the popup subscribes from it (only the Aside's own messages). */
+export type AsideOpenResult = { session: SessionInfo; title: string; from: string };
 /**
  * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
  * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.
@@ -645,7 +657,7 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditors"] as const;
 /** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
 export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
-export type Settings = { orchestration: { enabled: boolean; workerCap: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
+export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; notifications: { desktop: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
@@ -669,7 +681,7 @@ export type Settings = { orchestration: { enabled: boolean; workerCap: number; /
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
@@ -745,6 +757,8 @@ export type SkillRow = {
   advertised: boolean;
   handles?: SkillHandles;
 };
+/** session.shellOutput: `truncated` when the file holds more than `output`. */
+export type ShellOutputResult = { output: string; truncated: boolean };
 export type SkillsResult = { skills: SkillRow[] };
 /** `confirmed` false: saved, but the session's dialog still shows the previous state after 5 reads. */
 export type SkillsSetStateResult = SkillsResult & { confirmed: boolean };

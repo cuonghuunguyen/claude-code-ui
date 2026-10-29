@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
+import { taskDirs } from "../src/shell-output.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded } from "./fake-query.ts";
@@ -2163,19 +2164,30 @@ describe("Session background work", () => {
     }
   });
 
-  it("a stopped notification that gets no CLI turn leaves the session idle; working clears after the wait", async () => {
+  it("a stopped notification gets no CLI turn while idle (probe, GH-442): working clears at once, no wait", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const { events, send } = await setup();
       await bg(send);
       await send(result(), ["running", "idle+working"]);
-      await send(done("t1", "agent-bg", "stopped"), ["running", "idle+working", "idle+working"]);
+      await send(done("t1", "agent-bg", "stopped"), ["running", "idle+working", "idle"]);
       vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
       expect(log(events).at(-1)).toBe("idle");
       expect(log(events)).not.toContain("running+working");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("Stop agent while the parent turn runs: the session stays running until the turn's result, then idle without working", async () => {
+    const { events, s, send } = await setup();
+    await bg(send);
+    expect(await s.stopSubagent("agent-bg")).toBe(true);
+    await send(done("t1", "agent-bg", "stopped"), ["running"]);
+    expect(s.working()).toBe(true);
+    await send(result(), ["running", "idle"]);
+    expect(log(events).at(-1)).toBe("idle");
+    expect(s.working()).toBe(false);
   });
 
   // GH-239: an Artifact publish arms the CLI's comment monitor, a monitor_ws task flagged ambient that lives as long as the artifact
@@ -2580,5 +2592,31 @@ describe("coordinator settle off the event loop (GH-163 round 5)", () => {
     expect(await s.permissionTier(req.requestId)).toBe("high");
     expect(await s.coordinatorRespond(req.requestId, { decision: "allow", message: "r" })).toBe(false);
     expect(s.info().state).toBe("needs_input");
+  });
+});
+
+describe("shellOutput of a restored session (GH-442)", () => {
+  const msg = (type: string, uuid: string, content: unknown) => ({ type, uuid, session_id: "s", parent_tool_use_id: null, message: { role: type, content } });
+  const restored = (id: string, cwd: string, file: string, name = "Bash") => {
+    const placeholder = `Command running in background with ID: rt1. Output is being written to: ${file}. You will be notified when it completes.`;
+    return Session.restore(id, cwd, [
+      msg("user", "u1", "go"),
+      msg("assistant", "a1", [{ type: "tool_use", id: "tb1", name, input: { command: "ping x", run_in_background: true } }]),
+      msg("user", "r1", [{ type: "tool_result", tool_use_id: "tb1", content: placeholder }]),
+    ] as never, { query: fakeQuery as never });
+  };
+
+  it("reads the output file named by the placeholder result when it lies in the session's task folder; refuses one elsewhere", async () => {
+    const id = randomUUID();
+    const cwd = mkdtempSync(join(tmpdir(), "shell-restore-"));
+    const dir = taskDirs(cwd, id)[0]!;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "rt1.output"), "restored-out\n");
+    const ok = restored(id, cwd, join(dir, "rt1.output"));
+    expect(await ok.shellOutput("tb1")).toEqual({ output: "restored-out\n", truncated: false });
+    const outside = mkdtempSync(join(tmpdir(), "shell-restore-out-"));
+    writeFileSync(join(outside, "rt1.output"), "elsewhere");
+    expect(await restored(id, cwd, join(outside, "rt1.output")).shellOutput("tb1")).toBeUndefined();
+    expect(await ok.shellOutput("nope")).toBeUndefined();
   });
 });

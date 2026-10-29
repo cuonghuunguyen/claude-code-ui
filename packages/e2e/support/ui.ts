@@ -13,7 +13,7 @@ export const idleSend = (page: Page): Locator => page.locator('[data-testid="sen
 export const toolCard = (page: Page, text: string): Locator => page.getByTestId("tool-card").filter({ hasText: text });
 
 /** What a user calls the end of a tool call, and the status the card carries for it. */
-export const TOOL_STATUS: Record<string, string> = { running: "running", finished: "done", denied: "denied", stopped: "error" };
+export const TOOL_STATUS: Record<string, string> = { running: "running", finished: "done", denied: "denied", stopped: "error", killed: "stopped" };
 
 export async function waitConnected(page: Page): Promise<void> {
   // On a phone the connection badge lives in the drawer: it is attached but not always visible.

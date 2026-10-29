@@ -40,6 +40,7 @@ import {
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashRun } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
+import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
@@ -91,6 +92,8 @@ type SessionOpts = Partial<SessionSettings> & {
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
   mcpServers?: (id: string) => Options["mcpServers"];
+  /** Tools removed from session `id`'s CLI (Aside: no edits while read-only, no orchestration tools); read at every query start. */
+  disallowedTools?: (id: string) => string[] | undefined;
   /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
   agent?: (id: string) => string | undefined;
   /**
@@ -284,6 +287,7 @@ export class Session {
     const agent = this.opts.agent?.(this.id);
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
+    const disallowed = this.opts.disallowedTools?.(this.id);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
@@ -296,6 +300,8 @@ export class Session {
         cwd: this.cwd,
         additionalDirectories: dirs.length ? dirs : undefined,
         ...(rules.length && { allowedTools: rules }),
+        // Not a canUseTool deny: a user settings allow rule (e.g. Edit) would skip canUseTool.
+        ...(disallowed && { disallowedTools: disallowed }),
         model: this.model === "default" ? undefined : this.model,
         permissionMode: this.permissionMode,
         allowDangerouslySkipPermissions: !!this.opts.allowBypass,
@@ -517,8 +523,8 @@ export class Session {
     });
   }
 
-  /** `images`: data URLs already checked with imageBlock(). */
-  prompt(text: string, images: string[] = []) {
+  /** `images`: data URLs already checked with imageBlock(). Returns the user_text part id. */
+  prompt(text: string, images: string[] = []): string {
     if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.rewinding) throw new Error("session is rewinding");
@@ -535,6 +541,7 @@ export class Session {
       ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
       : text;
     this.input.push({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
+    return uuid;
   }
 
   /** Switches the live query's model; "default" resets to the SDK default. A restored session not yet resumed resumes with it. */
@@ -620,11 +627,11 @@ export class Session {
   }
 
   /**
-   * Stop agent: stops one subagent run (`stopTask()` of its task); the parent turn goes on with the run's error result.
-   * False when no run with that Agent call ID is running in the live query.
+   * Stops the task of call `callId`: a subagent run (Stop agent; the parent turn goes on with the run's error result) or a
+   * background shell (Kill, GH-442). False when no task of that call runs in the live query.
    */
-  async stopSubagent(subagentId: string): Promise<boolean> {
-    const task = this.tasks.get(subagentId);
+  async stopSubagent(callId: string): Promise<boolean> {
+    const task = this.tasks.get(callId);
     if (!task || !this.query) return false;
     await this.query.stopTask(task);
     return true;
@@ -633,6 +640,12 @@ export class Session {
   /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`. False without a live query or when the CLI runs no foreground task of that call. */
   async backgroundShell(toolUseId: string): Promise<boolean> {
     return this.query ? this.query.backgroundTasks(toolUseId) : false;
+  }
+
+  /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file; undefined when none is known, it lies outside the CLI's task folder, or it is gone. */
+  async shellOutput(toolUseId: string) {
+    const file = this.adapter.outputFile(toolUseId);
+    return file ? readTail(file, taskDirs(this.cwd, this.id)) : undefined;
   }
 
   /** Dry run of a code rewind to before this prompt. */
@@ -1129,7 +1142,8 @@ export class Session {
       const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
       if (id) this.tasks.delete(id);
       this.ambientTasks.delete(m.task_id);
-      this.cliTurn = true;
+      // A stopped task (Kill, Stop agent) gets no turn of its own while the session is idle: the CLI hands the notice to Claude with the next message (probe, GH-442).
+      this.cliTurn = m.status !== "stopped";
       // Idle: `working` may end now. The CLI's own turn, if any, shows running from its first assistant message.
       if (this.state === "idle") this.setState("idle");
       // ponytail: a stopped or killed task may get no CLI turn, so no result clears cliTurn; give up after 10 s. Upgrade: clear on a CLI signal if one exists.

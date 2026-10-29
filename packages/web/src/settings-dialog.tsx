@@ -10,7 +10,7 @@ import { isImeKey } from "./ime.ts";
 import { Switch } from "./plugins-dialog.tsx";
 import { saveKeepAwake, useKeepAwakeSetting, wakeLockReason, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type DockArea } from "./layout.ts";
+import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type Area } from "./layout.ts";
 import { DIFF_MODES, saveDiffMode, useDefaultDiffMode, type DiffMode } from "./diff-mode.ts";
 import { loadSidebarView, saveSidebarView, VIEW_EVENT } from "./sessions.ts";
 import { AUTO_CLOSE, type AutoClose } from "./tab-cleanup.ts";
@@ -167,9 +167,10 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     title: "Orchestration",
     rows: [
       { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session may start and supervise worker sessions, workers too (up to Maximum tree depth). Applies at a session's next start." },
-      { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers", hint: "Worker sessions running at the same time (1 to 20)." },
+      { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers per tree", hint: "Workers one root coordinator's tree may run at the same time, at every depth (1 to 20). Each coordinator you start counts its own tree." },
+      { key: "workerCapTotal", kind: "number", min: 0, max: 100, label: "Maximum workers in total", hint: "Workers this daemon may run at the same time across every tree (0 = no limit, up to 100)." },
       { key: "maxDepth", kind: "number", min: 1, max: 5, label: "Maximum tree depth", hint: "How deep workers may start workers of their own: 1 = only you start workers; 2 = a worker may start its own (e.g. a tester and a reviewer)." },
-      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers still counts every worker." },
+      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers per tree still counts its whole tree." },
       {
         key: "workerMode",
         kind: "select",
@@ -222,12 +223,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
   const [jiraToken, setJiraToken] = useState(false);
+  const [jiraTokenReset, setJiraTokenReset] = useState(false);
   // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
   const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
   const [layout, setLayout] = useState(() => loadSidebarView().layout);
@@ -258,7 +260,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return;
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setError(undefined), setDraft({})),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined), setDraft({})),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -271,6 +273,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       setSettings(r.settings);
       setDaemon(r.daemon);
       setJiraToken(!!r.jiraToken);
+      setJiraTokenReset(!!r.jiraTokenReset);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -490,11 +493,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
-          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, or a tab of the side panel. Narrow screens show it as the terminal pane. Kept in this browser.</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, a tab of the side panel, or a tab of the main area next to the session. Narrow screens show it as the terminal pane. Kept in this browser.</span>
         </div>
-        <Select value={terminalDock} onValueChange={(v) => v && saveTerminalDock(v as DockArea)}>
+        <Select value={terminalDock} onValueChange={(v) => v && (onTerminalPosition ?? saveTerminalDock)(v as Area)}>
           <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: DockArea) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
+            <SelectValue>{(v: Area) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {TERMINAL_DOCKS.map((d) => (
@@ -604,7 +607,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
-      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setError(undefined))} onError={setError} /> }]
+      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];

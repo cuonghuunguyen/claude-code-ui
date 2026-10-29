@@ -21,7 +21,7 @@ import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, foregroundBashQuery, yielded } from "./fake-query.ts";
+import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, foregroundBashQuery, backgroundShellQuery, yielded } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
@@ -3320,6 +3320,51 @@ describe("daemon", () => {
     }
   });
 
+  it("session.stopShell stops a running background shell; its notification ends it and working", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: backgroundShellQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const a = await client((d.address() as AddressInfo).port);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "go" });
+      await a.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle" && m.part.working === true);
+      expect(await a.request({ type: "session.stopShell", sessionId, toolUseId: "bs-1" })).toMatchObject({ type: "reply" });
+      expect(stopped).toContain("bstask1");
+      await a.waitFor((m) => m.type === "event" && m.part.id === "bs-1" && "status" in m.part && m.part.status === "stopped");
+      await a.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle" && !m.part.working);
+      expect(await a.request({ type: "session.stopShell", sessionId, toolUseId: "bs-1" })).toMatchObject({ type: "error", code: "unknown_shell" });
+      expect(await a.request({ type: "session.stopShell", sessionId, toolUseId: "nope" })).toMatchObject({ type: "error", code: "unknown_shell" });
+      expect(await a.request({ type: "session.stopShell", sessionId })).toMatchObject({ type: "error", code: "bad_request" });
+      expect(await a.request({ type: "session.stopShell", sessionId: "nope", toolUseId: "bs-1" })).toMatchObject({ type: "error", code: "unknown_session" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.shellOutput answers the tail of the shell's output file; a file outside the CLI's task folder is refused", async () => {
+    const d = createDaemon({ webRoot, roots: [webRoot], query: backgroundShellQuery as never, token });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const a = await client((d.address() as AddressInfo).port);
+      const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sessionId = result.session.id;
+      await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId, text: "go" });
+      await a.waitFor((m) => m.type === "event" && m.part.id === "bs-1" && "shell" in m.part);
+      await a.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+      expect(await a.request({ type: "session.shellOutput", sessionId, toolUseId: "bs-1" })).toMatchObject({ type: "reply", result: { output: "out-1\n", truncated: false } });
+      expect(await a.request({ type: "session.shellOutput", sessionId, toolUseId: "nope" })).toMatchObject({ type: "error", code: "no_output" });
+      expect(await a.request({ type: "session.shellOutput", sessionId })).toMatchObject({ type: "error", code: "bad_request" });
+      await a.request({ type: "session.prompt", sessionId, text: "outside" });
+      await a.waitFor((m) => m.type === "event" && m.part.id === "bs-2" && "shell" in m.part);
+      expect(await a.request({ type: "session.shellOutput", sessionId, toolUseId: "bs-2" })).toMatchObject({ type: "error", code: "no_output" });
+    } finally {
+      d.close();
+    }
+  });
+
   it("session.prompt steers a running turn; session.interrupt stops it and the session takes the next prompt", async () => {
     const d = createDaemon({ webRoot, roots: [webRoot], query: interruptQuery as never, token });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
@@ -3819,6 +3864,9 @@ describe("transcript sync (terminal CLI turns)", () => {
     // Transcript reads (getSessionMessages calls, getSubagentMessages agent IDs) and the subagent runs listSubagents names.
     const reads = { main: 0, runs: [] as string[] };
     const agents: string[] = [];
+    /** forkSession calls (Aside); the fork's transcript is the owner's, as the SDK copies it. */
+    const forks: { id: string; upToMessageId?: string }[] = [];
+    const forked = new Set<string>();
     const d = createDaemon({
       webRoot,
       token,
@@ -3827,7 +3875,14 @@ describe("transcript sync (terminal CLI turns)", () => {
       projectsDir,
       history: {
         listSessions: (async () => []) as never,
-        getSessionInfo: (async (sid: string) => (restored[sid] ? { sessionId: sid, cwd: restoredCwd } : undefined)) as never,
+        forkSession: (async (id: string, o: { upToMessageId?: string }) => {
+          const sessionId = randomUUID();
+          forks.push({ id, upToMessageId: o.upToMessageId });
+          forked.add(sessionId);
+          files[sessionId] = files[id] as Msg[];
+          return { sessionId };
+        }) as never,
+        getSessionInfo: (async (sid: string) => (restored[sid] || forked.has(sid) ? { sessionId: sid, cwd: restoredCwd } : undefined)) as never,
         getSessionMessages: (async (sid: string) => {
           reads.main++;
           if (files[sid] === "unreadable") throw new Error("EACCES");
@@ -3858,7 +3913,7 @@ describe("transcript sync (terminal CLI turns)", () => {
       await idle(sid, user.seq);
       return user.part.id;
     };
-    return { d, c, files, touch, create, prompt, reads, agents, port: (d.address() as AddressInfo).port };
+    return { d, c, files, touch, create, prompt, reads, agents, forks, port: (d.address() as AddressInfo).port };
   }
 
   it("a terminal CLI /compact shows the compaction divider once, like a restore: its summary lies before the preserved known messages", { timeout: 15_000 }, async () => {
@@ -3928,6 +3983,32 @@ describe("transcript sync (terminal CLI turns)", () => {
       touch(s.id, s.cwd);
       await c.waitFor((m) => isPart("external_turn")(m) && !(m as { part: { running: boolean } }).part.running);
       await prompt(s.id, "now");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("aside.open during a terminal CLI turn forks from the transcript on disk and leaves the owner's turn alone", { timeout: 15_000 }, async () => {
+    const { d, c, files, touch, create, prompt, forks } = await syncDaemon();
+    try {
+      const s = await create();
+      const p1 = await prompt(s.id, "hi");
+      files[s.id] = own(p1);
+      touch(s.id, s.cwd);
+      await quiet();
+      const m = msg("assistant", "cli-call", [{ type: "tool_use", id: "toolu_cli", name: "Bash", input: { command: "sleep 5" } }]) as Msg & { message: object };
+      files[s.id] = [...own(p1), msg("user", "cli-p", "from the terminal"), { ...m, message: { ...m.message, stop_reason: "tool_use" } } as Msg];
+      touch(s.id, s.cwd);
+      await c.waitFor((e) => isPart("external_turn")(e) && (e as Event).part.type === "external_turn" && (e as { part: { running: boolean } }).part.running);
+      const before = events(c).length;
+      const r = (await c.request({ type: "aside.open", sessionId: s.id, text: "what runs?" })) as { type: string; result?: { session: { id: string } } };
+      expect(r.type).toBe("reply");
+      // Cut before the terminal's pending call; the owner got no prompt and still reports the external turn.
+      expect(forks).toHaveLength(1);
+      expect(forks[0]!.id).toBe(s.id);
+      expect(forks[0]!.upToMessageId).not.toBe("cli-call");
+      expect(events(c).slice(before).some((e) => e.sessionId === s.id && e.part.type === "user_text")).toBe(false);
+      expect(await c.request({ type: "session.prompt", sessionId: s.id, text: "too early" })).toMatchObject({ type: "error", code: "external_turn" });
     } finally {
       d.close();
     }
@@ -4297,7 +4378,7 @@ describe("updates", () => {
 
 describe("sessions.search", () => {
   const line = (o: object) => JSON.stringify(o) + "\n";
-  const setup = (bigMB = 0) => {
+  const setup = (bigMB = 0, settingsFile?: string) => {
     const inside = join(webRoot, "search proj");
     const other = join(webRoot, "other proj");
     mkdirSync(inside, { recursive: true });
@@ -4318,7 +4399,7 @@ describe("sessions.search", () => {
       writeFileSync(join(projectsDir, inside.replace(/[^a-zA-Z0-9]/g, "-"), "big.jsonl"), row.repeat(Math.ceil((bigMB << 20) / row.length)));
       transcripts.push(big);
     }
-    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, projectsDir, history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, projectsDir, settingsFile, history: { listSessions: (async () => transcripts) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never } });
     return { d, inside, outside };
   };
   const results = (c: Awaited<ReturnType<typeof client>>) => c.inbox.filter((m): m is Extract<ServerMessage, { type: "sessions.search.result" }> => m.type === "sessions.search.result");
@@ -4333,6 +4414,22 @@ describe("sessions.search", () => {
       expect(reply.result.scannedFiles).toBe(2);
     } finally {
       d.close();
+    }
+  });
+
+  it("skips the transcript of an Aside (a copy of its owner's) until it is kept", async () => {
+    const { d } = setup();
+    const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    writeFileSync(settingsFile, JSON.stringify({ a1: { ownerId: "owner", readOnly: true, port: 1 } }));
+    d.close();
+    const { d: d2 } = setup(0, settingsFile);
+    await new Promise<void>((r) => d2.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d2.address() as AddressInfo).port);
+      await c.request({ type: "sessions.search", query: "ZEBRA" });
+      expect(results(c).map((r) => r.sessionId)).toEqual(["a2"]);
+    } finally {
+      d2.close();
     }
   });
 
