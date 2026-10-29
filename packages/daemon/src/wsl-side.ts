@@ -46,12 +46,13 @@ export async function prepareWslSide(o: {
   const src = o.bundle;
   const version = safeKey(src.version);
   const partsDir = join(src.cacheRoot, version, m.target);
+  // Marked before the fetch: a slow cold download must not let another version's hub prune this folder meanwhile.
+  markUsed(src.cacheRoot, version);
   try {
     await ensureParts({ dir: partsDir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion, node: m.node }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
   } catch (e) {
     return o.onInstall?.({ fallback: (e as Error).message }), undefined;
   }
-  markUsed(src.cacheRoot, version);
   pruneCache(src.cacheRoot, version);
   o.onInstall?.({ bundle: true });
   return { target: m.target, ...(m.node === "pinned" && { nodeDir: nodeDirName(m.target) }), claudePackage: claudePackage(m.target), host: { partsDir, sideDir: build!.dir, version: src.version, partsId: partsIdOf(m.target, build!.sdkVersion, m.node) } };

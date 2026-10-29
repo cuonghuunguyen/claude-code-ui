@@ -3,7 +3,7 @@ import { expect } from "@playwright/test";
 import { runDir } from "../support/paths.ts";
 import { writeFakeDocker, type FakeDockerConfig } from "../support/fake-docker.ts";
 import { openApp } from "../support/flow.ts";
-import { Given, Then, When } from "./fixtures.ts";
+import { After, Given, Then, When } from "./fixtures.ts";
 
 // A target the bundle covers, as the check script prints it.
 const COVERED = ["arch=x86_64", "libc=glibc", "glibc=2.36", "cxxrt=1", "foundnode=0", "credentials=1", "writable=/tmp", "installed=none"].map((l) => `CLAUDE_UI_CHECK ${l}\n`).join("");
@@ -55,4 +55,9 @@ Then("the side panel says the install uses npm because the container did not ans
 Then("the container row says the bundle needs the host to download the parts", async ({ page }) => {
   const row = page.getByTestId("side-check-row").filter({ hasText: "bundle" });
   await expect(row).toContainText("if the host can download the parts", { timeout: 60_000 });
+});
+
+// The worker's daemon outlives the scenario: take the fake docker off its PATH again.
+After(async ({ daemon }) => {
+  if (daemon.pathPrefix) await daemon.restart();
 });

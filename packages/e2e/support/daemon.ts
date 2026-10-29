@@ -21,17 +21,22 @@ export type Daemon = {
   readonly pid: number;
   /** `pathPrefix`: a folder put first on the daemon's PATH from this start on (a fake docker); none: the normal PATH. */
   restart(o?: { pathPrefix?: string }): Promise<void>;
+  /** The PATH prefix of the current start (a fake docker), if any. */
+  readonly pathPrefix?: string;
   stop(): Promise<void>;
 };
 
 /** The config dirs of the owner's real install: where a test run must never write. */
-export function realConfigDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
+export function realConfigDirs(env: NodeJS.ProcessEnv = process.env, home = homedir(), platform: NodeJS.Platform = process.platform): string[] {
   const dirs = [join(home, ".config", "claude-ui")];
   if (env.APPDATA) dirs.push(join(env.APPDATA, "claude-ui"));
   // The runner's own XDG_CONFIG_HOME is the owner's real config dir, unless it is the run's (a nested run).
   const own = env.E2E_RUN_DIR ? daemonConfigDir(env.E2E_RUN_DIR) : "";
   const xdg = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "claude-ui") : "";
   if (xdg && xdg !== own && !dirs.includes(xdg)) dirs.push(xdg);
+  // The owner's side part cache (daemonEnv gives the run its own): listed so a leak into it is a breach too.
+  const cache = platform === "win32" ? join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "claude-ui", "cache", "side") : join(env.XDG_CACHE_HOME || join(home, ".cache"), "claude-ui", "side");
+  if (cache !== (env.E2E_RUN_DIR ? join(cacheHome(env.E2E_RUN_DIR), "claude-ui", "side") : "")) dirs.push(cache);
   return dirs;
 }
 
@@ -261,6 +266,9 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     configDir,
     root: projectsRoot(run),
     log,
+    get pathPrefix() {
+      return state.pathPrefix;
+    },
     get pid() {
       return state.child?.pid ?? 0;
     },

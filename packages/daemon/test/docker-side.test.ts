@@ -518,6 +518,25 @@ describe("prepareDockerSide: the host-assembled bundle", () => {
     expect(g.installs).toEqual([{ fallback: expect.stringMatching(/^the host could not keep .* in its cache /) }]);
   });
 
+  it("this version is marked used before the parts are fetched (a slow cold download must not let another hub prune it)", async () => {
+    const cacheRoot = sideRoot();
+    let markedAtFetch: boolean | undefined;
+    const spy = (async () => ((markedAtFetch ??= existsSync(join(cacheRoot, "1.0.0", ".used"))), new Response("node"))) as unknown as typeof fetch;
+    await go({ cacheRoot, fetch: spy }).result;
+    expect(markedAtFetch).toBe(true);
+  });
+
+  it("a tar that cannot be assembled falls back to npm with a full-sentence reason", async () => {
+    const cacheRoot = sideRoot();
+    mkdirSync(join(cacheRoot, "1.0.0"), { recursive: true });
+    writeFileSync(join(cacheRoot, "1.0.0", ".tmp"), "a file where the tar folder should be");
+    const g = go({ cacheRoot });
+    const r = await g.result;
+    expect(r.bundle).toBeUndefined();
+    expect(r.path).toMatch(/\.tgz$/);
+    expect(g.installs.at(-1)).toEqual({ fallback: expect.stringMatching(/^the host could not assemble the bundle tar \(.+\)$/) });
+  });
+
   it("a .tmp tar older than an hour is removed before assembling; a fresh one stays", async () => {
     const cacheRoot = sideRoot();
     const tmpDir = join(cacheRoot, "1.0.0", ".tmp");

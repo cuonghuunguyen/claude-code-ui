@@ -160,19 +160,26 @@ async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDi
   const version = safeKey(src.version);
   const dir = join(src.cacheRoot, version, m.target);
   let parts: Record<string, string>;
+  // Marked before the fetch: a slow cold download must not let another version's hub prune this folder meanwhile.
+  markUsed(src.cacheRoot, version);
   try {
     parts = await ensureParts({ dir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion, node: m.node }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
   } catch (e) {
     return { fallback: (e as Error).message };
   }
-  markUsed(src.cacheRoot, version);
   pruneCache(src.cacheRoot, version);
   o.onInstall?.({ bundle: true });
   o.onPhase?.("packing");
   const outDir = join(src.cacheRoot, version, ".tmp");
   // Tars of a crashed start (a live start deletes its own tar after the copy).
   removeStale(outDir, "bundle-", 3_600_000);
-  const tar = await assembleBundle({ partFiles: parts, sideDir: build!.dir, version: src.version, outDir });
+  let tar: string;
+  try {
+    tar = await assembleBundle({ partFiles: parts, sideDir: build!.dir, version: src.version, outDir });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    return { fallback: `the host could not assemble the bundle tar (${err.code ?? err.message})` };
+  }
   try {
     o.onPhase?.("copying");
     const path = await sendTarball(exec, o.name, label, tar, `claude-ui-side-${safeKey(o.key)}.tar`);

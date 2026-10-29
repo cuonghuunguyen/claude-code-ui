@@ -35,15 +35,21 @@ describe("ownerPorts", () => {
   });
 });
 
+const SIDE = join("/home/u", ".cache", "claude-ui", "side");
 describe("realConfigDirs", () => {
   it("lists ~/.config/claude-ui and %APPDATA%\\claude-ui", () => {
-    expect(realConfigDirs({ APPDATA: "/ap" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), join("/ap", "claude-ui")]);
-    expect(realConfigDirs({}, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
+    expect(realConfigDirs({ APPDATA: "/ap" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), join("/ap", "claude-ui"), SIDE]);
+    expect(realConfigDirs({}, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), SIDE]);
   });
   it("adds the runner's own XDG_CONFIG_HOME, unless it is the run's", () => {
     expect(realConfigDirs({ XDG_CONFIG_HOME: "/x" }, "/home/u")).toContain(join("/x", "claude-ui"));
-    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/r", "ui-config"), E2E_RUN_DIR: "/r" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
-    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/home/u", ".config") }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui")]);
+    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/r", "ui-config"), E2E_RUN_DIR: "/r" }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), SIDE]);
+    expect(realConfigDirs({ XDG_CONFIG_HOME: join("/home/u", ".config") }, "/home/u")).toEqual([join("/home/u", ".config", "claude-ui"), SIDE]);
+  });
+  it("lists the owner's side part cache (XDG_CACHE_HOME or ~/.cache; Windows LOCALAPPDATA), unless it is the run's", () => {
+    expect(realConfigDirs({ XDG_CACHE_HOME: "/xc" }, "/home/u")).toContain(join("/xc", "claude-ui", "side"));
+    expect(realConfigDirs({ XDG_CACHE_HOME: join("/r", "cache"), E2E_RUN_DIR: "/r" }, "/home/u")).not.toContain(join("/r", "cache", "claude-ui", "side"));
+    expect(realConfigDirs({ LOCALAPPDATA: "/la" }, "/home/u", "win32")).toContain(join("/la", "claude-ui", "cache", "side"));
   });
 });
 

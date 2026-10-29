@@ -143,6 +143,14 @@ describe("prepareWslSide", () => {
     expect(existsSync(join(cacheRoot, "1.0.0", ".used"))).toBe(true);
   });
 
+  it("this version is marked used before the parts are fetched", async () => {
+    const cacheRoot = sideRoot();
+    let markedAtFetch: boolean | undefined;
+    const spy = (async () => ((markedAtFetch ??= existsSync(join(cacheRoot, "1.0.0", ".used"))), new Response("node"))) as unknown as typeof fetch;
+    await go({ cacheRoot, fetch: spy }).result;
+    expect(markedAtFetch).toBe(true);
+  });
+
   it("the parts id includes the Node.js checksum", () => {
     expect(partsIdOf("linux-x64", "1")).toContain(NODE.sha256["linux-x64"]);
   });
