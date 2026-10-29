@@ -8,6 +8,15 @@ const FLUSH_EVENT = "claude-ui:flush-drafts";
 /** Saves every open box's text now. A box that moves (a session docked or undocked) mounts anew before the old one unmounts and flushes. */
 export const flushDrafts = () => dispatchEvent(new Event(FLUSH_EVENT));
 
+const WRITTEN_EVENT = "claude-ui:draft-written";
+/** A draft was saved for `key` from outside its box (the Focus chip): a mounted box for that key shows it. */
+export const announceDraft = (key: string) => dispatchEvent(new CustomEvent(WRITTEN_EVENT, { detail: key }));
+export const onDraftWritten = (key: string, fn: () => void) => {
+  const h = (e: Event) => (e as CustomEvent<string>).detail === key && fn();
+  addEventListener(WRITTEN_EVENT, h);
+  return () => removeEventListener(WRITTEN_EVENT, h);
+};
+
 /**
  * `text` is what the box holds; `initial` what it started with (the stored draft). Bash mode text (a half-typed command) is not saved.
  * A new `key` (the box follows its text into the session /clear started) moves the draft: the old key's draft is dropped.

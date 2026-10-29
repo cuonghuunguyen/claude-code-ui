@@ -304,3 +304,24 @@ it("GH-399 the dialog's Open in tab shows for a file inside cwd, next to Open in
   expect(onOpenTab).toHaveBeenCalledWith("/p/a.ts");
   expect(dlg()).toBeNull();
 });
+
+it("GH-504 Open in tab leaves the focus where the caller put it: the dialog does not restore the opener", async () => {
+  const opener = document.createElement("button");
+  const target = document.createElement("button");
+  document.body.append(opener, target);
+  const client = fakeClient();
+  const store = createEditorStore(() => client);
+  await store.open("/p/a.ts", { cwd: "/p", preview: false });
+  const Wrapper = () => {
+    const [open, setOpen] = useState(true);
+    return <FileDialog open={open} opener={opener} client={client} status="connected" cwd="/p" store={store} onClose={() => setOpen(false)} onSend={() => {}} onOpenInFiles={() => {}} onOpenTab={() => (setOpen(false), target.focus())} />;
+  };
+  await act(async () => root.render(<Wrapper />));
+  await flush();
+  await click("[data-testid=open-in-tab]");
+  await new Promise((r) => setTimeout(r, 100));
+  expect(dlg()).toBeNull();
+  expect(document.activeElement).toBe(target);
+  opener.remove();
+  target.remove();
+});
