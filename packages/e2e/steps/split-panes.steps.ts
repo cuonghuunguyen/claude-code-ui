@@ -62,3 +62,58 @@ Then("the sidebar highlights the first session", async ({ page }) => {
 Then("the {string} tab is not shown in a split", async ({ page }, kind: string) => {
   await expect(paneSplit(page, kind)).toHaveCount(0);
 });
+
+When("I hide the side panel", async ({ page }) => {
+  const toggle = page.getByTestId("panel-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) === "true") await toggle.click();
+  await expect(page.getByTestId("side-panel")).toBeHidden();
+});
+
+const paletteHas = async (page: Page, title: string) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  const palette = page.getByTestId("palette");
+  await expect(palette).toBeVisible();
+  await palette.locator("input").first().fill(title);
+  const n = await palette.getByRole("option", { name: new RegExp(`^${title}`, "i") }).count();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+  return n > 0;
+};
+
+Then("the command palette lists {string}", async ({ page }, title: string) => {
+  expect(await paletteHas(page, title)).toBe(true);
+});
+
+Then("the command palette does not list {string}", async ({ page }, title: string) => {
+  expect(await paletteHas(page, title)).toBe(false);
+});
+
+Then("the session split is shown", async ({ page }) => {
+  await expect(sessionSplit(page)).toBeVisible();
+});
+
+Then("the session split is active", async ({ page }) => {
+  await expect(sessionSplit(page)).toHaveAttribute("data-active", "");
+});
+
+When("I hold the {string} tab over the session split", async ({ page }, kind: string) => {
+  await stripTab(page, kind).hover();
+  await page.mouse.down();
+  const t = (await stripTab(page, kind).boundingBox())!;
+  await page.mouse.move(t.x + t.width / 2, t.y + t.height + 40, { steps: 3 });
+  const box = (await sessionSplit(page).boundingBox())!;
+  const a = (await area(page).boundingBox())!;
+  // The outer thirds of the whole area are edge zones: aim at the part of the split inside the middle third.
+  const x = (Math.max(box.x, a.x + a.width / 3) + Math.min(box.x + box.width, a.x + (2 * a.width) / 3)) / 2;
+  await page.mouse.move(x, box.y + box.height / 2, { steps: 8 });
+});
+
+Then("the terminal of the split is ready", async ({ page }) => {
+  await expect(paneSplit(page, "Terminal").locator(".xterm")).toBeVisible();
+  await expect(page.getByTestId("session-item").first()).toBeVisible();
+});
+
+Then("the sidebar highlights the session of the session split", async ({ page }) => {
+  const id = (await sessionSplit(page).getAttribute("id"))!.replace(/^split-/, "");
+  await expect(page.locator('[data-testid="session-item"][aria-current="page"]')).toHaveAttribute("data-session-id", id);
+});
