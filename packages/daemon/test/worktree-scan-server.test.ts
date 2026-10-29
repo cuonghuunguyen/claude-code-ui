@@ -124,6 +124,31 @@ describe("worktree.status with a scan id", () => {
     expect(await c.request({ type: "worktree.cancel", scan: 5 })).toMatchObject({ code: "bad_request" });
   });
 
+  it("a scan request that arrives after its worktree.cancel is cancelled too: the id is not re-created", async () => {
+    const { root, repo, paths } = fixture(1, 0);
+    const c = await client(await daemon({ root, repo }));
+    const seen: GitRunOptions[] = [];
+    setGitRunner((o) => (seen.push(o), threadRunner(o)));
+    expect(await c.request({ type: "worktree.cancel", scan: "late" })).toMatchObject({ result: {} });
+    expect(await c.request({ type: "worktree.status", cwd: repo, path: paths[0], scan: "late" })).toMatchObject({ type: "error", code: "cancelled" });
+    expect(seen.filter((o) => o.cwd === paths[0])).toEqual([]);
+  });
+
+  it("the repo-wide facts read of a scan runs in the normal tier: it starts before a later status bar request", async () => {
+    const { root, repo, paths, bs } = fixture(1, 5);
+    const c = await client(await daemon({ root, repo }));
+    const g = gate();
+    const bar = bs.slice(0, 4).map((b) => c.request({ type: "git.status", cwd: b }));
+    await until(() => g.started.length >= 4);
+    const scan = c.request({ type: "worktree.status", cwd: repo, path: paths[0], scan: "s1" });
+    await settle();
+    const extra = c.request({ type: "git.status", cwd: bs[4] });
+    await settle();
+    g.release();
+    await Promise.all([...bar, scan, extra]);
+    expect(g.started[4]!.cwd).toBe(repo);
+  });
+
   it("a Clean up scan of 20 worktrees spawns at most 3 git processes per worktree and the repo-wide reads once", async () => {
     const { root, repo, paths } = fixture(20, 0);
     const c = await client(await daemon({ root, repo }));
@@ -156,7 +181,8 @@ describe("worktree.status with a scan id", () => {
     await Promise.all([...bar, late]);
     const first = (pred: (o: GitRunOptions) => boolean) => g.started.findIndex(pred);
     expect(first((o) => o.cwd === bs[4])).toBeGreaterThan(-1);
-    expect(first((o) => o.cwd === bs[4])).toBeLessThan(first((o) => o.cwd === repo && gitSub(o.args) === "worktree"));
+    // The worktree's own git status is low tier (the repo-wide facts read before it is not, see below).
+    expect(first((o) => o.cwd === bs[4])).toBeLessThan(first((o) => o.cwd === paths[0] && gitSub(o.args) === "status"));
   });
 });
 

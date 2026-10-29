@@ -143,6 +143,18 @@ describe("preview status", () => {
   });
 });
 
+describe("lock flag", () => {
+  it("a worktree locked or unlocked after a status read is seen by the next status (the lock is in the facts stamp)", async () => {
+    const { main } = repo();
+    const path = wt(main, "lk");
+    expect((await worktreeStatus(main, path, allowed)).blocked).toBeUndefined();
+    git(main, "worktree", "lock", path);
+    expect((await worktreeStatus(main, path, allowed)).blocked).toBe("locked");
+    git(main, "worktree", "unlock", path);
+    expect((await worktreeStatus(main, path, allowed)).blocked).toBeUndefined();
+  });
+});
+
 describe("merged another way", () => {
   it("squash-merged clean worktree is safe with mergedInto; changed base lines keep it has_work; an uncommitted file keeps it has_work", async () => {
     const { main } = repo();
