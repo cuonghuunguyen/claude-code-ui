@@ -30,7 +30,10 @@ export function paneTabFor(tabs: readonly string[], kind: PaneKind, owner: strin
   const id = identityOf(ref, cwdOf);
   return tabs.find((t) => kindOf(t) === kind && identityOf(t, cwdOf) === id) ?? ref;
 }
-/** Split view (4/8 widens it): no pane kind may be in a split yet. */
-export const splittable = (_id: string): boolean => false;
+/** Split view (R7): every pane kind but Git graph, which needs the whole area. */
+export const splittable = (id: string): boolean => {
+  const k = kindOf(id);
+  return k !== undefined && k !== "graph";
+};
 /** "Plan · <title>", "Files · <project>". */
 export const paneTabTitle = (kind: PaneKind, ownerTitle: string): string => `${KIND_LABEL[kind]} · ${ownerTitle}`;

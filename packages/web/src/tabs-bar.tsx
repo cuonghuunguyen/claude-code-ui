@@ -1204,7 +1204,7 @@ function Tab({
                       className={ITEM}
                       disabled={x.disabled}
                       data-testid={x.testId}
-                      onClick={() => (x.id === "moveLeft" ? onMenuMove(-1) : x.id === "moveRight" ? onMenuMove(1) : x.id === "close" ? onMenuClose() : onCommand?.(x.id))}
+                      onClick={() => (x.id === "moveLeft" ? onMenuMove(-1) : x.id === "moveRight" ? onMenuMove(1) : x.id === "close" ? onMenuClose() : x.id === "splitNote" ? undefined : onCommand?.(x.id))}
                     >
                       {x.label}
                     </ContextMenu.Item>

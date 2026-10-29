@@ -1,9 +1,9 @@
-// Split view (docs/spec.md "Split view", GH-356): the session area shows two session tabs side by side or stacked. `activeId` stays the single source of truth for "the current session": the active split always shows it.
+// Split view (docs/spec.md "Split view", GH-356): the session area shows a session and another session or a splittable pane (GH-398) side by side or stacked. `activeId` stays the single source of truth for "the current session": the active split always shows it.
 import { FOCUS_TAB, NEW_TAB, closeTab } from "./tabs.ts";
-import { isPaneRef } from "./pane-ref.ts";
+import { isPaneRef, kindOf, ownerOf, splittable } from "./pane-ref.ts";
 
 export type SplitDir = "row" | "col";
-/** `ids`: session tab per split in screen order (left/top first). `at`: index of the active split. `ratio`: size share of `ids[0]`. `runs`: subagent view per non-active split tab. */
+/** `ids`: tab per split in screen order (left/top first). `at`: index of the active split. `ratio`: size share of `ids[0]`. `runs`: subagent view per non-active split tab. */
 export type Split = { dir: SplitDir; ids: string[]; at: number; ratio: number; runs?: Record<string, string> };
 
 export const MAX_SPLITS = 2;
@@ -14,6 +14,9 @@ export const MIN_RATIO = 0.15;
 export const MAX_RATIO = 0.85;
 
 export const isSession = (id: unknown): id is string => typeof id === "string" && !!id && id !== NEW_TAB && id !== FOCUS_TAB && !isPaneRef(id);
+/** May show in a split (R7): a session or a splittable pane. A split holds at least one session. */
+export const splitContent = (id: unknown): id is string => isSession(id) || (typeof id === "string" && splittable(id));
+const valid = (ids: readonly string[]) => ids.length === MAX_SPLITS && ids.some(isSession);
 export const clampRatio = (r: number) => (Number.isFinite(r) ? Math.min(MAX_RATIO, Math.max(MIN_RATIO, r)) : 0.5);
 
 /** Ratio for a share of `px` of the container, never leaving a split below `minPx` (when the container allows both). */
@@ -29,8 +32,8 @@ export function parseSplit(raw: string | null): Split | undefined {
   try {
     const v = raw === null ? undefined : (JSON.parse(raw) as Partial<Split> | null);
     if (!v || typeof v !== "object" || !Array.isArray(v.ids)) return undefined;
-    const ids = [...new Set(v.ids.filter(isSession))].slice(0, MAX_SPLITS);
-    if (ids.length < 2) return undefined;
+    const ids = [...new Set(v.ids.filter(splitContent))].slice(0, MAX_SPLITS);
+    if (!valid(ids)) return undefined;
     const at = typeof v.at === "number" && Number.isInteger(v.at) ? Math.min(ids.length - 1, Math.max(0, v.at)) : 0;
     const runs: Record<string, string> = {};
     if (v.runs && typeof v.runs === "object") for (const [k, r] of Object.entries(v.runs)) if (ids.includes(k) && typeof r === "string") runs[k] = r;
@@ -43,7 +46,7 @@ export function parseSplit(raw: string | null): Split | undefined {
 /** Applied each render: drops closed tabs, puts the active tab in the active split. Same object when nothing changes. An active tab that is no session (New session, Focus page) suspends the split. */
 export function followSplit(s: Split | undefined, activeId: string | undefined, tabs: readonly string[]): Split | undefined {
   if (!s) return undefined;
-  if (!isSession(activeId)) return s;
+  if (!splitContent(activeId)) return s;
   const open = s.ids.map((id) => (tabs.includes(id) ? id : undefined));
   let ids: (string | undefined)[] = open;
   let at = s.at;
@@ -52,9 +55,11 @@ export function followSplit(s: Split | undefined, activeId: string | undefined, 
   else {
     at = Math.min(s.at, s.ids.length - 1);
     ids = open.map((id, i) => (i === at ? activeId : id));
+    // A pane never replaces the split's only session: it takes the other split.
+    if (!ids.some((id) => isSession(id))) ids = open.map((id, i) => (i === 1 - at ? activeId : id));
   }
   const kept = ids.filter((id): id is string => !!id);
-  if (kept.length < 2) return undefined;
+  if (!valid(kept)) return undefined;
   at = kept.indexOf(activeId);
   const runs = s.runs && Object.keys(s.runs).some((k) => !kept.includes(k)) ? Object.fromEntries(Object.entries(s.runs).filter(([k]) => kept.includes(k))) : s.runs;
   if (at === s.at && kept.length === s.ids.length && kept.every((id, i) => id === s.ids[i]) && runs === s.runs) return s;
@@ -66,11 +71,23 @@ export const canSplit = (tabs: readonly string[]) => tabs.filter(isSession).leng
 
 /** Puts `t` in a new split in direction `dir` (before: left/top) and focuses it. The other split keeps the active tab, else the other existing split's tab, else the neighbour of `t` in the strip. */
 export function splitTo(s: Split | undefined, tabs: readonly string[], activeId: string | undefined, t: string, dir: SplitDir, before = false): { split: Split; active: string } | undefined {
-  if (!isSession(t) || !tabs.includes(t)) return undefined;
-  const other = s?.ids.find((id) => id !== t && tabs.includes(id));
-  const x = (isSession(activeId) && activeId !== t ? activeId : undefined) ?? other ?? closeTab(tabs.filter(isSession), t, t).active;
+  if (!splitContent(t) || !tabs.includes(t)) return undefined;
+  // A pane needs a session partner; a session takes any split content.
+  const ok = (x: string | undefined): x is string => !!x && x !== t && tabs.includes(x) && (isSession(t) ? splitContent(x) : isSession(x));
+  const near = closeTab(tabs.filter((x) => x === t || ok(x)), t, t).active;
+  const x = [activeId, ...(s?.ids ?? []), isPaneRef(t) ? ownerOf(t) : undefined, near].find(ok);
   if (!x) return undefined;
   return { split: { dir, ids: before ? [t, x] : [x, t], at: before ? 0 : 1, ratio: s?.ratio ?? 0.5, runs: s?.runs }, active: t };
+}
+
+export type SplitRefusal = "whole" | "session";
+export const REFUSAL_TEXT: Record<SplitRefusal, string> = { whole: "Git graph needs the whole area", session: "A split needs a session" };
+/** Why dropping `t` in `zone` (centre: over split `over` of the shown split `s`) cannot happen; undefined = it can. A centre drop outside a shown split just opens the tab. */
+export function dropRefusal(s: Split | undefined, shown: boolean, tabs: readonly string[], activeId: string | undefined, t: string, zone: DropZone, over: number): SplitRefusal | undefined {
+  if (zone === "center" && !(shown && !!s && over >= 0)) return undefined;
+  if (kindOf(t) === "graph") return "whole";
+  if (zone !== "center") return splitTo(s, tabs, activeId, t, "row") ? undefined : "session";
+  return placeIn(s!, t, over).ids.some(isSession) ? undefined : "session";
 }
 
 /** The subagent views after `to` becomes the active tab: its own view is taken out (`run`), the previous active tab's (`curRun`) is kept. */
