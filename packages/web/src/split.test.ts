@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { FOCUS_TAB, NEW_TAB } from "./tabs.ts";
-import { type Split, isSession, switchRuns, canSplit, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, dropRefusal, REFUSAL_TEXT, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { type Split, isSession, switchRuns, clampRatio, dropZone, followSplit, loadSplit, nextAfterClose, nextSplit, parseSplit, placeIn, dropRefusal, REFUSAL_TEXT, ratioFor, saveSplit, splitTo } from "./split.ts";
 
 const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
 const sp = (o: Partial<Split> = {}): Split => ({ dir: "row", ids: ["a", "b"], at: 1, ratio: 0.5, ...o });
@@ -37,11 +37,6 @@ it("followSplit drops runs of tabs that left", () => {
 
 it("isSession is false for a plan ref; followSplit suspends while a plan tab is active only with no split content", () => {
   expect(isSession(`plan:${U}`)).toBe(false);
-});
-
-it("canSplit counts session tabs only", () => {
-  expect(canSplit(["a", NEW_TAB, FOCUS_TAB])).toBe(false);
-  expect(canSplit(["a", "b"])).toBe(true);
 });
 
 it("splitTo: the split of the active tab takes the neighbour, any other tab takes the active tab's place beside it", () => {

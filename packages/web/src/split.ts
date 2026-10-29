@@ -66,9 +66,6 @@ export function followSplit(s: Split | undefined, activeId: string | undefined, 
   return { ...s, ids: kept, at, runs };
 }
 
-/** At least two session tabs exist (New session and Focus page do not count). */
-export const canSplit = (tabs: readonly string[]) => tabs.filter(isSession).length >= 2;
-
 /** Puts `t` in a new split in direction `dir` (before: left/top) and focuses it. The other split keeps the active tab, else the other existing split's tab, else the neighbour of `t` in the strip. */
 export function splitTo(s: Split | undefined, tabs: readonly string[], activeId: string | undefined, t: string, dir: SplitDir, before = false): { split: Split; active: string } | undefined {
   if (!splitContent(t) || !tabs.includes(t)) return undefined;
