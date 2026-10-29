@@ -251,7 +251,7 @@ Then("Clean up showed Fetching… and then Fetched", async ({ page }) => {
   const iFetching = tl.findIndex((s) => s.fetch.includes("Fetching…"));
   const iFetched = tl.findIndex((s) => /Fetched \d+ s ago|Fetched/.test(s.fetch));
   expect(iFetching, "a Fetching… line was shown").toBeGreaterThanOrEqual(0);
-  expect(iFetched, "Fetched shown after").toBeGreaterThan(iFetching);
+  expect(iFetched, `Fetched shown after; fetch lines seen: ${JSON.stringify([...new Set(tl.map((s) => s.fetch))])}`).toBeGreaterThan(iFetching);
 });
 
 Then("Clean up says the fetch failed and rows still resolve", async ({ page }) => {
@@ -398,8 +398,9 @@ Then("the row of {string} showed Removing… dimmed before it disappeared", asyn
 });
 
 Then("a toast reports an ignored files count", async ({ page }) => {
-  await expect(page.getByText(/Removed wt-big: \d+ ignored files deleted/).first()).toBeVisible({ timeout: 60_000 });
-  console.log("toast:", await page.getByText(/Removed wt-big: \d+ ignored files deleted/).first().textContent());
+  // 12000 ignored files: the count is capped and shown as "1000+".
+  await expect(page.getByText(/Removed wt-big: 1000\+ ignored files deleted/).first()).toBeVisible({ timeout: 60_000 });
+  console.log("toast:", await page.getByText(/Removed wt-big: 1000\+ ignored files deleted/).first().textContent());
 });
 
 Then("a toast reports {string}", async ({ page }, text: string) => {
