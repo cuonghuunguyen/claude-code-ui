@@ -16,13 +16,15 @@ const TOKEN = "e2e-jira-token";
 // The Settings button of the sidebar (a drawer on a phone); Control+, is not the shortcut on macOS.
 async function openJiraSettings(page: Page) {
   const drawer = page.getByTestId("open-drawer");
+  const settings = page.getByTestId("open-settings").last(); // the drawer copy on a phone
   if (await drawer.isVisible()) {
+    // The drawer slides in: click Settings inside the retry so a click during the slide is repeated; open the drawer only when it is shut.
     await expect(async () => {
-      await drawer.click();
-      await expect(page.getByTestId("open-settings").last()).toBeInViewport({ timeout: 1500 });
-    }).toPass({ timeout: 15_000 });
-  }
-  await page.getByTestId("open-settings").last().click(); // the drawer copy on a phone
+      const shut = await expect(settings).toBeInViewport({ timeout: 300 }).then(() => false, () => true);
+      if (shut) await drawer.click();
+      await settings.click({ timeout: 2000 });
+    }).toPass({ timeout: 20_000 });
+  } else await settings.click();
   await page.getByTestId("settings-group-jira").click();
 }
 
@@ -358,6 +360,7 @@ Given("the daemon's saved Jira token has the old format without a host", async (
 });
 
 Then("Settings › Jira says the saved token was cleared by a security update", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-reset")).toBeVisible();
   await expect(page.getByTestId("settings-jira-token-reset")).toHaveText("Your saved token was cleared by a security update. Enter it again.");
 });
 
@@ -368,4 +371,10 @@ When("I save the Jira token {string}", async ({ page }, value: string) => {
 
 Then("Settings › Jira shows no token reset notice", async ({ page }) => {
   await expect(page.getByTestId("settings-jira-token-reset")).toHaveCount(0);
+});
+
+// On a phone the dialog returns to the list of groups after the URL save (not part of GH-487): open Jira again.
+When("I open the Jira group again", async ({ page }) => {
+  const g = page.getByTestId("settings-group-jira");
+  if (await g.isVisible()) await g.click();
 });
