@@ -1,5 +1,5 @@
 // The Artifacts pane (GH-176, docs/spec.md "Pane layout"): the artifacts a session published, newest first, with the selected one previewed. In a dock or as a main-area tab.
-import { memo, useMemo, useRef, useState, useSyncExternalStore, useEffect, type KeyboardEvent } from "react";
+import { memo, useMemo, useRef, useSyncExternalStore, useEffect, type KeyboardEvent } from "react";
 import { ChevronLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,10 +12,21 @@ import { isClaudeUrl } from "./tools.ts";
 
 const WIDE = 720;
 // The selected row per session, outside React so "Move to Artifacts" (App) can preselect without App state.
-const picked = new Map<string, string>();
+// `detail`: below 720 px the preview shows instead of the list.
+type Pick = { partId: string; detail: boolean };
+const picked = new Map<string, Pick>();
 const listeners = new Set<() => void>();
-export function selectArtifact(owner: string, partId: string): void {
-  picked.set(owner, partId);
+export function selectArtifact(owner: string, partId: string, detail = false): void {
+  picked.set(owner, { partId, detail });
+  listeners.forEach((l) => l());
+}
+/** A forgotten (deleted or unknown) session keeps no selection. */
+export function forgetArtifactSelection(owner: string): void {
+  if (picked.delete(owner)) listeners.forEach((l) => l());
+}
+/** Tests: a fresh start. */
+export function resetArtifactSelection(): void {
+  picked.clear();
   listeners.forEach((l) => l());
 }
 const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.delete(l));
@@ -32,6 +43,8 @@ type Props = {
   onOpenTab: (partId: string) => void;
   /** Loads the Artifact publishes older than the loaded page (App sends session.artifacts once per boundary). */
   requestOlder: () => void;
+  /** Its tab or dock pane is not the selected one: no preview is requested or mounted. */
+  hidden?: boolean;
   /** The session's subscribe failed: no view will come on its own. */
   failed?: boolean;
 };
@@ -42,7 +55,7 @@ const empty = (text: string, testId?: string) => (
   </p>
 );
 
-export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, load, connected, onOpenTab, requestOlder, failed }: Props) {
+export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, load, connected, onOpenTab, requestOlder, failed, hidden }: Props) {
   const rows = useMemo(() => (view ? sessionArtifacts(view) : []), [view?.parts, view?.aux]);
   const want = !!view?.older && !view.auxArtifacts;
   useEffect(() => {
@@ -50,14 +63,13 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
   }, [want, requestOlder]);
   const box = useRef<HTMLDivElement>(null);
   const width = useContainerWidth(box);
-  const [detail, setDetail] = useState(false);
-  const pick = useSyncExternalStore(subscribe, () => picked.get(owner));
+  const current = useSyncExternalStore(subscribe, () => picked.get(owner));
   if (!view) return failed ? empty("Could not load this session.", "artifacts-failed") : empty("Loading artifacts…");
   if (!rows.length) return empty("No artifacts in this session yet.", "artifacts-empty");
   const wide = width === undefined || width >= WIDE;
-  const at = Math.max(0, rows.findIndex((r) => r.partId === pick));
+  const at = Math.max(0, rows.findIndex((r) => r.partId === current?.partId));
   const sel = rows[at]!;
-  const choose = (r: ArtifactRow) => (selectArtifact(owner, r.partId), setDetail(true));
+  const choose = (r: ArtifactRow) => selectArtifact(owner, r.partId, true);
   const key = (e: KeyboardEvent<HTMLElement>) => {
     const d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
     if (!d) return;
@@ -85,12 +97,12 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
   const preview = (
     <div data-testid="artifacts-preview" className="flex min-h-0 min-w-0 flex-1 flex-col gap-1 p-2">
       {!wide && (
-        <Button type="button" variant="outline" size="sm" className="max-md:h-11 w-fit" onClick={() => setDetail(false)}>
+        <Button type="button" variant="outline" size="sm" className="max-md:h-11 w-fit" onClick={() => selectArtifact(owner, sel.partId)}>
           <ChevronLeftIcon aria-hidden className="size-4" />
           All artifacts
         </Button>
       )}
-      {sel.previewable ? (
+      {sel.previewable ? hidden ? null : (
         <ArtifactConnectedContext value={connected}>
           <ArtifactPreviewContext value={load}>
             <ArtifactFrame key={sel.partId} partId={sel.partId} title={sel.title} fill actions={open} />
@@ -115,7 +127,7 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
           {list}
           {preview}
         </>
-      ) : detail ? (
+      ) : current?.detail ? (
         preview
       ) : (
         list

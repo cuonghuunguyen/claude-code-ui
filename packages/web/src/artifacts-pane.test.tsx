@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Part } from "@claude-ui/protocol";
-import { ArtifactsPane, selectArtifact } from "./artifacts-pane.tsx";
+import { ArtifactsPane, forgetArtifactSelection, resetArtifactSelection, selectArtifact } from "./artifacts-pane.tsx";
 import type { ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { emptySession, type SessionView } from "./store.ts";
 
@@ -37,6 +37,7 @@ const options = () => [...el.querySelectorAll<HTMLElement>('[role="option"]')];
 const click = async (t: HTMLElement) => void (await act(async () => t.click()));
 afterEach(async () => {
   width = 0;
+  resetArtifactSelection();
   await act(async () => root.render(null));
 });
 
@@ -83,6 +84,27 @@ describe("ArtifactsPane", () => {
     const p = await mount(view(PARTS));
     await act(async () => selectArtifact(p.owner, "p1"));
     expect(options()[2]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("hidden: the list shows but no preview URL is requested and no iframe mounts; shown again: it loads", async () => {
+    const p = await mount(view(PARTS), { hidden: true });
+    expect(options()).toHaveLength(3);
+    expect(p.load).not.toHaveBeenCalled();
+    expect(el.querySelector("iframe")).toBeNull();
+    await act(async () => root.render(<ArtifactsPane {...p} hidden={false} />));
+    expect(p.load).toHaveBeenCalledWith("p3");
+  });
+
+  it("selectArtifact with detail opens the preview below 720 px; forgetArtifactSelection drops a session's selection", async () => {
+    width = 400;
+    const p = await mount(view(PARTS));
+    expect(options()).toHaveLength(3);
+    await act(async () => selectArtifact(p.owner, "p1", true));
+    expect(options()).toHaveLength(0);
+    expect(p.load).toHaveBeenCalledWith("p1");
+    await act(async () => forgetArtifactSelection(p.owner));
+    expect(options()).toHaveLength(3);
+    expect(options()[0]!.getAttribute("aria-selected")).toBe("true");
   });
 
   it("asks for older parts while the view has an unloaded region and no artifacts list yet, then stops", async () => {

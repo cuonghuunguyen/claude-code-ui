@@ -1003,10 +1003,11 @@ describe("Artifact publish time (GH-176)", () => {
     expect(tools(parts).at(-1)).toMatchObject({ status: "done", endedAt: Date.parse(ts(7)) });
   });
 
-  it("a live Artifact call gets a numeric endedAt", () => {
+  it("an Artifact call whose result has no timestamp gets no endedAt (the pane shows no time)", () => {
     const out = createAdapter();
     const parts = [call("a1", "Artifact"), result("a1")].flatMap((m) => out.convert(m as never));
-    expect(tools(parts).at(-1)!.endedAt).toBeTypeOf("number");
+    expect(tools(parts).at(-1)).toMatchObject({ status: "done" });
+    expect(tools(parts).at(-1)).not.toHaveProperty("endedAt");
   });
 
   it("another tool has no endedAt", () => {

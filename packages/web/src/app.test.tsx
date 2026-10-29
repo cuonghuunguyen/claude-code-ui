@@ -26,6 +26,7 @@ window.matchMedia = ((query: string) => ({
   removeListener() {},
 })) as never;
 
+import { resetArtifactSelection } from "./artifacts-pane.tsx";
 const ID = "11111111-2222-3333-4444-555555555555";
 const session: SessionListItem = { id: ID, cwd: "/p/demo", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], title: "Demo", lastActivity: 0, archived: false, transcript: true };
 const replies: Record<string, unknown> = {
@@ -6242,6 +6243,44 @@ describe("GH-176 Artifacts pane", () => {
   const menu = async (id: string) => act(async () => void el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [role="option"]')];
   const toSession = () => act(async () => void ((location.hash = `#${ID}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+  afterEach(() => resetArtifactSelection());
+
+  it("a dock pane that is not selected requests no preview (Changes selected); selecting Artifacts then does", async () => {
+    const restore = await mountWith();
+    try {
+      sent.length = 0;
+      await send(1, publish);
+      await pickSide(/changes/i);
+      await act(async () => new Promise((r) => setTimeout(r, 40)));
+      expect(sent.filter((m) => m.type === "artifact.preview")).toEqual([]);
+      await pickSide(/artifacts/i);
+      expect(sent.some((m) => m.type === "artifact.preview")).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("narrow: Move to Artifacts on an artifact tab shows the preview of that artifact, for its own session", async () => {
+    const OTHER = "99999999-8888-7777-6666-555555555555";
+    const other: SessionListItem = { ...session, id: OTHER, title: "Other" };
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, OTHER, REF]));
+    location.hash = `#${encodeURIComponent(REF)}`;
+    const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo"] }, "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === OTHER ? other : session }), "artifact.preview": { url: `/artifact/${"a".repeat(32)}/dash.html?v=1`, size: 1, mtime: 1 } });
+    try {
+      await send(1, publish);
+      width = 800;
+      await act(async () => void window.dispatchEvent(new Event("resize")));
+      await menu(REF);
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveToArtifacts"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 40)));
+      expect(tabIds()).not.toContain(REF);
+      expect(location.hash).toBe(`#${ID}`);
+      expect(el.querySelector('[data-testid="artifacts-preview"] iframe')).not.toBeNull();
+    } finally {
+      width = 1440;
+      restore();
+    }
+  });
 
   it("the dock tab appears only once the session has a done publish; the pane lists it and previews the newest", async () => {
     const restore = await mountWith();

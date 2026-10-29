@@ -61,7 +61,7 @@ import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { ArtifactTab } from "./artifact-tab.tsx";
-import { ArtifactsPane, selectArtifact } from "./artifacts-pane.tsx";
+import { ArtifactsPane, forgetArtifactSelection, selectArtifact } from "./artifacts-pane.tsx";
 import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
@@ -876,6 +876,7 @@ export function App() {
     // Its pane tabs go with it (its file tabs go back to Files through the effect on `tabs`).
     setTabs((t) => t.filter((id) => ownerOf(id) !== sessionId));
     setHeirOf((h) => without(h, sessionId));
+    forgetArtifactSelection(sessionId);
     delete clearQueue.current[sessionId];
     setTabKeys((k) => without(k, sessionId));
     const h = hashTab();
@@ -2449,9 +2450,12 @@ export function App() {
   const moveToArtifacts = (ref: string) => {
     const part = partIdOf(ref);
     if (!part) return;
+    const owner = ownerOf(ref);
     closeGroup([ref], true);
-    selectArtifact(ownerOf(ref), part);
-    showArtifacts(ownerOf(ref));
+    selectArtifact(owner, part, true);
+    // The pane shows the shown session's artifacts: the owner shows first (closing the tab may have opened another session).
+    if (areaOf(loadLayout(), "artifacts") !== "main") open(owner);
+    showArtifacts(owner);
   };
   // A file tab that left the strip without Move to Files (its owner was removed or deleted) hands its file back to Files with the draft.
   useEffect(() => {
@@ -2556,7 +2560,7 @@ export function App() {
       return (
         <Activity key={ref} mode={here ? "visible" : "hidden"}>
           <div {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
-            <ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} />
+            <ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} hidden={!here} />
           </div>
         </Activity>
       );
@@ -3704,7 +3708,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "artifacts") !== "main" && panelTarget.sessionId && (
                       <div className={shows("artifacts") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label="Artifacts" load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} />
+                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label="Artifacts" load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
                       </div>
                     ),
                     hosts.artifacts,
