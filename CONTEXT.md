@@ -149,7 +149,7 @@ A named role (system prompt, model, tool limits) a session runs as: a project, u
 _Avoid_: persona, role session. Not a Subagent run.
 
 **Worker tree**:
-A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
+A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth, Maximum workers per coordinator and Maximum workers per tree (the live workers of the whole tree).
 _Avoid_: hierarchy, manager chain
 
 **Aside**:

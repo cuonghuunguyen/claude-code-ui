@@ -27,7 +27,7 @@ Given("the scratch project is a git repository with its own worktree", async ({ 
 });
 
 When("I enable orchestration in Settings", async ({ page }) => {
-  await page.keyboard.press("Control+,");
+  await page.locator('[data-testid="open-settings"]:visible').first().click();
   await page.getByTestId("settings-group-orchestration").click();
   const toggle = page.getByTestId("settings-orchestration-enabled");
   if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();

@@ -212,9 +212,6 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const coordMode = (id: string): PermissionMode => deps.sessions.get(id)?.info().permissionMode ?? "default";
   const workers = (coordinator: string) =>
     deps.links.entries().flatMap(([id, l]) => (l.coordinatorId === coordinator && l.name ? [{ id, name: l.name, cwd: l.cwd, port: l.port }] : []));
-  /** Workers of this daemon with a running CLI process (or about to start one). */
-  const running = () =>
-    deps.links.entries().filter(([id, l]) => l.coordinatorId && (starting.has(id) || deps.sessions.get(id)?.liveQuery())).length + reserved.size;
   /** Hops along coordinatorId from `id` to its root coordinator (0 = not a worker). A missing link ends the walk; capped against cycles. */
   const depthOf = (id: string) => {
     let d = 0;
@@ -225,6 +222,20 @@ export function createOrchestration(deps: OrchestrationDeps) {
     }
     return d;
   };
+  /** The root coordinator of `id`'s tree (itself when it is not a worker); same walk as depthOf. */
+  const rootOf = (id: string) => {
+    let cur = id;
+    for (let d = 0; d < 20; d++) {
+      const up = linkOf(cur)?.coordinatorId;
+      if (!up) break;
+      cur = up;
+    }
+    return cur;
+  };
+  /** Workers with a running CLI process (or about to start one) plus worker_start calls in flight; with `root`, only that root coordinator's tree. */
+  const running = (root?: string) =>
+    deps.links.entries().filter(([id, l]) => l.coordinatorId && (starting.has(id) || deps.sessions.get(id)?.liveQuery()) && (!root || rootOf(id) === root)).length +
+    [...reserved].filter((k) => !root || rootOf(k.slice(0, k.indexOf("\0"))) === root).length;
   /** Worker names from the depth-1 ancestor down to `id`. */
   const chainOf = (id: string) => {
     const names: string[] = [];
@@ -266,7 +277,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
   };
   /** The sync limits of a worker_start by `c`: worker cap, tree depth, children (the name check is the handler's). Throws a ToolError. */
   const checkLimits = (c: string) => {
-    checkCap();
+    checkCap(c);
     checkDepth(c);
     checkChildren(c);
   };
@@ -290,9 +301,15 @@ export function createOrchestration(deps: OrchestrationDeps) {
   };
   /** A coordinator with a worker that is starting, running or waiting for input: the idle close keeps its CLI. */
   const waitingOnWorkers = (id: string) => workers(id).some((w) => starting.has(w.id) || !!deps.sessions.get(w.id)?.working());
-  const checkCap = () => {
-    const cap = deps.settings().workerCap;
-    if (running() >= cap) throw new ToolError(`Worker cap reached: ${cap} workers run (Settings > Orchestration > Maximum workers). Close one with worker_close first.`);
+  /** The cap a new CLI process under coordinator `c` would pass: its root's tree cap, then the total maximum (0 = off). The message, or undefined. */
+  const capHit = (c: string) => {
+    const { workerCap, workerCapTotal } = deps.settings();
+    if (running(rootOf(c)) >= workerCap) return `Worker cap reached: ${workerCap} workers run in your coordinator tree (Settings > Orchestration > Maximum workers per tree). Close one with worker_close first.`;
+    if (workerCapTotal > 0 && running() >= workerCapTotal) return `Total worker limit reached: ${workerCapTotal} workers run on this daemon (Settings > Orchestration > Maximum workers in total). Close one with worker_close first.`;
+  };
+  const checkCap = (c: string) => {
+    const m = capHit(c);
+    if (m) throw new ToolError(m);
   };
 
   /** Refuses a worker that a CLI process of another daemon or a terminal runs; this daemon only takes over a worker nobody runs. */
@@ -348,8 +365,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const c = deps.sessions.get(coordinator);
     // No notice that would wake a coordinator without its tools: orchestration off, or a live query started without the server.
     if (!c?.isLive() || !deps.settings().enabled || (c.liveQuery() && !served.has(coordinator))) return;
-    // A worker coordinator without a CLI at the worker cap: a notice would start a CLI past the cap; the next event or worker_send delivers.
-    if (linkOf(coordinator)?.coordinatorId && !c.liveQuery() && running() >= deps.settings().workerCap) return;
+    // A worker coordinator without a CLI while its tree (or the daemon total) is at the cap: a notice would start a CLI past it; the next event or worker_send delivers.
+    if (linkOf(coordinator)?.coordinatorId && !c.liveQuery() && capHit(coordinator)) return;
     notified.add(coordinator);
     // Push: Steering while the coordinator's turn runs, a new turn when it is idle. Names and event type only, no worker text:
     // the notice arrives as a user message, so nothing from the worker rides on it.
@@ -489,7 +506,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     return [
       def(
         "worker_start",
-        "Start a worker: a new Claude Code session that runs `prompt` as its first turn. Give exactly one target: `worktree` (an existing worktree of an added project, by folder name or path; add `project` when the name is in several projects), `project` alone (the project's main checkout; name = folder name as the sidebar shows it, or path), `project` with `branch` (new branch and folder <project>/.claude/worktrees/<branch>; letters, numbers, . _ -) and optional `base` (a commit or ref; default origin's default branch), or `cwd` (any directory inside the allowed roots). `repo` is an alias of `project`. `agent`: run the worker as an agent type (its system prompt, tools and model): a project or user agent, or a plugin agent as plugin:agent (the bare name works when one plugin agent has it); an unknown name is an error listing the agent types; an explicit `model` wins over the agent type's model. worker_targets lists projects and worktrees. An unknown or ambiguous name is an error naming the candidates. The result names `project` and `worktree`. `name` is unique among your workers. `mode`: absent = the user's Settings worker mode, or your own permission mode (bypassPermissions gives auto) when that is coordinator; else default (asks before edits and commands), acceptEdits, plan or auto. auto needs a model that supports it, else the worker runs in default and the result says so (modeNote). Limits: Settings > Orchestration > Maximum tree depth (workers starting workers) and Maximum workers per coordinator; hitting one is an error. The user approves this call; the worktree is created only then. daemonNote in the result: the daemon runs older code than is installed (tools or modes may be missing); tell the user. worker_close does not remove the worktree, and Removing the worktree in the web app deletes only worktree-* branches unless the user asks to delete a merged branch: this branch stays after the worktree is gone.",
+        "Start a worker: a new Claude Code session that runs `prompt` as its first turn. Give exactly one target: `worktree` (an existing worktree of an added project, by folder name or path; add `project` when the name is in several projects), `project` alone (the project's main checkout; name = folder name as the sidebar shows it, or path), `project` with `branch` (new branch and folder <project>/.claude/worktrees/<branch>; letters, numbers, . _ -) and optional `base` (a commit or ref; default origin's default branch), or `cwd` (any directory inside the allowed roots). `repo` is an alias of `project`. `agent`: run the worker as an agent type (its system prompt, tools and model): a project or user agent, or a plugin agent as plugin:agent (the bare name works when one plugin agent has it); an unknown name is an error listing the agent types; an explicit `model` wins over the agent type's model. worker_targets lists projects and worktrees. An unknown or ambiguous name is an error naming the candidates. The result names `project` and `worktree`. `name` is unique among your workers. `mode`: absent = the user's Settings worker mode, or your own permission mode (bypassPermissions gives auto) when that is coordinator; else default (asks before edits and commands), acceptEdits, plan or auto. auto needs a model that supports it, else the worker runs in default and the result says so (modeNote). Limits: Settings > Orchestration > Maximum tree depth (workers starting workers), Maximum workers per coordinator, Maximum workers per tree (your root coordinator's whole tree) and Maximum workers in total (this daemon, when set); hitting one is an error. The user approves this call; the worktree is created only then. daemonNote in the result: the daemon runs older code than is installed (tools or modes may be missing); tell the user. worker_close does not remove the worktree, and Removing the worktree in the web app deletes only worktree-* branches unless the user asks to delete a merged branch: this branch stays after the worktree is gone.",
         {
           name,
           cwd: z.string().min(1).max(4096).optional(),
@@ -505,7 +522,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           effort: z.enum(EFFORTS as [string, ...string[]]).optional(),
         },
         async (a) => {
-          const coordinator = cur();
+          let coordinator = cur();
           const refusal = refused.get(`${coordinator}\0${a.name}`);
           refused.delete(`${coordinator}\0${a.name}`);
           if (refusal && Date.now() - refusal.at < REFUSAL_MS) throw new ToolError(refusal.message);
@@ -519,6 +536,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           checkLimits(coordinator);
           const t = await target(a);
           const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
+          coordinator = cur(); // a /clear during the awaits moved the tree: check and reserve under the current ID
           const key = `${coordinator}\0${a.name}`;
           if (reserved.has(key) || workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
           checkLimits(coordinator);
@@ -582,12 +600,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
         "Send text to a worker: injected into its running turn (Steering), or starts a new turn when it is idle.",
         { name, text: text("text") },
         async (a) => {
-          const coordinator = cur();
+          let coordinator = cur();
           const s = await worker(coordinator, a.name);
+          coordinator = cur(); // a /clear during the await moved the tree
           // No await from the cap check to the mark: parallel sends to closed workers see each other.
           const start = !s.liveQuery() && !starting.has(s.id);
           if (start) {
-            checkCap();
+            checkCap(coordinator);
             checkChildren(coordinator);
             starting.add(s.id);
           }
