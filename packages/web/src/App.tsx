@@ -1837,11 +1837,13 @@ export function App() {
   const draftProject = draftCwd && startable.includes(draftCwd) ? draftCwd : projects[0];
   // GH-430: the side and bottom panel hang off a panel target: the shown session, or on wide screens the new-session tab's project
   // (cwd, DOM position and keys stay the same when its first prompt creates the session, so nothing remounts).
-  const panelHost = !!shown || (lg && draftShown && !!draftProject);
-  const target: PanelTarget | undefined = shown ? { key: shown.id, cwd: shown.cwd, sessionId: shown.id } : panelHost ? { key: NEW_TAB, cwd: draftProject! } : undefined;
-  // The panels stay mounted (hidden) while no tab shows (Focus), so their open files survive.
+  const draftHost = lg && draftShown && !!draftProject;
+  const target: PanelTarget | undefined = shown ? { key: shown.id, cwd: shown.cwd, sessionId: shown.id } : draftHost ? { key: NEW_TAB, cwd: draftProject! } : undefined;
+  // The panels stay mounted while no tab shows (Focus), so their open files survive.
   const lastTarget = useRef<PanelTarget>(undefined);
   if (target) lastTarget.current = target;
+  // GH-367: on wide screens Focus keeps the panels of the tab shown last, so the work area does not move on the switch.
+  const panelHost = !!target || (lg && activeId === FOCUS_TAB && !!lastTarget.current);
   /** Who Files and Git graph tabs open for: the shown session, else (New session, Focus) the session shown last. */
   const lastSession = useRef<string>(undefined);
   if (target?.sessionId) lastSession.current = target.sessionId;
@@ -3149,13 +3151,7 @@ export function App() {
                   <StartingSession cwd={draftProject} place={worktreeName(draftProject, worktrees)} pending={optimistic[NEW_TAB]} />
                 </>
               )}
-              {!(layout.side === "left" && lg) && (
-                <>
-                  {resizer}
-                  {sideCol}
-                  {sideStrip}
-                </>
-              )}
+              {/* GH-367: before the side panel, so it keeps its place right of the work area on Focus. */}
               {activeId === FOCUS_TAB && (
                 <FocusPage
                   list={focusList}
@@ -3171,6 +3167,13 @@ export function App() {
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                 />
+              )}
+              {!(layout.side === "left" && lg) && (
+                <>
+                  {resizer}
+                  {sideCol}
+                  {sideStrip}
+                </>
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !mainShown && (
                 <div className={`${card} flex-1`}>
