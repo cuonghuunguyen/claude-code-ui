@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createWorktree, listBranches, pullRequestBranches, removeWorktree } from "../src/git.ts";
 
@@ -87,6 +87,16 @@ describe("createWorktree: checkout of an existing branch", () => {
     const r = await createWorktree(main, { ...opts, checkout: "refs/heads/local-one" });
     expect(out(r.path, "branch", "--show-current")).toBe("local-one");
     expect(marked(main, "local-one")).toBe(false);
+  });
+
+  it("a local branch whose folder name exceeds 64 characters is checked out in a cut folder, the branch name unchanged", async () => {
+    const { main, opts } = origin();
+    const branch = "feature/PROJ-351-support-repo-with-client/server-folder-structure-like-the-old-monorepo-layout";
+    run(main, "branch", branch);
+    const r = await createWorktree(main, { ...opts, checkout: `refs/heads/${branch}` });
+    expect(r.branch).toBe(branch);
+    expect(basename(r.path)).toBe("feature-PROJ-351-support-repo-with-client-server-folder");
+    expect(out(r.path, "branch", "--show-current")).toBe(branch);
   });
 
   it("a branch checked out in another worktree, an unknown ref and a mixed request are refused; nothing is left", async () => {

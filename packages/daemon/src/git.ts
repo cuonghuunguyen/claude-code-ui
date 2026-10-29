@@ -3,7 +3,7 @@ import { constants, appendFileSync, existsSync, lstatSync, mkdirSync, readdirSyn
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { BRANCH_MAX, branchFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import ignore from "ignore";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -781,7 +781,7 @@ async function checkoutIn(main: string, rdir: string, o: CreateWorktreeOptions):
   }
   const holder = (await repoOf(main)).list.find((w) => w.branch === branch);
   if (holder) throw new WorktreeError("exists", `Branch ${branch} is checked out in worktree ${basename(holder.path)}`);
-  const name = branchFolder(branch);
+  const name = checkoutFolder(branch);
   const bad1 = worktreeNameError(name);
   if (bad1) throw new WorktreeError("bad_name", `Folder ${name}: ${bad1}`);
   const path = join(rdir, name);
