@@ -58,6 +58,8 @@ Feature: Focus rows
     And I open the scratch project
     And I start a new Haiku session
     When I send "Reply with exactly: one"
+    Then the turn has finished
+    When I send "Reply with exactly: two"
     And I open Focus
     Then Focus shows a Finished row
     When I restart the daemon

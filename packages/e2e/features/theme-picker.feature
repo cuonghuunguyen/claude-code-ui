@@ -21,6 +21,7 @@ Feature: Theme picker (GH-468)
     When I open the terminal with the shortcut
     Then the terminal background is "#1e1e2e"
     When I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
     Then the diff background is the app card colour
     When I open the Graph tab of the side panel
     Then the Graph ref chip uses the theme colour
