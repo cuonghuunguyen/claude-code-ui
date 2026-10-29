@@ -542,3 +542,14 @@ it("GH-399 Open in tab is listed only while a Files editor shows a file inside t
   run(c, "file.openInTab");
   expect(openFileTab).toHaveBeenCalledOnce();
 });
+
+it("GH-401 Move session to side / bottom panel are listed only with dockSession, have no default key and run it with the area", () => {
+  const ids = ["session.dock.side", "session.dock.bottom"];
+  expect(appCommands(ctx()).some((i) => ids.includes(i.id))).toBe(false);
+  const dockSession = vi.fn();
+  const items = appCommands(ctx({ dockSession }));
+  expect(ids.map((id) => items.find((i) => i.id === id)?.title)).toEqual(["Move session to side panel", "Move session to bottom panel"]);
+  expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined]);
+  ids.forEach((id) => run(ctx({ dockSession }), id));
+  expect(dockSession.mock.calls).toEqual([["side"], ["bottom"]]);
+});

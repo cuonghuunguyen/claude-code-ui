@@ -232,3 +232,54 @@ it("GH-396 the area menu has no Move to main area while Changes is the active pa
   await act(async () => doc("dock-menu-side").click());
   expect(document.querySelectorAll('[data-testid="dock-move-main"]').length).toBe(0);
 });
+
+// GH-401: docked sessions are tabs after the pane tabs.
+const sess = [
+  { id: "s1", title: "First", cwd: "/p/a", unread: false, state: "running" as const },
+  { id: "s2", title: "Second", cwd: "/p/b", unread: true },
+  { id: "s3", title: "Third", cwd: "/p/c", unread: false, state: "needs_input" as const },
+];
+const sessionTabs = () => [...el.querySelectorAll<HTMLElement>('[data-docked-tab]')];
+
+it("GH-401 sessions render a tab each after the pane tabs; the active one is selected; marks show; click selects", async () => {
+  const onSelectSession = vi.fn();
+  const { render } = h("side", { sessions: sess, activeSession: "s2", onSelectSession });
+  await render();
+  const tabs = [...el.querySelectorAll<HTMLElement>('[role="tab"]')];
+  expect(tabs.map((t) => t.dataset.dockedTab ?? t.dataset.paneTab)).toEqual(["changes", "files", "graph", "s1", "s2", "s3"]);
+  // The pane tab is not selected while a session tab is.
+  expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "false", "false", "false", "true", "false"]);
+  expect(sessionTabs().map((t) => t.textContent)).toEqual(["Firstrunning", "BSecondunread", "Thirdneeds input"]);
+  await act(async () => sessionTabs()[0]!.click());
+  expect(onSelectSession).toHaveBeenCalledWith("s1");
+});
+
+it("GH-401 the session tab menu moves it to the other panel or the main area, or closes it", async () => {
+  const onSessionCommand = vi.fn();
+  const { render } = h("side", { sessions: sess, activeSession: "s1", onSessionCommand });
+  await render();
+  const open = () => act(async () => void sessionTabs()[1]!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  await open();
+  expect(doc("docked-move").textContent).toBe("Move to bottom panel");
+  await act(async () => doc("docked-move").click());
+  expect(onSessionCommand).toHaveBeenLastCalledWith("s2", "moveBottom");
+  await open();
+  await act(async () => doc("docked-move-main").click());
+  expect(onSessionCommand).toHaveBeenLastCalledWith("s2", "main");
+  await open();
+  await act(async () => doc("docked-close").click());
+  expect(onSessionCommand).toHaveBeenLastCalledWith("s2", "close");
+});
+
+it("GH-401 the bottom panel's session menu offers the side panel; without sessions the header is unchanged", async () => {
+  const onSessionCommand = vi.fn();
+  const b = h("bottom", { sessions: [sess[0]!], onSessionCommand });
+  await b.render();
+  await act(async () => void sessionTabs()[0]!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  expect(doc("docked-move").textContent).toBe("Move to side panel");
+  await act(async () => doc("docked-move").click());
+  expect(onSessionCommand).toHaveBeenCalledWith("s1", "moveSide");
+  await h("bottom").render();
+  expect(sessionTabs()).toHaveLength(0);
+  expect([...el.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(["terminal"]);
+});
