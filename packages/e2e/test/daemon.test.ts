@@ -236,7 +236,7 @@ describe.skipIf(process.platform === "win32")("fake docker", () => {
       const sh = (c: typeof withLog & { side?: { home: string; repo: string; projects: string } }, args: string[]) => spawnSync("sh", ["-c", fakeDockerScript(c), "docker", ...args], { encoding: "utf8" });
       sh(withLog, ["cp", "a", "dev:/tmp/a"]);
       sh(withLog, ["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
-      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["cp", "setup", "exec"]);
+      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["cp", "exec", "setup"]);
       // The side script is built, never started here: only its text is checked.
       const text = fakeDockerScript({ ...withLog, side: { home: join(d, "h"), repo: "/repo", projects: join(d, "p") } });
       expect(text).toContain("side.pid");
