@@ -247,6 +247,13 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     ],
   },
   {
+    id: "focus",
+    title: "Focus",
+    rows: [
+      { key: "nextForYou", kind: "switch", label: "Next for you", hint: "After a turn, Claude predicts your next prompt; finished rows on Focus show it as a chip. The chip appears a few seconds after the turn and is often absent: none on a session’s first turn, in plan mode, near the usage limit or with a cold prompt cache. Uses a small extra request per turn that reuses the prompt cache: nearly free, not free. Applies to sessions started or resumed after the change; turning it off removes the chips shown." },
+    ],
+  },
+  {
     id: "usageLimit",
     title: "Usage limits",
     rows: [

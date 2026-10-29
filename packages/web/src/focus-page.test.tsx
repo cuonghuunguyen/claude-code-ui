@@ -3,6 +3,7 @@ import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { FocusPage, FocusRow } from "./focus-page.tsx";
 import { waitingRequests } from "./focus.ts";
 import type { PermissionAnswer } from "./permission.tsx";
@@ -232,6 +233,15 @@ it("usage-limit row: selecting shows Cancel continue, which calls onCancelContin
   expect(cancelContinue).toHaveBeenCalledWith("l");
 });
 
+it("usage-limit row without a scheduled continue (auto-continue off): Open session, no Cancel continue", async () => {
+  const s: State = { list: [item("l", { state: "idle" })], views: { l: view([{ type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: Date.now() + 60_000 }]) } };
+  await render(s);
+  expect(rows()[0]!.dataset.kind).toBe("limit");
+  expect(rows()[0]!.textContent).toContain("resets at");
+  expect(el.querySelector('[data-testid="focus-row-action"]')!.textContent).toBe("Open session");
+  expect(el.querySelector('[data-testid="focus-cancel-continue"]')).toBeNull();
+});
+
 it("the detail shows the task list (done, in progress, next) above the recent context", async () => {
   const s = base();
   s.views.a = view([{ type: "user_text", id: "u", text: "go", images: [] }, todo(["Plan", "completed"], ["Build", "in_progress"], ["Test", "pending"]), bash("ra", "ls", NOW)]);
@@ -350,4 +360,112 @@ it("the detail pane shows the last todo list of a finished (idle) session and th
   await act(async () => rows()[0]!.click());
   expect(rows()[0]!.dataset.kind).toBe("stuck");
   expect(el.querySelector('[data-testid="focus-tasks"]')!.textContent).toContain("Tasks · 2 of 3");
+});
+
+// ---- GH-305: nested worker rows ----
+const nested = (): State => ({
+  list: [item("c", { state: "idle", coordinator: true }), item("w1", { coordinatorId: "c", workerName: "one" }), item("w2", { coordinatorId: "c", workerName: "two", state: "closed" })],
+  views: { w1: view([bash("r1", "ls", NOW - 5000)]) },
+  unread: ["w2"],
+});
+const group = () => el.querySelector<HTMLElement>('[data-testid="focus-group"]');
+const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="focus-group-toggle"]')!;
+
+it("a worker's row nests under its coordinator's parent row; a closed worker's row is hidden", async () => {
+  localStorage.clear();
+  await render(nested());
+  expect(group()!.querySelectorAll('[data-testid="focus-row"]')).toHaveLength(1);
+  expect(group()!.textContent).toContain("Session c");
+  expect(group()!.textContent).toContain("1 worker");
+  expect(group()!.textContent).toContain("Permission");
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  expect(toggle().className).toContain("max-md:min-h-11");
+  expect(el.querySelector('[data-testid="focus-workers"]')!.className).toContain("pl-");
+});
+
+it("collapsing the group hides the worker rows, is kept in this browser and restored on remount", async () => {
+  localStorage.clear();
+  await render(nested());
+  await act(async () => toggle().click());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(rows()).toHaveLength(0);
+  expect(JSON.parse(localStorage.getItem("claude-ui.focusCollapsed")!)).toEqual(["c"]);
+  await render(nested());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(rows()).toHaveLength(0);
+  await act(async () => toggle().click());
+  expect(rows()).toHaveLength(1);
+  expect(JSON.parse(localStorage.getItem("claude-ui.focusCollapsed")!)).toEqual([]);
+});
+
+it("a coordinator with its own row shows it with the chevron beside it, outside the row button", async () => {
+  localStorage.clear();
+  const s = nested();
+  s.list[0]!.state = "needs_input";
+  s.views.c = view([question("rc", NOW - 9000)]);
+  await render(s);
+  expect(rows().map((r) => r.textContent!.includes("Session c"))).toEqual([true, false]);
+  expect(toggle().closest('[data-testid="focus-row"]')).toBeNull();
+  await act(async () => toggle().click());
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0]!.textContent).toContain("Session c");
+});
+
+// ---- GH-305: Next for you chip ----
+const withChip = (): State => ({
+  list: [item("f", { state: "idle", lastActivity: NOW })],
+  views: { f: view([{ type: "user_text", id: "u", text: "go", images: [] }, { type: "session_state", id: "st", state: "running" }, { type: "assistant_text", id: "r", text: "Done.", streaming: false }, { type: "session_state", id: "st", state: "idle" }, { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }]) },
+  unread: ["f"],
+});
+const chip = () => el.querySelector<HTMLButtonElement>('[data-testid="focus-suggestion"]');
+const draftKey = "claude-ui.draft.f";
+
+it("a finished row shows the Next for you chip; a click saves the suggestion as the draft and opens the session", async () => {
+  localStorage.clear();
+  open.mockClear();
+  await render(withChip());
+  expect(chip()!.textContent).toBe("Next for you: run the tests");
+  expect(chip()!.title).toBe("run the tests");
+  expect(chip()!.closest('[data-testid="focus-row"]')).toBeNull();
+  expect(chip()!.className).toContain("max-md:min-h-11");
+  await act(async () => chip()!.click());
+  expect(localStorage.getItem(draftKey)).toContain("run the tests");
+  expect(open).toHaveBeenCalledWith("f");
+});
+
+it("with a draft the suggestion is appended after a blank line", async () => {
+  localStorage.clear();
+  await render(withChip());
+  saveDraft("f", "fix the typo");
+  await act(async () => chip()!.click());
+  expect(loadDraft("f")).toBe("fix the typo\n\nrun the tests");
+});
+
+it("no chip without a suggestion", async () => {
+  const s = withChip();
+  s.views.f = view([{ type: "session_state", id: "st", state: "running" }, { type: "session_state", id: "st", state: "idle" }]);
+  await render(s);
+  expect(chip()).toBeNull();
+});
+
+// ---- GH-305: finished row of a closed session without a view (after a daemon restart) ----
+it("a closed unread session without a view shows a Finished row; its detail has the title, project and Open session", async () => {
+  open.mockClear();
+  await render({ list: [item("z", { state: "closed", lastActivity: NOW })], views: {}, unread: ["z"] });
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["finished"]);
+  await act(async () => rows()[0]!.click());
+  expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session z");
+  expect(el.querySelector('[data-testid="focus-context"]')).toBeNull();
+  await act(async () => button("Open session").click());
+  expect(open).toHaveBeenCalledWith("z");
+});
+
+it("rows of closed workers are neither shown nor counted: section count, subtitle and the +N more count match the shown rows", async () => {
+  const list = [item("c", { state: "idle", coordinator: true, lastActivity: NOW }), item("w1", { coordinatorId: "c", lastActivity: NOW }), ...[1, 2, 3, 4, 5, 6].map((n) => item(`x${n}`, { coordinatorId: "c", state: "closed", lastActivity: NOW })), item("f", { state: "closed", lastActivity: NOW })];
+  await render({ list, views: { w1: view([bash("r1", "ls", NOW - 5000)]) }, unread: ["f", ...[1, 2, 3, 4, 5, 6].map((n) => `x${n}`)] });
+  expect(el.textContent).toContain("Needs you · 1");
+  expect(el.textContent).toContain("Finished while you were away · 1");
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("1 needs you · 1 to review");
+  expect(el.querySelector('[data-testid="focus-more"]')).toBeNull();
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["permission", "finished"]);
 });

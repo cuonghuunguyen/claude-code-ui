@@ -116,7 +116,7 @@ import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
-import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
+import { FINISHED_MAX_AGE_MS, nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -644,7 +644,7 @@ export function App() {
       // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.state !== "error" || isShown(s.id)) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (s.state !== "closed" && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }

@@ -348,9 +348,11 @@ export function createDaemon(opts: {
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
+    promptSuggestions: () => appSettings.get().focus.nextForYou,
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
       const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
+      sessions.get(id)?.setLimitStop(at);
       autoContinue.schedule(id, at);
       // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
       queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
@@ -1974,6 +1976,7 @@ export function createDaemon(opts: {
             if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
             if (urlPatched && !origin) secrets.endJiraTokenReset();
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
+            if (!settings.focus.nextForYou) for (const s of sessions.values()) s.clearSuggestion();
             perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
             return reply(settingsReply(settings));

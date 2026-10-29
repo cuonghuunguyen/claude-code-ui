@@ -37,6 +37,7 @@ async function client() {
 const parts = (c: C, id: string) => c.inbox.filter((m: any) => m.type === "event" && m.sessionId === id).map((m: any) => m.part as Part);
 const texts = (c: C, id: string) => parts(c, id).filter((p) => p.type === "user_text").map((p: any) => p.text as string);
 const acs = (c: C, id: string) => parts(c, id).filter((p) => p.type === "auto_continue").map((p: any) => p.at as number | null);
+const stops = (c: C, id: string) => parts(c, id).filter((p) => p.type === "limit_stop").map((p: any) => p as { stopped: boolean; resetsAt?: number });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function session(c: C) {
   const id = ((await c.request({ type: "session.create", cwd: dir })).result as any).session.id as string;
@@ -56,6 +57,10 @@ describe("auto-continue in the daemon", { timeout: 20_000 }, () => {
     await sleep(4500);
     expect(acs(c, id)).toEqual([]);
     expect(texts(c, id)).toEqual(["limit"]);
+    // The Focus page row does not depend on the setting (GH-305).
+    expect(stops(c, id)).toEqual([{ type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: expect.any(Number) }]);
+    await c.request({ type: "session.prompt", sessionId: id, text: "hello" });
+    await vi.waitFor(() => expect(stops(c, id).at(-1)).toMatchObject({ stopped: false }), { timeout: 3000 });
     c.ws.close();
   });
 

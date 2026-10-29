@@ -2527,6 +2527,36 @@ describe("daemon", () => {
     }
   });
 
+  it("settings.set turning focus.nextForYou off clears the shown suggestions (GH-305)", async () => {
+    const suggesting = (args: Parameters<typeof fakeQuery>[0]) => {
+      const q = fakeQuery(args);
+      return Object.assign(
+        (async function* () {
+          for await (const m of q) {
+            yield m;
+            if ((m as { type: string }).type === "result") yield { type: "prompt_suggestion", suggestion: "run it", uuid: randomUUID(), session_id: "x" } as never;
+          }
+        })(),
+        q,
+      );
+    };
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: suggesting as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "settings.set", patch: { focus: { nextForYou: true } } });
+      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+      const text = (m: { type: string; sessionId?: string; part?: { type: string; text?: string | null } }) => m.type === "event" && m.sessionId === id && m.part?.type === "prompt_suggestion" ? m.part.text : undefined;
+      await c.waitFor((m) => text(m as never) === "run it");
+      await c.request({ type: "settings.set", patch: { focus: { nextForYou: false } } });
+      await c.waitFor((m) => text(m as never) === null);
+    } finally {
+      d.close();
+    }
+  });
+
   it("settings.get / settings.set: a patch changes only its fields, other clients hear settings_changed, an invalid value is refused", async () => {
     const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));

@@ -1,9 +1,10 @@
 // Focus page (docs/spec.md "Focus", GH-159, GH-270): per session, what needs you, what works and what finished; requests are answered in place.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
-import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { loadDraft, saveDraft } from "./drafts.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -174,15 +175,8 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const needs = capRows(attention.filter((r) => r.kind !== "finished"), expanded.needs);
   const finished = capRows(attention.filter((r) => r.kind === "finished"), expanded.finished);
   const workingShown = capRows(working, expanded.working);
-  // Answered one-liners sit among the request rows by their time, before the other kinds.
-  const lead = needs.shown.filter((r) => r.request);
-  // The requests are in the displayed order already (kind, then time); the answered lines lead.
-  const lines = [
-    ...lead.map((r) => ({ id: r.id, rank: 0, row: r, answered: undefined as Answered | undefined })),
-    ...answered.map((a) => ({ id: a.id, rank: -1, row: undefined, answered: a })),
-  ].sort((a, b) => a.rank - b.rank);
-  const rest = needs.shown.filter((r) => !r.request);
-  const needsEmpty = !lines.length && !rest.length;
+  // The rows are in the displayed order already (kind, then time); the answered lines lead.
+  const needsEmpty = !answered.length && !needs.shown.length;
   const more = (key: SectionKey, n: number) =>
     n > 0 || expanded[key] ? (
       <button type="button" className="mt-1 w-full cursor-pointer rounded-lg px-2.5 py-1.5 text-left text-muted-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))} data-testid="focus-more">
@@ -191,7 +185,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     ) : null;
   const select = (id: string) => (setDetail(true), onSelect(id));
   // A row's Cancel continue removes the row (when the daemon confirms): the focus goes to the next row's button, else the previous one, else the heading.
-  const shownIds = [...lines.flatMap((l) => (l.row ? [l.row.id] : [])), ...rest.map((r) => r.id), ...finished.shown.map((r) => r.id)];
+  const shownIds = [...needs.shown.map((r) => r.id), ...finished.shown.map((r) => r.id)];
   const heading = useRef<HTMLHeadingElement>(null);
   const page = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<{ id: string; before: string[] } | undefined>(undefined);
@@ -204,11 +198,56 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     const button = target && [...page.current!.querySelectorAll<HTMLElement>("[data-row-id]")].find((b) => b.dataset.rowId === target);
     (button || heading.current)?.focus();
   });
+  // The suggestion goes into the session's draft (after a blank line when there is one); the prompt box reads it when it mounts.
+  const pickSuggestion = (id: string, text: string) => {
+    const d = loadDraft(id);
+    saveDraft(id, d ? `${d}\n\n${text}` : text);
+    onOpenSession(id);
+  };
   const renderRow = (r: AttentionRow) => (
     <li key={r.id}>
       <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? ((pendingFocus.current = { id: r.id, before: shownIds }), onCancelContinue(r.sessionId)) : onOpenSession(r.sessionId))} />
+      {r.suggestion && (
+        <button type="button" title={r.suggestion} className="mt-1 ml-2.5 flex max-w-[calc(100%-0.625rem)] cursor-pointer items-center rounded-full border px-2.5 py-1 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => pickSuggestion(r.sessionId, r.suggestion!)} data-testid="focus-suggestion">
+          <span className="truncate">Next for you: {r.suggestion}</span>
+        </button>
+      )}
     </li>
   );
+  // Worker rows nest under their coordinator (the display only; Next waiting keeps the flat order). Folded groups are kept per browser.
+  const [collapsed, setCollapsed] = useState(loadFocusCollapsed);
+  const fold = (root: string) => {
+    const next = new Set(collapsed);
+    if (!next.delete(root)) next.add(root);
+    setCollapsed(next);
+    saveFocusCollapsed(next, list);
+  };
+  const renderGroups = <T,>(items: T[], idOf: (x: T) => string, render: (x: T) => ReactNode, word: (x: T) => string) =>
+    nestRows(items, list, idOf).map((g) => {
+      if (!g.workers.length) return g.own.map(render);
+      const open = !collapsed.has(g.root);
+      const label = `${open ? "Collapse" : "Expand"} the workers of ${titleOf(g.root)}`;
+      const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
+      return (
+        <li key={`group:${g.root}`} data-testid="focus-group">
+          {g.own.length ? (
+            <div className="flex items-start gap-1">
+              <button type="button" aria-expanded={open} aria-label={label} className="mt-1.5 flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:min-w-11 pointer-coarse:min-h-11 pointer-coarse:min-w-11" onClick={() => fold(g.root)} data-testid="focus-group-toggle">
+                <Chevron className="size-4" aria-hidden />
+              </button>
+              <ul className="flex min-w-0 flex-1 flex-col gap-1.5">{g.own.map(render)}</ul>
+            </div>
+          ) : (
+            <button type="button" aria-expanded={open} aria-label={label} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => fold(g.root)} data-testid="focus-group-toggle">
+              <Chevron className="size-4 shrink-0" aria-hidden />
+              <span className="min-w-0 flex-1 truncate font-medium">{titleOf(g.root)}</span>
+              <span className="shrink-0 text-muted-foreground text-xs">{g.workers.length} {g.workers.length === 1 ? "worker" : "workers"} · {word(g.workers[0]!)}</span>
+            </button>
+          )}
+          {open && <ul className="mt-1 flex flex-col gap-1.5 border-l pl-3 max-md:ml-2" data-testid="focus-workers">{g.workers.map(render)}</ul>}
+        </li>
+      );
+    });
   const next = nextWaiting(waiting, req?.part.id);
   const nextKey = useKeymap()("focus.next");
   const keys = nextKey ? keyLabels(nextKey) : [];
@@ -240,17 +279,13 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
             <section aria-labelledby="focus-needs">
               <h2 id="focus-needs" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Needs you · {attention.filter((r) => r.kind !== "finished").length}</h2>
               <ul className="flex flex-col gap-1.5">
-                {lines.map((r) =>
-                  r.answered ? (
-                    <li key={r.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground text-sm pointer-coarse:min-h-11" data-testid="focus-answered">
-                      <CheckIcon className="size-4 shrink-0 text-success" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate" title={`${titleOf(r.answered.sessionId)}: ${r.answered.label}`}>{r.answered.label}</span>
-                    </li>
-                  ) : (
-                    renderRow(r.row!)
-                  ),
-                )}
-                {rest.map(renderRow)}
+                {answered.map((a) => (
+                  <li key={a.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground text-sm pointer-coarse:min-h-11" data-testid="focus-answered">
+                    <CheckIcon className="size-4 shrink-0 text-success" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate" title={`${titleOf(a.sessionId)}: ${a.label}`}>{a.label}</span>
+                  </li>
+                ))}
+                {renderGroups(needs.shown, (r) => r.sessionId, renderRow, (r) => KIND_LABEL[r.kind])}
               </ul>
               {more("needs", needs.more)}
             </section>
@@ -265,7 +300,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
             <section aria-labelledby="focus-running">
               <h2 id="focus-running" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Working · {working.length}</h2>
               <ul className="flex flex-col gap-1">
-                {workingShown.shown.map(({ session: s, now: nowText, progress, quietMs }) => (
+                {renderGroups(workingShown.shown, (w) => w.session.id, ({ session: s, now: nowText, progress, quietMs }) => (
                   <li key={s.id}>
                     <button type="button" className="flex w-full cursor-pointer flex-col rounded-lg px-2.5 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" onClick={() => onOpenSession(s.id)} data-testid="focus-running-row">
                       <span className="flex items-center gap-2">
@@ -277,7 +312,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                       {progress && <span className="truncate pl-6 text-muted-foreground text-xs" data-testid="focus-progress">{progress}</span>}
                     </button>
                   </li>
-                ))}
+                ), () => "Working")}
               </ul>
               {more("working", workingShown.more)}
             </section>
@@ -285,13 +320,13 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
           {finished.shown.length > 0 && (
             <section aria-labelledby="focus-finished">
               <h2 id="focus-finished" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Finished while you were away · {attention.filter((r) => r.kind === "finished").length}</h2>
-              <ul className="flex flex-col gap-1.5">{finished.shown.map(renderRow)}</ul>
+              <ul className="flex flex-col gap-1.5">{renderGroups(finished.shown, (r) => r.sessionId, renderRow, (r) => KIND_LABEL[r.kind])}</ul>
               {more("finished", finished.more)}
             </section>
           )}
         </div>
         <div className={`flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 max-md:p-3 ${detail && current ? "" : "max-md:hidden"}`} data-testid="focus-detail">
-          {current && session && view ? (
+          {current && session ? (
             <>
               <Button type="button" variant="ghost" className="w-fit md:hidden max-md:h-11 pointer-coarse:h-11" onClick={() => setDetail(false)} data-testid="focus-back">
                 <ArrowLeftIcon />
@@ -320,10 +355,12 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                 </Button>
               )}
               {tasks.length > 0 && <TaskList items={tasks} />}
-              <section aria-label="Recent context, signal only">
-                <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Recent context · signal only</h3>
-                <RecentContext view={view} />
-              </section>
+              {view && (
+                <section aria-label="Recent context, signal only">
+                  <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Recent context · signal only</h3>
+                  <RecentContext view={view} />
+                </section>
+              )}
               {req && (
                 <section className="flex flex-col gap-1.5" aria-label="Request">
                   <p className="flex items-center gap-1.5 text-warning text-xs" data-testid="focus-waiting">

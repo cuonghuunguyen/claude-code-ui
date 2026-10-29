@@ -29,7 +29,7 @@ async function render({ failGet = false, tokenReset = false, group, daemon = { h
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -41,7 +41,7 @@ async function render({ failGet = false, tokenReset = false, group, daemon = { h
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
@@ -266,6 +266,17 @@ it("Esc closes the dialog and the focus returns to the prompt box", async () => 
   expect(document.activeElement).toBe(prompt);
 });
 
+it("shows Focus: the Next for you switch is off by default and sends its patch only (GH-305)", async () => {
+  const { q, calls, pick } = await render();
+  await pick("focus");
+  expect(q("settings-focus")?.textContent).toContain("Next for you");
+  expect(q("settings-focus")?.textContent).toContain("nearly free, not free");
+  expect(q("settings-focus-nextForYou")?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => q("settings-focus-nextForYou")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { focus: { nextForYou: true } } });
+  expect(q("settings-focus-nextForYou")?.getAttribute("aria-checked")).toBe("true");
+});
+
 it("shows Usage limits: the continue switch is off by default and sends its patch only", async () => {
   const { q, calls, pick } = await render();
   await pick("usageLimit");
@@ -365,7 +376,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups: Appearance first, Timeline next, Guide after Tabs, the daemon's groups last", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Usage limits", "Performance", "Git", "Jira", "About"]);
+  expect(ids).toEqual(["Appearance", "Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Focus", "Usage limits", "Performance", "Git", "Jira", "About"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
 });
 

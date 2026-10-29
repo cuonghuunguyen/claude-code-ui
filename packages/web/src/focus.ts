@@ -3,6 +3,7 @@ import type { Part, SessionListItem, TodoItem } from "@claude-ui/protocol";
 import { lastLine } from "./notify.ts";
 import { relPath } from "./paths.ts";
 import { clockText } from "./plan-meter.tsx";
+import { nestWorkers } from "./sessions.ts";
 import { shownState, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 import { diffStats, toolSummary } from "./tools.ts";
 
@@ -110,6 +111,8 @@ export type AttentionRow = {
   /** Line 3, optional: the coordinator's reason (escalated) or the task summary (finished). */
   detail?: string;
   request?: PermissionRequest | QuestionRequest;
+  /** Finished rows: "Next for you", the predicted next prompt of the session. */
+  suggestion?: string;
   action: "answer" | "cancel_continue" | "open";
 };
 
@@ -199,20 +202,29 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
   const cwdOf = new Map(i.list.map((s) => [s.id, s.cwd]));
   const rows: AttentionRow[] = i.waiting.map((w) => rowOfRequest(w, cwdOf.get(w.sessionId) ?? ""));
   const waits = new Set(i.waiting.map((w) => w.sessionId));
+  // A closed worker (a daemon restart closes every worker) of a listed coordinator has no row: the page hides it, so it must not count either.
+  const listed = new Set(i.list.filter((s) => !s.archived).map((s) => s.id));
   for (const s of i.list) {
+    if (s.state === "closed" && s.coordinatorId && listed.has(s.coordinatorId)) continue;
     const view = i.views[s.id];
-    if (!view || s.archived || waits.has(s.id)) continue;
+    if (s.archived || waits.has(s.id)) continue;
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
+    // After a daemon restart the sessions are closed and mostly without a view: `unread` (the browser's seen mark or shown record) alone says it finished unseen.
+    if (!view) {
+      if (s.state === "closed" && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, "Review the result", "open"));
+      continue;
+    }
     if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, `Check the error: ${errorText(view)}`, "open"));
     else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset: continues at ${clock(view.continueAt)}`, "cancel_continue"));
+    else if (view.limitStop) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset${view.limitStop.resetsAt ? `: resets at ${clock(view.limitStop.resetsAt)}` : ""}`, "open"));
     else if ((view.state === "running" || view.externalTurn) && !busy(view) && i.now - i.activity(s.id) >= STUCK_MS) {
       const at = i.activity(s.id);
       const lastCall = lastOf(topLevel(view), (p) => p.type === "tool_call");
       rows.push(row("stuck", at, `Check it: ${quietLabel(i.now - at)}${lastCall?.type === "tool_call" ? ` since ${callSummary(lastCall.tool, lastCall.input, s.cwd)}` : ""}`, "open"));
-    } else if (view.state === "idle" && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
+    } else if ((view.state === "idle" || s.state === "closed") && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
       const text = lastOf(topLevel(view), (p) => p.type === "assistant_text");
       const line = text?.type === "assistant_text" ? lastLine(text.text) : undefined;
-      rows.push(row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)));
+      rows.push({ ...row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)), ...(view.suggestion && { suggestion: view.suggestion }) });
     }
   }
   const order = new Map(rows.map((r, n) => [r, n]));
@@ -246,4 +258,49 @@ export function focusSubtitle(rows: AttentionRow[], working: number): string {
   const review = new Set(rows.filter((x) => !BLOCKING.has(x.kind)).map((x) => x.sessionId)).size;
   const parts = [b && `${b} ${b === 1 ? "needs" : "need"} you`, review && `${review} to review`, working && `${working} working`].filter(Boolean);
   return parts.length ? parts.join(" · ") : "Nothing needs you";
+}
+
+// ---- GH-305: worker rows nest under their coordinator ----
+
+/** The rows of one coordinator (or of a plain session): its own rows and its workers' rows (direct and deeper). */
+export type FocusGroup<T> = { root: string; own: T[]; workers: T[] };
+
+/**
+ * Groups the rows of one Focus list by root coordinator, in the rows' order (a group sits where its first row is, so the kind order
+ * holds). A worker whose coordinator is not listed (archived)
+ * is a plain row. Only the display nests: Next waiting follows the flat order.
+ */
+export function nestRows<T>(rows: T[], list: SessionListItem[], idOf: (row: T) => string = (r) => (r as { sessionId: string }).sessionId): FocusGroup<T>[] {
+  const rootOf = new Map<string, string>();
+  for (const [root, ws] of nestWorkers(list, false).workers) for (const w of ws) rootOf.set(w.id, root);
+  const groups = new Map<string, FocusGroup<T>>();
+  for (const row of rows) {
+    const id = idOf(row);
+    const root = rootOf.get(id);
+    const g = groups.get(root ?? id) ?? groups.set(root ?? id, { root: root ?? id, own: [], workers: [] }).get(root ?? id)!;
+    (root ? g.workers : g.own).push(row);
+  }
+  return [...groups.values()];
+}
+
+const COLLAPSED_KEY = "claude-ui.focusCollapsed";
+
+/** Coordinator ids whose workers are folded on the Focus page in this browser (default: all shown). */
+export function loadFocusCollapsed(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((c): c is string => typeof c === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Saves the set without ids of sessions no longer listed. */
+export function saveFocusCollapsed(ids: ReadonlySet<string>, list: SessionListItem[]) {
+  try {
+    const listed = new Set(list.map((s) => s.id));
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids].filter((id) => listed.has(id))));
+  } catch {
+    // Storage blocked: folding still works for this page.
+  }
 }

@@ -84,6 +84,8 @@ type SessionOpts = Partial<SessionSettings> & {
   onLiveChange?: (id: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
+  /** Asks the CLI for a predicted next prompt after each turn (Settings › Focus › Next for you); read when the CLI starts. */
+  promptSuggestions?: () => boolean;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
   plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
   /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
@@ -238,6 +240,8 @@ export class Session {
   private limitHit = false;
   private limitResetsAt?: number;
   private continueAt: number | null = null;
+  private limitStopped = false;
+  private suggested = false;
   /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
   private commandsAsked = false;
   /**
@@ -319,6 +323,7 @@ export class Session {
         includePartialMessages: true,
         // hook_started/hook_response: the stale-turn check waits for a running hook (GH-239); the adapter ignores them.
         includeHookEvents: true,
+        promptSuggestions: this.opts.promptSuggestions?.(),
         settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
@@ -888,6 +893,19 @@ export class Session {
     this.emit({ type: "auto_continue", id: "auto_continue", at });
   }
 
+  /** Settings › Focus › Next for you was turned off: the shown suggestion goes. */
+  clearSuggestion() {
+    if (!this.suggested) return;
+    this.suggested = false;
+    this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
+  }
+
+  /** The turn ended at the usage limit (`resetsAt` ms when known): the Focus page's limit row, also with auto-continue off. Cleared when the next turn starts. */
+  setLimitStop(resetsAt: number | undefined) {
+    this.limitStopped = true;
+    this.emit({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
+  }
+
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
   setQueue(items: { id: string; text: string; images: string[]; bash?: true; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
     const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };
@@ -1232,7 +1250,10 @@ export class Session {
     }
     // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
     if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
-    for (const part of this.adapter.convert(m)) this.emit(part);
+    // A CLI started while the setting was on goes on suggesting after it is turned off: no new chip then.
+    const late = m.type === "prompt_suggestion" && !this.opts.promptSuggestions?.();
+    if (!late) for (const part of this.adapter.convert(m)) this.emit(part);
+    if (m.type === "prompt_suggestion" && !late) this.suggested = true;
     if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
     if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.resetsAt) this.limitResetsAt = m.rate_limit_info.resetsAt * 1000;
     if (m.type === "assistant" && !m.parent_tool_use_id && m.error === "rate_limit") this.limitHit = true;
@@ -1418,6 +1439,14 @@ export class Session {
 
   private setState(state: SessionState) {
     this.state = state;
+    if (state === "running" && this.limitStopped) {
+      this.limitStopped = false;
+      this.emit({ type: "limit_stop", id: "limit_stop", stopped: false });
+    }
+    if (state === "running" && this.suggested) {
+      this.suggested = false;
+      this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
+    }
     this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
     if (state === "idle") this.flushBashNotices();

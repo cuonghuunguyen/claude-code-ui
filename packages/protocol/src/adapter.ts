@@ -391,6 +391,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
         ];
       }
       default:
+        if (m.type === "prompt_suggestion") return [{ type: "prompt_suggestion", id: "prompt_suggestion", text: m.suggestion }];
         if (m.type === "system" && m.subtype === "commands_changed") return commands(m.commands);
         if (m.type === "system" && m.subtype === "init") {
           terminalOnly = new Set(m.terminal_slash_commands);

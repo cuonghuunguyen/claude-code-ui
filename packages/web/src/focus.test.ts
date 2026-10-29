@@ -1,6 +1,6 @@
 import type { Part, SessionListItem } from "@claude-ui/protocol";
-import { expect, it } from "vitest";
-import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, nextWaiting, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, loadFocusCollapsed, nestRows, nextWaiting, saveFocusCollapsed, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
 import { asideItem } from "./aside.ts";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 
@@ -125,6 +125,36 @@ it("error: an unread error session shows the raw error text, else a plain senten
 it("usage limit: a scheduled continue gives a Cancel continue row", () => {
   const [r] = attentionRows(input([item("a")], { a: view([{ type: "auto_continue", id: "auto_continue", at: NOW + 5000 }]) }));
   expect(r).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset: continues at 14:05", action: "cancel_continue" });
+});
+
+it("usage limit without a scheduled continue (auto-continue off): an Open session row, with or without the reset time; a scheduled continue wins", () => {
+  const stop = (resetsAt?: number): Part => ({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW + 5000)]) }))[0]).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset: resets at 14:05", action: "open" });
+  expect(attentionRows(input([item("a")], { a: view([stop()]) }))[0]).toMatchObject({ kind: "limit", reason: "Wait for the usage limit to reset", action: "open" });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW + 9000), { type: "auto_continue", id: "auto_continue", at: NOW + 5000 }]) }))[0]).toMatchObject({ reason: "Wait for the usage limit to reset: continues at 14:05", action: "cancel_continue" });
+  expect(attentionRows(input([item("a")], { a: view([stop(NOW), { type: "limit_stop", id: "limit_stop", stopped: false }]) }))).toEqual([]);
+});
+
+it("finished row carries the Next for you suggestion of the view (GH-305)", () => {
+  const list = [item("a", { lastActivity: NOW - min })];
+  const withSuggestion = view([state("running"), reply("done"), state("idle"), { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }]);
+  expect(attentionRows(input(list, { a: withSuggestion }, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", suggestion: "run the tests" });
+  expect(attentionRows(input(list, { a: view([state("running"), reply("done"), state("idle")]) }, { unread: ["a"] }))[0]).not.toHaveProperty("suggestion", expect.anything());
+});
+
+it("finished after a daemon restart (GH-305): a closed session with an unread record gets a finished row, with or without a view; not unread, none; older than 24 h, none", () => {
+  const closed = (over: Partial<SessionListItem> = {}) => item("a", { state: "closed", lastActivity: NOW - min, ...over });
+  const withText = view([user, state("running"), reply("All green."), state("idle")]);
+  expect(attentionRows(input([closed()], { a: withText }, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", reason: "Review: All green.", action: "open" });
+  expect(attentionRows(input([closed()], {}, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", reason: "Review the result", action: "open", id: "finished:a" });
+  expect(attentionRows(input([closed()], {}))).toEqual([]);
+  expect(attentionRows(input([closed()], { a: withText }))).toEqual([]);
+  expect(attentionRows(input([closed({ lastActivity: NOW - 25 * 60 * min })], {}, { unread: ["a"] }))).toEqual([]);
+  expect(attentionRows(input([closed({ archived: true })], {}, { unread: ["a"] }))).toEqual([]);
+});
+
+it("error, limit and quiet rows still need a view (a closed or unknown session without one gets none of them)", () => {
+  expect(attentionRows(input([item("a", { state: "error", lastActivity: NOW })], {}, { unread: ["a"] }))).toEqual([]);
 });
 
 it("stuck: running, nothing pending, no running call, quiet 5 min; quiet 4 min or a running call gives none", () => {
@@ -278,4 +308,54 @@ it("an Aside's request is listed as 'Aside: title' through its synthetic list it
   expect(w.map((x) => x.sessionId)).toEqual(["as1"]);
   expect(list[1]!.title).toBe("Aside: why?");
   expect(waitingCount(w)).toBe(1);
+});
+
+// ---- GH-305: worker rows nest under their coordinator ----
+const r = (sessionId: string, tag = sessionId) => ({ sessionId, tag });
+const tags = (g: { own: { tag: string }[]; workers: { tag: string }[] }) => [g.own.map((x) => x.tag), g.workers.map((x) => x.tag)];
+
+it("nestRows: a worker's row goes under its coordinator; the group sits where its first row is, so the kind order holds", () => {
+  const list = [item("c", { coordinatorId: undefined }), item("w1", { coordinatorId: "c", workerName: "one" }), item("x")];
+  const groups = nestRows([r("w1"), r("x"), r("c")], list);
+  expect(groups.map((g) => [g.root, ...tags(g)])).toEqual([["c", ["c"], ["w1"]], ["x", ["x"], []]]);
+});
+
+it("nestRows: a coordinator without its own row gets a group with no own rows; a depth-2 worker goes to the root coordinator", () => {
+  const list = [item("c"), item("w1", { coordinatorId: "c" }), item("w2", { coordinatorId: "w1" })];
+  const [g, ...more] = nestRows([r("w2"), r("w1")], list);
+  expect(more).toEqual([]);
+  expect([g!.root, ...tags(g!)]).toEqual(["c", [], ["w2", "w1"]]);
+});
+
+it("attentionRows: no row for a closed worker whose coordinator is listed (so counts match what shows); a closed coordinator or a worker of an archived coordinator keeps its row", () => {
+  const list = [item("c", { state: "closed", lastActivity: NOW - min }), item("w1", { coordinatorId: "c", state: "closed", lastActivity: NOW - min }), item("a", { archived: true }), item("w2", { coordinatorId: "a", state: "closed", lastActivity: NOW - min })];
+  expect(attentionRows(input(list, {}, { unread: ["c", "w1", "w2"] })).map((x) => x.sessionId)).toEqual(["c", "w2"]);
+});
+
+it("nestRows: several own rows of a coordinator stay together as its own rows", () => {
+  const list = [item("c"), item("w1", { coordinatorId: "c" })];
+  const [g] = nestRows([r("c", "q1"), r("w1"), r("c", "q2")], list);
+  expect(tags(g!)).toEqual([["q1", "q2"], ["w1"]]);
+});
+
+it("nestRows: a worker whose coordinator is archived (not in the list) stays a plain row", () => {
+  const list = [item("c", { archived: true }), item("w1", { coordinatorId: "c" })];
+  expect(nestRows([r("w1")], list).map((g) => [g.root, ...tags(g)])).toEqual([["w1", ["w1"], []]]);
+});
+
+afterEach(() => vi.unstubAllGlobals());
+const store = (data: Record<string, string>) => vi.stubGlobal("localStorage", { getItem: (k: string) => data[k] ?? null, setItem: (k: string, v: string) => void (data[k] = v) });
+
+it("the collapsed groups load as a set; bad or blocked storage means none collapsed; save keeps only listed coordinators", () => {
+  expect(loadFocusCollapsed().size).toBe(0);
+  store({ "claude-ui.focusCollapsed": "{oops" });
+  expect(loadFocusCollapsed().size).toBe(0);
+  const data: Record<string, string> = { "claude-ui.focusCollapsed": '["a",3,"b"]' };
+  store(data);
+  expect([...loadFocusCollapsed()]).toEqual(["a", "b"]);
+  saveFocusCollapsed(new Set(["a", "b"]), [item("a")]);
+  expect(JSON.parse(data["claude-ui.focusCollapsed"]!)).toEqual(["a"]);
+  vi.stubGlobal("localStorage", { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+  expect(loadFocusCollapsed().size).toBe(0);
+  expect(() => saveFocusCollapsed(new Set(["a"]), [item("a")])).not.toThrow();
 });

@@ -144,6 +144,14 @@ describe("PartIndex", () => {
     expect(index.pageBefore(cursor.before, "zzz")!.parts.filter((p) => p.type === "user_text")).toHaveLength(PAGE_TURNS);
   });
 
+  it("limit_stop is a head: the snapshot carries the latest (GH-305)", () => {
+    const { index } = build([
+      { type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: 5 },
+      { type: "limit_stop", id: "limit_stop", stopped: false },
+    ]);
+    expect(index.heads().map((e) => e.part)).toEqual([{ type: "limit_stop", id: "limit_stop", stopped: false }]);
+  });
+
   it("heads keep the latest session_state, commands, context_usage, external_turn, todo_update; attentionSeq follows the store rule", () => {
     const { index, log } = build([
       state("running"),

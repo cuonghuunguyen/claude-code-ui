@@ -27,6 +27,10 @@ export type SessionView = {
   externalTurn?: boolean;
   /** A continue is scheduled at this time (ms) after a usage limit (auto_continue); undefined = none. */
   continueAt?: number;
+  /** The last turn ended at the usage limit (limit_stop), with or without a scheduled continue; undefined = none. */
+  limitStop?: { resetsAt?: number };
+  /** "Next for you": the predicted next prompt after the last turn (prompt_suggestion); undefined = none. */
+  suggestion?: string;
   /** Queued messages (prompt_queue) the daemon sends when the session is idle; undefined = none. */
   queue?: { items: QueuedPrompt[]; held?: { reason: "usage_limit" | "not_live"; until?: number } };
   /** Idle, but a background task of the session's own query still runs (session_state `working`). */
@@ -90,6 +94,8 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "external_turn") return { ...s, lastSeq: e.seq, externalTurn: part.running };
   if (part.type === "prompt_queue") return { ...s, lastSeq: e.seq, queue: part.items.length ? { items: part.items, ...(part.held && { held: part.held }) } : undefined };
   if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
+  if (part.type === "limit_stop") return { ...s, lastSeq: e.seq, limitStop: part.stopped ? { ...(part.resetsAt && { resetsAt: part.resetsAt }) } : undefined };
+  if (part.type === "prompt_suggestion") return { ...s, lastSeq: e.seq, suggestion: part.text ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };
   if (part.type === "todo_update") return { ...s, lastSeq: e.seq, todos: part.items, lastTodos: part.items };

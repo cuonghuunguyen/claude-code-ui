@@ -1422,6 +1422,22 @@ describe("Session context usage", () => {
     expect(onLimitStop).not.toHaveBeenCalled();
   });
 
+  it("setLimitStop emits limit_stop, the next turn clears it, the snapshot carries it (GH-305)", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const stops = () => events.filter((e) => e.part.type === "limit_stop").map((e) => e.part);
+    s.prompt("hello");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(stops()).toEqual([]);
+    s.setLimitStop(7000);
+    expect(stops()).toEqual([{ type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: 7000 }]);
+    expect(s.snapshot().snapshot.heads.some((e) => e.part.type === "limit_stop" && e.part.stopped)).toBe(true);
+    s.prompt("again");
+    await until(events, (e) => e.part.type === "limit_stop" && !e.part.stopped);
+    expect(stops()).toHaveLength(2);
+  });
+
   it("setContinueAt emits one auto_continue part per change; the snapshot heads carry it", () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
     const events: Event[] = [];
@@ -2914,5 +2930,66 @@ describe("shellOutput of a restored session (GH-442)", () => {
     writeFileSync(join(outside, "rt1.output"), "elsewhere");
     expect(await restored(id, cwd, join(outside, "rt1.output")).shellOutput("tb1")).toBeUndefined();
     expect(await ok.shellOutput("nope")).toBeUndefined();
+  });
+});
+
+describe("Next for you (GH-305)", () => {
+  const result = () => ({ type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] });
+  async function setup(opts: ConstructorParameters<typeof Session>[1] = {}) {
+    let next!: (m: unknown) => void;
+    let options!: Options;
+    const query = (a: { options: Options }) => (options = a.options) && Object.assign((async function* () { for (;;) yield await new Promise((r) => (next = r)); })(), { supportedCommands: async () => [], stopTask: async () => {}, interrupt: async () => {}, close() {} });
+    const s = started({ ...opts, query: query as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    await until(events, () => !!next);
+    return { s, events, next: (m: unknown) => next(m), options: () => options };
+  }
+  const suggestions = (events: Event[]) => events.filter((e) => e.part.type === "prompt_suggestion").map((e) => (e.part as { text: string | null }).text);
+
+  it("the query asks for suggestions only when the opts say so", async () => {
+    expect((await setup({ promptSuggestions: () => true })).options().promptSuggestions).toBe(true);
+    expect((await setup({ promptSuggestions: () => false })).options().promptSuggestions).toBe(false);
+    expect((await setup()).options().promptSuggestions).toBeUndefined();
+  });
+
+  it("a suggestion after the result is a head part; the next turn clears it; the snapshot carries it", async () => {
+    const t = await setup({ promptSuggestions: () => true });
+    t.next(result());
+    await until(t.events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    t.next({ type: "prompt_suggestion", suggestion: "run the tests", uuid: randomUUID(), session_id: "x" });
+    await until(t.events, (e) => e.part.type === "prompt_suggestion");
+    expect(suggestions(t.events)).toEqual(["run the tests"]);
+    expect(t.s.snapshot().snapshot.heads.some((e) => e.part.type === "prompt_suggestion" && e.part.text === "run the tests")).toBe(true);
+    t.s.prompt("go on");
+    await until(t.events, (e) => e.part.type === "prompt_suggestion" && e.part.text === null);
+    expect(suggestions(t.events)).toEqual(["run the tests", null]);
+  });
+
+  it("a suggestion that arrives while the setting is off is dropped (a session started while it was on)", async () => {
+    let on = true;
+    const t = await setup({ promptSuggestions: () => on });
+    t.next(result());
+    await until(t.events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    on = false;
+    t.next({ type: "prompt_suggestion", suggestion: "late", uuid: randomUUID(), session_id: "x" });
+    t.next({ type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(suggestions(t.events)).toEqual([]);
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual([]);
+  });
+
+  it("clearSuggestion (setting turned off) clears a shown suggestion once and does nothing without one", async () => {
+    const t = await setup({ promptSuggestions: () => true });
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual([]);
+    t.next(result());
+    await until(t.events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    t.next({ type: "prompt_suggestion", suggestion: "run the tests", uuid: randomUUID(), session_id: "x" });
+    await until(t.events, (e) => e.part.type === "prompt_suggestion");
+    t.s.clearSuggestion();
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual(["run the tests", null]);
   });
 });
