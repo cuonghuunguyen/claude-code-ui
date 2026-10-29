@@ -1,13 +1,14 @@
 // Shared editor tab state (docs/spec.md "Editor"): the Files tab and the file dialog are two views of one store, so open tabs, unsaved
 // drafts, cursor and undo history survive Pop out and the way back. App creates one store; pure tab transitions stay in files.ts.
-// Reuse: #399 (a file as a main-area tab) renders one path against this store; #366 (persist editor tabs) saves {paths, active, preview} from get().
+// Reuse: #399 (a file as a main-area tab) renders one path against this store. #366: the tab list and drafts persist (editor-persist.ts) and restore() reads them back once connected.
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { baseName, inDir } from "./paths.ts";
-import { diskChanged, dropTabs, isDirty, isMarkdown, mediaKind, movedPath, moveTabs, opened, openedMedia, pin, placeTab, readFailure, reload, saveBase, saved, type Tab } from "./files.ts";
+import { diskChanged, dropTabs, goneTab, isDirty, isMarkdown, mediaKind, movedPath, moveTabs, opened, openedMedia, pin, placeTab, readFailure, reload, restoredTab, saveBase, saved, type Tab } from "./files.ts";
+import { loadSaved, toSaved, writeSaved, type EditorStorage, type SavedTab } from "./editor-persist.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -15,6 +16,8 @@ export type EditorSnapshot = {
   /** Keyed by absolute path; insertion order is the tab order. */
   tabs: Record<string, Tab>;
   activePath?: string;
+  /** Paths by last activation, most recent first: the Files view of a folder shows its most recent tab (persisted). */
+  recent: string[];
   /** A line to go to in `path`'s editor once it shows (`key` tells a repeat of the same line apart). */
   goto?: { path: string; line: number; key: number };
   /** A markdown file opened at a line shows its source for that open, whatever view is chosen (not stored). */
@@ -38,18 +41,51 @@ export type OpenOptions = {
   item?: boolean;
 };
 
-export function createEditorStore(getClient: () => Client | undefined) {
-  let state: EditorSnapshot = { tabs: {}, gitNudge: 0 };
+const WRITE_DELAY_MS = 300;
+type Pending = { tab: SavedTab; draft?: { draft: string; mtime: number } };
+
+export function createEditorStore(getClient: () => Client | undefined, storage: EditorStorage = { load: loadSaved, write: writeSaved }) {
+  const loaded = storage.load();
+  /** Saved tabs not read yet. Until restore() has run, nothing is written; entries still pending are merged into every write, so a draft is never erased. */
+  const pending = new Map<string, Pending>(loaded.tabs.map((t) => [t.path, { tab: t, draft: loaded.drafts[t.path] }]));
+  let restored = false;
+  let restoring: Promise<void> | undefined;
+  let writeTimer: ReturnType<typeof setTimeout> | undefined;
+  let state: EditorSnapshot = { tabs: {}, recent: loaded.recent, gitNudge: 0 };
   const listeners = new Set<() => void>();
   const parked = new Map<string, EditorState>();
   let openSeq = 0;
   /** The mounted editor (one at a time: the side panel shows none while the file dialog is open). */
   const view: { current: EditorView | undefined } = { current: undefined };
 
+  const flush = () => {
+    clearTimeout(writeTimer);
+    writeTimer = undefined;
+    if (!restored) return;
+    const w = toSaved(state);
+    for (const [path, p] of pending) {
+      if (state.tabs[path]) continue;
+      w.tabs.push(p.tab);
+      if (p.draft) w.drafts[path] = p.draft;
+    }
+    w.active ??= pending.size ? loaded.active : undefined;
+    w.recent = state.recent.filter((p) => state.tabs[p] || pending.has(p));
+    storage.write(w);
+  };
+  const schedule = () => {
+    if (!restored) return;
+    clearTimeout(writeTimer);
+    writeTimer = setTimeout(flush, WRITE_DELAY_MS);
+  };
+  if (typeof window !== "undefined") window.addEventListener("pagehide", flush);
+
   const set = (f: (s: EditorSnapshot) => EditorSnapshot) => {
-    const next = f(state);
+    let next = f(state);
     if (next === state) return;
+    if (next.activePath && next.activePath !== state.activePath) next = { ...next, recent: [next.activePath, ...next.recent.filter((p) => p !== next.activePath)] };
+    const persisted = next.tabs !== state.tabs || next.activePath !== state.activePath;
     state = next;
+    if (persisted) schedule();
     listeners.forEach((l) => l());
   };
   const client = () => {
@@ -64,8 +100,52 @@ export function createEditorStore(getClient: () => Client | undefined) {
   const update = (path: string, f: (t: Tab) => Tab) => set((s) => (s.tabs[path] ? { ...s, tabs: { ...s.tabs, [path]: f(s.tabs[path]) } } : s));
   const setTabs = (f: (tabs: Record<string, Tab>) => Record<string, Tab>) => set((s) => ({ ...s, tabs: f(s.tabs) }));
 
-  const readTab = async (path: string) =>
-    mediaKind(path) ? openedMedia(path, await client().request<FsMediaResult>({ type: "fs.media", path })) : opened(path, await client().request<FsReadResult>({ type: "fs.read", path }));
+  /** `draft`: a saved draft of the file (GH-366). */
+  const readTab = async (path: string, draft?: Pending["draft"]) =>
+    mediaKind(path) ? openedMedia(path, await client().request<FsMediaResult>({ type: "fs.media", path })) : restoredTab(path, await client().request<FsReadResult>({ type: "fs.read", path }), draft);
+
+  /** A saved entry read back: the tab, "keep" (disconnected: try again), or undefined (dropped). */
+  async function readSaved(p: Pending): Promise<Tab | "keep" | undefined> {
+    const { path } = p.tab;
+    const flags = (t: Tab): Tab => ({ ...t, ...(p.tab.preview ? { preview: true } : {}), ...(p.tab.item ? { item: true } : {}), ...(p.tab.outside ? { outside: true } : {}) });
+    try {
+      return flags(await readTab(path, p.draft));
+    } catch (e) {
+      if ((e as Error).message === "disconnected") return "keep";
+      const f = readFailure(e as RequestError);
+      const code = (e as RequestError).code;
+      if (p.draft) return flags(goneTab(path, p.draft, code === "not_found" || code === "path_not_allowed" ? undefined : f.text));
+      // A file tab left to its own read (it shows the failure); a Files tab of a gone file is dropped silently.
+      if (p.tab.item || !f.notice) return undefined;
+      return flags({ path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint });
+    }
+  }
+
+  /** Once per page load, when connected: reads the saved tabs back (GH-366). Entries that could not be read for lack of a connection stay pending for the next call. */
+  function restore(): Promise<void> {
+    if (restoring) return restoring;
+    if (restored && !pending.size) return Promise.resolve();
+    const entries = [...pending.values()];
+    const run = async () => {
+      const read = await Promise.all(entries.map(async (p) => [p, await readSaved(p)] as const));
+      const back: Record<string, Tab> = {};
+      for (const [p, t] of read) {
+        const { path } = p.tab;
+        // Opened meanwhile (take over its draft in open()): not ours any more.
+        if (pending.get(path) !== p || t === "keep") continue;
+        pending.delete(path);
+        if (t) back[path] = t;
+      }
+      restored = true;
+      set((s) => ({
+        ...s,
+        tabs: { ...back, ...s.tabs },
+        activePath: s.activePath ?? (loaded.active && (back[loaded.active] ?? s.tabs[loaded.active]) ? loaded.active : undefined),
+      }));
+      schedule();
+    };
+    return (restoring = run().finally(() => (restoring = undefined)));
+  }
 
   /** SVG: the same file as text (editor) or as image. */
   async function switchView(path: string, toText: boolean) {
@@ -90,7 +170,7 @@ export function createEditorStore(getClient: () => Client | undefined) {
       // The draft was replaced by the disk version: a parked state would hold the old document.
       if (state.tabs[path]?.draft !== before) parked.delete(path);
     } catch (e) {
-      if ((e as Error).message === "disconnected") return;
+      if ((e as Error).message === "disconnected" || state.tabs[path]?.gone) return;
       const f = readFailure(e as RequestError);
       // A clean tab shows the state instead of its stale text; a dirty one keeps its edits and shows the line.
       update(path, (t) => (f.notice && !isDirty(t) ? { ...t, error: undefined, notice: f.text, noticeHint: f.hint } : { ...t, error: f.text }));
@@ -109,8 +189,10 @@ export function createEditorStore(getClient: () => Client | undefined) {
     if (state.tabs[path]) setTabs((ts) => (ts[path] ? placeTab(o.outside ? { ...ts, [path]: { ...ts[path]!, outside: true } } : ts, o.outside ? { ...ts[path]!, outside: true } : ts[path]!, preview, scope) : ts));
     else {
       const timer = setTimeout(() => set((s) => ({ ...s, loading: path })), 150);
+      const saved = pending.get(path);
+      pending.delete(path);
       try {
-        const tab = make(await readTab(path));
+        const tab = make(await readTab(path, saved?.draft));
         if (seq !== openSeq && preview) return;
         setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
@@ -140,8 +222,18 @@ export function createEditorStore(getClient: () => Client | undefined) {
     if (!t) return;
     const content = t.draft;
     try {
-      const r = await client().request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: saveBase(t, overwrite) });
-      update(path, (t) => pin(saved(t, content, r.mtime)));
+      // A deleted file (restored draft): create it, then write without a base version. If it came back meanwhile, its content meets the draft as a conflict.
+      if (t.gone) {
+        try {
+          await client().request({ type: "fs.create", path });
+        } catch (e) {
+          if ((e as RequestError).code !== "exists") throw e;
+          update(path, (t) => ({ ...t, gone: undefined, error: undefined }));
+          return void refresh(path);
+        }
+      }
+      const r = await client().request<FsWriteResult>({ type: "fs.write", path, content, baseMtime: t.gone ? undefined : saveBase(t, overwrite) });
+      update(path, (t) => pin(saved({ ...t, gone: undefined }, content, r.mtime)));
       set((s) => ({ ...s, gitNudge: s.gitNudge + 1 }));
     } catch (e) {
       update(path, (t) => ({ ...t, error: (e as Error).message }));
@@ -193,6 +285,7 @@ export function createEditorStore(getClient: () => Client | undefined) {
       });
     },
     refresh,
+    restore,
     switchView,
     update,
     /** "Reload from disk" of a conflict. */

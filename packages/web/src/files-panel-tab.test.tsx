@@ -154,3 +154,12 @@ it("a FileTab whose store tab is a Files tab again (Reopen after Move to Files) 
   await act(async () => root!.render(<FileTab store={store} client={client} path="/p/a.ts" cwd="/p" onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
   expect(store.get().tabs["/p/a.ts"]!.item).toBe(true);
 });
+
+it("a file tab restored with a saved draft shows the draft, dirty, and does not re-read it clean (GH-366)", async () => {
+  const { client, el, request } = setup();
+  const store = createEditorStore(() => client, { load: () => ({ tabs: [{ path: "/p/a.ts", item: true }], recent: [], drafts: { "/p/a.ts": { draft: "mine", mtime: 1 } } }), write: () => {} });
+  await act(async () => root!.render(<FileTab store={store} client={client} path="/p/a.ts" cwd="/p" onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
+  expect(store.get().tabs["/p/a.ts"]).toMatchObject({ disk: "a", draft: "mine", item: true });
+  expect(el.textContent).toContain("mine");
+  expect(request.mock.calls.filter(([m]) => m.type === "fs.read")).toHaveLength(1);
+});

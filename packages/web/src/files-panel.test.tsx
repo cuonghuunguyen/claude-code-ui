@@ -738,3 +738,48 @@ it("GH-396 two panels on one editor store keep their own shown file; becoming vi
   act(() => root.render(null));
   el.remove();
 });
+
+// GH-366: restored editor tabs in the Files view.
+function restored(saved: Partial<import("./editor-persist.ts").Saved>, disk: Record<string, { content: string; mtime: number }>) {
+  const request = vi.fn(async (m: { type: string; path?: string }) => {
+    if (m.type === "fs.list") return { entries: [] };
+    if (m.type === "fs.read") return disk[m.path!] ?? Promise.reject(Object.assign(new Error("gone"), { code: "not_found" }));
+    return {};
+  });
+  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
+  const store = createEditorStore(() => client, { load: () => ({ tabs: [], recent: [], drafts: {}, ...saved }), write: () => {} });
+  const el = document.createElement("div");
+  const root = createRoot(el);
+  const draw = (cwd: string) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd={cwd} editors={store} sync={false} onSend={() => {}} showTree onToggleTree={() => {}} />));
+  return { store, el, draw, root };
+}
+
+it("two folders: after a restore each folder shows its own most recently active tab", async () => {
+  const disk = { "/p/a.ts": { content: "a", mtime: 1 }, "/p/b.ts": { content: "b", mtime: 1 }, "/q/c.ts": { content: "c", mtime: 1 }, "/q/d.ts": { content: "d", mtime: 1 } };
+  const { store, el, draw, root } = restored({ tabs: ["/p/a.ts", "/p/b.ts", "/q/c.ts", "/q/d.ts"].map((path) => ({ path })), active: "/q/c.ts", recent: ["/q/c.ts", "/p/a.ts", "/q/d.ts", "/p/b.ts"] }, disk);
+  await act(async () => store.restore());
+  const selected = () => el.querySelector("[data-testid=editor-tab][aria-selected=true]")?.getAttribute("title");
+  await draw("/q");
+  expect(selected()).toBe("/q/c.ts");
+  await draw("/p");
+  expect(selected()).toBe("/p/a.ts");
+  act(() => root.render(null));
+});
+
+it("a restored draft of a deleted file shows the line and Save is enabled", async () => {
+  const { store, el, draw, root } = restored({ tabs: [{ path: "/p/a.ts" }], active: "/p/a.ts", drafts: { "/p/a.ts": { draft: "mine", mtime: 1 } } }, {});
+  await act(async () => store.restore());
+  await draw("/p");
+  expect(el.textContent).toContain("Deleted on disk. Save creates it again.");
+  expect(el.querySelector<HTMLButtonElement>("[data-testid=editor-save]")!.disabled).toBe(false);
+  act(() => root.render(null));
+});
+
+it("a restored draft whose file changed on disk shows the conflict bar and Save is disabled", async () => {
+  const { store, el, draw, root } = restored({ tabs: [{ path: "/p/a.ts" }], active: "/p/a.ts", drafts: { "/p/a.ts": { draft: "mine", mtime: 1 } } }, { "/p/a.ts": { content: "new", mtime: 2 } });
+  await act(async () => store.restore());
+  await draw("/p");
+  expect(el.textContent).toContain("Changed on disk while you have unsaved edits.");
+  expect(el.querySelector<HTMLButtonElement>("[data-testid=editor-save]")!.disabled).toBe(true);
+  act(() => root.render(null));
+});

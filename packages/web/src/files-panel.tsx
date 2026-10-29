@@ -40,6 +40,7 @@ const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
 /** The one editor sync of the shared store (disk watch, reload on change) for every Files view. */
 export function EditorSync({ store, client, status, watch }: { store: EditorStore; client: Client; status: ConnectionStatus; watch: string[] }) {
   useEditorSync(store, client, status, watch, true);
+  useEffect(() => void (status === "connected" && store.restore()), [status]);
   return null;
 }
 
@@ -131,7 +132,7 @@ export function FilesPanel({
 }) {
   const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
   const store = (editors ?? own)!;
-  const { tabs, activePath, gitNudge, error, loading } = useEditorStore(store);
+  const { tabs, activePath, recent, gitNudge, error, loading } = useEditorStore(store);
   const [treeKey, setTreeKey] = useState(0);
   const [filtering, setFiltering] = useState(false);
   const tree = useRef<FileTreeHandle>(undefined);
@@ -155,10 +156,9 @@ export function FilesPanel({
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
   const shown = paths.filter((p) => !tabs[p]!.item && (inDir(p, cwd) || (dialog && tabs[p]!.outside)));
-  // The store has one global activePath: a view whose folder does not own it keeps the file it showed last.
-  const lastShown = useRef<string>(undefined);
-  const active = activePath && shown.includes(activePath) ? tabs[activePath] : lastShown.current && shown.includes(lastShown.current) ? tabs[lastShown.current] : tabs[shown[0]!];
-  lastShown.current = active?.path;
+  // The store has one global activePath: a view whose folder does not own it shows the file of this folder that was active last (`recent`, persisted).
+  const recentShown = recent.find((p) => shown.includes(p));
+  const active = activePath && shown.includes(activePath) ? tabs[activePath] : tabs[recentShown ?? shown[0]!];
   // Becoming visible makes the shown file the active one, so Pop out and save act on it.
   useEffect(() => {
     if (visible && !dialog && active && store.get().activePath !== active.path) store.setActive(active.path);
