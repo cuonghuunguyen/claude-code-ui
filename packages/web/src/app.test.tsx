@@ -5637,6 +5637,7 @@ describe("GH-399 a file as a tab", () => {
       const { undoDepth } = await import("@codemirror/commands");
       const files = el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
       const v1 = EditorView.findFromDOM(files.querySelector<HTMLElement>(".cm-editor")!)!;
+      v1.contentDOM.blur(); // a focused view re-reads the (empty) DOM selection and resets the cursor
       await act(async () => v1.dispatch({ changes: { from: 0, insert: "X" }, selection: { anchor: 3 }, userEvent: "input.type" }));
       await act(async () => v1.dispatch({ changes: { from: 1, insert: "Y" }, selection: { anchor: 3 }, userEvent: "select" }));
       const depth = undoDepth(v1.state);

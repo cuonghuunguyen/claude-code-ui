@@ -838,8 +838,7 @@ export function App() {
     drop(sessionId, false);
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
-    // Its pane tabs go with it; its file tabs go back to Files with their drafts (GH-399).
-    for (const id of tabsRef.current) if (ownerOf(id) === sessionId && isItem(id)) editors.toFiles(pathOf(id)!);
+    // Its pane tabs go with it (its file tabs go back to Files through the effect on `tabs`).
     setTabs((t) => t.filter((id) => ownerOf(id) !== sessionId));
     setHeirOf((h) => without(h, sessionId));
     delete clearQueue.current[sessionId];

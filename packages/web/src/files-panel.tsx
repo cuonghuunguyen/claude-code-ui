@@ -122,9 +122,9 @@ export function FilesPanel({
   /** A Files open of a path that is a file tab already: App focuses that tab (one place per file). */
   onItem?: (path: string) => void;
   /** Reveal in Files: the tree shows this file (a new `seq` reveals again). */
+  revealPath?: { path: string; seq: number; /** A folder (a breadcrumb click in a file tab). */ dir?: boolean };
   /** The reveal request was carried out: the app clears it, so a later mount does not reveal it again. */
   onRevealed?: () => void;
-  revealPath?: { path: string; seq: number; /** A folder (a breadcrumb click in a file tab). */ dir?: boolean };
   headerEnd?: ReactNode;
   /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
   sync?: boolean;
