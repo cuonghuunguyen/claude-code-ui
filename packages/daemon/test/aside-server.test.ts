@@ -66,7 +66,7 @@ async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tm
   });
   open.push(d);
   // listen: false stands for a --side daemon, which has no port of its own.
-  if (!listen) return { d, settingsFile, deleted } as unknown as Awaited<ReturnType<typeof start>>;
+  if (!listen) return { d, settingsFile, deleted } as never;
   await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
   const port = (d.address() as AddressInfo).port;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`], { origin: `http://127.0.0.1:${port}` });
