@@ -49,11 +49,12 @@ export function createSecrets({ file }: { file?: string } = {}) {
     bindJiraToken(origin: string) {
       const d = get();
       if (!d.jiraToken || d.jiraOrigin !== "") return;
-      store.change((x) => void (x.jiraOrigin = origin));
+      // Checked again on the freshly loaded data: another daemon may have written since `get()`.
+      store.change((x) => void (x.jiraToken && x.jiraOrigin === "" && (x.jiraOrigin = origin)));
     },
     /** The Jira URL was emptied: the "cleared by an update" notice has done its job. */
     endJiraTokenReset() {
-      if (get().jiraTokenReset) store.change((d) => void delete d.jiraTokenReset);
+      if (get().jiraTokenReset) store.change((d) => void (d.jiraTokenReset && delete d.jiraTokenReset));
     },
     /** null clears. `origin` = the origin of jira.url ("" without URL). Throws when the token is invalid or the save fails. */
     setJiraToken(token: string | null, origin = "") {
