@@ -3,12 +3,12 @@
 // The Jira token is stored with the origin it was saved for and only returned for that origin (GH-487).
 import { createJsonFile } from "./json-file.ts";
 
-type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokenReset?: true };
+// `legacy` lives in memory only: the file held a token without its origin (saved before GH-487).
+type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokenReset?: true; legacy?: true };
 const parse = (raw: unknown): Stored => {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  if (typeof r.jiraToken !== "string" || !r.jiraToken) return r.jiraTokenReset === true ? { jiraTokenReset: true } : {};
-  // GH-487: a token without its origin (saved before) counts as not set; the flag tells Settings why.
-  return typeof r.jiraOrigin === "string" ? { jiraToken: r.jiraToken, jiraOrigin: r.jiraOrigin } : { jiraTokenReset: true };
+  if (typeof r.jiraToken === "string" && r.jiraToken) return typeof r.jiraOrigin === "string" ? { jiraToken: r.jiraToken, jiraOrigin: r.jiraOrigin } : { legacy: true };
+  return r.jiraTokenReset === true ? { jiraTokenReset: true } : {};
 };
 /** A Jira API token or personal access token: printable, no spaces, at most 2000 characters. */
 export const tokenProblem = (t: unknown): string | undefined =>
@@ -17,19 +17,44 @@ export const tokenProblem = (t: unknown): string | undefined =>
 /** Without `file` the secrets live in memory only (tests). */
 export function createSecrets({ file }: { file?: string } = {}) {
   const store = createJsonFile<Stored>(file, parse, "secrets");
+  /** GH-487: an old-format token is removed from the disk in one atomic write and replaced by the persisted `jiraTokenReset` flag. */
+  const get = (): Stored => {
+    if (store.get().legacy) {
+      try {
+        store.change((d) => {
+          delete d.legacy;
+          d.jiraTokenReset = true;
+        });
+      } catch (e) {
+        // The token is not returned anyway (no origin); the next read retries the write.
+        console.error("could not remove the old-format Jira token from secrets.json:", (e as Error).message);
+      }
+    }
+    return store.get();
+  };
   return {
     /** The token, only for the origin it was saved for. */
     jiraToken: (origin: string): string | undefined => {
-      const d = store.get();
+      const d = get();
       return d.jiraOrigin === origin ? d.jiraToken : undefined;
     },
     /** The origin of the saved token ("" = saved without URL); undefined without a token. */
     jiraTokenOrigin: (): string | undefined => {
-      const d = store.get();
+      const d = get();
       return d.jiraToken ? d.jiraOrigin : undefined;
     },
-    /** An old-format token was dropped and no new one was saved since. */
-    jiraTokenReset: (): boolean => !!store.get().jiraTokenReset,
+    /** An old-format token was removed and no token was saved since (Settings says why). */
+    jiraTokenReset: (): boolean => !!get().jiraTokenReset,
+    /** Binds a token saved without URL to `origin`, in one write; no-op for a token with an origin or none. */
+    bindJiraToken(origin: string) {
+      const d = get();
+      if (!d.jiraToken || d.jiraOrigin !== "") return;
+      store.change((x) => void (x.jiraOrigin = origin));
+    },
+    /** The Jira URL was emptied: the "cleared by an update" notice has done its job. */
+    endJiraTokenReset() {
+      if (get().jiraTokenReset) store.change((d) => void delete d.jiraTokenReset);
+    },
     /** null clears. `origin` = the origin of jira.url ("" without URL). Throws when the token is invalid or the save fails. */
     setJiraToken(token: string | null, origin = "") {
       if (token !== null) {

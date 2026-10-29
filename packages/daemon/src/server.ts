@@ -1869,10 +1869,12 @@ export function createDaemon(opts: {
           try {
             const settings = appSettings.set(msg.patch);
             const origin = jiraOrigin(settings.jira.url);
+            const urlPatched = msg.patch?.jira?.url !== undefined;
+            // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of another origin is dropped (cleanup, it is never sent anyway).
+            if (urlPatched && origin) secrets.bindJiraToken(origin);
             const bound = secrets.jiraTokenOrigin();
-            // GH-487: a token saved without URL takes the first URL set here (never a hand edit); a token of another origin is dropped (cleanup, it is never sent anyway).
-            if (bound === "" && origin && msg.patch?.jira?.url !== undefined) secrets.setJiraToken(secrets.jiraToken("")!, origin);
-            else if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
+            if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
+            if (urlPatched && !origin) secrets.endJiraTokenReset();
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });

@@ -291,6 +291,11 @@ describe("Jira over the wire", () => {
     expect(fake.requests).toEqual([]);
     // An unrelated settings change keeps the flag.
     expect(await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } })).toMatchObject({ result: { jiraTokenReset: true } });
+    // The old token is gone from the disk; emptying the URL ends the notice, a later URL does not bring it back.
+    expect(readFileSync(secretsFile, "utf8")).not.toContain(JIRA_TOKEN);
+    expect(await c.request({ type: "settings.set", patch: { jira: { url: "" } } })).toMatchObject({ result: { jiraToken: false } });
+    expect((await c.request({ type: "settings.get" })).result.jiraTokenReset).toBeUndefined();
+    await c.request({ type: "settings.set", patch: { jira: { url: fake.url } } });
     const saved = await c.request({ type: "jira.token", token: JIRA_TOKEN });
     expect(saved.result.jiraToken).toBe(true);
     expect(saved.result.jiraTokenReset).toBeUndefined();
