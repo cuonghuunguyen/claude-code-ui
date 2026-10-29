@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Settings } from "@claude-ui/protocol";
+import type { DockerState, Settings, SideInfo } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -65,6 +65,8 @@ async function render({ failGet = false, tokenReset = false, group, daemon = { h
       <SettingsDialog
         open={open}
         changed={changed}
+        sides={sides}
+        docker={docker}
         onShortcuts={onShortcuts}
         push={{ ...push, toggle }}
         request={request as never}
@@ -862,4 +864,42 @@ it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does
   expect(q("settings-theme-dracula-warning")).toBeNull();
   document.documentElement.classList.remove("dark");
   document.documentElement.removeAttribute("data-theme");
+});
+
+const LOCAL = { id: "local", label: "Windows", state: "ready" } as const;
+
+it("Sides group: shown only with a non-local side or docker", async () => {
+  expect((await render({ sides: [LOCAL] })).q("settings-group-sides")).toBeNull();
+  document.body.innerHTML = "";
+  expect((await render({})).q("settings-group-sides")).toBeNull();
+  document.body.innerHTML = "";
+  const a = await render({ sides: [LOCAL], docker: "empty" });
+  expect(a.q("settings-group-sides")).not.toBeNull();
+  await a.pick("sides");
+  expect(a.q("settings-sides")?.textContent).toContain("No WSL distro or container");
+});
+
+it("Sides group: a row per side with state; the switches send side.prefs; Update automatically is held while start is off", async () => {
+  const { q, pick, calls } = await render({
+    sides: [LOCAL, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready", autoStart: true }, { id: "docker:dev", label: "Docker: dev", state: "off", missing: true }, { id: "wsl:Old", label: "WSL: Old", state: "starting", autoStart: true, autoUpdate: false }],
+  });
+  await pick("sides");
+  expect(q("settings-side-wsl:Ubuntu")?.textContent).toContain("WSL: Ubuntu");
+  expect(q("settings-side-wsl:Ubuntu")?.textContent).toContain("Running");
+  expect(q("settings-side-docker:dev")?.textContent).toContain("Not running");
+  expect(q("settings-side-wsl:Old")?.textContent).toContain("Starting…");
+  expect(q("settings-side-start-wsl:Ubuntu")?.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-side-start-docker:dev")?.getAttribute("aria-checked")).toBe("false");
+  expect(q("settings-side-update-wsl:Ubuntu")?.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-side-update-wsl:Old")?.getAttribute("aria-checked")).toBe("false");
+  expect(q("settings-side-update-docker:dev")?.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => q("settings-side-start-wsl:Ubuntu")!.click());
+  expect(calls.at(-1)).toEqual({ type: "side.prefs", side: "wsl:Ubuntu", start: false });
+  await act(async () => q("settings-side-start-docker:dev")!.click());
+  expect(calls.at(-1)).toEqual({ type: "side.prefs", side: "docker:dev", start: true });
+  await act(async () => q("settings-side-update-wsl:Old")!.click());
+  expect(calls.at(-1)).toEqual({ type: "side.prefs", side: "wsl:Old", update: true });
+  const n = calls.length;
+  await act(async () => q("settings-side-update-docker:dev")!.click());
+  expect(calls).toHaveLength(n);
 });

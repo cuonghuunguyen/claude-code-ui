@@ -38,6 +38,10 @@ In Open project, **What this container needs** lists these items for the contain
 
 The bundle needs your computer to reach nodejs.org and the npm registry once per claude-code-ui version (`CLAUDE_UI_UPDATE_REGISTRY` sets a registry mirror). Without them and without a cached copy, the container installs with npm instead.
 
+## Coming back after a restart
+
+A side that has run once starts again with Claude UI, and again by itself if it stops (after 2 s, 10 s and 60 s; the fourth stop within ten minutes shows an error with **Retry**). A container that runs again starts within about 30 seconds. After a new Claude UI build, the side updates from the downloaded bundle; if its distro or container needs npm, it stays off and the sidebar shows **Needs an update** with **Update**. While a side starts, its projects stay in the sidebar. In **Settings › Sides**, **Start with Claude UI** turns this off for a side (its projects leave the sidebar) and **Update automatically** stops the automatic update.
+
 ## Good to know
 
 - Projects and sessions of all sides share one sidebar. A badge shows the side (for example `WSL` or `Docker`).

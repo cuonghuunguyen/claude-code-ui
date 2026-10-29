@@ -39,6 +39,21 @@ export function parseDistros(out: Buffer) {
 /** Appended to a failed Docker start that installed with npm: why the bundle was not used. */
 const fallbackNote = (s: { id: string; fallback?: string }) => (s.fallback ? `\nclaude-ui used npm in the ${isDocker(s.id) ? "container" : "distro"} because ${s.fallback}.` : "");
 
+/** A side started with the hub ("Start with Claude UI"): `key`: the claude-ui build it last ran; `update: false`: no automatic update. */
+export type SavedSide = { id: string; key?: string; update?: false };
+/** sides.json: `{sides: [...]}`, or a legacy array of IDs (entries without a key). Anything else reads as none. */
+export function parseSaved(raw: unknown): SavedSide[] {
+  const rows = Array.isArray(raw) ? raw : raw && typeof raw === "object" && Array.isArray((raw as { sides?: unknown }).sides) ? (raw as { sides: unknown[] }).sides : [];
+  return rows.flatMap((r): SavedSide[] => {
+    const o = typeof r === "string" ? { id: r } : (r as { id?: unknown; key?: unknown; update?: unknown } | null);
+    if (typeof o?.id !== "string") return [];
+    return [{ id: o.id, key: typeof (o as { key?: unknown }).key === "string" ? ((o as { key: string }).key) : undefined, ...((o as { update?: unknown }).update === false && { update: false as const }) }];
+  });
+}
+
+/** The setup mode a start runs with: an automatic update (`bundleOnly`) without a usable bundle runs what is installed only (no npm). */
+export const effectiveSetup = (setup: SideSetup, bundleOnly: boolean | undefined, hasBundle: boolean): SideSetup => (bundleOnly && !hasBundle ? "never" : setup);
+
 /** A side the hub can start. */
 export type SideTarget = { id: string; label: string };
 export const wslSide = (distro: string): SideTarget => ({ id: `wsl:${distro}`, label: `WSL: ${distro}` });
@@ -529,7 +544,7 @@ export function createSides(opts: {
   /** Static sides (WSL distros). */
   targets: SideTarget[];
   /** `install`: a Docker start says how it installs: the bundle, or npm in the container and why (`fallback`). */
-  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; /** The Node.js found there did not start claude-ui: use the pinned one. */ pinned?: boolean; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
+  spawn: (id: string, o: { setup: SideSetup; phase: (p: SidePhase) => void; /** The Node.js found there did not start claude-ui: use the pinned one. */ pinned?: boolean; /** Install from the bundle only: when it is not usable the side runs what is installed (setup never), no npm. */ bundleOnly?: boolean; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
   /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
   check?: (id: string) => Promise<SideCheck>;
   key?: () => string;
@@ -544,8 +559,16 @@ export function createSides(opts: {
   /** Minimum ms between two discover() runs (default 5000; tests 0). */
   discoverMs?: number;
   onPush?: (p: PushPayload) => void;
-  saved?: string[];
-  save?: (ids: string[]) => void;
+  saved?: SavedSide[];
+  save?: (sides: SavedSide[]) => void;
+  /** The last list of each saved side, kept across hub runs (`side-lists.json`), so its projects stay in the sidebar while it starts. */
+  cache?: { read(): Record<string, unknown>; write(c: Record<string, unknown>): void };
+  /** Wait before restart 1, 2, 3 after an exit of a ready side (default 2 s, 10 s, 60 s; a 4th exit within 10 min is an error). */
+  restartMs?: number[];
+  /** Wait before the one retry of a failed auto start (default 30 s). */
+  retryMs?: number;
+  /** Period of the discover while a saved Docker side is not running (default 30 s). */
+  pollMs?: number;
   /** Local paths can be POSIX too (Linux, macOS): an unknown POSIX path then stays local. */
   posixLocal?: boolean;
   /** Folders that are this computer's whatever a side says (hub home and roots, POSIX hub); default: the home folder when posixLocal. */
@@ -561,16 +584,66 @@ export function createSides(opts: {
   const changeListeners = new Set<() => void>();
   const changed = () => changeListeners.forEach((l) => l());
   let nextConn = 1;
-  /** Sides started once: they start again with the next daemon start (a saved ID not seen yet stays saved). */
-  const started = new Set(opts.saved ?? []);
+  /** Sides with "Start with Claude UI" on: they start again with the next daemon start (a saved ID not seen yet stays saved). */
+  const saved = new Map((opts.saved ?? []).map((e) => [e.id, e]));
+  const persist = () => opts.save?.([...saved.values()]);
   /** Started again once per daemon run. */
   const autoTried = new Set<string>();
-  const autoStart = (id: string) => {
-    if (!started.has(id) || autoTried.has(id)) return;
-    autoTried.add(id);
-    // Runs what is installed only: a claude-ui update is not installed silently (the side then offers Update).
-    start(id, "never").catch((e) => console.error(`starting ${id} failed:`, (e as Error).message));
+  let closing = false;
+  /** One pending timer per side: a restart after an exit, or the retry of a failed auto start. */
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const later = (id: string, ms: number, f: () => void) => {
+    clearTimeout(timers.get(id));
+    if (closing) return;
+    const t = setTimeout(() => (timers.delete(id), f()), ms);
+    t.unref();
+    timers.set(id, t);
   };
+  const restartMs = opts.restartMs ?? [2_000, 10_000, 60_000];
+  /** Times of each side's exits within the last 10 minutes. */
+  const exits = new Map<string, number[]>();
+  /**
+   * Starts a saved side the way the hub run left it: the build it last ran (or no automatic update): only what is installed;
+   * another build: installed from the bundle only (no npm: the side then stays off and offers Update). A failure is retried once after `retryMs`.
+   */
+  const startSaved = (id: string, retried = false) => {
+    const e = saved.get(id);
+    if (!e || closing) return;
+    const same = (e.key !== undefined && e.key === opts.key?.()) || e.update === false;
+    start(id, same ? "never" : "needed", undefined, !same).catch((err) => {
+      console.error(`starting ${id} failed:`, (err as Error).message);
+      if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
+    });
+  };
+  const autoStart = (id: string) => {
+    if (!saved.has(id) || autoTried.has(id)) return;
+    autoTried.add(id);
+    startSaved(id);
+  };
+  /** Last list of each saved side (projects, recent projects, sessions, worktrees). */
+  const lists = new Map<string, string>();
+  /** A list without its `lastActivity` times: only a change of this is written to the cache file. */
+  const sig = (j: string) => j.replace(/"lastActivity":\d+,?/g, "");
+  const sigs = new Map<string, string>();
+  for (const [id, l] of Object.entries(opts.cache?.read() ?? {})) if (saved.has(id)) (lists.set(id, JSON.stringify(l)), sigs.set(id, sig(JSON.stringify(l))));
+  const writeCache = () => opts.cache?.write(Object.fromEntries([...lists].map(([id, j]) => [id, JSON.parse(j)])));
+  /** After an exit of a ready side: restart (`starting`) after the next wait, or false when it exited too often. */
+  function scheduleRestart(s: Side) {
+    const now = Date.now();
+    const n = [...(exits.get(s.id) ?? []).filter((t) => now - t < 600_000), now];
+    exits.set(s.id, n);
+    if (closing || !saved.has(s.id) || n.length > restartMs.length) return false;
+    Object.assign(s, { state: "starting", message: undefined });
+    later(s.id, restartMs[n.length - 1]!, async () => {
+      // A container that is gone is not restarted: it starts when it is listed again.
+      if (isDocker(s.id) && opts.discover) {
+        await refresh(true);
+        if (!listed.has(s.id)) return (Object.assign(s, { state: "off", message: undefined }), autoTried.delete(s.id), exits.delete(s.id), changed());
+      }
+      startSaved(s.id);
+    });
+    return true;
+  }
   /** Session ID -> side, terminal ID -> side, project/session cwd -> side (not local ones). */
   const sessionSide = new Map<string, string>();
   const terminalSide = new Map<string, string>();
@@ -655,11 +728,14 @@ export function createSides(opts: {
     changed();
   };
 
-  function start(id: string, setup: SideSetup = "needed", nodeNote?: string): Promise<void> {
+  function start(id: string, setup: SideSetup = "needed", nodeNote?: string, bundleOnly?: boolean): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
     if (s.state === "ready") return Promise.resolve();
     if (s.starting) return s.starting;
+    clearTimeout(timers.get(id));
+    timers.delete(id);
+    delete s.update;
     delete s.phase;
     delete s.bundle;
     delete s.fallback;
@@ -675,6 +751,7 @@ export function createSides(opts: {
         proc = await opts.spawn(s.id, {
           setup,
           ...(nodeNote && { pinned: true }),
+          ...(bundleOnly && { bundleOnly: true }),
           phase: (p) => setPhase(s, p),
           install: (i) => {
             if (s.state !== "starting") return;
@@ -743,8 +820,8 @@ export function createSides(opts: {
           delete s.fallback;
           clashed.delete(s.id);
           Object.assign(s, { state: "ready", message: undefined });
-          started.add(s.id);
-          opts.save?.([...started]);
+          saved.set(s.id, { ...saved.get(s.id), id: s.id, key: opts.key?.() });
+          persist();
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
@@ -777,6 +854,7 @@ export function createSides(opts: {
             : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`)) + (wasReady ? "" : fallbackNote(s));
         // Nothing installed and none asked for (setup `never`): the side is as it was before, not failed.
         const notInstalled = !wasReady && setupCode === "not_installed";
+        if (notInstalled) s.update = true;
         delete s.phase;
         // The Node.js found there did not start claude-ui: once, start again with the pinned one (never a dead end).
         if (!wasReady && setupCode === "node_unusable" && !nodeNote) {
@@ -784,10 +862,12 @@ export function createSides(opts: {
           console.error(`side ${s.id}: the Node.js found there ${why}; starting again with claude-ui's own Node.js`);
           Object.assign(s, { state: "off", message: undefined, proc: undefined, starting: undefined });
           s.conns.clear();
-          start(id, setup, why).then(resolve, reject);
+          start(id, setup, why, bundleOnly).then(resolve, reject);
           return;
         }
-        Object.assign(s, notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
+        // An exit of a ready side: it comes back by itself (Starting…) unless it exits again and again.
+        const restarting = wasReady && scheduleRestart(s);
+        Object.assign(s, restarting ? {} : notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         for (const [gid, c] of s.gits) {
           clearTimeout(c.timer);
@@ -890,17 +970,19 @@ export function createSides(opts: {
     return p;
   }
 
-  for (const id of started) if (sides.has(id)) autoStart(id);
+  for (const id of saved.keys()) if (sides.has(id)) autoStart(id);
 
   let lastDiscover = 0;
+  /** IDs the last discover() listed. */
+  let listed = new Set<string>();
   let discovering: Promise<void> | undefined;
   /** Discovered sides (Docker containers): they come and go with their containers. */
   const dynamic = new Set<string>();
   /** Lists the dynamic sides again (throttled, one at a time): new ones join as off, vanished ones leave unless started or failed. */
-  function refresh(): Promise<void> {
+  function refresh(force = false): Promise<void> {
     if (!opts.discover) return Promise.resolve();
     if (discovering) return discovering;
-    if (Date.now() - lastDiscover < (opts.discoverMs ?? 5000)) return Promise.resolve();
+    if (!force && Date.now() - lastDiscover < (opts.discoverMs ?? 5000)) return Promise.resolve();
     lastDiscover = Date.now();
     const before = opts.dockerState?.();
     return (discovering = opts
@@ -910,6 +992,7 @@ export function createSides(opts: {
           // The Docker engine state (down, empty, ok) is part of the list: a change alone sends sessions.changed, so an open dialog updates its hint.
           let diff = opts.dockerState?.() !== before;
           const ids = new Set(found.map((t) => t.id));
+          listed = ids;
           for (const t of found)
             if (!sides.has(t.id)) {
               sides.set(t.id, { ...t, state: "off", conns: new Map(), gits: new Map() });
@@ -920,6 +1003,7 @@ export function createSides(opts: {
             if (!ids.has(id) && sides.get(id)?.state === "off") {
               sides.delete(id);
               dynamic.delete(id);
+              autoTried.delete(id);
               diff = true;
             }
           if (diff) changed();
@@ -930,9 +1014,56 @@ export function createSides(opts: {
       .finally(() => (discovering = undefined)));
   }
 
+  // A saved Docker side that is not running starts when its container runs again, without a browser asking for a list.
+  const poll = opts.discover
+    ? setInterval(() => {
+        if ([...saved.keys()].some((id) => isDocker(id) && !["ready", "starting"].includes(sides.get(id)?.state ?? ""))) void refresh(true);
+      }, opts.pollMs ?? 30_000)
+    : undefined;
+  poll?.unref();
+
+  /** The side row of a saved ID the hub does not list. */
+  const missingRow = (id: string): SideInfo => ({ id, label: (isDocker(id) ? dockerSide(id.slice(7)) : wslSide(id.slice(4))).label, state: "off", missing: true, autoStart: true });
+
   return {
     /** Every side, local first. */
-    list: (): SideInfo[] => [{ id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" }, ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error") && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }) }))],
+    list: (): SideInfo[] => [
+      { id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" },
+      ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote, update }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error" || (state === "off" && update)) && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }), ...(saved.has(id) && { autoStart: true as const }), ...(saved.get(id)?.update === false && { autoUpdate: false as const }), ...(update && state === "off" && { update: true as const }) })),
+      ...[...saved.keys()].filter((id) => !sides.has(id)).map(missingRow),
+    ],
+    /** "Start with Claude UI" / "Update automatically" (side.prefs). False: no such side. Turning start on starts nothing now. */
+    prefs(id: string, p: { start?: boolean; update?: boolean }): boolean {
+      if (!sides.has(id) && !saved.has(id)) return false;
+      if (p.start === false) {
+        saved.delete(id);
+        // A restart waiting for its timer shows `starting`: with the timer gone the side is off.
+        const s = sides.get(id);
+        clearTimeout(timers.get(id));
+        if (timers.delete(id) && s && s.state === "starting" && !s.starting) Object.assign(s, { state: "off", message: undefined });
+        if (lists.delete(id)) (sigs.delete(id), writeCache());
+      } else if (p.start === true && !saved.has(id)) {
+        saved.set(id, { id });
+        // Next hub start, not now (a listed container would start at once).
+        autoTried.add(id);
+      }
+      const e = saved.get(id);
+      if (e && p.update !== undefined) p.update ? delete e.update : (e.update = false);
+      persist();
+      changed();
+      return true;
+    },
+    /** Remembers a saved side's list when it changed. */
+    remember(id: string, list: unknown) {
+      const j = JSON.stringify(list);
+      if (!saved.has(id)) return;
+      lists.set(id, j);
+      if (sigs.get(id) === sig(j)) return;
+      sigs.set(id, sig(j));
+      writeCache();
+    },
+    /** Last lists of the saved sides that are not ready. */
+    cached: (): [string, unknown][] => [...lists].filter(([id]) => saved.has(id) && sides.get(id)?.state !== "ready").map(([id, j]) => [id, JSON.parse(j)]),
     docker: () => opts.dockerState?.(),
     has: (id: string) => sides.has(id),
     check,
@@ -954,7 +1085,8 @@ export function createSides(opts: {
         write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer } });
       });
     },
-    start,
+    /** A manual start (Retry, Update, Open project): the exit count starts again. */
+    start: (id: string, setup?: SideSetup) => (exits.delete(id), start(id, setup)),
     refresh,
     posixLocal: !!opts.posixLocal,
     open,
@@ -977,7 +1109,13 @@ export function createSides(opts: {
     },
     addRouter: (r: Router) => void routers.add(r),
     removeRouter: (r: Router) => void routers.delete(r),
-    close: () => sides.forEach((s) => s.proc?.kill()),
+    close: () => {
+      closing = true;
+      clearInterval(poll);
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+      sides.forEach((s) => s.proc?.kill());
+    },
   };
 }
 
@@ -1219,7 +1357,12 @@ export function createRouter(opts: {
       const l = local.result as ListLike;
       for (const p of [...l.sessions.map((s) => s.cwd), ...l.projects, ...l.recentProjects.map((x) => x.cwd), ...Object.values(l.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) sides.markLocal(p);
     }
-    const lists = await claimListed(answers.slice(1), new Set((local.result as ListLike).sessions.map((s) => s.id)));
+    // A saved side that is not ready keeps its last projects and sessions (not live) in the list, owned by that side.
+    const cached = sides.cached().filter(([id]) => !conns.has(id)) as [string, ListLike][];
+    const cachedIds = new Set(cached.map(([id]) => id));
+    const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
+    const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
+    for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);
     for (const [id, r] of lists) {
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
@@ -1251,6 +1394,13 @@ export function createRouter(opts: {
         } catch (e) {
           return send({ type: "error", reqId: msg.reqId, code: "side_failed", message: (e as Error).message });
         }
+      }
+      case "side.prefs": {
+        if (typeof msg.side !== "string" || msg.side === LOCAL_SIDE || !sides.list().some((s) => s.id === msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+        const ok = (v: unknown) => v === undefined || typeof v === "boolean";
+        if (!ok(msg.start) || !ok(msg.update) || (msg.start === undefined && msg.update === undefined)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "start and update must be booleans, at least one" });
+        sides.prefs(msg.side, { start: msg.start as boolean | undefined, update: msg.update as boolean | undefined });
+        return send({ type: "reply", reqId: msg.reqId, result: {} });
       }
       case "side.check": {
         // Read-only and the hub's own: never forwarded to a side.

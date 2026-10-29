@@ -1,5 +1,5 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
-import { SideBadge, SideLabel } from "./sides.tsx";
+import { SideBadge, SideLabel, SideStatusLine } from "./sides.tsx";
 import { Fragment, memo, use, useEffect, useRef, useState } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
@@ -601,6 +601,7 @@ export function SessionList({
                 </span>
               </h3>
               </RowContextMenu>
+              <SideStatusLine cwd={g.cwd} />
               {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&

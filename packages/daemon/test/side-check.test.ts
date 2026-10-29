@@ -385,7 +385,7 @@ describe("side.check in the hub", () => {
     expect(bad.sent[0]).toMatchObject({ result: { verdict: "blocked", reason: "check_failed", message: expect.stringContaining("boom") } });
   });
 
-  it("side.start passes the setup mode; a bad one is bad_request; autostart runs with never", async () => {
+  it("side.start passes the setup mode; a bad one is bad_request; a saved side without a key auto starts with needed (bundle only)", async () => {
     const modes: string[] = [];
     const h = hub({ spawn: async (_id, o) => (modes.push(o.setup), fakeReady()) });
     await ask(h, { type: "side.start", side: "wsl:Ubuntu", setup: "force" });
@@ -394,9 +394,10 @@ describe("side.check in the hub", () => {
     expect(modes).toEqual(["force", "needed"]);
     expect(h.sent.at(-1)).toMatchObject({ type: "error", code: "bad_request" });
     const auto: string[] = [];
-    createSides({ targets: [wslSide("A")], saved: ["wsl:A"], spawn: async (_id, o) => (auto.push(o.setup), fakeReady()) });
+    createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A" }], spawn: async (_id, o) => (auto.push(o.setup), fakeReady()) });
     await Promise.resolve();
-    expect(auto).toEqual(["never"]);
+    // A legacy entry has no key: the build may be another one, so it installs from the bundle only.
+    expect(auto).toEqual(["needed"]);
   });
 
   it("a Docker start shows the bundle or the npm fallback and its reason; a failed npm install says why npm was used", async () => {
@@ -441,7 +442,7 @@ describe("side.check in the hub", () => {
     await new Promise((r) => setTimeout(r, 5));
     exit.emit("exit", 3);
     expect(await started).toContain("not installed");
-    expect(sides.list()[1]).toEqual({ id: "docker:dev", label: "Docker: dev", state: "off" });
+    expect(sides.list()[1]).toEqual({ id: "docker:dev", label: "Docker: dev", state: "off", update: true });
   });
 });
 

@@ -12,6 +12,10 @@ export type FakeDockerConfig = {
   check: { stdout: string };
   /** Answer of the setup script (prints `CLAUDE_UI_SETUP <code>`); the install ends here. */
   setup: { code: number; stdout: string };
+  /** GH-458: one line per `docker` call (its first argument; `setup` for a setup exec) is appended here: the steps count them. */
+  log?: string;
+  /** GH-458: the setup exec runs a real side (`main.ts --side`) as the container's claude-ui; its PID is written to `<home>/side.pid`. `projects`: its roots. */
+  side?: { home: string; repo: string; projects: string };
 };
 
 const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
@@ -22,7 +26,10 @@ const answer = (a: { code?: number; stdout?: string; stderr?: string }) => `prin
  * `installed`, the target probe only `uname -m` (checked in this order; the check script contains the probe's lines too).
  */
 export function fakeDockerScript(c: FakeDockerConfig): string {
-  return `case "$1" in
+  const log = (what: string) => (c.log ? `echo ${what} >> ${q(c.log)}; ` : "");
+  // exec keeps the PID: kill of side.pid ends the side, like a container's process ending. cwd = the repo, so `--import tsx` resolves.
+  const side = c.side && `mkdir -p ${q(c.side.home)}; echo $$ > ${q(join(c.side.home, "side.pid"))}; cd ${q(c.side.repo)} && exec env HOME=${q(c.side.home)} XDG_CONFIG_HOME=${q(join(c.side.home, ".config"))} ${q(process.execPath)} --import tsx packages/daemon/src/main.ts --side --roots ${q(c.side.projects)}`;
+  return `${c.log ? `echo "$1" >> ${q(c.log)}\n` : ""}case "$1" in
   version) echo linux;;
   ps) printf '%s\\n' ${c.containers.map(q).join(" ")};;
   inspect)
@@ -35,7 +42,7 @@ export function fakeDockerScript(c: FakeDockerConfig): string {
   exec)
     for a in "$@"; do s=$a; done
     case "$s" in
-      *CLAUDE_UI_SETUP*) ${answer(c.setup)};;
+      *CLAUDE_UI_SETUP*) ${log("setup")}${side ?? answer(c.setup)};;
       *installed*) ${answer({ stdout: c.check.stdout })};;
       *"uname -m"*) ${answer(c.probe)};;
     esac

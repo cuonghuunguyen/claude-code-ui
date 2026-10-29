@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, release } from "node:os";
 import { delimiter, join } from "node:path";
@@ -17,7 +17,7 @@ import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide }
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
 import { prepareWslSide } from "./wsl-side.ts";
-import { checkWslSide, createSides, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import { checkWslSide, createSides, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
@@ -94,6 +94,7 @@ if (side) {
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
+  const listsFile = join(configDir(), "side-lists.json");
   const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
@@ -102,15 +103,15 @@ if (side) {
   // A hub that never starts a side keeps its parts from another hub's prune (7 days unused).
   if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(), safeKey(version));
   /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
-  const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean): Promise<SideProcess> => {
+  const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
     const key = sideKey();
-    const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
-    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", setup, sent.bundle)), { stdio: "pipe", windowsHide: true }));
+    const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle)), { stdio: "pipe", windowsHide: true }));
   };
   /** WSL side: a covered distro installs from the host's verified cached parts read through /mnt (no npm, network or compile in the distro), else from npm. */
-  const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean): Promise<SideProcess> => {
+  const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
     const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
-    return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", setup, bundle)), { stdio: "pipe", windowsHide: true }));
+    return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle)), { stdio: "pipe", windowsHide: true }));
   };
   let dockerState: DockerState | undefined;
   const sides =
@@ -128,13 +129,14 @@ if (side) {
             dockerState: () => dockerState,
           }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id, { setup, phase, install, pinned }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install, pinned) : spawnWsl(id.slice("wsl:".length), setup, phase, install, pinned)),
+          spawn: (id, { setup, phase, install, pinned, bundleOnly }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install, pinned, bundleOnly) : spawnWsl(id.slice("wsl:".length), setup, phase, install, pinned, bundleOnly)),
           // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
           key: sideKey,
           check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey(), bundle: { cacheRoot: sideCacheDir(), version, registry } }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: { cacheRoot: sideCacheDir(), version, registry } })),
           onPush: forwardSidePush(push),
-          saved: readSaved(sidesFile),
-          save: (ids) => writeFileSync(sidesFile, JSON.stringify(ids)),
+          saved: parseSaved(readJson(sidesFile)),
+          save: (list: SavedSide[]) => writeFileSync(sidesFile, JSON.stringify({ sides: list })),
+          cache: { read: () => ((c) => (c && typeof c === "object" && !Array.isArray(c) ? (c as Record<string, unknown>) : {}))(readJson(listsFile)), write: (c) => (writeFileSync(listsFile, JSON.stringify(c), { mode: 0o600 }), chmodSync(listsFile, 0o600)) },
         })
       : undefined;
   void sides?.refresh();
@@ -233,11 +235,10 @@ function wslDistros() {
   }
 }
 
-function readSaved(file: string): string[] {
+function readJson(file: string): unknown {
   try {
-    const ids = JSON.parse(readFileSync(file, "utf8"));
-    return Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
+    return JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    return [];
+    return undefined;
   }
 }

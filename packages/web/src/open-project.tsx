@@ -30,7 +30,7 @@ export function OpenProjectDialog({
   onPick,
   recent,
   finalFocus,
-  sides,
+  sides: listed,
   docker,
   onStartSide,
   onCheckSide,
@@ -52,6 +52,8 @@ export function OpenProjectDialog({
   /** Gets the focus when the dialog closes after a pick, when it exists; a cancel gives it back to the opener. */
   finalFocus?: React.RefObject<HTMLElement | null>;
 }) {
+  // A saved side the hub does not list now (a container that is not running) has a row in Settings, not here.
+  const sides = listed?.filter((x) => !x.missing);
   const input = useRef<HTMLInputElement>(null);
   // Set when a pick starts: the parent closes the dialog before onPick resolves.
   const picked = useRef(false);

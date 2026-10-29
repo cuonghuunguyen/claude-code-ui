@@ -246,6 +246,13 @@ describe("side chooser", () => {
     return { input, kinds, checked, status, target, containers, rowEls, filter, type, typeIn, press, click, kind, items, show, onPick, onStartSide, onCheckSide, byId };
   }
 
+  it("a saved container that is not running (missing) is not offered as a target", async () => {
+    const { containers, kind, click, byId } = await renderSides([S("local", "Windows"), { ...S("docker:dev", "Docker: dev", "off"), missing: true }], undefined, false, undefined, "empty");
+    await click(kind("Docker"));
+    expect(containers()).toEqual([]);
+    expect(byId("docker-hint")).not.toBeNull();
+  });
+
   it("shows one chip per kind: Windows and WSL; choosing WSL only checks the distro, Install sets it up, then it browses its home folder and picks on that side", async () => {
     let done!: () => void;
     const { input, checked, kind, click, byId, target, onPick, onStartSide, onCheckSide, kinds } = await renderSides(sides(), vi.fn(() => new Promise<void>((r) => (done = r))));
