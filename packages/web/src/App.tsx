@@ -1518,6 +1518,8 @@ export function App() {
   const listState = (s: SessionListItem) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state));
   /** The last status of each worktree (warming, remove dialog), and the warm in flight: one at a time, once per 10 s per path. */
   const wtStatus = useRef(new Map<string, WorktreeStatusResult>());
+  /** Stable identity: Clean up re-runs its scan (and the fetch) when `request` changes. */
+  const cleanupRequest = useCallback(<T,>(m: Request) => client.current!.request<T>(m), []);
   const warmed = useRef({ path: "", at: 0, scan: "" });
   function warmWorktree(project: string, path: string) {
     const w = warmed.current;
@@ -2842,7 +2844,7 @@ export function App() {
         list={list}
         worktrees={worktrees}
         state={listState}
-        request={(m) => client.current!.request(m)}
+        request={cleanupRequest}
         onClose={() => setCleanup(undefined)}
         onRemoving={markRemoving}
         onDone={(r) => {
