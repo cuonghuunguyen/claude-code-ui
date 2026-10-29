@@ -168,3 +168,34 @@ describe("pullRequestBranches: a pasted pull request link", () => {
     expect(await code(pullRequestBranches(main, "https://github.com/acme/app/issues/5", o))).toBe("bad_request");
   });
 });
+
+describe("createWorktree: branch name edge cases", () => {
+  it("createWorktree refuses a branch with @{", async () => {
+    const { main, opts } = origin();
+    expect(await code(createWorktree(main, { ...opts, branch: "a@{1}" }))).toBe("bad_name");
+    expect(out(main, "branch", "--list", "a*")).toBe("");
+  });
+
+  it("createWorktree returns exists for a D/F conflict both ways", async () => {
+    const { main, opts } = origin();
+    run(main, "branch", "feat");
+    const e = await createWorktree(main, { ...opts, branch: "feat/x" }).catch((x) => x as { code: string; message: string });
+    expect(e).toMatchObject({ code: "exists" });
+    expect((e as { message: string }).message).toContain("feat");
+    run(main, "branch", "a/b");
+    expect(await code(createWorktree(main, { ...opts, branch: "a" }))).toBe("exists");
+    run(main, "branch", "feat2/y");
+    expect(await code(createWorktree(main, { ...opts, branch: "feat2" }))).toBe("exists");
+    run(main, "branch", "feat3-y");
+    expect(await code(createWorktree(main, { ...opts, branch: "feat3" }))).toBe("ok");
+  });
+
+  it("listBranches does not mark a branch named like a detached worktree's short sha as in worktree", async () => {
+    const { main, opts } = origin();
+    const sha = out(main, "rev-parse", "HEAD");
+    run(main, "worktree", "add", "-q", "--detach", join(main, ".claude", "worktrees", "d"), sha);
+    run(main, "branch", sha.slice(0, 7));
+    const rows = (await listBranches(main, { allowed: () => true, claudeDir: opts.claudeDir })).branches;
+    expect(rows.find((r) => r.name === sha.slice(0, 7))?.worktree).toBeUndefined();
+  });
+});

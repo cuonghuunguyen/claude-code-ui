@@ -21,7 +21,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, listRepos, listWorktrees, removeWorktree, WorktreeError, worktreeStatus, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -570,9 +570,12 @@ export function createDaemon(opts: {
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
     const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
+    markRepoStale(cwd);
     broadcast({ type: "sessions.changed" });
     return r;
   };
+  /** Network git calls (fetch) of Clean up: at most 2 at a time, apart from the local git slot (a fetch may run for minutes). */
+  const netSlot = limiter(2);
   /** Worktrees being removed: no session or terminal may start in them meanwhile (`worktree_removing`). */
   const removing = new Set<string>();
   const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(p.endsWith(sep) ? p : p + sep);
@@ -581,11 +584,12 @@ export function createDaemon(opts: {
   const projectWorktrees = async (cwd: string): Promise<Worktree[] | undefined> => {
     const found = (await worktreesOf(cwd))?.map((w) => ({ ...w, path: real(w.path) ?? w.path }));
     if (!found?.some((w) => w.path === (real(cwd) ?? cwd))) return undefined;
-    return found.map((w) => (inRoots(w.path) ? w : { ...w, outsideRoots: true }));
+    return found.map((w) => ({ ...(inRoots(w.path) ? w : { ...w, outsideRoots: true }), ...(isRemoving(w.path) && { removing: true as const }) }));
   };
   /** Refused while a session in it runs or needs input; idle live sessions and its terminals close first (transcripts stay). */
-  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored: number }; deleteBranch?: boolean }) => {
+  const removeIn = async (cwd: string, path: string, o: { expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }) => {
     const marked: string[] = [];
+    let announced = false;
     // Early block for a worktree this app made, so no session slips in during git's own checks; the lock's mark below covers any other path.
     if (path.includes(`${sep}.claude${sep}worktrees${sep}`)) {
       marked.push(path);
@@ -599,6 +603,8 @@ export function createDaemon(opts: {
           if (!marked.includes(m)) marked.push(m);
           removing.add(m);
         }
+        // Clients show the row as Removing… from the first validated mark on.
+        if (!announced) (announced = true), broadcast({ type: "sessions.changed" });
       }, beforeRemove: async () => {
         const live = [...sessions.values()].filter((s) => isRemoving(s.cwd));
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
@@ -611,10 +617,12 @@ export function createDaemon(opts: {
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       } });
-      broadcast({ type: "sessions.changed" });
       return result;
     } finally {
+      markRepoStale(cwd);
       for (const m of marked) removing.delete(m);
+      // Success and failure alike: every client drops the Removing… flag.
+      broadcast({ type: "sessions.changed" });
     }
   };
 
@@ -781,6 +789,8 @@ export function createDaemon(opts: {
       else if (t === "session_state" || t === "external_turn" || t === "bash") {
         if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
         queue.kick(s.id);
+        // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
+        if (t === "session_state" && (e.part as { state?: string }).state === "idle") markWorktreeStale(s.cwd);
       }
     });
     s.subscribe(Infinity, notifier.observe);
@@ -1437,6 +1447,8 @@ export function createDaemon(opts: {
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
+    /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
+    const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
       watched.forEach((w) => unwatchFile(w.real, w.listener));
       watched.clear();
@@ -1452,6 +1464,8 @@ export function createDaemon(opts: {
       unwatchAll();
       attached.forEach((d) => d());
       searching?.abort();
+      scans.forEach((a) => a.abort());
+      scans.clear();
       focused.delete(ws);
       covered.delete(ws);
     });
@@ -2120,10 +2134,13 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          if (msg.defaultRemote !== undefined && typeof msg.defaultRemote !== "boolean") return fail("bad_request", "defaultRemote must be a boolean");
           const inside = (p: string) => inRoots(real(p) ?? p);
           // Output and URLs are never logged.
           try {
-            return reply({ remote: await gitFetch(cwd, { allowed: inside }) });
+            const remote = await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside }));
+            markRepoStale(cwd);
+            return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
@@ -2140,6 +2157,7 @@ export function createDaemon(opts: {
             if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
             // Output and URLs are never logged.
             const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, allowed: inside });
+            markRepoStale(cwd);
             return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
@@ -2165,6 +2183,24 @@ export function createDaemon(opts: {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
+        case "worktree.cancel": {
+          if (typeof msg.scan !== "string" || !msg.scan || msg.scan.length > 64) return fail("bad_request", "scan must be a string of at most 64 characters");
+          scans.get(msg.scan)?.abort();
+          scans.delete(msg.scan);
+          return reply({});
+        }
+        case "worktree.cached": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (!Array.isArray(msg.paths) || msg.paths.length > 500) return fail("bad_request", "paths must be an array of at most 500 paths");
+          const paths = msg.paths.filter((p): p is string => typeof p === "string" && !!allowed(p));
+          const statuses = await cachedStatuses(paths);
+          for (const [p, st] of Object.entries(statuses)) {
+            const running = [...sessions.values()].filter((s) => inDir(s.cwd, p) && ["running", "needs_input"].includes(s.info().state)).length;
+            statuses[p] = classify({ ...st, running, blocked: st.blocked ?? (isRemoving(p) ? "removing" : running ? "sessions_running" : undefined) });
+          }
+          return reply({ statuses });
+        }
         case "worktree.create":
         case "worktree.status":
         case "worktree.remove": {
@@ -2178,15 +2214,26 @@ export function createDaemon(opts: {
           if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && !refused(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
           const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
           if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+          if (msg.type === "worktree.status" && msg.scan !== undefined && !(typeof msg.scan === "string" && msg.scan && msg.scan.length <= 64)) return fail("bad_request", "scan must be a string of at most 64 characters");
           if (msg.type === "worktree.remove") {
             for (const k of ["expectSafe", "deleteBranch"] as const) if (msg[k] !== undefined && typeof msg[k] !== "boolean") return fail("bad_request", "expectSafe and deleteBranch must be booleans");
             const x = msg.expect as Record<string, unknown> | undefined;
-            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => Number.isInteger(x[k]) && (x[k] as number) >= 0))) return fail("bad_request", "expect must hold counts uncommitted, ahead and ignored");
+            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => (k === "ignored" && x[k] === undefined) || (Number.isInteger(x[k]) && (x[k] as number) >= 0)))) return fail("bad_request", "expect must hold counts uncommitted and ahead, and optionally ignored");
           }
           try {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
             if (msg.type === "worktree.status") {
-              const st = await worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              // Always a fresh read (never the cache): the cache only feeds `worktree.cached`, which the dialogs show as Checking… until this lands.
+              const check = () => worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              let st: Awaited<ReturnType<typeof worktreeStatus>>;
+              if (msg.scan === undefined) st = await check();
+              else {
+                // The ids are the client's: one per Clean up; requests with the same id share one abort.
+                const ac = scans.get(msg.scan) ?? new AbortController();
+                scans.set(msg.scan, ac);
+                st = await lowPriority(ac.signal, check);
+                if (ac.signal.aborted) return fail("cancelled", "cancelled");
+              }
               const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
               return reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
             }

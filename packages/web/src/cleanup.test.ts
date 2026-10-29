@@ -5,7 +5,7 @@ import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filter
 const DAY = 86_400_000;
 const NOW = 100 * DAY;
 const s = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ checkedAt: 0, uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const wt = (path: string, o: Partial<Row & { kind: "worktree" }> = {}): Row => ({ kind: "worktree", key: `wt:${path}`, project: "/r", path, external: false, outsideRoots: false, locked: false, sessions: 0, ...o }) as Row;
 const wk = (id: string, state: SessionState, o: object = {}): Row => ({ kind: "worker", key: `wk:${id}`, id, name: id, cwd: "/r", state, lastActivity: NOW, ...o }) as Row;
 
@@ -42,6 +42,7 @@ describe("cleanup", () => {
     expect(rowSafety(wt("/a", { status: st({ safety: "blocked", blocked: "sessions_running" }) } as never)).reason).toBe("A session there is running or needs input");
     expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 1, ahead: 2 }) } as never))).toEqual({ safety: "has_work", reason: "1 file, 2 commits" });
     expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 3, ahead: 1 }) } as never)).reason).toBe("3 files, 1 commit");
+    expect(rowSafety(wt("/a", { status: st({ safety: "has_work", uncommitted: 0, ahead: 2 }) } as never)).reason).toBe("2 commits, has unmerged commits");
     expect(rowSafety(wt("/a", { status: st() } as never))).toEqual({ safety: "safe" });
     expect(rowSafety(wk("a", "running"))).toEqual({ safety: "blocked", reason: "Running" });
     expect(rowSafety(wk("a", "needs_input")).reason).toBe("Needs input");
@@ -108,6 +109,22 @@ describe("cleanup", () => {
       { type: "worktree.remove", cwd: "/r", path: "/work", expectSafe: false, expect: { uncommitted: 1, ahead: 0, ignored: 0 }, deleteBranch: false },
       { type: "worktree.remove", cwd: "/r", path: "/unmerged", expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 }, deleteBranch: false },
     ]);
+  });
+
+  it("rowSafety safe with mergedInto gives the merged reason; cleanupItems omits expect.ignored when not counted; runCleanup notes ignoredDeleted", async () => {
+    expect(rowSafety(wt("/m", { status: st({ ahead: 2, mergedInto: "origin/main" }) }))).toEqual({ safety: "safe", reason: "changes already in origin/main (squash/rebase merged)" });
+    expect(rowSafety(wt("/n", { status: st() }))).toEqual({ safety: "safe" });
+    const rows = [wt("/counted", { status: st({ ignored: 3 }) }), wt("/preview", { status: { ...st(), ignored: undefined } })];
+    const sent: { path: string; expect: object }[] = [];
+    const items = cleanupItems(rows, new Set(rows.map((r) => r.key)), { deleteBranch: new Set() }, (async (m: { path: string; expect: object }) => (sent.push(m), m.path === "/preview" ? { ignoredDeleted: 5 } : {})) as never);
+    const r = await runCleanup(items);
+    expect(sent.map((m) => m.expect)).toEqual([{ uncommitted: 0, ahead: 0, ignored: 3 }, { uncommitted: 0, ahead: 0 }]);
+    expect("ignored" in sent[1]!.expect).toBe(false);
+    expect(r.notes).toEqual(["preview: 5 ignored files deleted"]);
+    // The daemon counts to 1000 and stops: say "1000+".
+    const bigRow = wt("/big", { status: { ...st(), ignored: undefined } });
+    const big = await runCleanup(cleanupItems([bigRow], new Set([bigRow.key]), { deleteBranch: new Set() }, (async () => ({ ignoredDeleted: 1000 })) as never));
+    expect(big.notes).toEqual(["big: 1000+ ignored files deleted"]);
   });
 
   it("runCleanup: sequential, a rejection is skipped with its message, branchKept becomes a note; summaryText 'Removed 2, skipped 1'", async () => {

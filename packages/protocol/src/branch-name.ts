@@ -7,6 +7,8 @@ export const BRANCH_NAME_MAX = 80;
 export const BRANCH_MAX = 200;
 /** Summary part of a Ticket branch name. */
 export const SUMMARY_MAX = 50;
+/** worktreeNameError's folder limit. */
+const FOLDER_MAX = 64;
 export const DEFAULT_BRANCH_TEMPLATE = "{type}/{key}-{summary}";
 
 /** Each `/` separated part: no leading or trailing `-` or `.`, no `.lock` suffix; empty parts dropped. */
@@ -58,6 +60,7 @@ export function branchNameError(branch: string): string | undefined {
   if (!branch) return "Enter a branch name";
   if (branch.startsWith("-")) return "A branch name cannot start with -";
   if (branch.length > BRANCH_MAX) return `A branch name has at most ${BRANCH_MAX} characters`;
+  if (branch.includes("@{")) return "A branch name cannot contain @{";
   const folder = worktreeNameError(branchFolder(branch));
   if (folder) return `Folder ${branchFolder(branch)}: ${folder}`;
 }
@@ -73,14 +76,19 @@ export function ticketTypeWord(type: string): string {
 
 /**
  * Branch name of a Ticket from a template (default `{type}/{key}-{summary}`): `{type}` per `ticketTypeWord` (empty drops the `/`
- * after it), `{key}` as is, `{summary}` through the Name rule cut to 50 characters; the result through the Name rule with the key's case kept.
+ * after it), `{key}` as is, `{summary}` through the Name rule cut to 50 characters and, at a word, until the folder has at most 64 characters (the key is never cut); the result through the Name rule with the key's case kept.
  */
 export function ticketBranchName(template: string, t: TicketFields): string {
   const type = ticketTypeWord(t.type);
-  const summary = tidy(normalizeBranchName(t.summary).slice(0, SUMMARY_MAX));
-  let s = type ? template.replaceAll("{type}", type) : template.replace(/\{type\}\/?/g, "");
-  s = s.replaceAll("{key}", t.key).replaceAll("{summary}", summary);
-  return normalizeBranchName(s, { keep: t.key });
+  const shape = (type ? template.replaceAll("{type}", type) : template.replace(/\{type\}\/?/g, "")).replaceAll("{key}", t.key);
+  const build = (summary: string) => normalizeBranchName(shape.replaceAll("{summary}", summary), { keep: t.key });
+  let summary = tidy(normalizeBranchName(t.summary).slice(0, SUMMARY_MAX));
+  // Cut at a word (`-`) while the folder is too long; a single long word loses characters; the key is never cut.
+  while (summary && branchFolder(build(summary)).length > FOLDER_MAX) {
+    const i = summary.lastIndexOf("-");
+    summary = tidy(i > 0 ? summary.slice(0, i) : summary.slice(0, -1));
+  }
+  return build(summary);
 }
 
 const KEY = /^[A-Za-z][A-Za-z0-9_]+-\d+$/;

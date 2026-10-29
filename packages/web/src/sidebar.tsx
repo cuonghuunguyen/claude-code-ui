@@ -125,6 +125,8 @@ export function SessionList({
   onRemove,
   onNewWorktree,
   onRemoveWorktree,
+  onWarmWorktree,
+  removing,
   onCleanUp,
   onOpenProject,
   renaming,
@@ -158,6 +160,10 @@ export function SessionList({
   onNewWorktree?: (cwd: string, quick: boolean) => void;
   /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
   onRemoveWorktree?: (project: string, path: string) => void;
+  /** Pointer enter or focus on a worktree's trash button: the app reads its status ahead (GH-463). */
+  onWarmWorktree?: (project: string, path: string) => void;
+  /** This page removes the worktree now (the list's `removing` flag covers other clients and reloads). */
+  removing?: (path: string) => boolean;
   /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
   onCleanUp?: (scope: CleanupScope) => void;
   onOpenProject: () => void;
@@ -279,13 +285,14 @@ export function SessionList({
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
     });
+  const isBusy = (r: WorktreeRow) => !!(r.removing || removing?.(r.path));
   /** Menu of a worktree row. */
   const rowMenu = (g: SessionGroup, r: WorktreeRow, label: string, prefix: string) => () =>
     groupEntries({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
-      newSession: r.outsideRoots ? undefined : () => onNew(r.path),
+      newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => onCopy(r.path, "path")),
-      tail: onRemoveWorktree && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
+      tail: onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
     });
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
@@ -606,11 +613,12 @@ export function SessionList({
                   const sameTail = (worktrees?.[g.cwd] ?? g.worktrees).filter((w) => lastSegment(w.branch ?? lastSegment(w.path)) === lastSegment(branch)).length > 1;
                   const shortBranch = sameTail ? branch : lastSegment(branch);
                   const label = `${kind} : ${branch}`;
+                  const busy = isBusy(r);
                   return (
                     <div key={r.path} data-testid="worktree-row" data-path={r.path}>
                       {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
                       <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
-                      <div className="group/worktree relative">
+                      <div className={cn("group/worktree relative", busy && "pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
                         <button
                           className="flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26"
                           aria-expanded={rowOpen}
@@ -619,8 +627,13 @@ export function SessionList({
                           title={`${narrow ? `${label}\n` : ""}${r.outsideRoots ? `${r.path}: Outside the allowed roots (--roots)` : r.path}`}
                           data-testid="worktree-toggle"
                         >
-                          <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />
+                          {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                           <span className="min-w-0 truncate font-medium">{narrow ? shortBranch : label}</span>
+                          {busy && (
+                            <span className="shrink-0 text-xs" data-testid="worktree-removing">
+                              Removing…
+                            </span>
+                          )}
                           {!narrow && r.outsideRoots && <span className="sr-only">(outside the allowed roots)</span>}
                           <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />
                         </button>
@@ -633,15 +646,15 @@ export function SessionList({
                           </span>
                         ) : (
                           <span className="absolute inset-y-0 right-0.5 flex items-center opacity-100 transition-opacity group-focus-within/worktree:opacity-100 group-hover/worktree:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
-                            <IconButton label={`New session in ${label}`} onClick={() => onNew(r.path)} testId="worktree-new-session" className="size-6">
+                            <IconButton label={`New session in ${label}`} onClick={() => onNew(r.path)} disabled={busy} testId="worktree-new-session" className="size-6">
                               <SquarePenIcon />
                             </IconButton>
                             {narrow ? (
-                              <RowMenu label={label} testId="worktree-menu" entries={rowMenu(g, r, label, "worktree-menu-")} />
+                              <RowMenu label={label} testId="worktree-menu" disabled={busy} entries={rowMenu(g, r, label, "worktree-menu-")} />
                             ) : (
                               onRemoveWorktree &&
                               removableWorktree(worktrees?.[g.cwd] ?? [], r) && (
-                                <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} testId="worktree-remove" className="size-6">
+                                <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} disabled={busy} onWarm={onWarmWorktree && (() => onWarmWorktree(g.cwd, r.path))} testId="worktree-remove" className="size-6">
                                   <Trash2Icon />
                                 </IconButton>
                               )

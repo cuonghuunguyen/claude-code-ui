@@ -15,7 +15,7 @@ globalThis.ResizeObserver ??= class {
 
 const NOW = Date.now();
 const item = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
-const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
+const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ checkedAt: 0, uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });
 const M = "/r";
 const P = (n: string) => `/r/.claude/worktrees/${n}`;
 const worktrees: Record<string, Worktree[]> = {
@@ -47,30 +47,33 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function open(o: { scope?: CleanupScope; status?: (path: string) => Promise<WorktreeStatusResult>; remove?: (m: { type: string; path?: string; sessionId?: string }) => Promise<object>; list?: SessionListItem[] } = {}) {
+async function open(o: { scope?: CleanupScope; status?: (path: string) => Promise<WorktreeStatusResult>; remove?: (m: { type: string; path?: string; sessionId?: string }) => Promise<object>; cached?: Record<string, WorktreeStatusResult>; list?: SessionListItem[] } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
   const sent: Record<string, unknown>[] = [];
   const request = vi.fn(async (m: Record<string, unknown>) => {
     sent.push(m);
+    if (m.type === "worktree.cached") return { statuses: o.cached ?? {} };
     if (m.type === "worktree.status") return (o.status ?? (async (p: string) => STATUS[p]!))(m.path as string);
     return (o.remove ?? (async () => ({})))(m as never);
   });
   const onClose = vi.fn();
   const onDone = vi.fn();
-  await act(async () => root!.render(<CleanupDialog scope={o.scope ?? { kind: "all" }} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} />));
+  const onRemoving = vi.fn();
+  await act(async () => root!.render(<CleanupDialog scope={o.scope ?? { kind: "all" }} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} onRemoving={onRemoving} />));
   await act(async () => {});
-  return { request, sent, onClose, onDone };
+  return { request, sent, onClose, onDone, onRemoving, rerender: (scope?: CleanupScope) => act(async () => root!.render(<CleanupDialog scope={scope} list={o.list ?? list} worktrees={worktrees} state={(s) => s.state} request={request as never} onClose={onClose} onDone={onDone} onRemoving={onRemoving} />)) };
 }
 const q = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 const row = (key: string) => q(`[data-key="${key}"]`);
 const check = (key: string) => row(key).querySelector<HTMLInputElement>('[data-testid="cleanup-check"]')!;
 const click = (e: HTMLElement) => act(async () => e.click());
+const fetchLines = () => qa('[data-testid="cleanup-fetch"]').map((e) => e.textContent);
 const confirm = () => q<HTMLButtonElement>('[data-testid="cleanup-confirm"]');
 
-it("lists worktrees with External tag and safety badges once statuses arrive; at most 4 status requests in flight", async () => {
+it("lists worktrees with External tag and safety badges once statuses arrive; every status is requested at once (the daemon queues them)", async () => {
   let inFlight = 0;
   let max = 0;
   const release: (() => void)[] = [];
@@ -85,9 +88,8 @@ it("lists worktrees with External tag and safety badges once statuses arrive; at
       },
     });
     expect(qa('[data-testid="cleanup-badge"]').filter((b) => b.textContent === "Checking…").length).toBe(10);
-    expect(max).toBe(4);
+    expect(max).toBe(10);
     for (let i = 0; i < 20; i++) await act(async () => release.splice(0).forEach((f) => f()));
-    expect(max).toBe(4);
   } finally {
     worktrees[M] = more[M]!.slice(0, 5);
   }
@@ -182,7 +184,7 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
       max = Math.max(max, active);
       await new Promise((r) => setTimeout(r, 5));
       active--;
-      if (m.type === "worktree.remove" && m.path === P("safe")) throw new Error("Changed since the list: 1 files, 0 commits");
+      if (m.type === "worktree.remove" && m.path === P("safe")) throw new Error("Changed since it was checked: 1 files, 0 commits");
       return {};
     },
   });
@@ -191,11 +193,12 @@ it("run sends one request at a time, then shows 'Removed 2, skipped 1' with the 
   await click(confirm());
   await act(async () => new Promise((r) => setTimeout(r, 60)));
   expect(max).toBe(1);
-  expect(sent.filter((m) => m.type !== "worktree.status").map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
+  expect(sent.filter((m) => !["worktree.status", "worktree.cached", "git.fetch", "worktree.cancel"].includes(m.type as string)).map((m) => m.type)).toEqual(["worker.remove", "worktree.remove", "worktree.remove"]);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("Removed 2, skipped 1");
-  expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since the list");
+  expect(q("[data-testid=cleanup-summary]").textContent).toContain("Changed since it was checked");
   expect(document.activeElement).toBe(q("[data-testid=cleanup-close]"));
   expect(onDone).toHaveBeenCalledTimes(1);
+  expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ removed: expect.any(Array), skipped: expect.any(Array) }));
   await click(q("[data-testid=cleanup-close]"));
   expect(onClose).toHaveBeenCalled();
 });
@@ -218,17 +221,29 @@ it("Esc closes the dialog like Cancel, also with focus on the select or a checkb
   expect(onClose).toHaveBeenCalledTimes(2);
 });
 
-it("Esc during a run does not close; the summary stays until Close", async () => {
-  let release!: () => void;
-  const { onClose } = await open({ list: [], remove: () => new Promise((r) => (release = () => r({}))) });
+it("the dialog closes during a run, the run continues, onRemoving marks each worktree and onDone gets the result", async () => {
+  const release: (() => void)[] = [];
+  const { onClose, onDone, onRemoving, rerender, sent } = await open({
+    list: [],
+    remove: (m) => (m.type === "worktree.remove" ? new Promise((r) => release.push(() => r({}))) : Promise.resolve({})),
+  });
   await click(confirm());
-  await esc();
-  expect(onClose).not.toHaveBeenCalled();
-  await act(async () => release());
-  await act(async () => {});
-  expect(q("[data-testid=cleanup-summary]")).not.toBeNull();
+  // Cancel reads Close and stays enabled; Esc closes too.
+  const cancel = q<HTMLButtonElement>("[data-testid=cleanup-cancel]");
+  expect(cancel.textContent).toBe("Close");
+  expect(cancel.disabled).toBe(false);
+  expect(onRemoving.mock.calls).toEqual([[P("safe"), true]]);
   await esc();
   expect(onClose).toHaveBeenCalledTimes(1);
+  // The app closes it: the run goes on.
+  await rerender(undefined);
+  expect(onDone).not.toHaveBeenCalled();
+  await act(async () => release.shift()!());
+  await act(async () => {});
+  expect(sent.filter((m) => m.type === "worktree.remove").map((m) => m.path)).toEqual([P("safe")]);
+  expect(onRemoving.mock.calls.slice(0, 2)).toEqual([[P("safe"), true], [P("safe"), false]]);
+  expect(onDone).toHaveBeenCalledTimes(1);
+  expect(onDone).toHaveBeenCalledWith({ removed: ["worktree-safe"], skipped: [], notes: [] });
 });
 
 it("a Safe row with ignored files says how many ignored files will be deleted", async () => {
@@ -257,4 +272,80 @@ it("'Also remove its worktree' ticked while a filter hides that worktree: not re
   expect(sent.filter((m) => m.type === "worktree.remove")).toEqual([]);
   expect(sent.filter((m) => m.type === "worker.remove")).toHaveLength(1);
   expect(q("[data-testid=cleanup-summary]").textContent).toContain("hidden by the filter");
+});
+
+it("fetches each repository first, shows the fetch line, then requests statuses with one scan id", async () => {
+  const gates: Record<string, () => void> = {};
+  const { sent } = await open({
+    scope: { kind: "all" },
+    list: [],
+    remove: (m) => (m.type === ("git.fetch" as string) ? new Promise((r) => (gates[(m as { cwd?: string }).cwd!] = () => r({ remote: null }))) : Promise.resolve({})),
+  });
+  expect(sent.map((m) => m.type)).toEqual(["worktree.cached", "git.fetch"]);
+  expect(sent[1]).toEqual({ type: "git.fetch", cwd: M, defaultRemote: true });
+  expect(fetchLines()).toEqual(["Fetching…"]);
+  expect(qa('[data-testid="cleanup-badge"]').every((b) => b.textContent === "Checking…")).toBe(true);
+  await act(async () => gates[M]!());
+  await act(async () => {});
+  const statuses = sent.filter((m) => m.type === "worktree.status");
+  expect(statuses.map((m) => m.path).sort()).toEqual([P("busy"), P("safe"), P("work"), "/x/ext"].sort());
+  const ids = new Set(statuses.map((m) => m.scan));
+  expect(ids.size).toBe(1);
+  expect(typeof [...ids][0]).toBe("string");
+  expect(fetchLines()).toEqual([expect.stringMatching(/^Fetched \d+ s ago$/)]);
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+});
+
+it("a failed fetch shows the warning and still scans", async () => {
+  const { sent } = await open({ list: [], remove: async (m) => (m.type === ("git.fetch" as string) ? Promise.reject(new Error("No remote for the default branch")) : {}) });
+  expect(fetchLines()).toEqual(["Fetch failed: No remote for the default branch — results may be out of date"]);
+  expect(sent.filter((m) => m.type === "worktree.status")).toHaveLength(4);
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+});
+
+it("closing the dialog sends worktree.cancel with the scan id", async () => {
+  const { sent } = await open({ list: [] });
+  const scan = sent.find((m) => m.type === "worktree.status")!.scan;
+  expect(sent.some((m) => m.type === "worktree.cancel")).toBe(false);
+  await act(async () => root!.unmount());
+  root = undefined;
+  expect(sent.filter((m) => m.type === "worktree.cancel")).toEqual([{ type: "worktree.cancel", scan }]);
+});
+
+it("a row shows ignored files: checked at removal and remote branch deleted", async () => {
+  const preview = { ...st(), ignored: undefined, upstreamGone: true as const };
+  await open({ list: [], status: async (p) => (p === P("safe") ? preview : STATUS[p]!) });
+  expect(row(`wt:${P("safe")}`).textContent).toContain("ignored files: checked at removal");
+  expect(row(`wt:${P("safe")}`).textContent).toContain("remote branch deleted");
+  expect(row(`wt:${P("safe")}`).textContent).not.toContain("ignored files will be deleted");
+  // A counted result keeps today's text.
+  expect(row("wt:/x/ext").textContent).toContain("3 ignored files will be deleted");
+  expect(row("wt:/x/ext").textContent).not.toContain("checked at removal");
+});
+
+it("a squash-merged row says why it is Safe", async () => {
+  await open({ list: [], status: async (p) => (p === P("safe") ? st({ ahead: 1, mergedInto: "origin/main" }) : STATUS[p]!) });
+  expect(row(`wt:${P("safe")}`).textContent).toContain("Safe");
+  expect(row(`wt:${P("safe")}`).textContent).toContain("changes already in origin/main (squash/rebase merged)");
+});
+
+it("cached rows show at once with Checking… and are not selectable until the fresh status", async () => {
+  const release: (() => void)[] = [];
+  const old = Date.now() - 5 * 60_000;
+  const cached = { [P("safe")]: st({ checkedAt: old }), [P("work")]: st({ safety: "has_work", uncommitted: 2, ahead: 1, checkedAt: old }) };
+  const { sent } = await open({ cached, status: (p) => new Promise((r) => release.push(() => r(STATUS[p] ?? st()))) });
+  const safe = `wt:${P("safe")}`;
+  expect(sent[0]).toEqual({ type: "worktree.cached", cwd: M, paths: expect.arrayContaining([P("safe")]) });
+  expect(row(safe).textContent).toContain("Safe · Checking…");
+  expect(row(safe).textContent).toContain("checked 5m");
+  expect(row(`wt:${P("work")}`).textContent).toContain("Has work: 2 files, 1 commit · Checking…");
+  expect(check(safe).disabled).toBe(true);
+  expect(check(safe).checked).toBe(false);
+  // Without a cached entry: plain Checking….
+  expect(row(`wt:${P("busy")}`).textContent).toContain("Checking…");
+  expect(row(`wt:${P("busy")}`).textContent).not.toContain("·  Checking");
+  for (let i = 0; i < 5; i++) await act(async () => release.splice(0).forEach((f) => f()));
+  expect(row(safe).textContent).not.toContain("Checking…");
+  expect(check(safe).disabled).toBe(false);
+  expect(check(safe).checked).toBe(true);
 });

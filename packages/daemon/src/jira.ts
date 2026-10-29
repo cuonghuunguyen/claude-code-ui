@@ -98,7 +98,8 @@ export function createJira(d: JiraDeps) {
       const key = jiraKeyOf(t);
       if (key) {
         const r = (await get(`issue/${encodeURIComponent(key)}?fields=${FIELDS}`)) as Raw | null;
-        return r ? [ticketOf(r)] : [];
+        if (r) return [ticketOf(r)];
+        if (/^https?:\/\//i.test(t)) return []; // a link to a missing ticket: nothing to search
       }
       const words = t.replace(SPECIAL, " ").split(/\s+/).filter((w) => w && !/^(and|or|not)$/i.test(w));
       if (!words.length) return search(filter || MY_OPEN_JQL);

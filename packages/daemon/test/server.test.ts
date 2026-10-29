@@ -2103,7 +2103,7 @@ describe("daemon", () => {
     try {
       const wt = join(root, "wt");
       execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
-      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0 }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
+      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0, ignored: "1" }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
         expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: expect_ } as never), JSON.stringify(expect_)).toMatchObject({ code: "bad_request" });
       expect(existsSync(wt)).toBe(true);
       writeFileSync(join(wt, "a.txt"), "1");

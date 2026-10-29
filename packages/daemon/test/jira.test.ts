@@ -53,6 +53,17 @@ describe("createJira", () => {
     expect((await j.search("dark")).map((t) => t.key)).toEqual(["PRJ-2"]);
   });
 
+  it("search: key-shaped text with no such ticket runs the summary search", async () => {
+    fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: [{ key: "PRJ-7", type: "Bug", summary: "fix 123 crash on save", status: "To Do" }] });
+    const j = createJira({ config: () => ({ url: fake!.url, email: "" }), token: () => TOKEN });
+    expect((await j.search("fix-123")).map((t) => t.key)).toEqual(["PRJ-7"]);
+    expect(fake.requests.some((r) => r.path.includes("search") && new URL(r.path, "http://x").searchParams.get("jql")?.includes("summary ~"))).toBe(true);
+    // A link to a missing ticket: nothing.
+    const before = fake.requests.length;
+    expect(await j.search(`${fake.url}/browse/FIX-123`)).toEqual([]);
+    expect(fake.requests.slice(before).some((r) => r.path.includes("search"))).toBe(false);
+  });
+
   it("Ticket filter (JQL): lists its tickets with its order; text searches inside it; a key ignores it", async () => {
     fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: ISSUES });
     let jql = "project = OTH order by created ASC";

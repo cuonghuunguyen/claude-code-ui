@@ -45,7 +45,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean } = {}) {
+async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -54,6 +54,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
   const onRemove = vi.fn();
   const onNewWorktree = vi.fn();
   const onRemoveWorktree = vi.fn();
+  const onWarmWorktree = vi.fn();
   const onOpenProject = vi.fn();
   const onAction = vi.fn();
   const onRenamed = vi.fn();
@@ -77,6 +78,8 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
         onRemove={onRemove}
         onNewWorktree={onNewWorktree}
         onRemoveWorktree={onRemoveWorktree}
+        onWarmWorktree={onWarmWorktree}
+        removing={props.removing}
         onCleanUp={props.cleanUp ? onCleanUp : undefined}
         onOpenProject={onOpenProject}
         renaming={props.renaming}
@@ -99,7 +102,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -484,6 +487,40 @@ describe("worktrees", () => {
     for (const p of ["/home/u/web", "/srv/web-far", "/home/u/locked"]) expect(remove(p), p).toBeNull();
     await act(async () => remove("/home/u/orca/web/fix")!.click());
     expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", "/home/u/orca/web/fix");
+  });
+
+  it("hovering or focusing the trash button asks the app to warm that worktree's status", async () => {
+    const managed = "/home/u/web/.claude/worktrees/fix";
+    const { el, onWarmWorktree } = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": [...wts, { path: managed, branch: "worktree-fix", main: false }] } });
+    const trash = el.querySelector<HTMLElement>(`[data-path="${managed}"] [data-testid="worktree-remove"]`)!;
+    expect(onWarmWorktree).not.toHaveBeenCalled();
+    await act(async () => trash.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+    await act(async () => trash.focus());
+    expect(onWarmWorktree).toHaveBeenCalledWith("/home/u/web", managed);
+    expect(onWarmWorktree.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a removing worktree row is dimmed, shows a spinner and Removing…, and its buttons are disabled", async () => {
+    const fix = "/home/u/orca/web/fix";
+    const other = "/home/u/web/.claude/worktrees/b";
+    const all = [...wts, { path: other, branch: "worktree-b", main: false }];
+    const check = (el: HTMLElement, path: string, busy: boolean) => {
+      const row = el.querySelector<HTMLElement>(`[data-path="${path}"]`)!;
+      expect(row.querySelector('[data-testid="worktree-removing"]')?.textContent ?? null).toBe(busy ? "Removing…" : null);
+      const wrap = row.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!.parentElement!;
+      expect(wrap.hasAttribute("data-removing")).toBe(busy);
+      expect(wrap.className.includes("opacity-50")).toBe(busy);
+      expect(row.querySelector("svg.animate-spin") !== null).toBe(busy);
+      for (const t of ["worktree-new-session", "worktree-remove"]) expect(row.querySelector(`[data-testid="${t}"]`)?.getAttribute("aria-disabled")).toBe(busy ? "true" : null);
+    };
+    // The list says so (another client or a reload).
+    const a = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": wts.map((w) => (w.path === fix ? { ...w, removing: true as const } : w)) } });
+    check(a.el, fix, true);
+    root?.unmount();
+    // This page's own removal (the prop), the other row stays normal.
+    const b = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": all }, removing: (p) => p === other });
+    check(b.el, other, true);
+    check(b.el, fix, false);
   });
 
   it("a repository without linked worktrees stays flat", async () => {

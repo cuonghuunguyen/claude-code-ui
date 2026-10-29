@@ -196,6 +196,7 @@ export function ConfirmDialog({
   finalFocus,
   children,
   confirmDisabled,
+  hideConfirm,
 }: {
   open: boolean;
   title: string;
@@ -205,6 +206,8 @@ export function ConfirmDialog({
   /** Between the text and the buttons (a name field). */
   children?: React.ReactNode;
   confirmDisabled?: boolean;
+  /** Only Cancel stays (nothing to confirm: the action is refused). */
+  hideConfirm?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   testId: string;
@@ -230,9 +233,11 @@ export function ConfirmDialog({
             <AlertDialog.Close render={<Button variant="ghost" className="cursor-pointer max-md:h-11" />} data-testid={`${testId}-cancel`}>
               Cancel
             </AlertDialog.Close>
-            <Button variant={destructive ? "destructive" : "default"} className="cursor-pointer max-md:h-11" onClick={onConfirm} disabled={confirmDisabled} data-testid={`${testId}-confirm`}>
-              {confirm}
-            </Button>
+            {!hideConfirm && (
+              <Button variant={destructive ? "destructive" : "default"} className="cursor-pointer max-md:h-11" onClick={onConfirm} disabled={confirmDisabled} data-testid={`${testId}-confirm`}>
+                {confirm}
+              </Button>
+            )}
           </div>
         </AlertDialog.Popup>
       </AlertDialog.Portal>

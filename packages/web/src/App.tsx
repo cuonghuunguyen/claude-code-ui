@@ -39,6 +39,7 @@ import type {
   TerminalListResult,
   Worktree,
   WorktreeCreateResult,
+  WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
@@ -79,8 +80,8 @@ import { copyFailText } from "./copy-text.ts";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
-import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, worktreeName } from "./sessions.ts";
-import { BLOCK_TEXT, type CleanupScope } from "./cleanup.ts";
+import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, timeAgo, worktreeName } from "./sessions.ts";
+import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { appendQuote } from "./quote.ts";
@@ -177,6 +178,17 @@ const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ d
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
+const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
+type RemovingWt = { project: string; path: string; branch: string; status?: WorktreeStatusResult; cached?: WorktreeStatusResult; checking: boolean; error?: string };
+/** The remove dialog's text: Checking… (with the cached status and its age when there is one), the reason when blocked, the error, or the counts. */
+function removeDialogText(w: RemovingWt | undefined, worktrees: Record<string, Worktree[]>) {
+  if (!w) return "";
+  const text = (st: WorktreeStatusResult) => removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[w.project], w.path, st) });
+  if (w.error !== undefined) return w.error;
+  if (w.checking) return w.cached ? `${text(w.cached)}${w.cached.checkedAt ? ` · checked ${timeAgo(w.cached.checkedAt)}` : ""} · Checking…` : "Checking…"; // an older daemon sends no checkedAt
+  if (w.status?.safety === "blocked") return `Worktree ${w.status.branch} cannot be removed: ${BLOCK_TEXT[w.status.blocked!]}`;
+  return w.status ? text(w.status) : "";
+}
 const loadFlag = (key: string) => {
   try {
     return localStorage.getItem(key) === "1";
@@ -515,7 +527,18 @@ export function App() {
   // Project whose Create worktree modal is open (GH-447).
   const [creatingWt, setCreatingWt] = useState<string>();
   // Worktree waiting for the Remove confirmation; kept while the dialog fades out.
-  const [removingWt, setRemovingWt] = useState<{ project: string; path: string; branch: string; text: string }>();
+  const [removingWt, setRemovingWt] = useState<RemovingWt>();
+  /** Identifies the open remove dialog's status request: a reply of a closed or replaced dialog does nothing. */
+  const askToken = useRef<object>(undefined);
+  /** Worktrees this page removes now (the dialog's Remove and a running Clean up): their rows show Removing…. */
+  const [removingPaths, setRemovingPaths] = useState<Set<string>>(new Set());
+  const markRemoving = (path: string, on: boolean) =>
+    setRemovingPaths((s) => {
+      const n = new Set(s);
+      if (on) n.add(path);
+      else n.delete(path);
+      return n;
+    });
   const lastRemovingWt = useRef(removingWt);
   if (removingWt) lastRemovingWt.current = removingWt;
   // Remove worker dialog (GH-358): `project`/`path`: the worker's own worktree when the app may remove it; `text`: its status; `others`: other listed sessions in it.
@@ -1489,24 +1512,52 @@ export function App() {
     }
   }
   const [cleanup, setCleanup] = useState<CleanupScope>();
+  /** A run that outlives its closed dialog reports by toast. */
+  const cleanupOpen = useRef(false);
+  cleanupOpen.current = cleanup !== undefined;
   const listState = (s: SessionListItem) => (s.coordinatorId ? workerState(s, views[s.id]) : (shownState(views[s.id]) ?? s.state));
+  /** The last status of each worktree (warming, remove dialog), and the warm in flight: one at a time, once per 10 s per path. */
+  const wtStatus = useRef(new Map<string, WorktreeStatusResult>());
+  const warmed = useRef({ path: "", at: 0, scan: "" });
+  function warmWorktree(project: string, path: string) {
+    const w = warmed.current;
+    if (w.path === path && Date.now() - w.at < 10_000) return;
+    if (w.scan) void client.current?.request({ type: "worktree.cancel", scan: w.scan }).catch(() => {});
+    const scan = crypto.randomUUID();
+    warmed.current = { path, at: Date.now(), scan };
+    client.current?.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path, scan }).then((st) => wtStatus.current.set(path, st), () => {});
+  }
   async function askRemoveWorktree(project: string, path: string) {
     setError(undefined);
+    // The dialog opens at once; the status (the cached one meanwhile) fills it in.
+    const branch = worktrees[project]?.find((w) => w.path === path)?.branch ?? lastSegment(path);
+    const tok = {};
+    askToken.current = tok;
+    setRemovingWt({ project, path, branch, cached: wtStatus.current.get(path), checking: true });
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path });
-      if (st.safety === "blocked") return setError(`Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}`);
-      setRemovingWt({ project, path, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[project], path, st) }) });
+      if (askToken.current !== tok) return;
+      wtStatus.current.set(path, st);
+      setRemovingWt((c) => (c?.path === path ? { ...c, branch: st.branch, status: st, checking: false } : c));
     } catch (e) {
-      setError((e as Error).message);
+      if (askToken.current !== tok) return;
+      setRemovingWt((c) => (c?.path === path ? { ...c, checking: false, error: (e as Error).message } : c));
     }
   }
-  async function removeWorktree(w: { project: string; path: string }) {
+  /** Removes in the background: the row shows Removing… until the list refresh drops it; a failure restores it and says why. */
+  async function removeWorktree(w: { project: string; path: string; branch?: string; status?: WorktreeStatusResult }) {
+    markRemoving(w.path, true);
     try {
-      await client.current!.request({ type: "worktree.remove", cwd: w.project, path: w.path });
+      // The counts the user saw: the daemon checks again and refuses (`stale`) when there is more work now.
+      const st = w.status;
+      const r = await client.current!.request<WorktreeRemoveResult>({ type: "worktree.remove", cwd: w.project, path: w.path, ...(st && { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } }) });
+      if (r?.ignoredDeleted) setToast(`Removed ${w.branch ?? lastSegment(w.path)}: ${ignoredText(r.ignoredDeleted)} deleted`);
       if (draftCwd === w.path) setDraftCwd(w.project);
       await refreshList();
     } catch (e) {
-      setError((e as Error).message);
+      setError(`Worktree ${w.branch ?? lastSegment(w.path)} not removed: ${(e as Error).message}`);
+    } finally {
+      markRemoving(w.path, false);
     }
   }
   /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
@@ -2793,7 +2844,11 @@ export function App() {
         state={listState}
         request={(m) => client.current!.request(m)}
         onClose={() => setCleanup(undefined)}
-        onDone={() => void refreshList()}
+        onRemoving={markRemoving}
+        onDone={(r) => {
+          void refreshList();
+          if (!cleanupOpen.current) setToast(summaryText(r) + (r.skipped[0] ? `: ${r.skipped[0].label}: ${r.skipped[0].reason}` : ""));
+        }}
       />
       <ConfirmDialog
         open={closingGroup !== undefined}
@@ -2906,16 +2961,22 @@ export function App() {
       <ConfirmDialog
         open={removingWt !== undefined}
         title={`Remove worktree ${lastRemovingWt.current?.branch ?? ""}?`}
-        description={lastRemovingWt.current?.text ?? ""}
+        description={removeDialogText(lastRemovingWt.current, worktrees)}
         confirm="Remove worktree"
         destructive
+        confirmDisabled={lastRemovingWt.current?.checking}
+        hideConfirm={!!lastRemovingWt.current && (lastRemovingWt.current.error !== undefined || lastRemovingWt.current.status?.safety === "blocked")}
         onConfirm={() => {
           const w = removingWt!;
           removedWt.current = w.project;
+          askToken.current = undefined;
           setRemovingWt(undefined);
           void removeWorktree(w);
         }}
-        onCancel={() => setRemovingWt(undefined)}
+        onCancel={() => {
+          askToken.current = undefined;
+          setRemovingWt(undefined);
+        }}
         // Cancel / Esc: back to the trash button (default). Confirmed: its row is gone; the project's group toggle.
         finalFocus={() => {
           const p = removedWt.current;
@@ -2961,6 +3022,8 @@ export function App() {
               onRemove={setRemoving}
               onNewWorktree={(cwd, quick) => (setDrawer(false), quick ? void newWorktree(cwd) : setCreatingWt(cwd))}
               onRemoveWorktree={askRemoveWorktree}
+              onWarmWorktree={warmWorktree}
+              removing={(path) => removingPaths.has(path)}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}

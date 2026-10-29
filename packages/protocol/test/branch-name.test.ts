@@ -103,3 +103,27 @@ describe("jiraIsCloud", () => {
     expect(jiraIsCloud("not a url")).toBe(false);
   });
 });
+
+describe("GH-452 long names", () => {
+  const ok = (r: string) => {
+    expect(branchNameError(r)).toBeUndefined();
+    expect(r.endsWith("-")).toBe(false);
+  };
+  it("ticketBranchName keeps the folder within 64 characters for long summaries, long keys, Bug and templates without {type}", () => {
+    const long = "Support repo with client/server folder structure like the old monorepo layout for every service";
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Story", summary: long }));
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "VERYLONGPROJECT-123456", type: "Story", summary: long }));
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Bug", summary: long }));
+    ok(ticketBranchName("{key}-{summary}", { key: "PROJ-351", type: "Story", summary: long }));
+    ok(ticketBranchName("{summary}", { key: "PROJ-351", type: "Story", summary: "x".repeat(60) }));
+    const r = ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Story", summary: long });
+    expect(r).toBe("feature/PROJ-351-support-repo-with-client/server-folder");
+    // Key and type alone over 64: only the summary goes.
+    const key = "K".repeat(60) + "-1";
+    expect(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key, type: "Bug", summary: "abc" })).toBe(`bugfix/${key}`);
+  });
+  it("branchNameError refuses @{ and still refuses a typed name over 64 folder characters", () => {
+    expect(branchNameError("a@{-1}")).toMatch(/@\{/);
+    expect(branchNameError("a".repeat(65))).toBeTruthy();
+  });
+});

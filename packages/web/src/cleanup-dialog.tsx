@@ -1,19 +1,18 @@
 // Clean up dialog (GH-377, docs/spec.md "Layout"): bulk removal of worktrees and workers with daemon-computed safety badges.
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import type { SessionListItem, SessionState, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
+import type { SessionListItem, SessionState, Worktree, WorktreeCachedResult, WorktreeStatusResult } from "@claude-ui/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
-import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filterRows, rowLabel, rowSafety, runCleanup, summaryText, type CleanupResult, type CleanupScope, type Filter, type Row } from "./cleanup.ts";
+import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filterRows, ignoredText, rowLabel, rowSafety, runCleanup, summaryText, type CleanupResult, type CleanupScope, type Filter, type Row } from "./cleanup.ts";
 import { trapTab } from "./focus-trap.ts";
 import { timeAgo } from "./sessions.ts";
 import { ARCHIVE_DAYS, daysLabel } from "./sidebar-menus.ts";
 import { projectName } from "./tabs.ts";
 
-/** At most this many `worktree.status` requests in flight (the daemon's git queue runs 4). */
-const STATUS_PARALLEL = 4;
+type FetchState = { state: "fetching" } | { state: "done"; at: number } | { state: "failed"; reason: string };
 
 type Props = {
   scope?: CleanupScope;
@@ -22,26 +21,28 @@ type Props = {
   state: (s: SessionListItem) => SessionState;
   request: <T>(m: Request) => Promise<T>;
   onClose: () => void;
-  /** After a run: the app refreshes its list. */
-  onDone: () => void;
+  /** After a run (also when the dialog was closed meanwhile): the app refreshes its list and reports the result. */
+  onDone: (result: CleanupResult) => void;
+  /** A worktree's removal starts / ends: the sidebar shows its row as Removing…. */
+  onRemoving: (path: string, on: boolean) => void;
 };
 
 export function CleanupDialog(p: Props) {
-  // Esc and an outside press close it like Cancel, except during a run: it stays open until the summary.
-  const running = useRef(false);
+  // Esc and an outside press close it like Cancel, also during a run: the run goes on and the app reports the result.
   return (
-    <Dialog.Root open={p.scope !== undefined} onOpenChange={(open) => !open && !running.current && p.onClose()}>
-      {p.scope && <Body {...p} scope={p.scope} running={running} />}
+    <Dialog.Root open={p.scope !== undefined} onOpenChange={(open) => !open && p.onClose()}>
+      {p.scope && <Body {...p} scope={p.scope} />}
     </Dialog.Root>
   );
 }
 
 const describe = (scope: CleanupScope) => (scope.kind === "all" ? "All projects" : scope.kind === "project" ? projectName(scope.cwd) : `Workers of “${scope.title}”`);
 
-function Body({ scope, list, worktrees, state, request, onClose, onDone, running }: Props & { scope: CleanupScope; running: { current: boolean } }) {
+function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemoving }: Props & { scope: CleanupScope }) {
   const id = useId();
   const cands = useMemo(() => cleanupCandidates(scope, list, worktrees, state), []); // eslint-disable-line react-hooks/exhaustive-deps -- frozen while open
   const [status, setStatus] = useState<Record<string, WorktreeStatusResult | { error: string }>>({});
+  const [cached, setCached] = useState<Record<string, WorktreeStatusResult>>({});
   const [override, setOverride] = useState<Record<string, boolean>>({});
   const [deleteBranch, setDeleteBranch] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>({ olderThan: 0, onlySafe: false });
@@ -52,33 +53,58 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   const closeRef = useRef<HTMLButtonElement>(null);
   const now = useMemo(() => Date.now(), []);
 
+  // One scan id for this dialog: the daemon queues its statuses behind the status bar and drops the queued ones on `worktree.cancel`.
+  const scan = useMemo(() => crypto.randomUUID(), []);
+  const repos = useMemo(() => [...new Set(cands.worktrees.map((w) => w.project))], [cands]);
+  const [fetches, setFetches] = useState<Record<string, FetchState>>({});
+  const [clock, setClock] = useState(() => Date.now());
+  const fetched = Object.values(fetches).some((f) => f.state === "done");
+
   useEffect(() => {
     let live = true;
-    const queue = [...cands.worktrees];
-    const next = async (): Promise<void> => {
-      const w = queue.shift();
-      if (!w || !live) return;
-      try {
-        const st = await request<WorktreeStatusResult>({ type: "worktree.status", cwd: w.project, path: w.path });
-        if (live) setStatus((s) => ({ ...s, [w.key]: st }));
-      } catch (e) {
-        if (live) setStatus((s) => ({ ...s, [w.key]: { error: (e as Error).message } }));
-      }
-      return next();
+    const scanRepo = (repo: string) => {
+      for (const w of cands.worktrees.filter((x) => x.project === repo))
+        request<WorktreeStatusResult>({ type: "worktree.status", cwd: repo, path: w.path, scan }).then(
+          (st) => live && setStatus((s) => ({ ...s, [w.key]: st })),
+          (e) => live && setStatus((s) => ({ ...s, [w.key]: { error: (e as Error).message } })),
+        );
     };
-    for (let i = 0; i < STATUS_PARALLEL; i++) void next();
-    return () => void (live = false);
-  }, [cands, request]);
+    // Per repository in parallel: fetch the default remote first (a failure only warns), then every status of it.
+    for (const repo of repos) {
+      // The last known statuses show at once (no git); the fresh ones replace them.
+      request<WorktreeCachedResult>({ type: "worktree.cached", cwd: repo, paths: cands.worktrees.filter((x) => x.project === repo).map((x) => x.path) }).then(
+        (r) => live && setCached((c) => ({ ...c, ...Object.fromEntries(cands.worktrees.flatMap((w) => (r.statuses?.[w.path] ? [[w.key, r.statuses[w.path]!] as const] : []))) })),
+        () => {},
+      );
+      setFetches((f) => ({ ...f, [repo]: { state: "fetching" } }));
+      request({ type: "git.fetch", cwd: repo, defaultRemote: true })
+        .then(
+          () => live && setFetches((f) => ({ ...f, [repo]: { state: "done", at: Date.now() } })),
+          (e) => live && setFetches((f) => ({ ...f, [repo]: { state: "failed", reason: (e as Error).message } })),
+        )
+        .then(() => live && scanRepo(repo));
+    }
+    return () => {
+      live = false;
+      void request({ type: "worktree.cancel", scan }).catch(() => {});
+    };
+  }, [cands, repos, request, scan]);
+
+  useEffect(() => {
+    if (!fetched) return;
+    const t = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [fetched]);
 
   const rows: Row[] = useMemo(
     () => [
       ...cands.worktrees.map((w): Row => {
         const s = status[w.key];
-        return { kind: "worktree", ...w, ...(s && ("error" in s ? { error: s.error } : { status: s })) };
+        return { kind: "worktree", ...w, ...(cached[w.key] && { cached: cached[w.key] }), ...(s && ("error" in s ? { error: s.error } : { status: s })) };
       }),
       ...cands.workers.map((w): Row => ({ kind: "worker", ...w })),
     ],
-    [cands, status],
+    [cands, status, cached],
   );
   const defaults = useMemo(() => defaultSelection(rows), [rows]);
   const safetyOf = (r: Row) => rowSafety(r).safety;
@@ -93,7 +119,6 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   const m = ticked.filter((r) => r.kind === "worktree" && safetyOf(r) === "has_work").length;
   const acked = m === 0 || ack === m;
   const busy = phase === "run";
-  running.current = busy;
   const set = (key: string, on: boolean) => setOverride((o) => ({ ...o, [key]: on }));
 
   useEffect(() => {
@@ -101,20 +126,24 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
   }, [phase]);
 
   async function run() {
-    running.current = true;
     setPhase("run");
     setProgress(0);
-    const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, request as never);
+    // Each worktree removal marks its row Removing… in the sidebar.
+    const marked = (m: Parameters<typeof request>[0]) => {
+      if (m.type !== "worktree.remove") return request(m);
+      onRemoving(m.path, true);
+      return request(m).finally(() => onRemoving(m.path, false));
+    };
+    const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, marked as never);
     const r = await runCleanup(items, setProgress);
     // A worktree ticked (by "Also remove its worktree" or by default) that the filter hides is not removed: say so.
     for (const w of ticked) {
       const wt = w.kind === "worker" && w.worktree ? rows.find((x) => x.kind === "worktree" && x.path === w.worktree) : undefined;
       if (wt && isOn(wt) && !visible.includes(wt)) r.notes.push(`Worktree ${rowLabel(wt)} kept: hidden by the filter`);
     }
-    running.current = false;
     setResult(r);
     setPhase("done");
-    onDone();
+    onDone(r);
   }
 
   const sections = [
@@ -127,10 +156,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
     <Dialog.Portal>
       <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
       <Dialog.Popup
-        onKeyDown={(e) => {
-          if (e.key === "Escape" && busy) e.stopPropagation();
-          trapTab(e);
-        }}
+        onKeyDown={trapTab}
         className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-640px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,720px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:rounded-none"
         data-testid="cleanup-dialog"
         aria-modal="true"
@@ -138,6 +164,18 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
         <div className="flex flex-col gap-0.5 px-4 pt-4 pb-2">
           <Dialog.Title className="font-medium text-[15px] tracking-[-0.13px]">Clean up</Dialog.Title>
           <Dialog.Description className="text-muted-foreground text-sm">{describe(scope)}</Dialog.Description>
+          {repos.map((repo) => {
+            const f = fetches[repo];
+            if (!f) return null;
+            const secs = f.state === "done" ? Math.max(0, Math.round((clock - f.at) / 1000)) : 0;
+            const text = f.state === "fetching" ? "Fetching…" : f.state === "done" ? `Fetched ${secs < 60 ? `${secs} s` : timeAgo(f.at, clock)} ago` : `Fetch failed: ${f.reason} — results may be out of date`;
+            return (
+              <p key={repo} role="status" data-testid="cleanup-fetch" className={cn("text-xs", f.state === "failed" ? "text-destructive" : "text-muted-foreground")}>
+                {repos.length > 1 ? `${projectName(repo)}: ` : ""}
+                {text}
+              </p>
+            );
+          })}
         </div>
         {phase === "done" && result ? (
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-2" data-testid="cleanup-summary">
@@ -241,8 +279,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, running
               </Button>
             ) : (
               <>
-                <Button variant="ghost" disabled={busy} onClick={onClose} className="max-md:h-11" data-testid="cleanup-cancel">
-                  Cancel
+                <Button variant="ghost" onClick={onClose} className="max-md:h-11" data-testid="cleanup-cancel">
+                  {busy ? "Close" : "Cancel"}
                 </Button>
                 <Button variant="destructive" disabled={busy || n === 0 || !acked} onClick={() => void run()} className="max-md:h-11" data-testid="cleanup-confirm">
                   {confirmLabel(n, m)}
@@ -272,19 +310,25 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
   deleteBranch: boolean;
   setDeleteBranch: (on: boolean) => void;
 }) {
-  const { safety, reason } = rowSafety(r);
-  const text = safety === "safe" ? "Safe" : safety === "has_work" ? `Has work: ${reason}` : safety === "blocked" ? `Blocked: ${reason}` : "Checking…";
+  const { safety, reason, cached } = rowSafety(r);
+  const label = (s: string, why?: string) => (s === "safe" ? "Safe" : s === "has_work" ? `Has work: ${why}` : s === "blocked" ? `Blocked: ${why}` : "Checking…");
+  const text = cached ? `${label(cached.safety, cached.reason)} · Checking…` : label(safety, reason);
+  const checkedAt = r.kind === "worktree" ? (r.status ?? r.cached)?.checkedAt : undefined;
   const act = r.kind === "worker" ? r.lastActivity : Math.max(r.lastActivity ?? 0, r.status?.headTime ?? 0) || undefined;
   const meta = [
     r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
     act ? timeAgo(act, now) : undefined,
-    r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored >= 1000 ? "1000+" : r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
+    checkedAt && now - checkedAt > 5000 ? `checked ${timeAgo(checkedAt, now)}` : undefined,
+    r.kind === "worktree" && r.status && r.status.ignored === undefined ? "ignored files: checked at removal" : undefined,
+    r.kind === "worktree" && r.status?.ignored ? `${ignoredText(r.status.ignored)} will be deleted` : undefined,
+    r.kind === "worktree" && r.status?.upstreamGone ? "remote branch deleted" : undefined,
+    safety === "safe" ? reason : undefined,
     r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,
   ].filter(Boolean);
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;
   const wtHidden = !!wt && !shown(wt);
   const wtOk = wt && !wtHidden && !["blocked", "checking"].includes(safetyOf(wt));
-  const keptBranch = r.kind === "worktree" && r.branch && !r.branch.startsWith("worktree-") && !r.status?.createdBranch && r.status?.branchMerged;
+  const keptBranch = r.kind === "worktree" && r.branch && !r.status?.createdBranch && r.status?.branchMerged;
   return (
     <li className="flex min-h-8 flex-col justify-center py-1 max-md:min-h-11" data-testid="cleanup-row" data-key={r.key}>
       <div className="flex items-start gap-2">

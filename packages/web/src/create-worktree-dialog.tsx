@@ -60,10 +60,11 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   // The local list at once, then again after `git fetch --prune origin` (offline: the local list stays, with a hint).
   useEffect(() => {
     let live = true;
+    let fetched = false; // the fetched list never gives way to a plain one that arrives later
     const apply = (r: WorktreeBranchesResult) => live && (setBranches(r.branches), setDefaultBase(r.defaultBase));
-    ask.current<WorktreeBranchesResult>({ type: "worktree.branches", cwd: project }).then(apply, (e: Error) => live && setError(e.message));
+    ask.current<WorktreeBranchesResult>({ type: "worktree.branches", cwd: project }).then((r) => fetched || apply(r), (e: Error) => live && setError(e.message));
     ask.current<WorktreeBranchesResult>({ type: "worktree.branches", cwd: project, fetch: true }).then(
-      (r) => (apply(r), live && setFetchError(r.fetchError)),
+      (r) => ((fetched = true), apply(r), live && setFetchError(r.fetchError)),
       () => {},
     ).finally(() => live && setFetching(false));
     ask.current<SettingsResult>({ type: "settings.get" }).then(
