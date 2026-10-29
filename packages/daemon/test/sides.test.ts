@@ -8,13 +8,13 @@ import { PassThrough } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PushPayload, type ServerMessage } from "@claude-ui/protocol";
+import { NODE_MIN, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PushPayload, type ServerMessage } from "@claude-ui/protocol";
 import { runGit } from "../src/git-runner.ts";
 import { SideGone } from "../src/wsl-git.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
-import { createRouter, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupMessage, setupScript, wslArgs, wslSide, type SideProcess } from "../src/sides.ts";
+import { checkMessage, checkScript, createRouter, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupMessage, setupScript, wslArgs, wslSide, type SideProcess } from "../src/sides.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -121,7 +121,7 @@ describe("sides", () => {
     const script = Buffer.from(/echo (\S+) \|/.exec(args[5]!)![1]!, "base64").toString();
     expect(script).toContain("wslpath -u 'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\claude-code-ui'");
     expect(script).toContain('dir="$root/1.2.3-1700000000000"');
-    expect(script).toContain('exec node "$cli" --side');
+    expect(script).toContain('exec "${n:-node}" "$cli" --side');
   });
 
   it("the setup script installs into a temp folder, checks it, and only then moves it over the old install", () => {
@@ -139,7 +139,7 @@ describe("sides", () => {
 
   it("the docker setup script runs in plain sh: the tarball, no wslpath, roots from the working dir", () => {
     const s = setupScript("/tmp/claude-ui-side-0.2.0-1.tgz", "0.2.0-1", "docker");
-    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", 'exec node "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
+    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", 'exec "${n:-node}" "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
     expect(s).not.toContain("not_logged_in");
     for (const part of ["wslpath", "<(", "[[", "--install-links", "-exec"]) expect(s).not.toContain(part);
     expect(dockerExecArgs("dev", s)).toEqual(["exec", "-i", "dev", "sh", "-c", s]);
@@ -170,6 +170,8 @@ describe("sides", () => {
       const cliSource = broken ? "process.exit(1)" : 'console.log("side started")';
       const npm = `#!/bin/sh\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\necho "$p" >> '${log}'\nfresh=1; [ -d "$p/node_modules" ] && fresh=0\nmkdir -p "$p/node_modules/claude-code-ui/dist"\n${fail ? 'echo partial > "$p/node_modules/partial"' : `echo '${cliSource}' > "$p/node_modules/claude-code-ui/dist/cli.js"`}${failNow}\n${writeBinary}\n`;
       writeFileSync(join(bin, "npm"), npm, { mode: 0o755 });
+      // The host node is no "linux" node on macOS: a node that passes the usable_node rule and runs the rest on the host's.
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) case "$2" in *execPath*) echo "$0";; *) exec '${process.execPath}' "$@";; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
       const tgz = join(home, "side.tgz");
       writeFileSync(tgz, "");
       const r = spawnSync("sh", ["-c", setupScript(tgz, key, "docker")], { cwd: home, encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, ANTHROPIC_API_KEY: "test" } });
@@ -263,7 +265,7 @@ describe("sides", () => {
         if (nodeH) writeFileSync(join(prefix, "include/node/node.h"), "");
         writeFileSync(join(prefix, "include/node/node_version.h"), `#define NODE_MAJOR_VERSION ${maj}\n#define NODE_MINOR_VERSION ${min}\n#define NODE_PATCH_VERSION ${pat}\n`);
       }
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -p) case "$2" in *split*) echo 22;; *execPath*) echo "$(dirname "$(readlink -f "$0")")/node";; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -v) echo v${FAKE};; -e) echo claude-ui-node-ok;; -p) case "$2" in *split*) echo 22;; *execPath*) echo "$(dirname "$(readlink -f "$0")")/node";; *) echo ${FAKE};; esac;; *) exec '${process.execPath}' "$@";; esac\n`, { mode: 0o755 });
       // symlinked: node reaches PATH through a link in a folder without headers (Volta, asdf, /usr/bin/node -> /opt/node/bin/node)
       let nodeBin = bin;
       if (symlinked) {
@@ -313,6 +315,33 @@ describe("sides", () => {
       for (const part of ["/usr /usr/local", 'dirname "$(dirname "$(node -p process.execPath 2>/dev/null)")"', "include/node/node.h", "npm_config_nodedir"]) expect(s).toContain(part);
       expect(s.indexOf("npm_config_nodedir")).toBeLessThan(s.indexOf('npm install --prefix "$new"'));
     });
+  });
+
+  it("a found Node.js that does not start claude-ui: the hub starts again once with the pinned one, with the reason as a note; no error", async () => {
+    const calls: { pinned?: boolean }[] = [];
+    const notes: (string | undefined)[] = [];
+    let list: () => { nodeNote?: string; state: string }[] = () => [];
+    const spawn = vi.fn(async (_id: string, o: { pinned?: boolean }) => {
+      calls.push({ pinned: o.pinned });
+      notes.push(list().find((x) => x.state === "starting")?.nodeNote);
+      return o.pinned ? inProcessSide() : failingSide("node_unusable");
+    });
+    const two = createSides({ targets: [wslSide("Ubuntu")], spawn: spawn as never, posixLocal: true });
+    list = () => two.list() as never;
+    await two.start("wsl:Ubuntu");
+    expect(calls).toEqual([{ pinned: undefined }, { pinned: true }]);
+    expect(notes[1]).toMatch(/did not start claude-ui/);
+    expect(two.list().find((x) => x.id === "wsl:Ubuntu")).toMatchObject({ state: "ready" });
+    // The pinned start fails too: an error, no third try.
+    spawn.mockClear();
+    const three = createSides({ targets: [wslSide("Ubuntu")], spawn: (async () => failingSide("node_unusable")) as never, posixLocal: true });
+    await expect(three.start("wsl:Ubuntu")).rejects.toThrow();
+  });
+
+  it("the minimum Node.js comes from engines.node: messages carry it, no script hard-codes a version", () => {
+    for (const m of [setupMessage("node_missing", "", "X"), setupMessage("node_old", "v18", "X", true), checkMessage("node_missing", "X"), checkMessage("node_old", "X", { docker: true, detail: "v18" })]) expect(m).toContain(NODE_MIN);
+    for (const s of [setupScript("/s", "k", "docker"), setupScript("C:\\p", "k", "wsl"), checkScript("k", "docker"), checkScript("k", "wsl", "C:\\p")]) expect(s).not.toMatch(/-ge 22|>= ?22/);
+    expect(setupMessage("node_changed", "", "X")).toMatch(/changed while it started/);
   });
 
   it("setup errors in a container name the container's next step", () => {

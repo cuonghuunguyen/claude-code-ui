@@ -11,6 +11,8 @@ import { isImeKey } from "./ime.ts";
 type Props = {
   jira: Settings["jira"];
   tokenSet: boolean;
+  /** An old-format token was cleared by a security update (GH-487); shown until a token is saved. */
+  tokenReset?: boolean;
   saving: boolean;
   save: (patch: SettingsPatch, field?: string) => Promise<void>;
   request: <T>(m: Request) => Promise<T>;
@@ -22,7 +24,7 @@ type Props = {
 const INPUT = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 const ROW = "flex flex-col gap-1 border-t py-2";
 
-export function JiraSection({ jira, tokenSet, saving, save, request, onResult, onError }: Props) {
+export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request, onResult, onError }: Props) {
   const [draft, setDraft] = useState<Partial<Record<"url" | "email" | "template" | "jql", string>>>({});
   const [replacing, setReplacing] = useState(false);
   const [token, setToken] = useState("");
@@ -46,7 +48,7 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
         placeholder={o.placeholder}
         onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
         onBlur={() => commit(k)}
-        onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && e.currentTarget.blur()}
+        onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())} // preventDefault: on a phone the focus falls to Back and this Enter would click it
         disabled={saving}
         className={INPUT}
         aria-describedby={`settings-jira-${k}-hint`}
@@ -134,6 +136,11 @@ export function JiraSection({ jira, tokenSet, saving, save, request, onResult, o
               </Button>
             )}
           </div>
+        )}
+        {tokenReset && !tokenSet && (
+          <span role="status" className="text-xs" data-testid="settings-jira-token-reset">
+            Your saved token was cleared by a security update. Enter it again.
+          </span>
         )}
         <span id="settings-jira-token-hint" className="text-muted-foreground text-xs">
           {cloud ? "Create one at id.atlassian.com › Security › API tokens." : "Create one in Jira › Profile › Personal Access Tokens."} Saved on the daemon's computer only, never shown again.

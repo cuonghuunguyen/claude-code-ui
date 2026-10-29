@@ -54,6 +54,7 @@ Feature: Split view with a session and one of its panes
     And I capture "graph-menu-refused"
     When I close the menu
     And I click the first session tab
+    And I hide the side panel
     And I hold the "Git graph" tab over the right edge of the session area
     Then the drop overlay says "Git graph needs the whole area"
     And I capture "graph-drop-refused"

@@ -12,4 +12,5 @@ Deleting a worktree must delete the branch claude-ui created for it (a Created b
 
 - A held `config.lock` is retried a few times; when the write still fails, the create succeeds without the mark (warning in the daemon log) and that branch is kept on delete like a user's branch.
 - A user can mark or unmark a branch by hand (`git config branch.<name>.claudeUiCreated true|false`).
-- An existing branch checked out through the Branch source is never marked: deleting its worktree keeps it unless the user asks and it is merged.
+- An existing branch checked out through the Branch source is never marked `true` (a `worktree-*` one is marked `false`, so the legacy prefix rule skips it): deleting its worktree keeps it unless the user asks and it is merged.
+- A `worktree-*` branch checked out through the Branch source before the `false` mark existed carries no mark and is still deleted with its worktree (the legacy prefix rule); no migration. When the `false` mark cannot be written, the checkout is undone (`git_failed`) and the branch stays.

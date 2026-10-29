@@ -16,10 +16,10 @@ export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "session.edits", "session.ids", "session.interrupt", "session.list", "session.media", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
   "session.setModel", "session.setPermissionMode", "session.shellOutput", "session.stopShell", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
   "side.check", "side.start", "skills.list", "skills.setState", "terminal.attach", "terminal.close", "terminal.create", "terminal.detach", "terminal.input", "terminal.list",
-  "terminal.resize", "update.install", "update.restart", "aside.open", "aside.close", "aside.keep", "worker.close", "worker.remove", "worktree.branches", "worktree.create", "worktree.pr", "worktree.remove", "worktree.status",
+  "terminal.resize", "update.install", "update.restart", "aside.open", "aside.close", "aside.keep", "worker.close", "worker.remove", "worktree.branches", "worktree.cached", "worktree.cancel", "worktree.create", "worktree.pr", "worktree.remove", "worktree.status",
 ]);
 const CMDS = new Set(["git", "claude", "node", "docker", "wsl", "powershell", "tailscale", "npm", "sh", "bash", "cmd", "taskkill", "osascript", "notify-send"]);
-export const GIT_SUBS = ["status", "log", "show", "diff", "diff-tree", "rev-parse", "worktree", "for-each-ref", "branch", "cat-file", "ls-files", "symbolic-ref", "merge-base", "rev-list", "config", "check-ignore", "grep"] as const;
+export const GIT_SUBS = ["status", "log", "show", "diff", "diff-tree", "rev-parse", "worktree", "for-each-ref", "branch", "cat-file", "ls-files", "symbolic-ref", "merge-base", "rev-list", "config", "check-ignore", "grep", "merge-tree", "fetch"] as const;
 
 /** The git subcommand of an argument list (skips `-c x=y`, `-C dir` and `--flags`), from the allowlist, else "other". */
 export function gitSub(args: readonly string[]): string {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage, SideCheck } from "@claude-ui/protocol";
+import { NODE_OK_JS } from "../src/side-bundle.ts";
 import { blockedCheck, checkMessage, checkScript, createRouter, createSides, parseCheck, setupScript, verdictOf, wslSide, dockerSide, type SideProcess } from "../src/sides.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -14,13 +15,14 @@ const hasSh = spawnSync("sh", ["-c", "true"]).status === 0;
 const SH = existsSync("/bin/sh") ? "/bin/sh" : "sh";
 const KEY = "0.5.0-1700";
 
-const base = { make: true, python3: true, cxx: true, installed: "none" as "current" | "other" | "none", node: "22.4.0" as string | undefined };
+const base = { make: true, python3: true, cxx: true, installed: "none" as "current" | "other" | "none", node: "22.4.0" as string | undefined, foundNode: true as boolean | undefined };
 const verdict = (checked: Partial<Parameters<typeof verdictOf>[0]["checked"]>, o: Partial<Parameters<typeof verdictOf>[0]> = {}) => verdictOf({ key: KEY, label: "WSL: Ubuntu", kind: "wsl", build: true, checked: { ...base, ...checked }, ...o });
 
 describe("checkScript", () => {
   for (const kind of ["wsl", "docker"] as const) {
     it(`${kind}: only reads: no install, copy, write, redirect into a file, key names or file contents`, () => {
-      const s = checkScript(KEY, kind, "C:\\pkg");
+      // The JS the candidate node runs holds `>=` and `<`: not shell redirects.
+      const s = checkScript(KEY, kind, "C:\\pkg").replace(NODE_OK_JS, "");
       for (const bad of [/\bnpm\s+\w/, /\brm\b/, /\bmv\b/, /\bmkdir\b/, /\bcp\b/, /\bcat\b/, /\btee\b/, /\btouch\b/, /\bchmod\b/, /\bpack\b/, /ANTHROPIC|OAUTH|TOKEN|API_KEY/, /\benv\b|\bprintenv\b/, /node "?\$cli|--side|exec node/]) expect(s).not.toMatch(bad);
       // Redirects only into /dev/null or other file descriptors.
       for (const m of s.matchAll(/\d?>>?\s*([^\s;&|)]+)/g)) expect(m[1]).toMatch(/^(\/dev\/null|&\d)$/);
@@ -64,7 +66,7 @@ describe("parseCheck", () => {
     expect(parseCheck(out(["node=22.1.0", "writable=", "installed=current"]))!.writable).toEqual([]);
   });
   it("docker: target, tools and the own-Node flag", () => {
-    const r = parseCheck(out(["node=none", "arch=aarch64", "libc=glibc", "glibc=2.36", "cxxrt=1", "tar=1", "gzip=0", "git=1", "npm=0", "bundled=1", "installed=current"]))!;
+    const r = parseCheck(out(["node=none", "foundnode=0", "arch=aarch64", "libc=glibc", "glibc=2.36", "cxxrt=1", "tar=1", "gzip=0", "git=1", "npm=0", "bundled=1", "installed=current"]))!;
     expect(r).toMatchObject({ target: { arch: "aarch64", libc: "glibc", glibc: "2.36", cxxRuntime: true }, tools: { tar: true, gzip: false, git: true, npm: false, cxxRuntime: true }, bundled: true });
   });
   it("is undefined without the last line (the script did not finish) or without any line", () => {
@@ -81,13 +83,13 @@ describe("verdictOf", () => {
       ["update", { installed: "other", installedKey: "0.4.0-1" }, {}, "update", undefined],
       ["installed", { installed: "current" }, {}, "installed", undefined],
       ["no build", { installed: "current" }, { build: false }, "blocked", "no_build"],
-      ["no node", { node: undefined }, {}, "blocked", "node_missing"],
-      ["old node", { node: "20.11.0" }, {}, "blocked", "node_old"],
+      ["no node", { node: undefined, foundNode: false }, {}, "blocked", "node_missing"],
+      ["old node", { node: "20.11.0", foundNode: false }, {}, "blocked", "node_old"],
       ["tools missing", { make: false, cxx: false }, {}, "blocked", "build_tools_missing"],
       ["tools missing but installed", { make: false, installed: "current" }, {}, "installed", undefined],
       ["package unreadable", { packageVisible: false }, {}, "blocked", "package_unreadable"],
       ["package unreadable but installed", { packageVisible: false, installed: "current" }, {}, "installed", undefined],
-      ["old node beats tools", { node: "18.0.0", make: false }, {}, "blocked", "node_old"],
+      ["old node beats tools", { node: "18.0.0", foundNode: false, make: false }, {}, "blocked", "node_old"],
       ["docker: nothing writable", { writable: [] }, { kind: "docker", cpUsable: false }, "blocked", "no_writable_path"],
       ["docker: cp works, nothing writable for a stream", { writable: [] }, { kind: "docker", cpUsable: true }, "install", undefined],
       ["docker: cp unknown, nothing writable", { writable: [] }, { kind: "docker" }, "install", undefined],
@@ -119,7 +121,8 @@ describe("verdictOf", () => {
     expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringContaining("tar and gzip")]);
     // Installed with its own Node.js: starts without the container's; installed by npm: needs it.
     expect(verdict({ node: undefined, installed: "current", bundled: true }, { kind: "docker", install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
-    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).reason).toBe("node_missing");
+    // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
+    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
   });
 
   it("wsl bundle path: no Node.js or build tools needed; tar and gzip are; an own-Node install runs without Node.js; npm path as before", () => {
@@ -133,7 +136,8 @@ describe("verdictOf", () => {
     const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
     expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringMatching(/tar and gzip.*in the distro/)]);
     expect(verdict({ node: undefined, installed: "current", bundled: true }, { install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
-    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).reason).toBe("node_missing");
+    // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
+    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
     // npm (musl, other CPU, no dist/side): Node.js and build tools as before, with the reason.
     const npm = verdict({ node: undefined }, { install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" } });
     expect(npm.reason).toBe("node_missing");
@@ -211,7 +215,7 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     if (o.install === "other") pkg("0.4.0-1", true);
     if (o.credentials !== false) (mkdirSync(join(home, ".claude")), writeFileSync(join(home, ".claude/.credentials.json"), "SECRET-DO-NOT-READ"));
     // A fake node answers `-p` (the version), `-v` and `--version`; run as the side it prints a marker.
-    if (o.node !== false) writeFileSync(join(bin, "node"), `#!/bin/sh\necho "node $*" >> '${log}'\ncase "$1" in -p) case "$2" in *split*) echo ${(o.node ?? "22.4.0").split(".")[0]};; *) echo ${o.node ?? "22.4.0"};; esac;; -v) echo v${o.node ?? "22.4.0"};; *) echo side started;; esac\n`, { mode: 0o755 });
+    if (o.node !== false) writeFileSync(join(bin, "node"), `#!/bin/sh\necho "node $*" >> '${log}'\ncase "$1" in -e) if [ "${(o.node ?? "22.4.0").split(".")[0]}" -ge 22 ]; then echo claude-ui-node-ok; fi;; -p) case "$2" in *execPath*) echo "$0";; *split*) echo ${(o.node ?? "22.4.0").split(".")[0]};; *) echo ${o.node ?? "22.4.0"};; esac;; -v) echo v${o.node ?? "22.4.0"};; *) echo side started;; esac\n`, { mode: 0o755 });
     if (o.tools !== false) for (const t of ["make", "python3", "g++"]) writeFileSync(join(bin, t), "#!/bin/sh\n", { mode: 0o755 });
     // npm only logs (and fakes a complete install into the --prefix).
     writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "npm $*" >> '${log}'\nwhile [ "$1" != --prefix ]; do shift; done; p=$2\nmkdir -p "$p/node_modules/claude-code-ui/dist" "$p/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"\necho x > "$p/node_modules/claude-code-ui/dist/cli.js"\n`, { mode: 0o755 });
@@ -236,8 +240,9 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     expect(c.out).not.toContain(c.home);
     expect(c.unchanged).toBe(true);
     expect(c.calls().filter((l) => l.startsWith("npm"))).toEqual([]);
-    // Only `node -p <version>` ever ran, never the claude-ui entry.
-    expect(c.calls()).toEqual(["node -p process.versions.node"]);
+    // Node only answered version and detection questions, never ran the claude-ui entry.
+    expect(c.calls().filter((l) => /cli\.js|--side/.test(l))).toEqual([]);
+    expect(c.parsed).toMatchObject({ foundNode: true });
   });
   it("another build installed: update, named; this build without the SDK binary counts as not current", () => {
     expect(check({ install: "other" }).parsed).toMatchObject({ installed: "other", installedKey: "0.4.0-1" });

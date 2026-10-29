@@ -2,10 +2,24 @@ import { expect, type Page } from "@playwright/test";
 import { TURN_MS } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
+async function clickFocus(page: Page) {
+  // On a phone the tab strip sits behind the switcher.
+  if (await page.getByTestId("focus-tab").isVisible()) await page.getByTestId("focus-tab").click();
+  else {
+    await page.getByTestId("tab-switcher").click();
+    await page.getByRole("option", { name: /^Focus/ }).click();
+  }
+}
+
 When("I open Focus", async ({ page }) => {
-  // On a phone the tab strip sits behind the switcher; this scenario runs at desktop size.
-  await page.getByTestId("focus-tab").click();
+  await clickFocus(page);
   await expect(page.getByTestId("focus-page")).toBeVisible();
+});
+
+// A maximized bottom panel stays maximized on Focus (GH-367): the page sits behind it.
+When("I switch to Focus", async ({ page }) => {
+  await clickFocus(page);
+  await expect(page.getByTestId("focus-tab")).toHaveAttribute("data-active", "true");
 });
 
 When("I select the {word} request in Focus", async ({ page }, kind: string) => {

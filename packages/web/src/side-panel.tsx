@@ -3,7 +3,7 @@
 // itself: the owner calls onRun when a button is pressed (docs/spec.md "Sides").
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, LoaderCircleIcon, MinusIcon, TriangleAlertIcon } from "lucide-react";
-import type { SideCheck, SideInfo, SidePhase, SideSetup } from "@claude-ui/protocol";
+import { NODE_MIN, NODE_MIN_MAJOR, type SideCheck, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import { ContainerNeeds } from "./container-needs.tsx";
 
@@ -59,9 +59,9 @@ function fixText(check: SideCheck, label: string): string | undefined {
     case "package_unreadable":
       return "claude-ui cannot read its own files to install them. Wait for the build to finish, then check again.";
     case "node_missing":
-      return `Node.js 22 or newer is not installed in ${label}. Install it there (for example nvm install 22), then check again.`;
+      return `Node.js ${NODE_MIN} or newer is not installed in ${label}. Install it there (for example nvm install ${NODE_MIN_MAJOR}), then check again.`;
     case "node_old":
-      return `Node.js ${f.node ?? ""} in ${label} is too old. Install version 22 or newer, then check again.`;
+      return `Node.js ${f.node ?? ""} in ${label} is too old. Install version ${NODE_MIN} or newer, then check again.`;
     case "build_tools_missing":
       return `Build tools are missing in ${label}: ${missingTools(f.buildTools).join(", ")}. Install them, then check again.`;
     case "unpack_tools_missing":
@@ -81,7 +81,7 @@ type Row = { name: string; value: string; status: "ok" | "missing" | "na" };
 function rowsOf(c: SideCheck, docker = true): Row[] {
   const f = c.facts;
   const na = (name: string): Row => ({ name, value: "Not checked", status: "na" });
-  if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na("Node.js 22+"), na("Build tools"), na("claude-ui for this build")];
+  if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na(`Node.js ${NODE_MIN_MAJOR}+`), na("Build tools"), na("claude-ui for this build")];
   const tools = missingTools(f.buildTools);
   const build: Row = f.installed === "current" ? { name: "claude-ui for this build", value: "Installed", status: "ok" } : f.installed === "other" ? { name: "claude-ui for this build", value: "Older build installed", status: "missing" } : { name: "claude-ui for this build", value: "Not installed", status: "missing" };
   // Docker with the bundle (or a build that runs on its own Node.js): the container's Node.js and build tools do not matter.
@@ -92,7 +92,7 @@ function rowsOf(c: SideCheck, docker = true): Row[] {
   }
   return [
     { name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" },
-    f.node === undefined && f.nodeOk === undefined ? na("Node.js 22+") : f.node && f.nodeOk ? { name: "Node.js 22+", value: f.node, status: "ok" } : { name: "Node.js 22+", value: f.node ? `${f.node} (too old)` : "Not installed", status: "missing" },
+    f.node === undefined && f.nodeOk === undefined ? na(`Node.js ${NODE_MIN_MAJOR}+`) : f.node && f.nodeOk ? { name: `Node.js ${NODE_MIN_MAJOR}+`, value: f.node, status: "ok" } : { name: `Node.js ${NODE_MIN_MAJOR}+`, value: f.node ? `${f.node} (too old)` : "Not installed", status: "missing" },
     !f.buildTools ? na("Build tools") : tools.length ? { name: "Build tools", value: `Missing: ${tools.join(", ")}`, status: "missing" } : { name: "Build tools", value: "Found", status: "ok" },
     build,
   ];
@@ -196,6 +196,11 @@ export function SidePanel({
             <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
             {phaseText}
             <Elapsed />
+          </p>
+        ) : null}
+        {inProgress && side.nodeNote ? (
+          <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-node-note">
+            The Node.js in the {noun} was not used: {side.nodeNote}. claude-ui installs its own Node.js.
           </p>
         ) : null}
         {inProgress && side.fallback ? (

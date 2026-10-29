@@ -72,11 +72,12 @@ export function RowContextMenu({ entries, children, testId }: { entries: () => M
 }
 
 /** `...` menu of a project or worktree row below `md`: the same entries as the context menu, so the label keeps the room. */
-export function RowMenu({ label, testId, entries }: { label: string; testId: string; entries: () => MenuEntry[] }) {
+export function RowMenu({ label, testId, entries, disabled }: { label: string; testId: string; entries: () => MenuEntry[]; disabled?: boolean }) {
   return (
     <Menu.Root>
       <Menu.Trigger
         aria-label={`Actions for ${label}`}
+        disabled={disabled}
         title="Actions"
         className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4"
         data-testid={testId}

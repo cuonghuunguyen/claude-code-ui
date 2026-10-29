@@ -31,7 +31,8 @@ export function splitJql(jql: string): { where: string; order?: string } {
 export type JiraDeps = {
   /** `jql`: the Ticket filter of Settings › Jira; blank = MY_OPEN_JQL. */
   config: () => { url: string; email: string; jql?: string };
-  token: () => string | undefined;
+  /** The token saved for this origin (GH-487). */
+  token: (origin: string) => string | undefined;
   fetch?: typeof fetch;
   timeoutMs?: number;
 };
@@ -45,8 +46,8 @@ export function createJira(d: JiraDeps) {
   /** GET `<base>/rest/api/<2|3>/<path>`; 404 is null. */
   async function get(path: string): Promise<unknown | null> {
     const { url, email } = d.config();
-    const token = d.token();
     if (!url) throw new JiraError("jira_not_configured", "Jira is not set up: add its URL and token in Settings › Jira");
+    const token = d.token(jiraOrigin(url));
     if (!token) throw new JiraError("jira_not_configured", "No Jira token: set one in Settings › Jira");
     // GH-451: a stored non-local http address is kept, but never gets the token.
     const unsafe = jiraUrlProblem(url);
@@ -97,7 +98,8 @@ export function createJira(d: JiraDeps) {
       const key = jiraKeyOf(t);
       if (key) {
         const r = (await get(`issue/${encodeURIComponent(key)}?fields=${FIELDS}`)) as Raw | null;
-        return r ? [ticketOf(r)] : [];
+        if (r) return [ticketOf(r)];
+        if (/^https?:\/\//i.test(t)) return []; // a link to a missing ticket: nothing to search
       }
       const words = t.replace(SPECIAL, " ").split(/\s+/).filter((w) => w && !/^(and|or|not)$/i.test(w));
       if (!words.length) return search(filter || MY_OPEN_JQL);

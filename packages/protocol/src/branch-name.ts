@@ -1,4 +1,5 @@
 // Branch-name rules of the Create worktree modal (docs/spec.md "Worktrees", GH-447), shared by the daemon and the web app.
+import { jiraKeyInBranch } from "./pull-request.ts";
 import { worktreeNameError } from "./wire.ts";
 
 /** Longest normalized name (Name rule). */
@@ -7,6 +8,8 @@ export const BRANCH_NAME_MAX = 80;
 export const BRANCH_MAX = 200;
 /** Summary part of a Ticket branch name. */
 export const SUMMARY_MAX = 50;
+/** worktreeNameError's folder limit. */
+const FOLDER_MAX = 64;
 export const DEFAULT_BRANCH_TEMPLATE = "{type}/{key}-{summary}";
 
 /** Each `/` separated part: no leading or trailing `-` or `.`, no `.lock` suffix; empty parts dropped. */
@@ -53,11 +56,36 @@ const lowerName = (input: string) =>
 /** The worktree folder of a branch: `/` becomes `-` (`feat/x` → `feat-x`). */
 export const branchFolder = (branch: string) => branch.replaceAll("/", "-");
 
+/**
+ * The worktree folder when an existing branch is checked out: `branchFolder`, cut to 64 characters at a word (`-`) like the Ticket source's summary; a ticket key in the name is never cut.
+ * The branch name stays as is. A key that itself crosses the limit stays whole (the folder rule refuses it then).
+ */
+export function checkoutFolder(branch: string): string {
+  const folder = branchFolder(branch);
+  if (folder.length <= FOLDER_MAX) return folder;
+  const key = jiraKeyInBranch(branch);
+  const at = key ? folder.toUpperCase().indexOf(key) : -1;
+  const floor = at >= 0 ? at + key!.length : 0;
+  let s = folder.slice(0, Math.max(FOLDER_MAX, floor));
+  // A word cut never goes back into the prefix (`feature/` + one long word keeps characters of the word, not only `feature`).
+  const i = s.lastIndexOf("-");
+  if (folder[s.length] !== "-" && i > Math.max(floor, branch.lastIndexOf("/", s.length))) s = s.slice(0, i);
+  return s.replace(/[-.]+$/, "");
+}
+
+/** Why an existing branch cannot be checked out into its folder (the key crosses the 64-character limit); undefined when it may. */
+export function checkoutFolderError(branch: string): string | undefined {
+  const folder = checkoutFolder(branch);
+  const e = worktreeNameError(folder);
+  return e && `Folder ${folder}: ${e}. The ticket key in the branch name is never cut: rename the branch to check it out.`;
+}
+
 /** Quick checks of a new branch name before the daemon's `git check-ref-format --branch`; undefined when it may be valid. */
 export function branchNameError(branch: string): string | undefined {
   if (!branch) return "Enter a branch name";
   if (branch.startsWith("-")) return "A branch name cannot start with -";
   if (branch.length > BRANCH_MAX) return `A branch name has at most ${BRANCH_MAX} characters`;
+  if (branch.includes("@{")) return "A branch name cannot contain @{";
   const folder = worktreeNameError(branchFolder(branch));
   if (folder) return `Folder ${branchFolder(branch)}: ${folder}`;
 }
@@ -73,14 +101,19 @@ export function ticketTypeWord(type: string): string {
 
 /**
  * Branch name of a Ticket from a template (default `{type}/{key}-{summary}`): `{type}` per `ticketTypeWord` (empty drops the `/`
- * after it), `{key}` as is, `{summary}` through the Name rule cut to 50 characters; the result through the Name rule with the key's case kept.
+ * after it), `{key}` as is, `{summary}` through the Name rule cut to 50 characters and, at a word, until the folder has at most 64 characters (the key is never cut); the result through the Name rule with the key's case kept.
  */
 export function ticketBranchName(template: string, t: TicketFields): string {
   const type = ticketTypeWord(t.type);
-  const summary = tidy(normalizeBranchName(t.summary).slice(0, SUMMARY_MAX));
-  let s = type ? template.replaceAll("{type}", type) : template.replace(/\{type\}\/?/g, "");
-  s = s.replaceAll("{key}", t.key).replaceAll("{summary}", summary);
-  return normalizeBranchName(s, { keep: t.key });
+  const shape = (type ? template.replaceAll("{type}", type) : template.replace(/\{type\}\/?/g, "")).replaceAll("{key}", t.key);
+  const build = (summary: string) => normalizeBranchName(shape.replaceAll("{summary}", summary), { keep: t.key });
+  let summary = tidy(normalizeBranchName(t.summary).slice(0, SUMMARY_MAX));
+  // Cut at a word (`-`) while the folder is too long; a single long word loses characters; the key is never cut.
+  while (summary && branchFolder(build(summary)).length > FOLDER_MAX) {
+    const i = summary.lastIndexOf("-");
+    summary = tidy(i > 0 ? summary.slice(0, i) : summary.slice(0, -1));
+  }
+  return build(summary);
 }
 
 const KEY = /^[A-Za-z][A-Za-z0-9_]+-\d+$/;

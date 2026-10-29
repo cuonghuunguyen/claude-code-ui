@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -33,6 +33,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
+  let jiraTokenReset = tokenReset;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
@@ -43,23 +44,27 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
       settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
-    if (msg.type === "jira.token") jiraToken = msg.token !== null;
+    if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
     if (msg.type === "jira.test") return { user: "Ann Example" };
-    return { settings, ...(daemon && { daemon }), jiraToken };
+    return { settings, ...(daemon && { daemon }), jiraToken, ...(jiraTokenReset && { jiraTokenReset: true }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
   prompt.setAttribute("aria-label", "Prompt");
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   document.body.append(el, prompt);
+  let bump = () => {};
   function Host() {
     const [open, set] = useState(true);
+    const [changed, setChanged] = useState(0);
+    bump = () => setChanged((n) => n + 1);
     const [grouping, setGrouping] = useState<TabGrouping>("project");
     const [compact, setCompact] = useState(false);
     const [auto, setAuto] = useState<"off" | "1h" | "1d">("off");
     return (
       <SettingsDialog
         open={open}
+        changed={changed}
         onShortcuts={onShortcuts}
         push={{ ...push, toggle }}
         request={request as never}
@@ -87,7 +92,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
+  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -140,6 +145,39 @@ it("Orchestration shows Maximum tree depth and Maximum workers per coordinator a
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
+});
+
+it("two number fields edited before the refetch of the first save both keep their edit (GH-498)", async () => {
+  const { q, calls, pick, bump } = await render();
+  await pick("orchestration");
+  const type = async (id: string, v: string) => {
+    const input = q(id) as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return input;
+  };
+  const first = await type("settings-orchestration-maxDepth", "3");
+  const second = await type("settings-orchestration-maxChildren", "5");
+  await act(async () => first.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await bump(); // settings_changed of the first save arrives: the dialog refetches
+  expect((q("settings-orchestration-maxChildren") as HTMLInputElement).value).toBe("5");
+  await act(async () => second.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: unknown }).patch)).toEqual([{ orchestration: { maxDepth: 3 } }, { orchestration: { maxChildren: 5 } }]);
+});
+
+it("Enter in a field commits it without a keypress that can activate the Back button the focus falls to on a phone (GH-500)", async () => {
+  const { q, pick } = await render();
+  await pick("jira");
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  await act(async () => void q("settings-jira-url")!.dispatchEvent(enter));
+  expect(enter.defaultPrevented).toBe(true);
+  await pick("orchestration");
+  const enter2 = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  await act(async () => void q("settings-orchestration-maxDepth")!.dispatchEvent(enter2));
+  expect(enter2.defaultPrevented).toBe(true);
+  expect(q("settings-panel")!.className).not.toContain("max-md:hidden");
 });
 
 it("Maximum workers in total shows 0 = no limit and saves a patch of its field", async () => {
@@ -381,6 +419,24 @@ it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only 
   await act(async () => q("settings-jira-token-clear")!.click());
   expect(calls.filter((c) => c.type === "jira.token").at(-1)).toEqual({ type: "jira.token", token: null });
   expect(q("settings-jira-token-set")).toBeNull();
+});
+
+it("Jira: a token cleared by the security update says so under the token field until a token is saved (GH-487)", async () => {
+  const { q, pick } = await render({ tokenReset: true });
+  await pick("jira");
+  expect(q("settings-jira-token-reset")!.textContent).toBe("Your saved token was cleared by a security update. Enter it again.");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(q("settings-jira-token"), "tok-123");
+    q("settings-jira-token")!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("settings-jira-token-save")!.click());
+  expect(q("settings-jira-token-reset")).toBeNull();
+});
+
+it("Jira: no notice when no token was cleared (GH-487)", async () => {
+  const { q, pick } = await render();
+  await pick("jira");
+  expect(q("settings-jira-token-reset")).toBeNull();
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {

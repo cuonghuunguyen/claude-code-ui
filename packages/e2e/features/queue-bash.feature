@@ -4,7 +4,7 @@ Feature: Queue a shell command while a turn runs
     Given the app is open
     And I open the scratch project
     And I start a new Haiku session
-    When I send "Use the Bash tool to run exactly this command and nothing else: sleep 30; echo e2e > slept.txt"
+    When I send "Use the Bash tool to run exactly this command and nothing else: for i in $(seq 1 30); do sleep 1; done; echo e2e > slept.txt"
     And I allow the permission request
 
   Scenario Outline: A shell command sent during the turn is queued and runs after it at <width>x<height>

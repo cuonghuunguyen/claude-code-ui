@@ -1,6 +1,7 @@
 // Ticket tab, daemon side (GH-447): Jira auth by URL, my open tickets, key / text / URL search, errors.
 import { afterEach, describe, expect, it } from "vitest";
 import { createJira, JiraError } from "../src/jira.ts";
+import { createSecrets } from "../src/secrets.ts";
 import { fakeJira, type FakeJira, type FakeIssue } from "./fake-jira.ts";
 
 const ISSUES: FakeIssue[] = [
@@ -52,6 +53,17 @@ describe("createJira", () => {
     expect((await j.search("dark")).map((t) => t.key)).toEqual(["PRJ-2"]);
   });
 
+  it("search: key-shaped text with no such ticket runs the summary search", async () => {
+    fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: [{ key: "PRJ-7", type: "Bug", summary: "fix 123 crash on save", status: "To Do" }] });
+    const j = createJira({ config: () => ({ url: fake!.url, email: "" }), token: () => TOKEN });
+    expect((await j.search("fix-123")).map((t) => t.key)).toEqual(["PRJ-7"]);
+    expect(fake.requests.some((r) => r.path.includes("search") && new URL(r.path, "http://x").searchParams.get("jql")?.includes("summary ~"))).toBe(true);
+    // A link to a missing ticket: nothing.
+    const before = fake.requests.length;
+    expect(await j.search(`${fake.url}/browse/FIX-123`)).toEqual([]);
+    expect(fake.requests.slice(before).some((r) => r.path.includes("search"))).toBe(false);
+  });
+
   it("Ticket filter (JQL): lists its tickets with its order; text searches inside it; a key ignores it", async () => {
     fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: ISSUES });
     let jql = "project = OTH order by created ASC";
@@ -92,5 +104,14 @@ describe("createJira", () => {
     const failed = (await createJira({ config: () => ({ url: fake!.url, email: "" }), token: () => TOKEN }).search().catch((x) => x)) as JiraError;
     expect(failed.code).toBe("jira_failed");
     expect(failed.message).toContain("forced 500");
+  });
+  it("never sends the token to another origin than the one it was saved for (GH-487)", async () => {
+    fake = await fakeJira({ auth: `Bearer ${TOKEN}`, issues: ISSUES });
+    const s = createSecrets();
+    s.setJiraToken(TOKEN, "https://jira.example.com");
+    const j = createJira({ config: () => ({ url: fake!.url, email: "" }), token: (o) => s.jiraToken(o) });
+    expect(await code(j.test())).toBe("jira_not_configured");
+    expect(await code(j.search())).toBe("jira_not_configured");
+    expect(fake.requests).toEqual([]);
   });
 });

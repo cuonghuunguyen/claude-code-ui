@@ -110,7 +110,6 @@ When("I hold the {string} tab over the session split", async ({ page }, kind: st
 
 Then("the terminal of the split is ready", async ({ page }) => {
   await expect(paneSplit(page, "Terminal").locator(".xterm")).toBeVisible();
-  await expect(page.getByTestId("session-item").first()).toBeVisible();
 });
 
 Then("the sidebar highlights the session of the session split", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchFolder, branchNameError, DEFAULT_BRANCH_TEMPLATE, jiraIsCloud, jiraKeyOf, normalizeBranchName, ticketBranchName } from "../src/branch-name.ts";
+import { branchFolder, checkoutFolder, checkoutFolderError, branchNameError, DEFAULT_BRANCH_TEMPLATE, jiraIsCloud, jiraKeyOf, normalizeBranchName, ticketBranchName } from "../src/branch-name.ts";
 
 describe("normalizeBranchName (GH-447 Name rule)", () => {
   it.each([
@@ -101,5 +101,51 @@ describe("jiraIsCloud", () => {
     expect(jiraIsCloud("https://jira.acme.com")).toBe(false);
     expect(jiraIsCloud("https://atlassian.net.evil.com")).toBe(false);
     expect(jiraIsCloud("not a url")).toBe(false);
+  });
+});
+
+describe("GH-452 long names", () => {
+  const ok = (r: string) => {
+    expect(branchNameError(r)).toBeUndefined();
+    expect(r.endsWith("-")).toBe(false);
+  };
+  it("ticketBranchName keeps the folder within 64 characters for long summaries, long keys, Bug and templates without {type}", () => {
+    const long = "Support repo with client/server folder structure like the old monorepo layout for every service";
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Story", summary: long }));
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "VERYLONGPROJECT-123456", type: "Story", summary: long }));
+    ok(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Bug", summary: long }));
+    ok(ticketBranchName("{key}-{summary}", { key: "PROJ-351", type: "Story", summary: long }));
+    ok(ticketBranchName("{summary}", { key: "PROJ-351", type: "Story", summary: "x".repeat(60) }));
+    const r = ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key: "PROJ-351", type: "Story", summary: long });
+    expect(r).toBe("feature/PROJ-351-support-repo-with-client/server-folder");
+    // Key and type alone over 64: only the summary goes.
+    const key = "K".repeat(60) + "-1";
+    expect(ticketBranchName(DEFAULT_BRANCH_TEMPLATE, { key, type: "Bug", summary: "abc" })).toBe(`bugfix/${key}`);
+  });
+  it("branchNameError refuses @{ and still refuses a typed name over 64 folder characters", () => {
+    expect(branchNameError("a@{-1}")).toMatch(/@\{/);
+    expect(branchNameError("a".repeat(65))).toBeTruthy();
+  });
+  it("checkoutFolder: a short branch as branchFolder; a long one is cut at a word to 64 characters, never inside the ticket key", () => {
+    expect(checkoutFolder("feat/x")).toBe("feat-x");
+    const long = "feature/PROJ-351-support-repo-with-client/server-folder-structure-like-the-old-monorepo-layout";
+    const f = checkoutFolder(long);
+    expect(f).toBe("feature-PROJ-351-support-repo-with-client-server-folder");
+    expect(f.length).toBeLessThanOrEqual(64);
+    // The key ends at the limit: it stays whole, the rest goes.
+    expect(checkoutFolder(`${"a".repeat(50)}-PROJ-351-tail-${"b".repeat(30)}`)).toBe(`${"a".repeat(50)}-PROJ-351-tail`);
+    // The key crosses the limit: it is never cut (the folder rule then refuses it, as for the Ticket source).
+    expect(checkoutFolder(`${"a".repeat(60)}-PROJ-351-${"b".repeat(30)}`)).toBe(`${"a".repeat(60)}-PROJ-351`);
+    // No key, one long word: characters are cut.
+    expect(checkoutFolder("x".repeat(80))).toBe("x".repeat(64));
+  });
+  it("checkoutFolder never cuts back to the prefix alone: `feature/` + one long word keeps characters of the word", () => {
+    const f = checkoutFolder(`feature/${"x".repeat(80)}`);
+    expect(f).toBe(`feature-${"x".repeat(56)}`);
+    expect(checkoutFolder(`feature/${"word-".repeat(20)}end`).startsWith("feature-word")).toBe(true);
+  });
+  it("checkoutFolderError: none after a cut; a message when the ticket key itself crosses the limit", () => {
+    expect(checkoutFolderError(`feature/PROJ-351-${"x-".repeat(60)}`)).toBeUndefined();
+    expect(checkoutFolderError(`${"a".repeat(60)}-PROJ-351-tail`)).toMatch(/key.*never cut/);
   });
 });

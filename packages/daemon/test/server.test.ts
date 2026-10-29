@@ -2071,6 +2071,22 @@ describe("daemon", () => {
     }
   });
 
+  it("worktree.remove with the shown status refuses (stale) after a file was written since, and keeps the worktree", async () => {
+    const { root, repo, d, c } = await wtDaemon("wtshown-");
+    try {
+      const wt = join(root, "wt");
+      execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
+      const st = (await c.request({ type: "worktree.status", cwd: repo, path: wt }) as { result: { safety: string; uncommitted: number; ahead: number } }).result;
+      expect(st.safety).toBe("safe");
+      writeFileSync(join(wt, "late.txt"), "x");
+      const shown = { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } };
+      expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, ...shown })).toMatchObject({ code: "stale" });
+      expect(existsSync(join(wt, "late.txt"))).toBe(true);
+    } finally {
+      d.close();
+    }
+  });
+
   it.skipIf(process.platform === "win32")("worktree.status and worktree.remove refuse a symlinked path (not_removable)", async () => {
     const { root, repo, d, c } = await wtDaemon("wtlink-");
     try {
@@ -2103,7 +2119,7 @@ describe("daemon", () => {
     try {
       const wt = join(root, "wt");
       execFileSync("git", ["worktree", "add", "-q", "-b", "wt", wt], { cwd: repo });
-      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0 }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
+      for (const expect_ of ["x", null, { uncommitted: -1, ahead: 0, ignored: 0 }, { uncommitted: "1", ahead: 0, ignored: 0 }, { uncommitted: 0, ahead: 0, ignored: "1" }, { uncommitted: 1.5, ahead: 0, ignored: 0 }])
         expect(await c.request({ type: "worktree.remove", cwd: repo, path: wt, expect: expect_ } as never), JSON.stringify(expect_)).toMatchObject({ code: "bad_request" });
       expect(existsSync(wt)).toBe(true);
       writeFileSync(join(wt, "a.txt"), "1");

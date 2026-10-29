@@ -15,7 +15,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node22",
+  target: `node${pkg.engines.node.replace(/^>=\s*/, "").split(".")[0]}`,
   // Native or platform-specific packages stay runtime dependencies.
   external: Object.keys(pkg.dependencies),
   banner: { js: "#!/usr/bin/env node" },
@@ -28,7 +28,7 @@ const side = await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node22",
+  target: `node${pkg.engines.node.replace(/^>=\s*/, "").split(".")[0]}`,
   // bufferutil and utf-8-validate are optional to ws.
   external: ["node-pty", "@anthropic-ai/claude-agent-sdk", "bufferutil", "utf-8-validate"],
   // Inlined CommonJS packages call require() for Node built-ins.
