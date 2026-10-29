@@ -956,3 +956,33 @@ describe("Bash call moved to the background (GH-440)", () => {
     expect(adapter.convert({ type: "system", subtype: "task_updated", task_id: "bg1", patch: { status: "completed" }, uuid: "u2" } as never)).toEqual([]);
   });
 });
+
+describe("Bash mode command moved to the background (GH-485)", () => {
+  const user = (uuid: string, content: string) => ({ type: "user", uuid, message: { role: "user", content } });
+  const bashes = (ps: Part[]) => ps.filter((p): p is Extract<Part, { type: "bash" }> => p.type === "bash");
+  const moved = (id: string) => [user(id, "<bash-input>x</bash-input>"), user("o1", `<bash-stdout>Command was manually backgrounded by user with ID: ${id}. You will be notified with its output when it ends.</bash-stdout><bash-stderr></bash-stderr>`)];
+
+  it("a restored ! command moved to the background stays running until its notice; the notice sets status, exit code and output", () => {
+    const adapter = createAdapter();
+    const parts = moved("b1").flatMap((m) => adapter.convert(m as never));
+    expect(bashes(parts).at(-1)).toMatchObject({ id: "b1", status: "running", shell: "background" });
+    const notice = user("n1", '<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n<summary>Background command "x" failed with exit code 2</summary>\n</task-notification>\n<bash-stdout>out</bash-stdout><bash-stderr>err</bash-stderr><bash-exit-code>2</bash-exit-code>');
+    const ended = adapter.convert(notice as never);
+    expect(ended).toMatchObject([{ type: "bash", id: "b1", status: "error", shell: "background", exitCode: 2, stdout: "out", stderr: "err" }]);
+    expect(ended.some((p) => p.type === "user_text")).toBe(false);
+  });
+
+  it("a terminal CLI session's backgrounded ! command (2.1.312 records) ends by its task-notification", () => {
+    const parts = run(fixture("bang-backgrounded.jsonl"));
+    const b = bashes(parts);
+    expect(b.filter((p) => p.shell === "background").at(-1)).toMatchObject({ status: "done", shell: "background" });
+    expect(b.at(-1)).toMatchObject({ command: "echo second", status: "done", stdout: "second" });
+    expect(b.at(-1)!.shell).toBeUndefined();
+  });
+
+  it("endCalls stops a restored ! shell without a notice", () => {
+    const adapter = createAdapter();
+    moved("b2").forEach((m) => adapter.convert(m as never));
+    expect(bashes(adapter.endCalls())).toMatchObject([{ id: "b2", status: "stopped", shell: "background" }]);
+  });
+});

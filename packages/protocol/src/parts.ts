@@ -81,7 +81,7 @@ export type Part = { parentId?: string } & (
    * with the next prompt. `id` = its `<bash-input>` record's uuid. Live: re-emitted while output arrives (at most every 500 ms) and
    * at the end. `exitCode`: absent while running and in records without one. `stopped`: killed (Esc/Stop) or timed out.
    */
-  | { type: "bash"; id: string; command: string; stdout: string; stderr: string; status: "running" | "done" | "error" | "stopped"; exitCode?: number }
+  | { type: "bash"; id: string; command: string; stdout: string; stderr: string; status: "running" | "done" | "error" | "stopped"; exitCode?: number; /** Moved to the background (Run in background, GH-485): runs on as a background shell; the session is free. */ shell?: "background" }
   /**
    * `id` = `requestId`; re-emitted once settled. `suggestions` are the SDK's rules for "don't ask again";
    * `title` is the SDK's prompt sentence when it sends one.

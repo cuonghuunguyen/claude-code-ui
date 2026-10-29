@@ -162,6 +162,19 @@ describe("daemon", () => {
     expect(done.part.stdout).toBe(`${realpathSync(webRoot)}\n`);
   });
 
+  it.skipIf(!posix)("session.backgroundShell moves a running bash mode command to the background; session.stopShell kills it (GH-485)", async () => {
+    const c = await client();
+    const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+    await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await c.request({ type: "session.bash", sessionId: id, command: "sleep 30" });
+    const part = (c.inbox.find((m) => m.type === "event" && m.part.type === "bash") as { part: { id: string } }).part;
+    expect(await c.request({ type: "session.backgroundShell", sessionId: id, toolUseId: part.id })).toMatchObject({ type: "reply" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "bash" && "shell" in m.part && m.part.shell === "background");
+    expect(await c.request({ type: "session.stopShell", sessionId: id, toolUseId: "nope" })).toMatchObject({ type: "error", code: "unknown_shell" });
+    expect(await c.request({ type: "session.stopShell", sessionId: id, toolUseId: part.id })).toMatchObject({ type: "reply" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "bash" && m.part.status === "stopped");
+  });
+
   it("session.bash on a session whose folder left the allowlisted roots (removed) => cwd_not_allowed, nothing runs", async () => {
     const c = await client();
     const dir = mkdtempSync(join(webRoot, "gone-"));

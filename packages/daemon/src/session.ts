@@ -18,6 +18,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   bashRecords,
+  escapeBash,
   createAdapter,
   imageBlock,
   MAX_FROM_PARTS,
@@ -38,7 +39,10 @@ import {
   type SessionState,
 } from "@claude-ui/protocol";
 import type { PlanTracker } from "./plan-usage.ts";
-import { runBash, type BashRun } from "./bash.ts";
+import { runBash, type BashResult, type BashRun } from "./bash.ts";
+
+/** How long a restart waits for a bash mode command moved to the background (GH-485). Only the wait ends; the command is never killed for time. */
+export const BASH_BACKGROUND_WAIT_MS = 30 * 60_000;
 import { PartIndex } from "./part-index.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
@@ -160,7 +164,11 @@ export class Session {
   /** True while rewind() awaits rewindFiles(): a prompt then would run on the query the rewind closes. */
   private rewinding = false;
   /** The bash mode command that runs now (`bash()`). */
-  private bashRun?: BashRun;
+  private bashRun?: BashRun & { id: string; toBackground(): void };
+  /** Bash mode commands moved to the background (GH-485), by bash part id. `cleared`: a /clear took the query; its end notice is dropped. */
+  private bashShells = new Map<string, { run: BashRun; since: number; cleared?: true }>();
+  /** End notices of those commands that wait for the turn (or a bash mode command) to end: the CLI takes them after the turn. */
+  private bashNotices: { status: string; id: string; content: string }[] = [];
   /** Session-scoped grants the user gave (destination "session"): re-applied at each query start, the CLI forgets them on exit. */
   private grants: PermissionUpdate[] = [];
   /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
@@ -414,6 +422,7 @@ export class Session {
    */
   async close() {
     this.bashRun?.kill();
+    for (const b of this.bashShells.values()) b.run.kill();
     clearTimeout(this.externalQuiet);
     clearTimeout(this.staleTimer);
     this.generation++;
@@ -450,7 +459,7 @@ export class Session {
 
   /** Idle close (docs/spec.md "Idle close"): drops the live query when nothing runs or waits; the next prompt resumes. False when busy or no query. */
   releaseQuery() {
-    if (!this.query || !this.isLive() || this.busy() || this.externalTurn || this.bashRun || this.syncing) return false;
+    if (!this.query || !this.isLive() || this.busy() || this.externalTurn || this.bashRun || this.bashShells.size || this.syncing) return false;
     this.dropQuery();
     return true;
   }
@@ -485,7 +494,8 @@ export class Session {
     const id = randomUUID();
     const outId = randomUUID();
     const generation = this.generation;
-    const part = (p: Partial<Extract<Part, { type: "bash" }>>) => this.emit({ type: "bash", id, command, stdout: "", stderr: "", status: "running", ...p });
+    let bg = false;
+    const part = (p: Partial<Extract<Part, { type: "bash" }>>) => this.emit({ type: "bash", id, command, stdout: "", stderr: "", status: "running", ...(bg && { shell: "background" as const }), ...p });
     part({});
     let last = 0;
     let shown = "";
@@ -499,28 +509,78 @@ export class Session {
       shown = key;
       part({ stdout: latest[0], stderr: latest[1] });
     };
-    const run = (this.bashRun = (this.opts.runBash ?? runBash)(command, this.cwd, (stdout, stderr) => {
+    const raw = (this.opts.runBash ?? runBash)(command, this.cwd, (stdout, stderr) => {
       latest = [stdout, stderr];
       // At most every 500 ms, with a trailing update for the last output.
       if (!timer) timer = setTimeout(flush, Math.max(0, 500 - (Date.now() - last)));
-    }));
+    });
+    const run = (this.bashRun = {
+      ...raw,
+      done: raw.done,
+      id,
+      // Run in background (GH-485): the command runs on without the session; the CLI's two records go in at once.
+      toBackground: () => {
+        raw.background();
+        bg = true;
+        this.bashRun = undefined;
+        this.bashShells.set(id, { run: raw, since: Date.now() });
+        clearTimeout(timer);
+        flush();
+        part({ stdout: latest[0], stderr: latest[1] });
+        this.appendBashRecords([id, outId], [`<bash-input>${command}</bash-input>`, `<bash-stdout>Command was manually backgrounded by user with ID: ${id}. You will be notified with its output when it ends.</bash-stdout><bash-stderr></bash-stderr>`]);
+      },
+    });
     void run.done.then((r) => {
       clearTimeout(timer);
-      this.bashRun = undefined;
+      const shell = this.bashShells.get(id);
+      if (bg) this.bashShells.delete(id);
+      else this.bashRun = undefined;
       part({ stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, status: r.stopped ? "stopped" : r.exitCode ? "error" : "done" });
       if (!this.isLive() || generation !== this.generation) return;
-      const records = bashRecords(command, r.stdout, r.stderr, r.exitCode);
-      const uuids = [id, outId];
-      for (const u of uuids) {
-        this.known.add(u);
-        this.own.add(u);
-        this.timeline.push(u);
-      }
-      // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
-      this.lastAssistant = outId;
-      if (!this.query) this.start(false);
-      records.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
+      if (bg) return shell?.cleared ? undefined : this.bashEnded(id, command, r);
+      this.appendBashRecords([id, outId], bashRecords(command, r.stdout, r.stderr, r.exitCode));
+      this.flushBashNotices();
     });
+  }
+
+  /** Appends Bash mode records as own user messages; no turn (`shouldQuery: false`). The next prompt forks after the last one. */
+  private appendBashRecords(uuids: `${string}-${string}-${string}-${string}-${string}`[], contents: string[]) {
+    for (const u of uuids) {
+      this.known.add(u);
+      this.own.add(u);
+      this.timeline.push(u);
+    }
+    // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
+    this.lastAssistant = uuids.at(-1);
+    if (!this.query) this.start(false);
+    contents.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
+  }
+
+  /**
+   * End notice of a `!` command moved to the background (GH-485): the CLI's <task-notification> plus the output records. It starts
+   * a turn like the CLI does; a killed one waits for the next message. While a turn (or a bash mode command) runs it waits for its end.
+   */
+  private bashEnded(id: string, command: string, r: BashResult) {
+    const status = r.stopped ? "killed" : r.exitCode ? "failed" : "completed";
+    const cmd = escapeBash(command);
+    const summary = status === "killed" ? `Background command "${cmd}" was stopped` : status === "failed" ? `Background command "${cmd}" failed with exit code ${r.exitCode}` : `Background command "${cmd}" completed (exit code 0)`;
+    const content = `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>\n${bashRecords(command, r.stdout, r.stderr, r.exitCode)[1]}`;
+    this.bashNotices.push({ status, id, content });
+    this.flushBashNotices();
+  }
+
+  private flushBashNotices() {
+    if (!this.bashNotices.length || this.state !== "idle" || this.pending.size || this.rewinding || this.bashRun || !this.isLive()) return;
+    for (const { status, content } of this.bashNotices.splice(0)) {
+      const uuid = randomUUID();
+      this.known.add(uuid);
+      this.own.add(uuid);
+      this.timeline.push(uuid);
+      const turn = status !== "killed";
+      if (!this.query) this.start(turn);
+      if (turn) this.setState("running");
+      this.input.push({ type: "user", uuid, ...(!turn && { shouldQuery: false }), message: { role: "user", content }, parent_tool_use_id: null });
+    }
   }
 
   /** `images`: data URLs already checked with imageBlock(). Returns the user_text part id. */
@@ -637,9 +697,17 @@ export class Session {
     return true;
   }
 
-  /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`. False without a live query or when the CLI runs no foreground task of that call. */
+  /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`, or the running bash mode command with that part id (GH-485). False without a live query or when the CLI runs no foreground task of that call. */
   async backgroundShell(toolUseId: string): Promise<boolean> {
+    if (this.bashRun?.id === toolUseId) return this.bashRun.toBackground(), true;
     return this.query ? this.query.backgroundTasks(toolUseId) : false;
+  }
+
+  /** Kill (GH-442): a bash mode command moved to the background (GH-485), else the task of call `id` (Stop agent's way). */
+  async stopShell(id: string): Promise<boolean> {
+    const b = this.bashShells.get(id);
+    if (b) return b.run.kill(), true;
+    return this.stopSubagent(id);
   }
 
   /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file; undefined when none is known, it lies outside the CLI's task folder, or it is gone. */
@@ -734,7 +802,7 @@ export class Session {
    * run, background shell) of the own query runs: an update restart waits for it (docs/spec.md "Updates").
    */
   working() {
-    return this.state === "running" || this.state === "needs_input" || this.pending.size > 0 || this.tasks.size > 0 || this.cliTurn || !!this.bashRun;
+    return this.state === "running" || this.state === "needs_input" || this.pending.size > 0 || this.tasks.size > 0 || this.cliTurn || !!this.bashRun || [...this.bashShells.values()].some((b) => Date.now() - b.since < BASH_BACKGROUND_WAIT_MS);
   }
 
   /** A turn, a decision or a rewind is under way, or a subagent run of the own query still runs: a sync now would cut into it. */
@@ -1195,6 +1263,8 @@ export class Session {
       heir.ownCalls.add(call.id);
       heir.emit(call);
     }
+    // A command moved to the background keeps running here (list, Kill); its end notice is dropped: the heir's CLI does not know it.
+    for (const b of this.bashShells.values()) b.cleared = true;
     heir.tasks = this.tasks;
     this.tasks = new Map();
     heir.backgroundLevel = this.backgroundLevel;
@@ -1340,6 +1410,7 @@ export class Session {
     this.state = state;
     this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
+    if (state === "idle") this.flushBashNotices();
   }
 
   private bump() {

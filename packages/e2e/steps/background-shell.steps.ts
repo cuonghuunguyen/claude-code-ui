@@ -50,3 +50,23 @@ Then("the {string} tool card has no Run in background button", async ({ page }, 
 Then("the {string} tool card has no Run in background button right away", async ({ page }, text: string) => {
   await expect(button(page, text)).toHaveCount(0);
 });
+
+// Bash mode (GH-485): the card of a `!` command has a button at once (no registration delay).
+const lastBashCard = (page: Parameters<typeof toolCard>[0]) => page.getByTestId("bash-card").last();
+
+When("I click Run in background on the bash card", async ({ page }) => {
+  const b = lastBashCard(page).getByTestId("run-in-background");
+  await expect(b).toBeVisible();
+  await b.click();
+});
+
+Then("the bash card runs in the background", async ({ page }) => {
+  const card = lastBashCard(page);
+  await expect(card).toHaveAttribute("data-shell", "background");
+  await expect(card).toHaveAttribute("data-status", "running");
+  await expect(card.getByTestId("run-in-background")).toHaveCount(0);
+});
+
+Then("the bash card is finished", async ({ page }) => {
+  await expect(lastBashCard(page)).toHaveAttribute("data-status", /^(done|error)$/, { timeout: 60_000 });
+});

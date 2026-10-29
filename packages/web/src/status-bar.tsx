@@ -3,7 +3,8 @@ import { isBackgroundShell } from "@claude-ui/protocol";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { GitStatus } from "@claude-ui/protocol";
 import { usePhone } from "./lib/use-narrow.ts";
-import { wholeParts, type SessionView, type ToolCall } from "./store.ts";
+import { bashShell, type Shell } from "./shells.ts";
+import { wholeParts, type SessionView } from "./store.ts";
 
 /** 453, 241.1k, 54.4M. */
 export const tokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(1)}k` : `${(n / 1e6).toFixed(1)}M`);
@@ -30,12 +31,12 @@ export function totals(v: SessionView) {
 }
 
 /** Bash calls running as background shells (run_in_background or moved there) whose task has not ended (task_notification). */
-export const backgroundShells = (v: SessionView) =>
-  wholeParts(v).filter((p): p is ToolCall => p.type === "tool_call" && p.status === "running" && isBackgroundShell(p));
+export const backgroundShells = (v: SessionView): Shell[] =>
+  wholeParts(v).flatMap((p) => (p.type === "bash" && p.shell && p.status === "running" ? [bashShell(p)] : p.type === "tool_call" && p.status === "running" && isBackgroundShell(p) ? [p] : []));
 
-/** Running Bash calls the CLI runs as a foreground task: Run in background applies (GH-440). */
-export const foregroundShells = (v: SessionView) =>
-  wholeParts(v).filter((p): p is ToolCall => p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && p.shell === "foreground");
+/** Running Bash calls the CLI runs as a foreground task, and running bash mode commands: Run in background applies (GH-440, GH-485). */
+export const foregroundShells = (v: SessionView): Shell[] =>
+  wholeParts(v).flatMap((p) => (p.type === "bash" && p.status === "running" && !p.shell ? [bashShell(p)] : p.type === "tool_call" && p.tool === "Bash" && p.status === "running" && p.shell === "foreground" ? [p] : []));
 
 // ponytail: polls git every 5s while shown; a daemon-side watcher if many tabs or big repos make it slow.
 const GIT_POLL_MS = 5_000;

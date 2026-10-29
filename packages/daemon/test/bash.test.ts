@@ -55,6 +55,43 @@ describe("runBash", () => {
   });
 });
 
+describe("runBash background() (GH-485)", () => {
+  posix("never kills: the command runs past the foreground timeout", async () => {
+    const run = runBash("sleep 1; echo x", dir(), () => {}, { timeoutMs: 200 });
+    run.background();
+    expect(await run.done).toEqual({ stdout: "x\n", stderr: "", exitCode: 0, stopped: false });
+  });
+
+  posix("keeps the last maxChars of a stream (rolling tail) with a marker at the start", async () => {
+    const run = runBash("seq 1 20000", dir(), () => {}, { maxChars: 1000 });
+    run.background();
+    const r = await run.done;
+    expect(r.stdout.startsWith("… output truncated, showing the last 1000 characters\n")).toBe(true);
+    expect(r.stdout.endsWith("\n20000\n")).toBe(true);
+    expect(r.stdout).not.toContain("\n1\n");
+    expect(r.stdout.length).toBeLessThan(1100);
+  });
+
+  posix("the streamed output is the tail too; a short output has no marker", async () => {
+    const seen: string[] = [];
+    const run = runBash("seq 1 20000; sleep 0.2; echo end", dir(), (o) => seen.push(o), { maxChars: 1000 });
+    run.background();
+    await run.done;
+    expect(seen.at(-1)!.endsWith("20000\nend\n")).toBe(true);
+    expect(seen.at(-1)!.length).toBeLessThan(1100);
+    const short = runBash("echo hi", dir(), () => {});
+    short.background();
+    expect((await short.done).stdout).toBe("hi\n");
+  });
+
+  posix("kill() still stops a moved command", async () => {
+    const run = runBash("sleep 30", dir(), () => {});
+    run.background();
+    setTimeout(() => run.kill(), 100);
+    expect((await run.done).stopped).toBe(true);
+  });
+});
+
 describe("runBash release and records", () => {
   posix("a setsid background process holding the pipe does not keep the command running: kill() releases within the drain time", async () => {
     const run = runBash("setsid sleep 30 & sleep 30", dir(), () => {});
