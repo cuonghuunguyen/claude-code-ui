@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
 import { baseline, callStats, fileStats, sessionChanges, type FileChange, type Stats } from "./changes.ts";
 import type { SessionView } from "./store.ts";
-import { useDark } from "./theme.ts";
+import { useColorTheme, useDark } from "./theme.ts";
+import { diffThemes } from "./code-palette.ts";
 import { DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
@@ -867,12 +868,13 @@ export function KindBadge({ kind }: { kind: Kind }) {
 function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
   const { path } = row;
   const dark = useDark();
+  const colorTheme = useColorTheme();
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
   const [drawn, setDrawn] = useState(false);
   // One header per file, like OpenCode's (file header off in the library): the panel's own, with the relative path.
   const options = useMemo(
-    () => ({ ...DIFF_OPTIONS, diffStyle: style, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
-    [style, dark],
+    () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle: style, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
+    [style, dark, colorTheme],
   );
   const files = useMemo(
     () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: row.oldPath ?? path, contents: row.before }, new: { name: path, contents: row.after } }),

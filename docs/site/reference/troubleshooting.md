@@ -41,6 +41,10 @@ The dialog says why. Causes:
 - The container or distro uses musl (Alpine) or a CPU other than x86_64 and arm64, has glibc older than 2.28, or has no libstdc++. Use a glibc image or distro, or install Node.js 22+, make, python3 and g++ there.
 - Your computer could not download a part (Node.js from nodejs.org, only for a target without Node.js 22+; node-pty, the Claude Agent SDK or Claude Code from the npm registry) and has no checked copy in `~/.cache/claude-ui/side`. Check the network or set `CLAUDE_UI_UPDATE_REGISTRY` to a registry mirror, then retry.
 
+- `docker exec` could not run in the container (stopped meanwhile, no `sh`, runtime error): the reason quotes the error.
+
+Parts of an older claude-ui version stay in the cache for 7 days after their last use, then are removed.
+
 A downloaded or cached part that does not match its checksum is never used: it is downloaded again.
 
 ### Push notifications do not work

@@ -195,7 +195,7 @@ export function RepoSelector({ list, truncated, selected, onSelect, submoduleLim
           <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
           <Dialog.Popup
             aria-modal="true"
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-floating outline-none"
+            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-floating ring-[0.5px] ring-foreground/15 outline-none"
             data-testid="repo-sheet"
           >
             <Dialog.Title className="px-4 py-3 font-medium text-[15px]">Repositories</Dialog.Title>
@@ -213,7 +213,7 @@ export function RepoSelector({ list, truncated, selected, onSelect, submoduleLim
         <Popover.Positioner side="bottom" align="start" sideOffset={6} className="z-50">
           <Popover.Popup
             initialFocus={false}
-            className="flex max-h-[min(60vh,420px)] w-80 max-w-[calc(100vw-32px)] origin-(--transform-origin) flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
+            className="flex max-h-[min(60vh,420px)] w-80 max-w-[calc(100vw-32px)] origin-(--transform-origin) flex-col overflow-hidden rounded-2xl border bg-popover text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
             data-testid="repo-popup"
           >
             {open && content}

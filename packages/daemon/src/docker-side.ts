@@ -5,7 +5,7 @@ import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DockerState, SideCheck, SideCheckReason, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { blockedCheck, checkScript, dockerExecArgs, hasBuild, parseCheck, verdictOf, type SideBundle } from "./sides.ts";
-import { assembleBundle, claudePackage, DOCKER_PROBE, ensureParts, nodeDirName, parseTarget, partsFor, installMethodOf, pruneCache, sideBuild } from "./side-bundle.ts";
+import { assembleBundle, claudePackage, DOCKER_PROBE, ensureParts, bundleParts, markUsed, nodeDirName, parseTarget, partsFor, installMethodOf, probeFailReason, pruneCache, removeStale, safeKey, sideBuild } from "./side-bundle.ts";
 import { runCommand, type Runner } from "./update.ts";
 export { installMethodOf };
 
@@ -68,7 +68,7 @@ export function underDist(file: string, pkgDir: string): boolean {
   const rel = relative(resolve(pkgDir, "dist"), resolve(file));
   return rel !== "" && !rel.startsWith("..") && resolve(rel) !== rel;
 }
-export const safeKey = (key: string) => key.replace(/[^\w.-]/g, "_");
+export { safeKey };
 const packing = new Map<string, Promise<string>>();
 
 /** This claude-ui's package as an npm tarball, packed once per key into `<cacheDir>/<key>/`; other keys are removed. */
@@ -151,21 +151,35 @@ export async function prepareDockerSide(o: {
 async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDir: string; key: string; onPhase?: (p: SidePhase) => void; onInstall?: (i: { bundle: true }) => void }, src: BundleSource, label: string): Promise<{ path: string; bundle: SideBundle } | { fallback: string }> {
   const build = sideBuild(o.pkgDir);
   const probe = build ? await exec("docker", ["exec", o.name, "sh", "-c", DOCKER_PROBE], 15_000) : undefined;
-  const m = installMethodOf(probe ? parseTarget(probe.stdout) : undefined, !!build);
+  const target = probe ? parseTarget(probe.stdout) : undefined;
+  // docker exec did not run the probe (timeout, a failed exec): not a container the bundle does not cover.
+  if (probe && !target) return { fallback: probeFailReason(probe, "container") };
+  const m = installMethodOf(target, !!build);
   if (m.method === "npm") return { fallback: m.reason };
   if (o.pinned) m.node = "pinned";
   const version = safeKey(src.version);
   const dir = join(src.cacheRoot, version, m.target);
   let parts: Record<string, string>;
+  // Marked before the fetch: a slow cold download must not let another version's hub prune this folder meanwhile.
+  markUsed(src.cacheRoot, version);
   try {
     parts = await ensureParts({ dir, parts: (src.parts ?? partsFor)(m.target, { sdkVersion: build!.sdkVersion, node: m.node }), registry: src.registry, fetch: src.fetch, onDownload: () => o.onPhase?.("downloading") });
   } catch (e) {
-    return { fallback: `the host ${(e as Error).message} and has no verified copy of it` };
+    return { fallback: (e as Error).message };
   }
   pruneCache(src.cacheRoot, version);
   o.onInstall?.({ bundle: true });
   o.onPhase?.("packing");
-  const tar = await assembleBundle({ partFiles: parts, sideDir: build!.dir, version: src.version, outDir: join(src.cacheRoot, version, ".tmp") });
+  const outDir = join(src.cacheRoot, version, ".tmp");
+  // Tars of a crashed start (a live start deletes its own tar after the copy).
+  removeStale(outDir, "bundle-", 3_600_000);
+  let tar: string;
+  try {
+    tar = await assembleBundle({ partFiles: parts, sideDir: build!.dir, version: src.version, outDir });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    return { fallback: `the host could not assemble the bundle tar (${err.code ?? err.message})` };
+  }
   try {
     o.onPhase?.("copying");
     const path = await sendTarball(exec, o.name, label, tar, `claude-ui-side-${safeKey(o.key)}.tar`);
@@ -180,7 +194,7 @@ async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDi
  * `docker exec <name> sh -c <check script>`. Never packs, copies or writes; the inspect formats never print the environment.
  * Whether the package gets in by `docker cp` or by a stream is not told: it only matters that one of them can (else `no_writable_path`).
  */
-export async function checkDockerSide(o: { name: string; pkgDir: string; key: string; exec?: Exec; timeoutMs?: number }): Promise<SideCheck> {
+export async function checkDockerSide(o: { name: string; pkgDir: string; key: string; exec?: Exec; timeoutMs?: number; bundle?: BundleSource }): Promise<SideCheck> {
   // The install method follows the container's target and whether this build has dist/side (the bundle's JS).
   const exec = o.exec ?? execRun;
   const label = `Docker: ${o.name}`;
@@ -200,7 +214,7 @@ export async function checkDockerSide(o: { name: string; pkgDir: string; key: st
   const checked = parseCheck(r.stdout);
   if (!checked) return blocked(r.code === null ? "unreachable" : "check_failed", r.code === null ? "no answer in time" : lastLines(r.stderr).replace(/\.$/, "") || `exit code ${r.code}`, true);
   const m = installMethodOf(checked.target, !!sideBuild(o.pkgDir));
-  return verdictOf({ key: o.key, label, kind: "docker", name: o.name, build: hasBuild(o.pkgDir, true), checked, cpUsable: cp, install: m.method === "bundle" ? { method: "bundle" } : m, network });
+  return verdictOf({ key: o.key, label, kind: "docker", name: o.name, build: hasBuild(o.pkgDir, true), checked, cpUsable: cp, install: m.method === "bundle" ? { method: "bundle", ...(o.bundle && { parts: bundleParts(o.bundle, m, sideBuild(o.pkgDir)!.sdkVersion) }) } : m, network });
 }
 
 /** Directories tried in order; "HOME" is the container user's $HOME. */

@@ -533,7 +533,7 @@ export type SideCheckFacts = {
   /** Docker or WSL: the container's or distro's CPU (`uname -m`), C library and glibc version. */
   target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string };
   /** Docker or WSL: how an install gets claude-ui in: the host-assembled bundle, or npm in the container or distro (`reason`: why not the bundle). */
-  install?: { method: "bundle" | "npm"; reason?: string };
+  install?: { method: "bundle" | "npm"; reason?: string; /** Bundle only, when the hub looked at its cache: every part file is there (`cached`), or the start must download them (`download`). */ parts?: "cached" | "download" };
   /** Docker or WSL: tools and libraries found (each item of "What this container needs"). */
   tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
   /** Docker: false when the container has no network (`--network none`). */

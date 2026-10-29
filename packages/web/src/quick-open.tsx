@@ -77,7 +77,7 @@ export function QuickOpen({
         role="dialog"
         aria-modal="true"
         aria-label="Quick open"
-        className="relative flex max-h-[min(100dvh-96px,480px)] self-start min-h-70 w-full max-w-160 flex-col rounded-2xl bg-popover text-popover-foreground shadow-floating"
+        className="relative flex max-h-[min(100dvh-96px,480px)] self-start min-h-70 w-full max-w-160 flex-col rounded-2xl border bg-popover text-popover-foreground shadow-floating"
         data-testid="quick-open"
         // The search box is the only focus stop: a click elsewhere in the dialog leaves focus there.
         onMouseDown={(e) => e.target !== input.current && e.preventDefault()}

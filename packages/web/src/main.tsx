@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { takeFirstUseSnapshot } from "./guide.ts";
 import "./index.css";
-import { applyTheme, loadPref } from "./theme.ts";
+import { applyColorTheme, applyTheme, loadColorTheme, loadPref } from "./theme.ts";
 import { reloadOnStalePage } from "./preload-reload.ts";
 import { adoptToken } from "./pairing.ts";
 
@@ -11,6 +11,7 @@ import { adoptToken } from "./pairing.ts";
 takeFirstUseSnapshot();
 
 // Before the first render, so a dark theme does not flash light. App's effect owns the "system" listener; stop this one.
+applyColorTheme(loadColorTheme());
 applyTheme(loadPref())();
 
 // Pasting the pairing URL into an already open tab only changes the fragment; reload to reconnect with the token.

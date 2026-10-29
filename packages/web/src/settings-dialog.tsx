@@ -28,6 +28,8 @@ import { KeyTipsRow } from "./key-tip.tsx";
 import { ChevronLeftIcon } from "lucide-react";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
+import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
+import { swatchOf, THEMES, type ThemeId } from "./themes.ts";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
 const loadGroup = () => {
@@ -123,6 +125,62 @@ function SendingSection() {
           </SelectContent>
         </Select>
       </div>
+    </section>
+  );
+}
+
+/** Light half = the theme's light card, dark half = its dark card. */
+function Swatch({ id }: { id: ThemeId }) {
+  const [l, d] = swatchOf(id);
+  return (
+    <span className="inline-flex h-4 w-7 shrink-0 overflow-hidden rounded-[4px] ring-1 ring-border" aria-hidden data-testid="settings-theme-swatch">
+      <span className="flex-1" style={{ background: l }} />
+      <span className="flex-1" style={{ background: d }} />
+    </span>
+  );
+}
+
+/** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
+function AppearanceSection() {
+  const id = useColorTheme();
+  const dark = useDark();
+  return (
+    <section aria-labelledby="settings-appearance-title" className="flex flex-col" data-testid="settings-appearance">
+      <h3 id="settings-appearance-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Appearance
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-theme-label" className="block text-sm">Theme</span>
+          <span id="settings-theme-hint" className="block text-muted-foreground text-xs">Colors of the app, the editor, diffs and the terminal. Light, dark or system: the theme button in the titlebar. Kept in this browser.</span>
+        </div>
+        <Select value={id} onValueChange={(v) => v && setColorTheme(v as ThemeId)}>
+          <SelectTrigger aria-labelledby="settings-theme-label" aria-describedby="settings-theme-hint" data-testid="settings-theme" className="w-44 max-md:data-[size=default]:h-11">
+            <SelectValue>
+              {(v: ThemeId) => (
+                <>
+                  <Swatch id={v} />
+                  {THEMES.find((t) => t.id === v)?.name ?? v}
+                </>
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {THEMES.map((t) => (
+              <SelectItem key={t.id} value={t.id} data-testid={`settings-theme-${t.id}`}>
+                <Swatch id={t.id} />
+                {t.name}
+                {!t.light && t.dark && <span className="text-muted-foreground text-xs">dark only</span>}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {id === "dracula" && !dark && (
+        <div data-testid="settings-theme-dracula-warning" className="flex flex-col pb-2">
+          <Banner kind="warning">Dracula has no light colors: light mode shows Default.</Banner>
+        </div>
+      )}
     </section>
   );
 }
@@ -365,6 +423,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   );
   // One entry per group; a later group (e.g. Notifications) is one more line here.
   const groups: Group[] = [
+    { id: "appearance", title: "Appearance", body: <AppearanceSection /> },
     { id: "timeline", title: "Timeline", body: <TimelineSection /> },
     { id: "sending", title: "Sending", body: <SendingSection /> },
     {

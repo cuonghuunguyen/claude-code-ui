@@ -6,6 +6,14 @@ Open **Settings** with <kbd>Ctrl</kbd>+<kbd>,</kbd> (<kbd>⌘</kbd> <kbd>,</kbd>
 
 Most settings are **kept in this browser** only. Orchestration, Usage limits (except the ring), Jira and desktop notifications are saved in the daemon and apply to every browser.
 
+## Appearance
+
+| Setting | Options |
+| --- | --- |
+| Theme | Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One. Recolors the app, the editor, diffs, the terminal and the git graph at once. Dracula has no light colors: in light mode it shows Default. Kept in this browser. |
+
+The theme button at the top right still cycles System, Light and Dark inside the theme.
+
 ## Timeline
 
 | Setting | Does |
@@ -99,6 +107,6 @@ The version of the web app and of the daemon.
 
 ## Not in Settings
 
-- **Theme:** the theme button at the top right cycles System → Light → Dark.
+- **Mode:** the theme button at the top right cycles System → Light → Dark, inside the colour theme you picked in Settings › Appearance.
 - **Model, mode, effort:** per session, in the [prompt box](../features/prompt-box).
 - **Server options** (port, roots, remote access): [CLI flags](cli).
