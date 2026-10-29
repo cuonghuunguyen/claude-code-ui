@@ -1,13 +1,13 @@
 // Tab context menu above the session items (GH-359): data, so more sections (Split, GH-356) slot in.
 import type { KeyboardEvent } from "react";
 
-export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession";
+export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession" | "moveToFiles" | "copyPath" | "copyRel" | "revealInFiles";
 export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote" | TabCommand; label: string; disabled?: boolean; testId: string };
 
 const entry = (id: TabMenuEntry["id"], label: string, disabled = false): TabMenuEntry => ({ id, label, disabled, testId: `tab-menu-${id}` });
 
 /** Sections of the tab context menu, a separator between sections: move, close, pin, copy and reveal, then split. The New session tab (`session` false) has the first two only. */
-export function tabMenuSections(s: { session: boolean; /** Absent: pinning is not offered. */ pinned?: boolean; first: boolean; last: boolean; canOthers: boolean; canRight: boolean; canAll: boolean; canReopen: boolean; hasCwd: boolean; /** A pane tab (GH-395): move to a dock, go to its session; no copy or reveal. */ pane?: { label: string }; /** Split view (GH-356): absent on narrow screens, where there is no split. */ split?: { can: boolean; /** Git graph: the reason line follows the disabled items. */ whole?: boolean } }): TabMenuEntry[][] {
+export function tabMenuSections(s: { session: boolean; /** Absent: pinning is not offered. */ pinned?: boolean; first: boolean; last: boolean; canOthers: boolean; canRight: boolean; canAll: boolean; canReopen: boolean; hasCwd: boolean; /** A pane tab (GH-395): move to a dock, go to its session; no copy or reveal. */ pane?: { label: string; /** GH-399: a file tab: no dock; Move to Files, copy paths, Reveal in Files. */ item?: boolean }; /** Split view (GH-356): absent on narrow screens, where there is no split. */ split?: { can: boolean; /** Git graph: the reason line follows the disabled items. */ whole?: boolean } }): TabMenuEntry[][] {
   const sections = [
     [entry("moveLeft", "Move left", s.first), entry("moveRight", "Move right", s.last)],
     [entry("close", "Close tab"), entry("closeOthers", "Close others", !s.canOthers), entry("closeRight", "Close to the right", !s.canRight), entry("closeAll", "Close all", !s.canAll), entry("reopen", "Reopen closed tab", !s.canReopen)],
@@ -16,7 +16,7 @@ export function tabMenuSections(s: { session: boolean; /** Absent: pinning is no
   if (s.pane) {
     const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can), ...(s.split.whole ? [entry("splitNote", "Git graph needs the whole area", true)] : [])]] : [];
     const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
-    return [...sections, ...pin, [entry("moveSide", `Move ${s.pane.label} to side panel`), entry("moveBottom", `Move ${s.pane.label} to bottom panel`)], [entry("goToSession", "Go to session")], ...split];
+    return [...sections, ...pin, s.pane.item ? [entry("moveToFiles", "Move to Files"), entry("copyPath", "Copy path"), entry("copyRel", "Copy relative path"), entry("revealInFiles", "Reveal in Files")] : [entry("moveSide", `Move ${s.pane.label} to side panel`), entry("moveBottom", `Move ${s.pane.label} to bottom panel`)], [entry("goToSession", "Go to session")], ...split];
   }
   const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
   const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can)]] : [];

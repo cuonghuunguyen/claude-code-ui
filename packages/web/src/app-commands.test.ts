@@ -519,3 +519,12 @@ it("Run in background is listed only while a foreground shell runs, with Ctrl+Sh
   if (item && "run" in item) item.run();
   expect(run).toHaveBeenCalled();
 });
+
+it("GH-399 Open in tab is listed only while a Files editor shows a file inside the folder", () => {
+  expect(appCommands(ctx()).map((i) => i.id)).not.toContain("file.openInTab");
+  const openFileTab = vi.fn();
+  const c = ctx({ openFileTab });
+  expect(appCommands(c).find((x) => x.id === "file.openInTab")).toMatchObject({ title: "Open in tab", keys: undefined });
+  run(c, "file.openInTab");
+  expect(openFileTab).toHaveBeenCalledOnce();
+});

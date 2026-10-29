@@ -44,8 +44,8 @@ function fakeClient(handler: (m: Req) => unknown = (m) => (m.type === "fs.read" 
 }
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const call = (tool: string, input: unknown): ToolCall => ({ type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" });
-const dialog = (p: { target?: Exclude<ViewerTarget, { kind: "file" }>; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession>; onOpenInEditor?: (path: string, line?: number) => void }) => (
-  <ViewerDialog target={p.target} client={p.client ?? fakeClient()} cwd="/w" view={p.view} sessionId={p.sessionId} opener={p.opener} onClose={p.onClose ?? (() => {})} onOpenInEditor={p.onOpenInEditor ?? (() => {})} />
+const dialog = (p: { target?: Exclude<ViewerTarget, { kind: "file" }>; client?: ReturnType<typeof fakeClient>; onClose?: () => void; opener?: HTMLElement | null; sessionId?: string; view?: ReturnType<typeof emptySession>; onOpenInEditor?: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) => (
+  <ViewerDialog target={p.target} client={p.client ?? fakeClient()} cwd="/w" view={p.view} sessionId={p.sessionId} opener={p.opener} onClose={p.onClose ?? (() => {})} onOpenInEditor={p.onOpenInEditor ?? (() => {})} onOpenInTab={p.onOpenInTab} />
 );
 const open = async (p: Parameters<typeof dialog>[0]) => {
   await act(async () => root.render(dialog(p)));
@@ -238,4 +238,14 @@ it("Open in Files tab on a diff target calls onOpenInEditor with the edited file
   await open({ target: { kind: "diff", call: call("Edit", { file_path: "/w/b.ts", old_string: "a", new_string: "b" }) }, onOpenInEditor });
   await click("[data-testid=viewer-open-editor]");
   expect(onOpenInEditor).toHaveBeenLastCalledWith("/w/b.ts", undefined);
+});
+
+it("GH-399 the diff popup offers Open in tab next to Open in Files tab, only with the handler", async () => {
+  const target = { kind: "diff", call: call("Edit", { file_path: "/w/b.ts", old_string: "a", new_string: "b" }) } as const;
+  await open({ target });
+  expect(q("[data-testid=viewer-open-tab]")).toBeNull();
+  const onOpenInTab = vi.fn();
+  await open({ target, onOpenInTab });
+  await click("[data-testid=viewer-open-tab]");
+  expect(onOpenInTab).toHaveBeenCalledWith("/w/b.ts");
 });

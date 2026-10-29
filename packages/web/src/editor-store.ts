@@ -34,6 +34,8 @@ export type OpenOptions = {
   focusEditor?: boolean;
   /** A file outside the session folder: the file dialog lists it, the Files tab does not. */
   outside?: boolean;
+  /** A file tab (GH-399): the new tab is an item, pinned, and does not take Files' preview slot. */
+  item?: boolean;
 };
 
 export function createEditorStore(getClient: () => Client | undefined) {
@@ -97,12 +99,12 @@ export function createEditorStore(getClient: () => Client | undefined) {
 
   /** Opens `path` as a preview tab (italic, replaced by the next single-click open) unless `preview` is false. */
   async function open(path: string, o: OpenOptions) {
-    const preview = o.preview ?? true;
+    const preview = o.item ? false : (o.preview ?? true);
     const scope = (p: string) => inDir(p, o.cwd) || !!state.tabs[p]?.outside;
     set((s) => ({ ...s, error: undefined, sourceOnly: !o.line && s.sourceOnly === path ? undefined : s.sourceOnly }));
     // Answers come back in any order: only the latest open may take the preview slot and the focus.
     const seq = ++openSeq;
-    const make = (tab: Tab): Tab => (o.outside ? { ...tab, outside: true } : tab);
+    const make = (tab: Tab): Tab => ({ ...tab, ...(o.outside ? { outside: true } : {}), ...(o.item ? { item: true } : {}) });
     // An open tab (say, from another project's Files tab) a Read card now opens from outside this folder is listed by the file dialog.
     if (state.tabs[path]) setTabs((ts) => (ts[path] ? placeTab(o.outside ? { ...ts, [path]: { ...ts[path]!, outside: true } } : ts, o.outside ? { ...ts[path]!, outside: true } : ts[path]!, preview, scope) : ts));
     else {
@@ -154,6 +156,12 @@ export function createEditorStore(getClient: () => Client | undefined) {
     prune();
   }
 
+  /** Drops tabs the caller already confirmed (a file tab closed, GH-399). */
+  function discard(paths: string[]) {
+    setTabs((ts) => Object.fromEntries(Object.entries(ts).filter(([p]) => !paths.includes(p))));
+    prune();
+  }
+
   return {
     get: () => state,
     subscribe(cb: () => void) {
@@ -164,6 +172,26 @@ export function createEditorStore(getClient: () => Client | undefined) {
     open,
     save,
     close,
+    discard,
+    /** GH-399 Open in tab: the file leaves Files for its own tab, keeping draft and parked editor state; Files shows its next tab. */
+    toItem(path: string) {
+      set((s) => {
+        const t = s.tabs[path];
+        if (!t) return s;
+        const tabs = { ...s.tabs, [path]: { ...pin(t), item: true } };
+        const next = s.activePath === path ? Object.keys(tabs).find((p) => p !== path && !tabs[p]!.item) : s.activePath;
+        return { ...s, tabs, activePath: next };
+      });
+    },
+    /** Move to Files: the tab is a Files tab again and the active one. */
+    toFiles(path: string) {
+      set((s) => {
+        const t = s.tabs[path];
+        if (!t) return s;
+        const { item: _, ...rest } = t;
+        return { ...s, tabs: { ...s.tabs, [path]: rest }, activePath: path };
+      });
+    },
     refresh,
     switchView,
     update,

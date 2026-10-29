@@ -5359,3 +5359,176 @@ describe("GH-397 Terminal in the main area", () => {
     });
   });
 });
+
+describe("GH-399 a file as a tab", () => {
+  const A = `file:${ID}:/p/demo/a.ts`;
+  const B = `file:${ID}:/p/demo/b.ts`;
+  const disk: Record<string, string> = { "/p/demo/a.ts": "alpha", "/p/demo/b.ts": "beta" };
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
+  const tabMenu = async (id: string) => {
+    await act(async () => void stripTab(id).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  };
+  const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="tab-menu-${id}"]`);
+  const editView = async (ref: string, insert: string) => {
+    const { EditorView } = await import("@codemirror/view");
+    const v = EditorView.findFromDOM(bodyOf(ref)!.querySelector<HTMLElement>(".cm-editor")!)!;
+    await act(async () => v.dispatch({ changes: { from: 0, insert } }));
+  };
+  const toSession = () => act(async () => void ((location.hash = `#${ID}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+  /** Quick open works from the session tab only. */
+  const quickOpen = async (path: string, init: KeyboardEventInit = {}) => {
+    await toSession();
+    await press({ key: "p", code: "KeyP", ctrlKey: true });
+    await settle();
+    const input = document.querySelector<HTMLElement>('[data-testid="quick-open-input"]')!;
+    const at = [...document.querySelectorAll<HTMLElement>('[role="option"]')].findIndex((o) => o.dataset.path === path);
+    for (let i = 0; i < at; i++) await press({ key: "ArrowDown" }, input);
+    await press({ key: "Enter", ...init }, input);
+    await settle();
+  };
+  async function mount(o: { tabs?: string[]; hash?: string } = {}) {
+    if (o.tabs) localStorage.setItem("claude-ui.tabs", JSON.stringify(o.tabs));
+    if (o.hash) location.hash = `#${encodeURIComponent(o.hash)}`;
+    sent.length = 0;
+    return remount({ "fs.search": { paths: ["a.ts", "b.ts"] }, "fs.read": (m: { path: string }) => ({ content: disk[m.path] ?? "x", mtime: 1 }) });
+  }
+
+  it("Alt+Enter in Quick open opens the file as a tab right of the session, active with its text; again focuses the same tab", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      expect(tabIds()).toEqual([ID, A]);
+      expect(location.hash).toBe(`#${encodeURIComponent(A)}`);
+      expect(stripTab(A).textContent).toContain("a.ts");
+      expect(bodyOf(A)!.querySelector(".cm-content")!.textContent).toBe("alpha");
+      expect(el.querySelectorAll('[data-testid="files-panel"] [data-testid="editor-tab"]')).toHaveLength(0);
+      await quickOpen("a.ts", { altKey: true });
+      expect(tabIds()).toEqual([ID, A]);
+      expect(location.hash).toBe(`#${encodeURIComponent(A)}`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Quick open Enter shows the file in Files with the editor focused (#301); its header Open in tab moves it with the draft, the strip shows the unsaved mark, Move to Files brings it back", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts");
+      const files = el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
+      expect(files.querySelectorAll('[data-testid="editor-tab"]')).toHaveLength(1);
+      expect(files.querySelector(".cm-content")!.contains(document.activeElement)).toBe(true);
+      const { EditorView } = await import("@codemirror/view");
+      await act(async () => EditorView.findFromDOM(files.querySelector<HTMLElement>(".cm-editor")!)!.dispatch({ changes: { from: 0, insert: "X" } }));
+      await act(async () => files.querySelector<HTMLElement>('[data-testid="open-in-tab"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, A]);
+      expect(el.querySelector('[data-testid="files-panel"] [data-testid="editor-tab"]')).toBeNull();
+      expect(bodyOf(A)!.querySelector(".cm-content")!.textContent).toBe("Xalpha");
+      expect(stripTab(A).textContent).toContain("●");
+      await tabMenu(A);
+      expect(["moveToFiles", "copyPath", "copyRel", "revealInFiles", "goToSession", "splitRight"].every((id) => menuItem(id))).toBe(true);
+      expect(menuItem("moveSide")).toBeNull();
+      await act(async () => menuItem("moveToFiles")!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID]);
+      const back = el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
+      expect(back.querySelector('[data-testid="editor-tab"]')!.textContent).toContain("a.ts");
+      expect(back.querySelector(".cm-content")!.textContent).toBe("Xalpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("closing a dirty file tab asks: Cancel keeps it, OK closes it", async () => {
+    const restore = await mount();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await editView(A, "X");
+      await act(async () => stripTab(A).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(ask).toHaveBeenLastCalledWith("Discard unsaved changes to a.ts?");
+      expect(tabIds()).toContain(A);
+      ask.mockReturnValue(true);
+      await act(async () => stripTab(A).querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
+      expect(tabIds()).toEqual([ID]);
+    } finally {
+      ask.mockRestore();
+      restore();
+    }
+  });
+
+  it("Close others with two dirty file tabs asks once; Cancel keeps the dirty ones and closes the rest", async () => {
+    const restore = await mount();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await quickOpen("b.ts", { altKey: true });
+      await editView(A, "X");
+      await editView(B, "Y");
+      await toSession();
+      await tabMenu(ID);
+      await act(async () => menuItem("closeOthers")!.click());
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(ask).toHaveBeenCalledWith("Discard unsaved changes to 2 files?");
+      expect(tabIds()).toEqual([ID, B, A]); // a new file tab opens right of the session
+    } finally {
+      ask.mockRestore();
+      restore();
+    }
+  });
+
+  it("a reload restores the file tab and reads the file again", async () => {
+    const restore = await mount({ tabs: [ID, A], hash: A });
+    try {
+      await settle();
+      expect(tabIds()).toEqual([ID, A]);
+      expect((sent as { type: string; path?: string }[]).filter((m) => m.type === "fs.read").map((m) => m.path)).toContain("/p/demo/a.ts");
+      expect(bodyOf(A)!.querySelector(".cm-content")!.textContent).toBe("alpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("a file tab of a session the daemon does not list closes with the list", async () => {
+    const GONE = `file:aaaaaaaa-2222-3333-4444-555555555555:/p/demo/a.ts`;
+    const restore = await mount({ tabs: [ID, GONE] });
+    try {
+      await settle();
+      expect(tabIds()).toEqual([ID]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("the palette's Open in tab takes the file Files shows; Reset layout keeps the file tab", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("b.ts");
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
+      await act(async () => row("Open in tab")!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, B]);
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => row("Reset layout")!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, B]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("the file tab's Split right is enabled", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await tabMenu(A);
+      expect(menuItem("splitRight")!.hasAttribute("data-disabled")).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+});

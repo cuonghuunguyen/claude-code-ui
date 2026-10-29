@@ -302,4 +302,11 @@ describe("GH-396 files and graph tabs", () => {
     expect(staleTabs([`files:${U}`, `graph:${U}`], new Set([U]))).toEqual([]);
     expect(staleTabs([`files:${U}`], new Set(["x"]))).toEqual([`files:${U}`]);
   });
+
+  it("GH-399 a file ref round-trips through the hash; a file ref of an unknown owner is stale", () => {
+    const o = "0b5e6f1c-1111-4222-8333-444455556666";
+    for (const id of [`file:${o}:/p/a b#c.ts`, `file:${o}:C:\\p\\a.ts`]) expect(tabFromHash(tabHash(id))).toBe(id);
+    expect(staleTabs([`file:${o}:/p/a.ts`, o], new Set([o]))).toEqual([]);
+    expect(staleTabs([`file:${o}:/p/a.ts`], new Set())).toEqual([`file:${o}:/p/a.ts`]);
+  });
 });

@@ -188,7 +188,7 @@ The tab strip and the area under it (one tab, or two splits).
 The owner of the active main tab. The dock areas, Changes, Files, Terminal and the commands follow it; the New session tab and Focus keep the rule they had.
 
 **Item**:
-A single file or artifact shown as its own tab ("Open in tab"). Not in this slice.
+A single file or artifact shown as its own tab ("Open in tab"): a file tab `file:<session>:<path>` exists; artifacts follow. An item has no kind home in a dock and is never in Files.
 
 **Files tab**:
 The pane with the file tree and the editor tabs (side panel by default, or a main-area tab "Files · <project>").

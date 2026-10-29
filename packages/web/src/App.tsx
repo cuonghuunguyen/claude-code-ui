@@ -120,10 +120,11 @@ import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./foc
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
-import { inDir, joinPath, relPath } from "./paths.ts";
-import { EditorSync, FilesPanel } from "./files-panel.tsx";
+import { baseName, inDir, joinPath, relPath } from "./paths.ts";
+import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
+import { isDirty } from "./files.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, type RepoList } from "./repo-choice.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
@@ -152,7 +153,7 @@ import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenR
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
-import { PER_CWD, identityOf, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf } from "./pane-ref.ts";
+import { PER_CWD, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, pathOf, refOf } from "./pane-ref.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
@@ -494,7 +495,10 @@ export function App() {
   const [insert, setInsert] = useState<string>();
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
-  const [openFile, setOpenFile] = useState<{ path: string; line?: number }>();
+  const [openFile, setOpenFile] = useState<{ path: string; line?: number; /** The editor takes the focus (an explicit "open in Files tab", #301). */ focus?: boolean }>();
+  // GH-399 file tabs: the tab whose editor takes the focus (`seq` tells a repeat apart), and the Files tree's reveal request (a file, or a breadcrumb folder).
+  const [fileFocus, setFileFocus] = useState<{ ref: string; seq: number }>();
+  const [treeReveal, setTreeReveal] = useState<{ path: string; seq: number; dir?: boolean }>();
   /** File tree "Show changes": the Changes tab selects this path (`seq` tells a repeat apart). */
   const [changesReveal, setChangesReveal] = useState<{ path: string; seq: number }>();
   // Popup viewer (GH-238): what shows, for which session; `opener` takes the focus back on close.
@@ -834,7 +838,8 @@ export function App() {
     drop(sessionId, false);
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
-    // Its pane tabs go with it.
+    // Its pane tabs go with it; its file tabs go back to Files with their drafts (GH-399).
+    for (const id of tabsRef.current) if (ownerOf(id) === sessionId && isItem(id)) editors.toFiles(pathOf(id)!);
     setTabs((t) => t.filter((id) => ownerOf(id) !== sessionId));
     setHeirOf((h) => without(h, sessionId));
     delete clearQueue.current[sessionId];
@@ -991,7 +996,11 @@ export function App() {
 
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
-  function close(id: string) {
+  function close(id: string): boolean | void {
+    if (isItem(id)) {
+      if (!askDirtyFiles([id]).length) return false;
+      if (editors.get().tabs[pathOf(id)!]?.item) editors.discard([pathOf(id)!]);
+    }
     const r = closeTab(tabsRef.current, id, activeRef.current);
     // Closing the active split's tab: the next tab is one outside the splits, else the other split's tab (the split ends).
     const sp = splitRef.current;
@@ -1005,7 +1014,7 @@ export function App() {
   function closeFromList(id: string) {
     const title = tabLabel(id);
     const wasActive = activeRef.current === id;
-    close(id);
+    if (close(id) === false) return;
     if (id === NEW_TAB) return;
     setToast({
       message: `Closed ${title}`,
@@ -1050,12 +1059,25 @@ export function App() {
   }
 
   /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
-  function closeGroup(ids: string[]) {
+  function closeGroup(ids: string[], asked = false) {
+    if (!asked) ids = askDirtyFiles(ids);
+    editors.discard(ids.flatMap((id) => (isItem(id) && editors.get().tabs[pathOf(id)!]?.item ? [pathOf(id)!] : [])));
     const r = closeMany(tabsRef.current, ids, activeRef.current);
     setTabs(r.tabs);
     const left = tabsRef.current.filter((t) => !ids.includes(t));
     for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id, left);
     activate(r.active);
+  }
+
+  /** File tabs (GH-399) with unsaved edits ask once for all of `ids`; Cancel keeps those tabs. Returns the ids that may close. */
+  function askDirtyFiles(ids: string[]): string[] {
+    const dirty = ids.filter((id) => {
+      const t = isItem(id) ? editors.get().tabs[pathOf(id)!] : undefined;
+      return !!t && isDirty(t);
+    });
+    if (!dirty.length) return ids;
+    const text = dirty.length === 1 ? `Discard unsaved changes to ${baseName(pathOf(dirty[0]!)!)}?` : `Discard unsaved changes to ${dirty.length} files?`;
+    return confirm(text) ? ids : ids.filter((id) => !dirty.includes(id));
   }
 
   /** Close group (chip menu, middle click, Delete on the chip, the command): a group of 2 or more tabs asks first, a single tab closes at once. */
@@ -1068,6 +1090,7 @@ export function App() {
 
   /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
   function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string, onUndo?: () => void) {
+    ids = askDirtyFiles(ids);
     // Before closeGroup: release() reads the old tab list for each index.
     const now = tabsRef.current;
     const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
@@ -1075,7 +1098,7 @@ export function App() {
     const wasActive = activeRef.current;
     const one = entries.length === 1 ? entries[0]!.id : undefined;
     const title = one && (one === NEW_TAB ? "New session" : tabLabel(one));
-    closeGroup(entries.map((e) => e.id));
+    closeGroup(entries.map((e) => e.id), true);
     // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
     const prev = undoToast.current;
     const joined = prev && toastRef.current?.key === prev.key && toastRef.current.action ? prev.parts : [];
@@ -1128,7 +1151,9 @@ export function App() {
       // A pane tab: no state of its own, so "idle" and "finished" never close it; an archived or deleted owner and the unused rules do.
       if (isPaneRef(id)) {
         const owner = listRef.current.find((s) => s.id === ownerOf(id));
-        return { id, unread: false, draft: false, listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !listFresh.current, lastUsed: usedAt(id) };
+        // A file tab with unsaved edits is a draft: no rule closes it (GH-399).
+        const fileTab = isItem(id) ? editors.get().tabs[pathOf(id)!] : undefined;
+        return { id, unread: false, draft: !!fileTab && isDirty(fileTab), listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !listFresh.current, lastUsed: usedAt(id) };
       }
       const item = listRef.current.find((s) => s.id === id);
       const v = viewsRef.current[id];
@@ -1168,7 +1193,11 @@ export function App() {
     else if (c === "copyCwd") copyText(sessionOf(id)?.cwd, "cwd path");
     else if (c === "reveal") revealTab(id);
     else if (c === "splitRight" || c === "splitDown") splitTab(id, c === "splitRight" ? "row" : "col");
-    else if (c === "moveSide" || c === "moveBottom") move(kindOf(id)!, c === "moveSide" ? "side" : "bottom");
+    else if (c === "moveSide" || c === "moveBottom") move(kindOf(id) as PaneId, c === "moveSide" ? "side" : "bottom");
+    else if (c === "moveToFiles") moveToFiles(id);
+    else if (c === "revealInFiles") revealInFiles(id);
+    else if (c === "copyPath") copyText(pathOf(id), "path");
+    else if (c === "copyRel") copyText(pathOf(id) && relPath(pathOf(id)!, cwdOfOwner(ownerOf(id)) ?? ""), "relative path");
     else if (c === "goToSession") (open(ownerOf(id)), focusShownPrompt(ownerOf(id)));
   }
 
@@ -1725,7 +1754,7 @@ export function App() {
     const stray = tabs.filter((t) => {
       const k = kindOf(t);
       if (!k) return false;
-      if (areaOf(loadLayout(), k) !== "main") return true;
+      if (!isItem(t) && areaOf(loadLayout(), k as PaneId) !== "main") return true;
       const id = identityOf(t, cwdOfOwner);
       if (seen.has(id)) return true;
       seen.add(id);
@@ -1737,13 +1766,14 @@ export function App() {
   /** A pane tab's title: Files and Git graph name the owner's folder ("demo", "demo · feature"), Plan the owner's title. */
   const paneTitle = (ref: string) => {
     const k = kindOf(ref)!;
+    if (k === "file") return baseName(pathOf(ref)!);
     const c = PER_CWD.includes(k) ? cwdOfOwner(ownerOf(ref)) : undefined;
     return paneTabTitle(k, c ? (worktreeName(c, worktrees) ?? projectName(c)) : ownerTitle(ownerOf(ref)));
   };
   /** What a tab is called in toasts. */
   const tabLabel = (id: string) => (isPaneRef(id) ? paneTitle(id) : ownerTitle(id));
   /** A closed or Undo-restored tab can come back: its session is listed, and a pane tab's kind still has the main area as its home. */
-  const existsTab = (id: string) => id === NEW_TAB || (listRef.current.some((s) => s.id === ownerOf(id)) && (!kindOf(id) || areaOf(loadLayout(), kindOf(id) as PaneId) === "main"));
+  const existsTab = (id: string) => id === NEW_TAB || (listRef.current.some((s) => s.id === ownerOf(id)) && (!kindOf(id) || isItem(id) || areaOf(loadLayout(), kindOf(id) as PaneId) === "main"));
   // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
   const autoRan = useRef<number>(undefined);
   // Reassigned each render: the check reads the current tabs, titles and list, the effect below only sets the timer.
@@ -2138,10 +2168,11 @@ export function App() {
   /** Reset layout: Plan, Files and Git graph return to their docks, their tabs close (Undo brings the layout and the tabs back). */
   const resetPanes = () => {
     const prev = loadLayout();
-    const refs = tabsRef.current.filter(isPaneRef);
+    // File tabs have no kind home: Reset layout keeps them (GH-399).
+    const refs = tabsRef.current.filter((t) => isPaneRef(t) && !isItem(t));
     resetLayout();
     setPaneTabs({});
-    const kinds = new Set(refs.map((r) => kindOf(r)!));
+    const kinds = new Set(refs.map((r) => kindOf(r) as PaneId));
     if (refs.length) closeSeveral(refs, kinds.size === 1 ? kindToast([...kinds][0]!) : (n) => `Closed ${n} pane tabs`, () => saveLayout(prev));
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
@@ -2222,7 +2253,7 @@ export function App() {
   const showSession = () => (setBottomMax(false), !wide(1024) && setPane("session"));
   /** Opens a file of the shown session (path relative to its cwd) in the files panel. */
   const openInPanel = (p: string, line?: number) => {
-    setOpenFile({ path: joinPath(shown!.cwd, p), line });
+    setOpenFile({ path: joinPath(shown!.cwd, p), line, focus: true });
     reveal("files");
   };
   const popFile = useCallback((path?: string, line?: number, opener?: HTMLElement | null) => {
@@ -2238,6 +2269,43 @@ export function App() {
     if (!sid || !isSession(sid)) return;
     if (areaOf(loadLayout(), "plan") === "main") return openPaneTab(refOf({ kind: "plan", owner: sid }));
     reveal("plan");
+  };
+  /** Files in the main area: its tab (of `owner`'s folder); in a dock: the dock. */
+  const showFiles = (owner = paneOwner) => (areaOf(loadLayout(), "files") === "main" ? showKind("files", owner) : reveal("files"));
+  /** Open in tab (GH-399): `path` (inside the owner's folder) as a main-area tab right of the owner's tab, one tab per file. The file leaves Files with its draft, cursor and undo history. */
+  const openFileTab = (path: string, owner = paneOwner) => {
+    const cwd = owner ? cwdOfOwner(owner) : undefined;
+    if (!owner || !cwd || !inDir(path, cwd)) return;
+    const ref = paneTabFor(tabsRef.current, "file", owner, cwdOfOwner, path);
+    // A file not loaded yet is read by its tab (a reload does the same).
+    editors.toItem(path);
+    setFileDialog(undefined);
+    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
+    open(ref);
+    setFileFocus((f) => ({ ref, seq: (f?.seq ?? 0) + 1 }));
+  };
+  /** A Files open of a path that is a file tab: that tab takes the focus. */
+  const focusFileTab = (path: string) => {
+    const ref = tabsRef.current.find((t) => pathOf(t) === path);
+    if (!ref) return;
+    setFileDialog(undefined);
+    open(ref);
+    setFileFocus((f) => ({ ref, seq: (f?.seq ?? 0) + 1 }));
+  };
+  /** Reveal in Files: the tree shows the file (or the breadcrumb folder `dir`) of a file tab, which stays a tab. */
+  const revealInFiles = (ref: string, dir?: string) => {
+    const path = dir ?? pathOf(ref);
+    if (!path) return;
+    setTreeReveal((r) => ({ path, dir: !!dir, seq: (r?.seq ?? 0) + 1 }));
+    showFiles(ownerOf(ref));
+  };
+  /** Move to Files: the tab closes without a question or toast, the file shows in Files with its draft. */
+  const moveToFiles = (ref: string) => {
+    const path = pathOf(ref);
+    if (!path) return;
+    editors.toFiles(path);
+    closeGroup([ref], true);
+    revealInFiles(ref, undefined);
   };
   /** Opens or focuses the Files / Git graph tab of the folder of `sid` (default: the shown session, else the one shown last). */
   const showKind = (p: "files" | "graph", sid = paneOwner) => {
@@ -2295,6 +2363,29 @@ export function App() {
           {termSeen.has(ref) && <PaneSlot host={ref === carryRef ? hosts.terminal : hostOf(ref)} />}
         </div>
       );
+    if (kind === "file") {
+      const cwd = cwdOfOwner(ownerOf(ref));
+      return (
+        <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
+          {cwd ? (
+            <FileTab
+              store={editors}
+              path={pathOf(ref)!}
+              cwd={cwd}
+              client={client.current!}
+              focusKey={fileFocus?.ref === ref ? fileFocus.seq : undefined}
+              onSend={(mention) => (open(ownerOf(ref)), setInsert(mention))}
+              onFolder={(dir) => revealInFiles(ref, dir)}
+              onLink={(p, line) => (setOpenFile({ path: p, line }), showFiles(ownerOf(ref)))}
+              onMoveToFiles={() => moveToFiles(ref)}
+              onFocusTab={() => focusTabOf(ref)}
+            />
+          ) : (
+            <p className="m-auto text-muted-foreground text-sm">Loading file…</p>
+          )}
+        </div>
+      );
+    }
     const cwd = cwdOfOwner(ownerOf(ref));
     const loading = <p className="m-auto text-muted-foreground text-sm">Loading {kind === "files" ? "files" : "graph"}…</p>;
     return (
@@ -2316,6 +2407,10 @@ export function App() {
             onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
             openPath={on ? openFile?.path : undefined}
             openLine={on ? openFile?.line : undefined}
+            openFocus={on ? openFile?.focus : undefined}
+            onOpenTab={(p) => openFileTab(p, ownerOf(ref))}
+            onItem={focusFileTab}
+            revealPath={treeReveal && inDir(treeReveal.path, cwd) ? treeReveal : undefined}
             onOpened={() => setOpenFile(undefined)}
             watch={[]}
             showTree={fileTree}
@@ -2452,6 +2547,9 @@ export function App() {
   const reopen = popClosed(closedTabs, existsTab, tabs).tab;
   const movingShells = useRef(new Set<string>());
   // Session commands follow the owner of the active pane only while its session is in the split.
+  // The file the Files editor shows (not a file tab), inside the owner's folder: the palette's "Open in tab".
+  const filesTab = editorTabs[editors.get().activePath ?? ""];
+  const activeFilesPath = inSight("files") && filesTab && !filesTab.item && paneOwner && inDir(filesTab.path, cwdOfOwner(paneOwner) ?? "\0") ? filesTab.path : undefined;
   const ownerOnScreen = !paneRef || (splitShown && split!.ids.includes(currentId!));
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
@@ -2535,6 +2633,7 @@ export function App() {
     viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
     viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     showPlan: shown && !draftShown && latest ? () => showPlan() : undefined,
+    openFileTab: activeFilesPath ? () => openFileTab(activeFilesPath) : undefined,
     homes: { plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph"), terminal: termHome },
     moveKind: (p, to) => move(p, to),
     focusPrompt: (id?: string) => {
@@ -2814,6 +2913,10 @@ export function App() {
               const groupInfo = keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" };
               const pk = kindOf(id);
               // A pane tab: the owner's project and group, no session state of its own.
+              if (pk === "file") {
+                const t = editorTabs[pathOf(id)!];
+                return { title: paneTitle(id) + (t && isDirty(t) ? " ●" : ""), kind: pk, path: pathOf(id), cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
+              }
               if (pk) return { title: paneTitle(id), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
               const item = list.find((l) => l.id === id);
               const title = item?.title || titles[id] || "Untitled";
@@ -3098,7 +3201,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? paneRef.kind : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -3288,6 +3391,10 @@ export function App() {
                         onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
                         openPath={openFile?.path}
                         openLine={openFile?.line}
+                        openFocus={openFile?.focus}
+                        onOpenTab={openFileTab}
+                        onItem={focusFileTab}
+                        revealPath={treeReveal && inDir(treeReveal.path, panelTarget.cwd) ? treeReveal : undefined}
                         onOpened={() => setOpenFile(undefined)}
                         watch={changedPaths}
                         showTree={fileTree}
@@ -3440,6 +3547,7 @@ export function App() {
           connected={status === "connected"}
           onSearch={search(shown.cwd)}
           onOpen={(p) => (hideQuickOpen(false), openInPanel(p))}
+          onOpenTab={(p) => (hideQuickOpen(false), openFileTab(joinPath(shown.cwd, p)))}
           onMention={(p) => {
             hideQuickOpen(false);
             setInsert(mentionPath(p));
@@ -3537,7 +3645,8 @@ export function App() {
           repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
-          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line }), reveal("files"))}
+          onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
+          onOpenInTab={(p) => (setViewer(undefined), openFileTab(p, viewer?.sessionId))}
         />
       )}
       {panelTarget && client.current && (
@@ -3556,6 +3665,8 @@ export function App() {
           onCopy={copyText}
           onShowChanges={(path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
           onOpenInFiles={() => (setFileDialog(undefined), reveal("files"))}
+          onOpenTab={(p) => openFileTab(p)}
+          onItem={focusFileTab}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />

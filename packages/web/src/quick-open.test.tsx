@@ -23,7 +23,7 @@ async function render(connected = true) {
   document.body.append(el);
   root = createRoot(el);
   const onSearch = vi.fn(async (q: string) => FILES[q] ?? []);
-  const handlers = { onOpen: vi.fn(), onMention: vi.fn(), onClose: vi.fn() };
+  const handlers = { onOpen: vi.fn(), onMention: vi.fn(), onClose: vi.fn(), onOpenTab: vi.fn() };
   const draw = (c: boolean) => act(async () => root!.render(<QuickOpen onSearch={onSearch} connected={c} {...handlers} />));
   await draw(connected);
   const input = el.querySelector<HTMLInputElement>('[data-testid="quick-open-input"]')!;
@@ -171,4 +171,16 @@ it("offline it says so instead of searching, and searches once the daemon reconn
   await draw(true);
   expect(onSearch).toHaveBeenLastCalledWith("");
   expect(rows()).toHaveLength(3);
+});
+
+it("GH-399 Alt+Enter and a middle click on a row open the file as a tab; Enter still opens in Files", async () => {
+  const { key, rows, onOpen, onOpenTab } = await render();
+  await key("Enter", { altKey: true });
+  expect(onOpenTab).toHaveBeenLastCalledWith("README.md");
+  expect(onOpen).not.toHaveBeenCalled();
+  await act(async () => void rows()[1]!.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })));
+  expect(onOpenTab).toHaveBeenLastCalledWith("src/app.ts");
+  await key("Enter");
+  expect(onOpen).toHaveBeenCalledWith("README.md");
+  expect(onOpenTab).toHaveBeenCalledTimes(2);
 });

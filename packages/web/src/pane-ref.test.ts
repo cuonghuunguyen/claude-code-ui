@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { identityOf, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
+import { fileRef, identityOf, isItem, isPaneRef, KIND_LABEL, kindOf, pathOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
 
 const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
 
@@ -61,5 +61,34 @@ describe("pane refs", () => {
   it("paneTabTitle gives \"Files · demo\" and \"Git graph · demo · feature\"", () => {
     expect(paneTabTitle("files", "demo")).toBe("Files · demo");
     expect(paneTabTitle("graph", "demo · feature")).toBe("Git graph · demo · feature");
+  });
+});
+
+describe("GH-399 file refs", () => {
+  const V = U.replace("0f8e", "1f8e");
+  it("parse and refOf a file ref, POSIX and Windows path; junk rejected", () => {
+    for (const path of ["/p/a.ts", "C:\\a\\b.ts", "/p/with space:colon.ts"]) {
+      expect(parseRef(`file:${U}:${path}`)).toEqual({ kind: "file", owner: U, path });
+      expect(refOf(parseRef(`file:${U}:${path}`)!)).toBe(`file:${U}:${path}`);
+      expect(fileRef(U, path)).toBe(`file:${U}:${path}`);
+      expect(pathOf(`file:${U}:${path}`)).toBe(path);
+    }
+    for (const id of [`file:${U}`, `file:${U}:`, `file:abc:/p/a.ts`, `file:${U.toUpperCase()}:/p/a.ts`, `files:${U}:/p/a.ts`]) expect(parseRef(id)).toBeUndefined();
+    expect(pathOf(`plan:${U}`)).toBeUndefined();
+    expect(ownerOf(`file:${U}:/p/a.ts`)).toBe(U);
+  });
+  it("identity is the path, whatever the owner; paneTabFor finds the open file tab", () => {
+    const cwd = () => "/p";
+    expect(identityOf(`file:${U}:/p/a.ts`, cwd)).toBe("file@/p/a.ts");
+    expect(identityOf(`file:${V}:/p/a.ts`, cwd)).toBe("file@/p/a.ts");
+    expect(paneTabFor([`file:${U}:/p/a.ts`], "file", V, cwd, "/p/a.ts")).toBe(`file:${U}:/p/a.ts`);
+    expect(paneTabFor([`file:${U}:/p/a.ts`], "file", V, cwd, "/p/b.ts")).toBe(`file:${V}:/p/b.ts`);
+  });
+  it("file tabs are splittable items with the label File", () => {
+    expect(splittable(`file:${U}:/p/a.ts`)).toBe(true);
+    expect(isItem(`file:${U}:/p/a.ts`)).toBe(true);
+    expect(isItem(`files:${U}`)).toBe(false);
+    expect(isItem(U)).toBe(false);
+    expect(KIND_LABEL.file).toBe("File");
   });
 });

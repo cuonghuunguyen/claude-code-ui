@@ -7,13 +7,16 @@ import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
 import type { FsMediaResult } from "@claude-ui/protocol";
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { useContainerWidth } from "@/lib/use-container-width.ts";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
+import { ITEM, POPUP } from "./session-actions.tsx";
+import { openContextMenuFromKey } from "./tab-menu.ts";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
@@ -57,6 +60,7 @@ export function FilesPanel({
   onShowGraph,
   openPath,
   openLine,
+  openFocus,
   onOpened,
   watch = [],
   showTree,
@@ -68,6 +72,9 @@ export function FilesPanel({
   suspended,
   onPopOut,
   onOpenInFiles,
+  onOpenTab,
+  onItem,
+  revealPath,
   headerEnd,
   sync = true,
 }: {
@@ -88,6 +95,8 @@ export function FilesPanel({
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
+  /** With `openPath`: the editor takes the focus (an explicit open, #301). */
+  openFocus?: boolean;
   onOpened?: () => void;
   watch?: string[];
   /** The file tree's open state is the app's (Toggle file tree, kept per browser). */
@@ -107,6 +116,12 @@ export function FilesPanel({
   onPopOut?: () => void;
   /** Open in editor (dialog only, for a file inside `cwd`): close the dialog and show the Files tab. */
   onOpenInFiles?: () => void;
+  /** Open in tab (GH-399): the file as a main-area tab; offered for a file inside `cwd`. */
+  onOpenTab?: (path: string) => void;
+  /** A Files open of a path that is a file tab already: App focuses that tab (one place per file). */
+  onItem?: (path: string) => void;
+  /** Reveal in Files: the tree shows this file (a new `seq` reveals again). */
+  revealPath?: { path: string; seq: number; /** A folder (a breadcrumb click in a file tab). */ dir?: boolean };
   headerEnd?: ReactNode;
   /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
   sync?: boolean;
@@ -122,11 +137,11 @@ export function FilesPanel({
   const update = store.update;
   const save = store.save;
   const close = store.close;
-  const open = (path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) => store.open(path, { cwd, ...opts });
+  const open = (path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) => (store.get().tabs[path]?.item ? onItem?.(path) : store.open(path, { cwd, ...opts }));
 
   useEffect(() => {
     if (!openPath) return;
-    void open(openPath, { line: openLine });
+    void open(openPath, { line: openLine, focusEditor: openFocus });
     onOpened?.();
   }, [openPath]);
 
@@ -136,7 +151,7 @@ export function FilesPanel({
   const openRef = useRef(open);
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
-  const shown = paths.filter((p) => inDir(p, cwd) || (dialog && tabs[p]!.outside));
+  const shown = paths.filter((p) => !tabs[p]!.item && (inDir(p, cwd) || (dialog && tabs[p]!.outside)));
   // The store has one global activePath: a view whose folder does not own it keeps the file it showed last.
   const lastShown = useRef<string>(undefined);
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : lastShown.current && shown.includes(lastShown.current) ? tabs[lastShown.current] : tabs[shown[0]!];
@@ -171,18 +186,29 @@ export function FilesPanel({
     if (wide) setDrawer(false);
   }, [wide]);
   /** Pop out in the Files tab, Open in editor in the file dialog (for a file inside `cwd`): the file view's way to the other place. */
+  const tabButton = active && onOpenTab && inDir(active.path, cwd) && (
+    <Button size="icon-sm" variant="ghost" onClick={() => onOpenTab(active.path)} title="Open in tab" aria-label="Open in tab" className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
+      <ExternalLinkIcon />
+    </Button>
+  );
   const placeButton = !active ? null : dialog ? (
-    inDir(active.path, cwd) && onOpenInFiles && (
-      <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
-        <SquareArrowOutUpRightIcon /> Open in editor
-      </Button>
-    )
+    <>
+      {tabButton}
+      {inDir(active.path, cwd) && onOpenInFiles && (
+        <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
+          <SquareArrowOutUpRightIcon /> Open in editor
+        </Button>
+      )}
+    </>
   ) : (
-    onPopOut && (
-      <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
-        <Maximize2Icon />
-      </Button>
-    )
+    <>
+      {tabButton}
+      {onPopOut && (
+        <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
+          <Maximize2Icon />
+        </Button>
+      )}
+    </>
   );
   // No file open: the tree takes the whole panel (both layouts); with a file it is beside the editor, or a drawer over it when narrow.
   const empty = !active;
@@ -208,13 +234,17 @@ export function FilesPanel({
   const toggleTree = () => (wide ? onToggleTree() : setDrawer((d) => !d));
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
-  function revealFolder(dir: string) {
+  function revealFolder(dir: string, isDir = true) {
     if (!wide) {
       folderReveal.current = true;
       setDrawer(true);
     } else if (!showTree) onToggleTree();
-    requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
+    requestAnimationFrame(() => void tree.current?.reveal(dir, true, isDir));
   }
+  // Reveal in Files (GH-399): the tree shows the file of a tab.
+  useEffect(() => {
+    if (revealPath) revealFolder(revealPath.path, !!revealPath.dir);
+  }, [revealPath?.seq]);
 
   const treeNav = (
     <nav
@@ -236,6 +266,7 @@ export function FilesPanel({
             onFilter={setFiltering}
             onCopy={onCopy}
             onViewer={dialog ? undefined : onViewer}
+            onOpenTab={onOpenTab && ((p) => (inDir(p, cwd) ? onOpenTab(p) : undefined))}
             onShowChanges={onShowChanges}
             repos={repos}
             onShowGraph={onShowGraph}
@@ -345,36 +376,66 @@ export function FilesPanel({
           {shown.map((p) => {
             const t = tabs[p]!;
             return (
-              <div
-                key={p}
-                role="tab"
-                aria-selected={t === active}
-                data-testid="editor-tab"
-                className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
-                title={p}
-              >
-                <button
-                  className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
-                  aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
-                  onClick={() => store.setActive(p)}
-                  onDoubleClick={() => update(p, pin)}
-                  onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+              <ContextMenu.Root key={p}>
+                <ContextMenu.Trigger
+                  render={
+                    <div
+                      role="tab"
+                      aria-selected={t === active}
+                      data-testid="editor-tab"
+                      className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
+                      title={p}
+                      onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget)}
+                    />
+                  }
                 >
-                  <FileIcon path={p} className="size-4 shrink-0" />
-                  <span>
-                    {baseName(p)}
-                    {isDirty(t) && <span aria-label="unsaved"> ●</span>}
-                    {t.conflict && <span className="text-warning"> !</span>}
-                  </span>
-                </button>
-                <button
-                  className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
-                  onClick={() => close(p)}
-                  aria-label={`Close ${baseName(p)}`}
-                >
-                  ×
-                </button>
-              </div>
+                  <button
+                    className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
+                    aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
+                    onClick={() => store.setActive(p)}
+                    onDoubleClick={() => update(p, pin)}
+                    onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+                  >
+                    <FileIcon path={p} className="size-4 shrink-0" />
+                    <span>
+                      {baseName(p)}
+                      {isDirty(t) && <span aria-label="unsaved"> ●</span>}
+                      {t.conflict && <span className="text-warning"> !</span>}
+                    </span>
+                  </button>
+                  <button
+                    className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
+                    onClick={() => close(p)}
+                    aria-label={`Close ${baseName(p)}`}
+                  >
+                    ×
+                  </button>
+                </ContextMenu.Trigger>
+                <ContextMenu.Portal>
+                  <ContextMenu.Positioner className="z-50">
+                    <ContextMenu.Popup className={POPUP} data-testid="editor-tab-menu">
+                      {onOpenTab && inDir(p, cwd) && (
+                        <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-openTab" onClick={() => onOpenTab(p)}>
+                          Open in tab
+                        </ContextMenu.Item>
+                      )}
+                      <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-close" onClick={() => close(p)}>
+                        Close
+                      </ContextMenu.Item>
+                      {onCopy && (
+                        <>
+                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyPath" onClick={() => onCopy(p, "path")}>
+                            Copy path
+                          </ContextMenu.Item>
+                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyRel" onClick={() => onCopy(relPath(p, cwd), "relative path")}>
+                            Copy relative path
+                          </ContextMenu.Item>
+                        </>
+                      )}
+                    </ContextMenu.Popup>
+                  </ContextMenu.Positioner>
+                </ContextMenu.Portal>
+              </ContextMenu.Root>
             );
           })}
         </div>
@@ -561,6 +622,71 @@ export function FileEditor({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * One file as a main-area tab (GH-399): the editor of `path` on the shared store, the tab is an item (kept out of Files). On a reload the store has no tab yet: it reads the file.
+ * `focusKey`: a new value focuses the editor with a fine pointer, else calls `onFocusTab` (the strip tab: no keyboard on a touch screen).
+ */
+export function FileTab({
+  store,
+  path,
+  cwd,
+  client,
+  focusKey,
+  onSend,
+  onFolder,
+  onLink,
+  onMoveToFiles,
+  onFocusTab,
+}: {
+  store: EditorStore;
+  path: string;
+  cwd: string;
+  client: Client;
+  focusKey?: number;
+  onSend: (mention: string) => void;
+  onFolder: (dir: string) => void;
+  onLink: (path: string, line?: number) => void;
+  onMoveToFiles: (path: string) => void;
+  onFocusTab: () => void;
+}) {
+  const { tabs, error } = useEditorStore(store);
+  const viewRef = useRef<EditorView>(undefined);
+  const loaded = !!tabs[path];
+  useEffect(() => {
+    if (!store.get().tabs[path]) void store.open(path, { cwd, item: true });
+  }, [path]);
+  useEffect(() => {
+    if (!focusKey || !loaded) return;
+    if (!window.matchMedia?.("(pointer: fine)").matches) return onFocusTab();
+    let frames = 30;
+    const focus = () => (viewRef.current ? viewRef.current.focus() : frames-- > 0 && requestAnimationFrame(focus));
+    requestAnimationFrame(focus);
+  }, [focusKey, loaded]);
+  if (!loaded)
+    return (
+      <p className={cn("m-auto p-4 text-sm", error ? "text-destructive" : "text-muted-foreground")} role="status" data-testid="file-tab-loading">
+        {error ?? "Loading file…"}
+      </p>
+    );
+  return (
+    <FileEditor
+      store={store}
+      path={path}
+      cwd={cwd}
+      client={client}
+      viewRef={viewRef}
+      onSend={onSend}
+      onFolder={onFolder}
+      onLink={onLink}
+      place={
+        <Button size="icon-sm" variant="ghost" onClick={() => onMoveToFiles(path)} title="Move to Files" aria-label="Move to Files" className="max-md:size-11 pointer-coarse:size-11" data-testid="file-tab-to-files">
+          <FolderInputIcon />
+        </Button>
+      }
+    />
   );
 }
 
