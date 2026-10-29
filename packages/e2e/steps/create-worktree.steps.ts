@@ -244,6 +244,7 @@ Given("the scratch project has gitignored files listed in .worktreeinclude", asy
   git(dir, "add", ".gitignore", ".worktreeinclude");
   git(dir, "add", "-f", "tracked.env");
   git(dir, "commit", "-m", "worktreeinclude fixture");
+  git(dir, "push", "origin", "main"); // a new worktree branches from origin/main, so the fixture commit must be there
   memo.envValue = `secret-${randomUUID()}`;
   writeFileSync(join(dir, "tracked.env"), "edited in the main checkout\n");
   writeFileSync(join(dir, ".env"), `${memo.envValue}\n`);
