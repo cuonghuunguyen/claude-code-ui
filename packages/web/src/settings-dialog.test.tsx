@@ -29,7 +29,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -39,7 +39,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
     if (msg.type === "settings.set") {
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
-      if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers must be a whole number from 1 to 20");
+      if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
       settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
@@ -97,12 +97,12 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("false");
   expect(q("settings-orchestration-coordinatorPermissions")?.getAttribute("aria-checked")).toBe("true");
   expect((q("settings-orchestration-workerCap") as HTMLInputElement).value).toBe("4");
-  expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Maximum workers");
+  expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Maximum workers per tree");
   // Short accessible name; the hint is the description.
   const desc = (id: string) => document.getElementById(q(id)!.getAttribute("aria-describedby")!)?.textContent;
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Enable orchestration");
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
-  expect(desc("settings-orchestration-workerCap")).toContain("1 to 20");
+  expect(desc("settings-orchestration-workerCap")).toContain("root coordinator's tree");
   expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-label")).toBe("Notifications from workers");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("true");
@@ -142,6 +142,21 @@ it("Orchestration shows Maximum tree depth and Maximum workers per coordinator a
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
 });
 
+it("Maximum workers in total shows 0 = no limit and saves a patch of its field", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  expect((q("settings-orchestration-workerCapTotal") as HTMLInputElement).value).toBe("0");
+  expect(document.querySelector('label[for="settings-orchestration-workerCapTotal"]')?.textContent).toBe("Maximum workers in total");
+  expect(document.getElementById(q("settings-orchestration-workerCapTotal")!.getAttribute("aria-describedby")!)?.textContent).toContain("0 = no limit");
+  const input = q("settings-orchestration-workerCapTotal") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "6");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerCapTotal: 6 } } });
+});
+
 it("an out-of-range cap shows the daemon's error in a Banner", async () => {
   const { q, pick } = await render();
   await pick("orchestration");
@@ -151,7 +166,7 @@ it("an out-of-range cap shows the daemon's error in a Banner", async () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
-  expect(q("banner-error")?.textContent).toContain("Maximum workers must be a whole number");
+  expect(q("banner-error")?.textContent).toContain("Maximum workers per tree must be a whole number");
 });
 
 it("Compact tabs is a switch that applies at once, and is disabled with a hint while grouping is None", async () => {

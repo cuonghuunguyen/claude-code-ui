@@ -58,4 +58,4 @@ worker is refused: wait, or ask it to close them.
 ## Limits
 
 Depth: a worker at Maximum tree depth cannot start workers (tool error). Children: Maximum workers
-per coordinator. Both count live workers; the worker cap counts every depth.
+per coordinator. Both count live workers; Maximum workers per tree counts the root coordinator's whole tree, every depth; another coordinator's tree does not count.

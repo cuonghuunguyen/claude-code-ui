@@ -3,7 +3,7 @@ import { TURN_MS, toolCard as anyToolCard } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 const input = (page: Page, label: string): Locator => {
-  const key = label === "Maximum tree depth" ? "maxDepth" : label === "Maximum workers per coordinator" ? "maxChildren" : label === "Maximum workers" ? "workerCap" : "";
+  const key = label === "Maximum tree depth" ? "maxDepth" : label === "Maximum workers per coordinator" ? "maxChildren" : label === "Maximum workers per tree" ? "workerCap" : label === "Maximum workers in total" ? "workerCapTotal" : "";
   if (!key) throw new Error(`unknown Orchestration setting "${label}"`);
   return page.getByTestId(`settings-orchestration-${key}`);
 };

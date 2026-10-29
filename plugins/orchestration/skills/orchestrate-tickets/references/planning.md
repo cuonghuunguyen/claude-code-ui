@@ -71,7 +71,7 @@ it at the top of the ledger.
 - **3** live workers unless the user or the playbook raises it. More than that and the user
   cannot read the output as fast as it arrives.
 - **2** acceptance workers at once: each drives a real browser and a real app.
-- claude-ui enforces its own cap (Settings → Orchestration → Maximum workers, default 4) on
+- claude-ui enforces its own cap (Settings → Orchestration → Maximum workers per tree, default 4; counts the coordinator's whole tree) on
   workers with a running process. Closed workers do not count; a `worker_send` to a closed
   worker counts again. `Worker cap reached` from `worker_start` or `worker_send` is not a
   failure: close a settled worker, or wait for one.

@@ -167,9 +167,10 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
     title: "Orchestration",
     rows: [
       { key: "enabled", kind: "switch", label: "Enable orchestration", hint: "Every session may start and supervise worker sessions, workers too (up to Maximum tree depth). Applies at a session's next start." },
-      { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers", hint: "Worker sessions running at the same time (1 to 20)." },
+      { key: "workerCap", kind: "number", min: 1, max: 20, label: "Maximum workers per tree", hint: "Workers one root coordinator's tree may run at the same time, at every depth (1 to 20). Each coordinator you start counts its own tree." },
+      { key: "workerCapTotal", kind: "number", min: 0, max: 100, label: "Maximum workers in total", hint: "Workers this daemon may run at the same time across every tree (0 = no limit, up to 100)." },
       { key: "maxDepth", kind: "number", min: 1, max: 5, label: "Maximum tree depth", hint: "How deep workers may start workers of their own: 1 = only you start workers; 2 = a worker may start its own (e.g. a tester and a reviewer)." },
-      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers still counts every worker." },
+      { key: "maxChildren", kind: "number", min: 1, max: 20, label: "Maximum workers per coordinator", hint: "Workers one session (you or a worker) may run at the same time. Maximum workers per tree still counts its whole tree." },
       {
         key: "workerMode",
         kind: "select",
