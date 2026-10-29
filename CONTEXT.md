@@ -203,7 +203,7 @@ The large modal that shows the Files tab (tree, tabs, editor) over the same edit
 _Avoid_: popup viewer, file popup
 
 **Split view**:
-The session area showing a session and one more pane (another session, or one of its panes) at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip). A plan tab is never in a split yet.
+The session area showing a session and one more pane (another session, or one of its panes) at once, side by side or stacked; each region is a **split**. One split is active and shows the active tab (the current session for the side panel, terminal and commands). Not a tab group (the project chip). A split always holds a session; Git graph is never in one.
 _Avoid_: group, editor group
 
 **In-app notification**:

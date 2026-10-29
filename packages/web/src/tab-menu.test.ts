@@ -55,7 +55,7 @@ it("GH-356 the split section is last, disabled without a second session, and abs
   expect(tabMenuSections({ ...all, session: false, split: { can: true } })).toHaveLength(2);
 });
 
-it("GH-395 a pane tab menu has move, close, pin, Move Plan to side/bottom panel, Go to session and disabled split items, no copy/reveal", () => {
+it("GH-395 a pane tab menu has move, close, pin, Move Plan to side/bottom panel, Go to session and split items that follow split.can, no copy/reveal", () => {
   const sections = tabMenuSections({ ...all, pane: { label: "Plan" }, split: { can: true } });
   expect(sections.map((x) => x.map((e) => e.label))).toEqual([
     ["Move left", "Move right"],
@@ -68,14 +68,21 @@ it("GH-395 a pane tab menu has move, close, pin, Move Plan to side/bottom panel,
   const flat = sections.flat();
   expect(flat.map((e) => e.id)).not.toContain("copyId");
   expect(flat.map((e) => e.id)).not.toContain("reveal");
-  expect(flat.filter((e) => e.disabled).map((e) => e.id)).toEqual(["splitRight", "splitDown"]);
+  expect(flat.filter((e) => e.disabled)).toEqual([]);
+  const off = tabMenuSections({ ...all, pane: { label: "Plan" }, split: { can: false } }).flat();
+  expect(off.filter((e) => e.disabled).map((e) => e.id)).toEqual(["splitRight", "splitDown"]);
   expect(flat.find((e) => e.id === "moveSide")!.testId).toBe("tab-menu-moveSide");
   expect(flat.find((e) => e.id === "goToSession")!.testId).toBe("tab-menu-goToSession");
 });
 
-it("GH-396 a Git graph tab menu says Move Git graph to side / bottom panel and has Split right and Split down disabled", () => {
-  const flat = tabMenuSections({ ...all, pane: { label: "Git graph" }, split: { can: true } }).flat();
+it("GH-396 a Git graph tab menu says Move Git graph to side / bottom panel and has Split right, Split down and the reason disabled", () => {
+  const sections = tabMenuSections({ ...all, pane: { label: "Git graph" }, split: { can: false, whole: true } });
+  const flat = sections.flat();
   expect(flat.map((e) => e.label)).toContain("Move Git graph to side panel");
   expect(flat.map((e) => e.label)).toContain("Move Git graph to bottom panel");
-  expect(flat.filter((e) => e.disabled).map((e) => e.id)).toEqual(["splitRight", "splitDown"]);
+  expect(sections.at(-1)!.map((e) => e.id)).toEqual(["splitRight", "splitDown", "splitNote"]);
+  expect(sections.at(-1)!.every((e) => e.disabled)).toBe(true);
+  const note = flat.find((e) => e.id === "splitNote")!;
+  expect(note.label).toBe("Git graph needs the whole area");
+  expect(note.testId).toBe("tab-menu-splitNote");
 });

@@ -21,8 +21,9 @@ describe("pane refs", () => {
     expect(kindOf(`plan:${U}`)).toBe("plan");
     expect(kindOf(U)).toBeUndefined();
   });
-  it("splittable is false for plan refs", () => {
-    expect(splittable(`plan:${U}`)).toBe(false);
+  it("GH-398 splittable is true for plan, files and terminal refs and false for Git graph, sessions and junk", () => {
+    for (const k of ["plan", "files", "terminal"]) expect(splittable(`${k}:${U}`)).toBe(true);
+    for (const x of [`graph:${U}`, U, "new", ""]) expect(splittable(x)).toBe(false);
   });
   it("paneTabTitle is \"Plan · <title>\"", () => {
     expect(paneTabTitle("plan", "Fix bug")).toBe("Plan · Fix bug");

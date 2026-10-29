@@ -83,6 +83,9 @@ function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind
 }
 
 export const TAB_DRAG_TYPE = "application/x-claude-ui-tab";
+let dragged: string | undefined;
+/** The strip tab being dragged (dragover cannot read the data). */
+export const draggedTab = () => dragged;
 const DRAG_TYPE = TAB_DRAG_TYPE;
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
 // Hover time before a compact chip opens its menu: none. Base UI's `delay` on a menu trigger is a rest time (the pointer must stop moving that long), so any value above 0 shows up as waiting; with 0 the menu opens on mouseenter. Mouse only (touch opens by tap); a drag fires no mouseenter, and the drag start closes the menu.
@@ -163,8 +166,8 @@ export function TabsBar({
   canReopen?: boolean;
   /** Pinned session tabs (GH-359): first in their group, icon only, no close button, skipped by the bulk closes; they never cross the unpinned ones. */
   pinned?: ReadonlySet<string>;
-  /** Split view (GH-356): the tab menu offers Split right / down (disabled while `canSplit` is false); absent (narrow screen): it does not. */
-  canSplit?: boolean;
+  /** Split view (GH-356): the tab menu offers Split right / down per tab (disabled while `canSplit(id)` is false); absent (narrow screen): no split items. */
+  canSplit?: (id: string) => boolean;
   /** The tab shown in the split that is not active: marked with the split's icon. */
   splitShown?: { id: string; dir: "row" | "col"; /** Its split, 1 = left or top. */ n: number; /** The split is not drawn for lack of room. */ hidden?: boolean };
   onNew: () => void;
@@ -378,7 +381,7 @@ export function TabsBar({
                     canRight={tabs.slice(i + 1).some((x) => !pins.has(x))}
                     canAll={tabs.some((x) => !pins.has(x))}
                     canReopen={!!canReopen}
-                    canSplit={canSplit}
+                    canSplit={canSplit?.(id)}
                     splitDir={splitShown?.id === id ? splitShown.dir : undefined}
                     splitN={splitShown?.id === id ? splitShown.n : undefined}
                     splitHidden={splitShown?.id === id && !!splitShown.hidden}
@@ -1125,7 +1128,9 @@ function Tab({
         data-pinned={pinned || undefined}
         data-first={first || undefined}
         draggable={!renaming && !coarse}
+        onDragEnd={() => (dragged = undefined)}
         onDragStart={(e) => {
+          dragged = id;
           e.dataTransfer.setData(DRAG_TYPE, id);
           e.dataTransfer.effectAllowed = "move";
         }}
@@ -1191,7 +1196,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind] } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit && !t.kind } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind] } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)
@@ -1201,10 +1206,10 @@ function Tab({
                   {sec.map((x) => (
                     <ContextMenu.Item
                       key={x.id}
-                      className={ITEM}
+                      className={x.id === "splitNote" ? cn(ITEM, "text-muted-foreground text-xs") : ITEM}
                       disabled={x.disabled}
                       data-testid={x.testId}
-                      onClick={() => (x.id === "moveLeft" ? onMenuMove(-1) : x.id === "moveRight" ? onMenuMove(1) : x.id === "close" ? onMenuClose() : onCommand?.(x.id))}
+                      onClick={() => (x.id === "moveLeft" ? onMenuMove(-1) : x.id === "moveRight" ? onMenuMove(1) : x.id === "close" ? onMenuClose() : x.id === "splitNote" ? undefined : onCommand?.(x.id))}
                     >
                       {x.label}
                     </ContextMenu.Item>

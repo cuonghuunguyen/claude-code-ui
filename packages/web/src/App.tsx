@@ -156,7 +156,7 @@ import { PER_CWD, identityOf, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTit
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
-import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, canSplit as canSplitTabs, followSplit, isSession, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
@@ -484,11 +484,11 @@ export function App() {
   const [area, setArea] = useState<{ w: number; h: number }>();
   const splitFits = !split || !area || !area.w || (split.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8);
   /** Wide with a split, but no room for both: the active split shows alone, with a hint. */
-  const splitCramped = lg && !!split && isSession(activeId) && !splitFits;
+  const splitCramped = lg && !!split && split.ids.includes(activeId!) && !splitFits;
   const splitRef = useRef(split);
   splitRef.current = split;
-  /** Wide, roomy enough, a split exists and a session shows (the New session tab and Focus page suspend it). Both splits are on screen: they count as shown. */
-  const splitOn = lg && !!split && isSession(activeId) && splitFits;
+  /** Wide, roomy enough, a split exists and a session or a pane in it shows (the New session tab, Focus page and Git graph suspend it). Both splits are on screen: they count as shown. */
+  const splitOn = lg && !!split && split.ids.includes(activeId!) && splitFits;
   const visibleIds = splitOn ? split.ids : [activeId];
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
@@ -948,7 +948,7 @@ export function App() {
     if (!r) return;
     setDrawer(false);
     enter(r.split, t);
-    focusShownPrompt(t);
+    focusSplitContent(t);
   }
 
   /** A tab dropped on the middle of a split: it shows there (a tab shown in the other split swaps with it). */
@@ -956,7 +956,7 @@ export function App() {
     const s = splitRef.current;
     if (!s) return open(t);
     enter(placeIn(s, t, i), t);
-    focusShownPrompt(t);
+    focusSplitContent(t);
   }
 
   /** Join splits: one session shows again, the active one. */
@@ -1774,13 +1774,14 @@ export function App() {
   /** Both splits render (a loading session shows alone until its view is there). */
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
-    enabled: () => lg && isSession(activeRef.current),
+    enabled: () => lg && splitContent(activeRef.current),
+    refuse: (id, t) => dropRefusal(splitRef.current, splitOnRef.current, tabsRef.current, activeRef.current, id, t.zone, t.over),
     onDrop: (id, t) => {
-      if (!isSession(id) || !tabsRef.current.includes(id)) return;
+      if (!tabsRef.current.includes(id)) return;
       if (t.zone !== "center") return splitTab(id, t.zone === "left" || t.zone === "right" ? "row" : "col", t.zone === "left" || t.zone === "top");
       if (splitRef.current && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
       open(id);
-      focusShownPrompt(id);
+      focusSplitContent(id);
     },
   });
   const areaRef = useCallback((n: HTMLElement | null) => {
@@ -1800,7 +1801,21 @@ export function App() {
     const total = (row ? area.w : area.h) - 8;
     return ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
   })();
-  const splitShown = splitOn && split.ids.every((id) => !!viewOf(id) && !!sessionOf(id));
+  const splitShown = splitOn && split.ids.every((id) => (isPaneRef(id) ? !!sessionOf(ownerOf(id)) : !!viewOf(id) && !!sessionOf(id)));
+  const inSplit = (id: string) => splitShown && split!.ids.includes(id);
+  /** On screen: in the shown split, else the active tab. */
+  const onScreen = (id: string) => (splitShown ? split!.ids.includes(id) : id === activeId);
+  const splitProps = (id: string) => ({
+    className: `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}`,
+    style: { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? drawnRatio : 1 - drawnRatio} 1 0%` },
+    id: `split-${id}`,
+    role: "group",
+    "aria-label": `${isPaneRef(id) ? tabLabel(id) : list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
+    "data-testid": "split",
+    "data-active": id === activeId ? "" : undefined,
+    onPointerDownCapture: () => focusSplit(id),
+    onFocusCapture: () => focusSplit(id),
+  });
   // A tab that followed a /clear typed in the prompt box: the box gets the focus once the session shows (after its subscribe).
   useEffect(() => {
     if (!shown || refocus.current !== shown.id) return;
@@ -2037,7 +2052,9 @@ export function App() {
   // (Ctrl+`, New terminal, a click on its strip tab) is for; any other show is quiet (GH-382). `termReq`: per-tab New terminal / focus counters.
   const [termCarry, setTermCarry] = useState<string>();
   const [termSeen, setTermSeen] = useState<ReadonlySet<string>>(new Set());
-  if (kindOf(activeId ?? "") === "terminal" && !termSeen.has(activeId!)) setTermSeen(new Set(termSeen).add(activeId!));
+  // A terminal in the other split mounts too (a restored split).
+  const unseenTerms = visibleIds.filter((t): t is string => kindOf(t ?? "") === "terminal" && !termSeen.has(t!));
+  if (unseenTerms.length) setTermSeen(new Set([...termSeen, ...unseenTerms]));
   const [termLoud, setTermLoud] = useState<string>();
   if (termLoud && termLoud !== activeId) setTermLoud(undefined);
   // A pending explicit request (its panel may mount late, GH-382) ends at the user's next key or pointer press: later navigation must not focus the shell.
@@ -2058,7 +2075,10 @@ export function App() {
     if (!el) (el = document.createElement("div"), (el.style.display = "contents"), (el.dataset.paneHost = ref), termHosts.current.set(ref, el));
     return el;
   };
-  useEffect(() => void [...termHosts.current.keys()].forEach((k) => tabs.includes(k) || termHosts.current.delete(k)), [tabs]);
+  useEffect(() => {
+    [...termHosts.current.keys()].forEach((k) => tabs.includes(k) || termHosts.current.delete(k));
+    setTermSeen((s) => ([...s].every((k) => tabs.includes(k)) ? s : new Set([...s].filter((k) => tabs.includes(k)))));
+  }, [tabs]);
   const termBump = (ref: string, k: "add" | "focus") =>
     ref === carryRef ? (k === "add" ? setTerminalTick : setTermFocusReq)((n) => n + 1) : setTermReq((m) => ({ ...m, [ref]: { add: m[ref]?.add ?? 0, focus: m[ref]?.focus ?? 0, [k]: (m[ref]?.[k] ?? 0) + 1 } }));
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
@@ -2258,10 +2278,12 @@ export function App() {
   /** The body of a pane tab by kind. Terminal: its instance portals into its own host (or the dock host when carried). Plan: Activity; Files and Git graph: CSS hidden, so a hidden tab keeps its tree, editor tabs and loaded graph without effects re-running. */
   const paneTabBody = (ref: string) => {
     const kind = kindOf(ref);
+    const here = onScreen(ref);
+    const box = (cls: string) => (inSplit(ref) ? { ...splitProps(ref), className: `${splitProps(ref).className} ${cls}` } : { className: here ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden" });
     if (kind === "plan")
       return (
-        <Activity key={ref} mode={ref === activeId ? "visible" : "hidden"}>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-pane-tab-body={ref} tabIndex={-1}>
+        <Activity key={ref} mode={here ? "visible" : "hidden"}>
+          <div {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
             <PlanPane view={views[ownerOf(ref)]} failed={failedTabs.has(ownerOf(ref))} label={tabLabel(ref)} onGoToRequest={() => goToRequest(ownerOf(ref))} />
           </div>
         </Activity>
@@ -2269,14 +2291,14 @@ export function App() {
     const on = ref === activeId;
     if (kind === "terminal")
       return (
-        <div key={ref} className={on ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-pane-tab-body={ref} tabIndex={-1}>
+        <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
           {termSeen.has(ref) && <PaneSlot host={ref === carryRef ? hosts.terminal : hostOf(ref)} />}
         </div>
       );
     const cwd = cwdOfOwner(ownerOf(ref));
     const loading = <p className="m-auto text-muted-foreground text-sm">Loading {kind === "files" ? "files" : "graph"}…</p>;
     return (
-      <div key={ref} className={on ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-pane-tab-body={ref} tabIndex={-1}>
+      <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
         {!cwd ? (
           loading
         ) : kind === "files" ? (
@@ -2289,7 +2311,7 @@ export function App() {
             onViewer={(path) => popFile(path)}
             editors={editors}
             sync={false}
-            suspended={!!fileDialog || !on}
+            suspended={!!fileDialog || !here}
             onPopOut={() => popFile()}
             onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
             openPath={on ? openFile?.path : undefined}
@@ -2301,11 +2323,11 @@ export function App() {
             gitStamp={treeStamp}
             repos={cwd === panelCwd ? repoList : undefined}
             onShowGraph={() => reveal("graph")}
-            visible={on && (lg || pane === "session")}
+            visible={here && (lg || pane === "session")}
           />
         ) : (
           <Suspense fallback={loading}>
-            <GraphTab client={client.current!} cwd={cwd} hidden={!on || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
+            <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
           </Suspense>
         )}
       </div>
@@ -2394,6 +2416,8 @@ export function App() {
   const gitProject = project ? projectOf(project, worktrees) : undefined;
   const canWorktree = !!gitProject && !!worktrees[gitProject]?.some((w) => w.main && !w.outsideRoots);
   // `id`: the tab just selected, which this render does not show yet.
+  /** After a split action: a pane tab's body, else the session's prompt box. */
+  const focusSplitContent = (t: string) => (isPaneRef(t) ? requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pane-tab-body="${CSS.escape(t)}"]`)?.focus()) : focusShownPrompt(t));
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
     else setBottomMax(false);
@@ -2427,6 +2451,8 @@ export function App() {
   };
   const reopen = popClosed(closedTabs, existsTab, tabs).tab;
   const movingShells = useRef(new Set<string>());
+  // Session commands follow the owner of the active pane only while its session is in the split.
+  const ownerOnScreen = !paneRef || (splitShown && split!.ids.includes(currentId!));
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     askAside: shown && !paneRef && !draftShown ? () => setInsert("/btw ") : undefined,
@@ -2434,15 +2460,16 @@ export function App() {
     tabs,
     activeId,
     panels: panelHost,
-    splitRight: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "row") : undefined,
-    splitDown: lg && isSession(activeId) && canSplitTabs(tabs) ? () => splitTab(activeId!, "col") : undefined,
-    splitNext: splitShown ? () => (focusSplit(nextSplit(split!, 1)), focusShownPrompt()) : undefined,
-    splitPrev: splitShown ? () => (focusSplit(nextSplit(split!, -1)), focusShownPrompt()) : undefined,
+    splitRight: lg && !!splitTo(split, tabs, activeId, activeId ?? "", "row") ? () => splitTab(activeId!, "row") : undefined,
+    splitDown: lg && !!splitTo(split, tabs, activeId, activeId ?? "", "col") ? () => splitTab(activeId!, "col") : undefined,
+    splitNext: splitShown ? () => { const t = nextSplit(split!, 1); focusSplit(t); focusSplitContent(t); } : undefined,
+    splitPrev: splitShown ? () => { const t = nextSplit(split!, -1); focusSplit(t); focusSplitContent(t); } : undefined,
+    splitPrompt: splitShown && isPaneRef(activeId) && split!.ids.some(isSession),
     joinSplits: split ? joinSplits : undefined,
     sessions: list,
     session: draftShown
       ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
-      : shown && !paneRef ? {
+      : shown && ownerOnScreen ? {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
@@ -2450,7 +2477,7 @@ export function App() {
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
-    runInBackground: shown && !paneRef && !draftShown && view && foregroundShells(view).length
+    runInBackground: shown && ownerOnScreen && !draftShown && view && foregroundShells(view).length
       ? () => {
           // A second press while a move is pending would only get unknown_shell.
           for (const c of foregroundShells(view)) {
@@ -2510,7 +2537,11 @@ export function App() {
     showPlan: shown && !draftShown && latest ? () => showPlan() : undefined,
     homes: { plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph"), terminal: termHome },
     moveKind: (p, to) => move(p, to),
-    focusPrompt: focusShownPrompt,
+    focusPrompt: (id?: string) => {
+      const s = !id && splitShown && isPaneRef(activeId) ? split!.ids.find(isSession) : undefined;
+      if (s) focusSplit(s);
+      focusShownPrompt(id ?? s);
+    },
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
     setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
@@ -2807,7 +2838,7 @@ export function App() {
             onCleanup={cleanUp}
             canReopen={!!reopen}
             pinned={pinnedSet}
-            canSplit={lg ? canSplitTabs(tabs) : undefined}
+            canSplit={lg ? (id: string) => !!splitTo(split, tabs, activeId, id, "row") : undefined}
             splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : splitCramped ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at, hidden: true } : undefined}
             onNew={() => newSession()}
             home={sidebar}
@@ -3095,20 +3126,8 @@ export function App() {
                   const v = viewOf(id);
                   if (!s || !v) return null;
                   return (
-                    <Activity key={tabKeys[id] ?? id} mode={(splitShown ? split!.ids.includes(id) : id === activeId) ? "visible" : "hidden"}>
-                      <div
-                        className={splitShown && split!.ids.includes(id) ? `${card} ${id === activeId ? "outline outline-1 -outline-offset-1 outline-ring" : ""}` : "flex min-h-0 min-w-0 flex-1 flex-col"}
-                        style={splitShown && split!.ids.includes(id) ? { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? drawnRatio : 1 - drawnRatio} 1 0%` } : undefined}
-                        {...(splitShown && split!.ids.includes(id) && {
-                          id: `split-${id}`,
-                          role: "group",
-                          "aria-label": `${list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
-                          "data-testid": "split",
-                          "data-active": id === activeId ? "" : undefined,
-                          onPointerDownCapture: () => focusSplit(id),
-                          onFocusCapture: () => focusSplit(id),
-                        })}
-                      >
+                    <Activity key={tabKeys[id] ?? id} mode={onScreen(id) ? "visible" : "hidden"}>
+                      <div {...(inSplit(id) ? splitProps(id) : { className: "flex min-h-0 min-w-0 flex-1 flex-col" })}>
                       {renderTab(id, s, v, pend, { active: splitShown ? id === activeId : true })}
                       </div>
                     </Activity>
@@ -3132,9 +3151,12 @@ export function App() {
                     aria-hidden
                     data-testid="split-drop"
                     data-zone={splitDrop.state.zone}
-                    className="pointer-events-none absolute z-10 rounded-xl bg-ring/15 outline-2 -outline-offset-2 outline-ring"
+                    data-refused={splitDrop.state.refused}
+                    className={`pointer-events-none absolute z-10 rounded-xl outline-2 -outline-offset-2 ${splitDrop.state.refused ? "flex items-center justify-center bg-muted/80 px-3 text-center text-muted-foreground text-sm outline-border" : "bg-ring/15 outline-ring"}`}
                     style={splitDrop.state.box}
-                  />
+                  >
+                    {splitDrop.state.refused && REFUSAL_TEXT[splitDrop.state.refused]}
+                  </div>
                 )}
                 {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
               </div>

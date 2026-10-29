@@ -45,12 +45,12 @@ Feature: Plan pane
     And the stored layout has Plan in the main area
     And I capture "plan-tab-current-session"
 
-  Scenario: The plan tab menu offers Close, Pin and Go to session, and no split
+  Scenario: The plan tab menu offers Close, Pin, Go to session and Split right
     Given a Haiku session in Plan mode with a plan waiting for approval
     When I move the Plan pane to the main area from its tab menu
     And I open the menu of the plan tab
-    Then the menu item "Split right" is disabled
-    And the menu item "Split down" is disabled
+    Then the menu item "Split right" is enabled
+    And the menu item "Split down" is enabled
     And I capture "plan-tab-menu"
     When I choose "Pin tab" in the plan tab menu
     Then the plan tab is pinned
