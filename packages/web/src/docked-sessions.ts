@@ -2,6 +2,7 @@
 // The id stays in the stored tab list (`claude-ui.tabs`); this map says which dock holds it. Narrow screens ignore the map.
 import { useSyncExternalStore } from "react";
 import type { DockArea } from "./layout.ts";
+import { ownerOf } from "./pane-ref.ts";
 import { closeTab } from "./tabs.ts";
 
 export type Docked = Record<string, DockArea>;
@@ -33,7 +34,7 @@ export const undock = (d: Docked, id: string): Docked => {
 /** What the tabs bar shows: wide without the docked ids, narrow the whole list. Every strip action (close, move, split, cleanup, next tab) reads this list. */
 export const stripTabs = (tabs: string[], d: Docked, lg: boolean): string[] => (lg && tabs.some((t) => t in d) ? tabs.filter((t) => !(t in d)) : tabs);
 /** The tab the main area shows once `id` is docked or gone: its right strip neighbour, else the left one, else none (the rule of closeTab). */
-export const neighbourAfterDock = (tabs: string[], d: Docked, id: string): string | undefined => closeTab(tabs.filter((t) => t === id || !(t in d)), id, id).active;
+export const neighbourAfterDock = (tabs: string[], d: Docked, id: string): string | undefined => closeTab(tabs.filter((t) => t === id || (!(t in d) && ownerOf(t) !== id)), id, id).active;
 /** The docked ids of `area`, in strip order. */
 export const dockedIn = (tabs: readonly string[], d: Docked, area: DockArea): string[] => tabs.filter((t) => d[t] === area);
 

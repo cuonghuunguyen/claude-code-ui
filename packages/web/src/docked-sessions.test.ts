@@ -51,3 +51,9 @@ it("neighbourAfterDock: the strip tab right of the id, else left, else none; doc
   expect(neighbourAfterDock([B], d, B)).toBeUndefined();
   expect(neighbourAfterDock([A, B, C], { ...d, [C]: "bottom" }, A)).toBeUndefined();
 });
+
+it("neighbourAfterDock: pane tabs owned by the docked id are skipped (GH-503)", () => {
+  expect(neighbourAfterDock([A, `plan:${A}`, C], {}, A)).toBe(C);
+  expect(neighbourAfterDock([C, `plan:${A}`, A], {}, A)).toBe(C);
+  expect(neighbourAfterDock([A, `plan:${C}`, C], {}, A)).toBe(`plan:${C}`);
+});
