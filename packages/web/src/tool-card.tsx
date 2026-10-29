@@ -24,7 +24,7 @@ import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactPreview } from "./artifact-preview.tsx";
-import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -425,7 +425,7 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
               {file}
             </div>
           )}
-          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={title || file.split(/[\\/]/).pop() || file} />}
+          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={artifactTitle(call) || file} />}
         </div>
         {output}
       </div>

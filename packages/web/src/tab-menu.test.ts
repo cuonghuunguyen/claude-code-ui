@@ -88,7 +88,7 @@ it("GH-396 a Git graph tab menu says Move Git graph to side / bottom panel and h
 });
 
 it("GH-399 an item tab: no move to a dock, Move to Files, copy paths and Reveal in Files, then Go to session and split", () => {
-  const sections = tabMenuSections({ ...all, pinned: undefined, pane: { label: "File", item: true }, split: { can: true } });
+  const sections = tabMenuSections({ ...all, pinned: undefined, pane: { label: "File", item: "file" }, split: { can: true } });
   expect(sections.map((s) => s.map((x) => x.id))).toEqual([
     ["moveLeft", "moveRight"],
     ["close", "closeOthers", "closeRight", "closeAll", "reopen"],
@@ -99,5 +99,12 @@ it("GH-399 an item tab: no move to a dock, Move to Files, copy paths and Reveal 
   const flat = sections.flat();
   expect(flat.find((e) => e.id === "moveToFiles")!.label).toBe("Move to Files");
   expect(flat.map((e) => e.id)).not.toContain("moveSide");
-  expect(tabMenuSections({ ...all, pane: { label: "File", item: true }, split: { can: true } })[2]!.map((e) => e.id)).toEqual(["pin"]);
+  expect(tabMenuSections({ ...all, pane: { label: "File", item: "file" }, split: { can: true } })[2]!.map((e) => e.id)).toEqual(["pin"]);
+});
+
+it("GH-400 an artifact tab: no dock moves, no file entries; Go to session and split stay", () => {
+  const sections = tabMenuSections({ ...all, pinned: undefined, pane: { label: "Artifact", item: "artifact" }, split: { can: true } });
+  const ids = sections.flat().map((e) => e.id);
+  for (const gone of ["moveSide", "moveBottom", "moveToFiles", "copyPath", "copyRel", "revealInFiles"]) expect(ids).not.toContain(gone);
+  expect(ids).toEqual(expect.arrayContaining(["goToSession", "splitRight", "splitDown", "close"]));
 });
