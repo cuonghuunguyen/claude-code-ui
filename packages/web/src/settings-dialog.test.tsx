@@ -290,6 +290,12 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
   localStorage.removeItem("claude-ui.diffMode");
 });
 
+it("Terminal position hint names the narrow Terminal tab of the Main area", async () => {
+  const { q, pick } = await render();
+  await pick("terminal");
+  expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
+});
+
 it("Terminal position: Bottom by default, Side panel saved per browser", async () => {
   localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
