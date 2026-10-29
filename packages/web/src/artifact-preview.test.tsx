@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArtifactConnectedContext, ArtifactPreview, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactConnectedContext, ArtifactFrame, ArtifactOpenedContext, ArtifactPreview, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -167,5 +167,129 @@ describe("ArtifactPreview", () => {
     await mount(ok());
     await click("Show preview");
     expect(el.textContent).toContain("Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.");
+  });
+});
+
+const frameOf = (loader: ArtifactPreviewLoader | undefined, partId: string, o: { connected?: boolean; fill?: boolean; onTitle?: (t: string) => void } = {}) => (
+  <ArtifactConnectedContext value={o.connected ?? true}>
+    <ArtifactPreviewContext value={loader}>
+      <ArtifactFrame partId={partId} title="T" fill={o.fill} onTitle={o.onTitle} />
+    </ArtifactPreviewContext>
+  </ArtifactConnectedContext>
+);
+const mountFrame = (...a: Parameters<typeof frameOf>) => act(async () => root.render(frameOf(...a)));
+
+describe("ArtifactFrame (GH-400)", () => {
+  it("requests on mount, shows the sandboxed iframe; fill drops the 60vh cap", async () => {
+    const loader = ok();
+    await mountFrame(loader, "toolu_f1", { fill: true });
+    expect(loader).toHaveBeenCalledWith("toolu_f1");
+    const f = el.querySelector("iframe")!;
+    expect(f.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(f.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(f.hasAttribute("allow")).toBe(false);
+    expect(f.className).not.toMatch(/h-\[60vh\]/);
+    expect(f.className).toMatch(/flex-1/);
+    await mountFrame(loader, "toolu_f1b");
+    expect(el.querySelector("iframe")!.className).toMatch(/h-\[60vh\]/);
+  });
+
+  it("Reload requests again and remounts the iframe; a reconnect requests again", async () => {
+    const loader = ok();
+    await mountFrame(loader, "toolu_f2");
+    const before = el.querySelector("iframe");
+    await click("Reload");
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(el.querySelector("iframe")).not.toBe(before);
+    await mountFrame(loader, "toolu_f2", { connected: false });
+    expect(loader).toHaveBeenCalledTimes(2);
+    await mountFrame(loader, "toolu_f2", { connected: true });
+    expect(loader).toHaveBeenCalledTimes(3);
+  });
+
+  it("not_found and a daemon error show their text", async () => {
+    await mountFrame(vi.fn(async () => Promise.reject(Object.assign(new Error("x"), { code: "not_found" }))), "toolu_f3");
+    expect(el.querySelector('[role="alert"]')!.textContent).toBe("Preview not available: file is gone");
+    await mountFrame(vi.fn(async () => Promise.reject(Object.assign(new Error("A side session has no local files"), { code: "side_unsupported" }))), "toolu_f4");
+    expect(el.querySelector('[role="alert"]')!.textContent).toBe("Preview not available: A side session has no local files");
+    expect(el.querySelector("iframe")).toBeNull();
+  });
+
+  it("onTitle gets the title of the reply", async () => {
+    const onTitle = vi.fn();
+    await mountFrame(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, title: "Sales" })), "toolu_f5", { onTitle });
+    expect(onTitle).toHaveBeenCalledWith("Sales");
+  });
+
+  it("card and frame of one part request on their own; hiding the card keeps the frame; a frame does not open the card", async () => {
+    const loader = ok();
+    const both = (card: boolean) => (
+      <ArtifactOpenedContext value={opened}>
+        <ArtifactConnectedContext value={true}>
+          <ArtifactPreviewContext value={loader}>
+            {card && <ArtifactPreview partId="toolu_f6" title="T" />}
+            <div id="tab">
+              <ArtifactFrame partId="toolu_f6" title="T" fill />
+            </div>
+          </ArtifactPreviewContext>
+        </ArtifactConnectedContext>
+      </ArtifactOpenedContext>
+    );
+    const opened = new Set<string>();
+    await act(async () => root.render(both(true)));
+    expect(loader).toHaveBeenCalledTimes(1); // the frame only: the card is collapsed
+    expect(button("Show preview")).toBeDefined();
+    expect(opened.has("toolu_f6")).toBe(false);
+    await click("Show preview");
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(el.querySelectorAll("iframe")).toHaveLength(2);
+    await click("Hide preview");
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(el.querySelectorAll("iframe")).toHaveLength(1);
+    expect(el.querySelector("#tab iframe")).not.toBeNull();
+  });
+
+  it("a card remount in the same ArtifactOpenedContext stays open; a fresh one is collapsed", async () => {
+    const loader = ok();
+    const card = (set: Set<string>) => (
+      <ArtifactOpenedContext value={set}>
+        <ArtifactPreviewContext value={loader}>
+          <ArtifactPreview partId="toolu_f7" title="T" />
+        </ArtifactPreviewContext>
+      </ArtifactOpenedContext>
+    );
+    const set = new Set<string>();
+    await act(async () => root.render(card(set)));
+    await click("Show preview");
+    await act(async () => root.render(null));
+    await act(async () => root.render(card(set)));
+    expect(el.querySelector("iframe")).not.toBeNull();
+    await act(async () => root.render(null));
+    await act(async () => root.render(card(new Set())));
+    expect(button("Show preview")).toBeDefined();
+  });
+
+  it("Open in tab shows only with ArtifactTabContext, in both card states, 44 px, and passes the part id", async () => {
+    const loader = ok();
+    const onTab = vi.fn();
+    const card = (tab?: (p: string) => void) => (
+      <ArtifactTabContext value={tab}>
+        <ArtifactPreviewContext value={loader}>
+          <ArtifactPreview partId="toolu_f8" title="T" />
+        </ArtifactPreviewContext>
+      </ArtifactTabContext>
+    );
+    await act(async () => root.render(card()));
+    expect(button("Open in tab")).toBeUndefined();
+    await act(async () => root.render(card(onTab)));
+    expect(button("Open in tab")!.className).toMatch(/min-h-11/);
+    expect(button("Open in tab")!.className).toMatch(/md:min-h-0/);
+    await click("Open in tab");
+    expect(onTab).toHaveBeenCalledWith("toolu_f8");
+    expect(loader).not.toHaveBeenCalled();
+    await click("Show preview");
+    expect(button("Open in tab")).toBeDefined();
+    await click("Open in tab");
+    expect(onTab).toHaveBeenCalledTimes(2);
   });
 });

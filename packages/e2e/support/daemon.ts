@@ -177,7 +177,7 @@ function tail(file: string, lines = 30): string {
 }
 
 /** Starts the daemon with its own config dir and returns once the pairing URL is printed. */
-export async function startDaemon(run: string, worker: number, opts: { port?: number; timeoutMs?: number } = {}): Promise<Daemon> {
+export async function startDaemon(run: string, worker: number, opts: { port?: number; timeoutMs?: number; /** Added to the daemon's environment (the artifact-tab features: CLAUDE_CONFIG_DIR inside the run). */ env?: NodeJS.ProcessEnv } = {}): Promise<Daemon> {
   mkdirSync(projectsRoot(run), { recursive: true });
   mkdirSync(configHome(run), { recursive: true });
   mkdirSync(localAppData(run), { recursive: true });
@@ -194,7 +194,7 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     const child = spawn(
       process.execPath,
       ["--import", "tsx", "packages/daemon/src/main.ts", "--port", String(port), "--roots", projectsRoot(run), "--no-open", "--no-update-check", "--no-os-notify"],
-      { cwd: REPO_ROOT, env: daemonEnv(process.env, run, port, process.platform, state.pathPrefix), stdio: ["ignore", "pipe", fd], windowsHide: true, detached: process.platform !== "win32" },
+      { cwd: REPO_ROOT, env: { ...daemonEnv(process.env, run, port, process.platform, state.pathPrefix), ...opts.env }, stdio: ["ignore", "pipe", fd], windowsHide: true, detached: process.platform !== "win32" },
     );
     closeSync(fd);
     state.child = child;

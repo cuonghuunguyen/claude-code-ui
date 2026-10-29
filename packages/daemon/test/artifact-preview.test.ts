@@ -35,6 +35,15 @@ describe("artifactFileOf", () => {
   });
 });
 
+describe("artifactFileOf title (GH-400)", () => {
+  it("is the input title, else the file base name", () => {
+    expect(artifactFileOf(call({ file_path: "/t/a.html", title: "Sales" }), "/c")).toMatchObject({ title: "Sales" });
+    expect(artifactFileOf(call({ file_path: "/t/a.html", title: "" }), "/c")).toMatchObject({ title: "a.html" });
+    expect(artifactFileOf(call({ file_path: "/t/a.html", title: 5 }), "/c")).toMatchObject({ title: "a.html" });
+    expect(artifactFileOf(call({ file_path: "a/p.htm" }), "/c")).toMatchObject({ title: "p.htm" });
+  });
+});
+
 describe("ARTIFACT_CSP", () => {
   const dirs = new Map(ARTIFACT_CSP.split(";").map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k!, v]));
 
@@ -105,6 +114,7 @@ describe("artifactAssetsOf (GH-335)", () => {
   it("artifactFileOf carries the assets of a done publish", () => {
     expect(artifactFileOf(call({ file_path: "/t/a.html", files: { "a.css": "/t/a.css" } }), "/c")).toEqual({
       path: resolve("/t/a.html"),
+      title: "a.html",
       assets: [{ key: "a.css", path: resolve("/t/a.css"), type: css }],
       unavailable: [],
     });

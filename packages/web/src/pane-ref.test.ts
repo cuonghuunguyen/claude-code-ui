@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileRef, identityOf, isItem, isPaneRef, KIND_LABEL, kindOf, pathOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
+import { artifactRef, partIdOf, fileRef, identityOf, isItem, isPaneRef, KIND_LABEL, kindOf, pathOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
 
 const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
 
@@ -90,5 +90,32 @@ describe("GH-399 file refs", () => {
     expect(isItem(`files:${U}`)).toBe(false);
     expect(isItem(U)).toBe(false);
     expect(KIND_LABEL.file).toBe("File");
+  });
+});
+
+describe("GH-400 artifact refs", () => {
+  it("parse and refOf round trip; a part id with a colon too; uppercase uuid and empty part rejected", () => {
+    for (const part of ["toolu_01X", "a:b:c"]) {
+      const ref = `artifact:${U}:${part}`;
+      expect(parseRef(ref)).toEqual({ kind: "artifact", owner: U, part });
+      expect(refOf(parseRef(ref)!)).toBe(ref);
+      expect(artifactRef(U, part)).toBe(ref);
+      expect(partIdOf(ref)).toBe(part);
+    }
+    for (const id of [`artifact:${U}`, `artifact:${U}:`, `artifact:${U.toUpperCase()}:toolu_01X`, `artifact:abc:toolu_01X`]) expect(parseRef(id)).toBeUndefined();
+    expect(partIdOf(`plan:${U}`)).toBeUndefined();
+    expect(ownerOf(`artifact:${U}:toolu_01X`)).toBe(U);
+  });
+  it("an artifact is a splittable item labeled Artifact; its identity is the ref", () => {
+    const ref = `artifact:${U}:toolu_01X`;
+    expect(isItem(ref)).toBe(true);
+    expect(splittable(ref)).toBe(true);
+    expect(KIND_LABEL.artifact).toBe("Artifact");
+    expect(identityOf(ref, () => "/p")).toBe(ref);
+  });
+  it("paneTabFor finds the open artifact tab of the same owner and part", () => {
+    const ref = artifactRef(U, "toolu_01X");
+    expect(paneTabFor([ref], "artifact", U, () => "/p", undefined, "toolu_01X")).toBe(ref);
+    expect(paneTabFor([ref], "artifact", U, () => "/p", undefined, "toolu_02")).toBe(artifactRef(U, "toolu_02"));
   });
 });
