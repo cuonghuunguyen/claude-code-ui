@@ -70,3 +70,40 @@ Then("the bash card runs in the background", async ({ page }) => {
 Then("the bash card is finished", async ({ page }) => {
   await expect(lastBashCard(page)).toHaveAttribute("data-status", /^(done|error)$/, { timeout: 60_000 });
 });
+
+// Acceptance additions (GH-485 / GH-492).
+Then("no Claude reply starts for {int} seconds", async ({ page, memo }, s: number) => {
+  await page.waitForTimeout(s * 1000);
+  expect(await page.getByTestId("assistant-text").count()).toBe(memo.texts ?? 0);
+  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toHaveCount(1);
+});
+
+Then("the shell output starts with the truncation marker and ends with {string}", async ({ page }, last: string) => {
+  const out = page.getByTestId("shells-dialog").getByTestId("shell-output");
+  await expect(out).toContainText("showing the last 30000 characters", { timeout: 60_000 });
+  await expect(out).toContainText(last);
+  const text = (await out.innerText()).replace(/\s+/g, " ");
+  expect(text).not.toMatch(/\btick-1\b/);
+  expect(text).not.toMatch(/\b1 2 3 4 5 6 7 8 9 10 /);
+});
+
+// Claude may ask before a subagent's Bash runs: allow while waiting for the card button.
+When("I move the subagent Bash call {string} to the background", async ({ page, memo }, text: string) => {
+  const b = button(page, text);
+  const end = Date.now() + 180_000;
+  while (Date.now() < end && !(await b.first().isVisible())) {
+    const allowBtn = page.getByTestId("permission-panel").getByRole("button", { name: "Allow once" });
+    if (await allowBtn.isVisible()) await allowBtn.click();
+    await page.waitForTimeout(500);
+  }
+  await expect(b.first()).toBeVisible({ timeout: 1_000 });
+  await b.first().click();
+});
+
+Then("the status bar shows a shell within a minute", async ({ page }) => {
+  await expect(shells(page)).toContainText("shell", { timeout: 60_000 });
+});
+
+Then("the chat shows a reply containing {string}", async ({ page }, text: string) => {
+  await expect(page.getByTestId("assistant-text").filter({ hasText: text }).first()).toBeVisible({ timeout: 30_000 });
+});
