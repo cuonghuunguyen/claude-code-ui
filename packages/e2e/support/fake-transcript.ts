@@ -1,23 +1,27 @@
 // A synthetic Claude Code transcript of one session that published an Artifact (GH-400 e2e): the real publish would go to claude.ai.
+// Writes only below a config dir inside the run folder (projectsDirOf throws otherwise).
 // Minimal record shape the SDK's getSessionMessages() and listSessions() restore (verified by test/fake-transcript.test.ts):
 // one JSON object per line, type user|assistant, uuid chained by parentUuid, sessionId, cwd, timestamp, message in the API shape
 // (assistant: a tool_use block, user: the matching tool_result block).
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative, isAbsolute, resolve } from "node:path";
 
-/** `<CLAUDE_CONFIG_DIR or ~/.claude>/projects`, where the daemon's Claude CLI keeps transcripts. */
-export const projectsDirOf = (env: NodeJS.ProcessEnv = process.env, home = homedir()): string => join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "projects");
+/** `<configDir>/projects` of a Claude config dir that lies inside the run folder; anything else (the owner's real ~/.claude included) throws: a fixture must never write there. */
+export function projectsDirOf(configDir: string | undefined, run: string): string {
+  const rel = configDir ? relative(resolve(run), resolve(configDir)) : "";
+  if (!configDir || rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`refusing to write a transcript: CLAUDE_CONFIG_DIR (${configDir ?? "unset"}) is not inside the run folder ${run}`);
+  return join(configDir, "projects");
+}
 
 /** The project folder name of a cwd: every non-alphanumeric character becomes "-" (the Claude CLI's rule). */
 export const slugOf = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 
-export type FakePublish = { sessionId: string; cwd: string; file: string; title: string; url: string; root?: string };
+export type FakePublish = { sessionId: string; cwd: string; file: string; title: string; url: string; /** The daemon's CLAUDE_CONFIG_DIR, inside `run`. */ configDir: string; run: string };
 
 /** Writes the transcript; returns its path. Remove it with rmSync when the scenario ends. */
 export function writePublishTranscript(p: FakePublish): string {
   const cwd = realpathSync(p.cwd);
-  const dir = join(p.root ?? projectsDirOf(), slugOf(cwd));
+  const dir = join(projectsDirOf(p.configDir, p.run), slugOf(cwd));
   mkdirSync(dir, { recursive: true });
   const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
   const base = { isSidechain: false, userType: "external", cwd, sessionId: p.sessionId, version: "2.0.0" };

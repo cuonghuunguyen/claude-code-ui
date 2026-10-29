@@ -1,13 +1,18 @@
 import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
+import { startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
+import { runDir } from "../support/paths.ts";
+import { RECONNECT_MS, waitConnected } from "../support/ui.ts";
 import { writePublishTranscript } from "../support/fake-transcript.ts";
 import { Given, Then, When, After } from "./fixtures.ts";
 import { randomUUID } from "node:crypto";
 
 const PAGE_HTML = `<!doctype html><html><body><h1>Sales dashboard</h1><script>try { top.location = "https://example.com"; } catch (e) {}</script></body></html>`;
-/** The transcript of the scenario's session, removed afterwards (it lives in the Claude config dir, not in the scratch project). */
+/** The scenario's own daemon: its CLAUDE_CONFIG_DIR is inside the run folder, so the synthetic transcript never lands in the real ~/.claude, and no model is involved. */
+let own: Daemon | undefined;
+/** The transcript of the scenario's session; its project folder is removed afterwards. */
 let transcript: string | undefined;
 let urlBefore = "";
 
@@ -17,11 +22,14 @@ const body = (page: Page): Locator => page.locator("[data-pane-tab-body^='artifa
 const card = (page: Page): Locator => page.getByTestId("tool-card").filter({ hasText: "Sales dashboard" }).first();
 const frame = (page: Page) => page.frameLocator("[data-pane-tab-body^='artifact:'] iframe");
 
-Given("a session that published the page {string} titled {string}", async ({ page, daemon, project }, name: string, title: string) => {
+Given("a session that published the page {string} titled {string}", async ({ page, project, $testInfo }, name: string, title: string) => {
   const file = join(project.path, name);
   writeFileSync(file, PAGE_HTML);
-  transcript = writePublishTranscript({ sessionId: randomUUID(), cwd: project.path, file, title, url: "https://claude.ai/artifact/AbC123" });
-  await openApp(page, daemon);
+  const run = runDir();
+  const configDir = join(run, `claude-config-w${$testInfo.workerIndex}`);
+  transcript = writePublishTranscript({ sessionId: randomUUID(), cwd: project.path, file, title, url: "https://claude.ai/artifact/AbC123", configDir, run });
+  own = await startDaemon(run, 1000 + $testInfo.workerIndex, { env: { CLAUDE_CONFIG_DIR: configDir } });
+  await openApp(page, own);
   await openProject(page, project.path);
   const row = page.getByTestId("session-item").filter({ hasText: "Publish the dashboard" }).first();
   if (await page.getByTestId("open-drawer").isVisible()) await page.getByTestId("open-drawer").click();
@@ -29,9 +37,19 @@ Given("a session that published the page {string} titled {string}", async ({ pag
   await expect(card(page)).toBeVisible({ timeout: 30_000 });
 });
 
-After(() => {
-  if (transcript) rmSync(transcript, { force: true });
+After(async () => {
+  await own?.stop();
+  own = undefined;
+  if (transcript) rmSync(dirname(transcript), { recursive: true, force: true });
   transcript = undefined;
+});
+
+When("I restart the artifact daemon", async ({ page }) => {
+  const lost = expect(page.getByTestId("connection-status").first()).not.toHaveText(/^\s*connected\s*$/, { timeout: RECONNECT_MS });
+  const [restarted, seen] = await Promise.allSettled([own!.restart(), lost]);
+  if (restarted.status === "rejected") throw restarted.reason;
+  if (seen.status === "rejected") throw seen.reason;
+  await waitConnected(page);
 });
 
 When("I note the page URL", async ({ page }) => {

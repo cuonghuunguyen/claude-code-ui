@@ -2347,12 +2347,16 @@ export function App() {
   };
   /** Open in tab of an Artifact card (GH-400): the page of `partId` as a main-area tab right of its session's tab, one tab per part. */
   const openArtifactTab = (owner: string, partId: string) => openPaneTab(artifactRef(owner, partId));
+  /** The shell takes the focus (GH-382 loud open), without a spawn. */
+  const focusTerminal = (ref: string) => {
+    setTermLoud(ref);
+    termBump(ref, "focus");
+  };
   /** Explicit open of a terminal tab: the shell takes the focus; `spawn`: a shell starts if the folder has none; `add`: New terminal on the shown tab. */
   const loudTerminal = (ref: string, { spawn = true, add = false } = {}) => {
     if (add && ref === activeId && termSeen.has(ref)) termBump(ref, "add");
     else if (spawn) setTermSpawn(ref);
-    setTermLoud(ref);
-    termBump(ref, "focus");
+    focusTerminal(ref);
     if (!lg) setPane("session");
     setTabs((t) => insertPaneTab(t, ref, groupOfTab));
     open(ref);
@@ -2551,7 +2555,13 @@ export function App() {
   const canWorktree = !!gitProject && !!worktrees[gitProject]?.some((w) => w.main && !w.outsideRoots);
   // `id`: the tab just selected, which this render does not show yet.
   /** After a split action: a pane tab's body, else the session's prompt box. */
-  const focusSplitContent = (t: string) => (isPaneRef(t) ? requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pane-tab-body="${CSS.escape(t)}"]`)?.focus()) : focusShownPrompt(t));
+  const focusSplitContent = (t: string) => {
+    const kind = isPaneRef(t) ? kindOf(t) : undefined;
+    if (kind === "terminal") focusTerminal(t);
+    else if (kind === "file") setFileFocus((f) => ({ ref: t, seq: (f?.seq ?? 0) + 1 }));
+    else if (kind) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pane-tab-body="${CSS.escape(t)}"]`)?.focus());
+    else focusShownPrompt(t);
+  };
   const focusShownPrompt = (id = activeId) => {
     if (id !== NEW_TAB) showSession();
     else setBottomMax(false);

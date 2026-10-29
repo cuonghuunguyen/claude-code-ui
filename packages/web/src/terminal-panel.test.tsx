@@ -93,6 +93,10 @@ globalThis.ResizeObserver ??= class {
 } as never;
 // jsdom has no layout: an element is on screen unless it or an ancestor has the class "hidden" (display: none).
 Object.defineProperty(HTMLElement.prototype, "offsetParent", { get: function (this: HTMLElement) { return this.closest(".hidden") ? null : document.body; } });
+// jsdom has no layout: a box is 100x100 unless the test sets `size.w` to 0.
+const size = { w: 100 };
+Object.defineProperty(HTMLElement.prototype, "clientWidth", { get: () => size.w });
+Object.defineProperty(HTMLElement.prototype, "clientHeight", { get: () => 100 });
 window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as never;
 
 const el = document.createElement("div");
@@ -102,6 +106,7 @@ afterEach(async () => {
   await act(async () => root.render(null));
   xterm.all = [];
   fitted.n = 0;
+  size.w = 100;
   Reflect.deleteProperty(document, "fonts");
   resetTerminalFont();
 });
@@ -526,4 +531,25 @@ it("GH-468: the terminal colors follow the colour theme: ANSI colors for Catppuc
   await act(async () => void document.documentElement.setAttribute("data-theme", "default"));
   expect(xterm.all[0]!.options!.theme).not.toHaveProperty("red");
   document.documentElement.removeAttribute("data-theme");
+});
+
+it("GH-501 a visible box of zero size is not opened or fitted; it fits once it has a size", async () => {
+  const cbs: ResizeObserverCallback[] = [];
+  const RO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { constructor(cb: ResizeObserverCallback) { cbs.push(cb); } observe() {} unobserve() {} disconnect() {} } as never;
+  try {
+    size.w = 0;
+    const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+    await render(client);
+    await flush();
+    expect(xterm.all[0]!.parent).toBeUndefined();
+    expect(fitted.n).toBe(0);
+    expect(client.sent().some((m) => m.type === "terminal.resize")).toBe(false);
+    size.w = 100;
+    await act(async () => cbs.forEach((cb) => cb([], {} as ResizeObserver)));
+    expect(xterm.all[0]!.parent).toBeDefined();
+    expect(fitted.n).toBeGreaterThan(0);
+  } finally {
+    globalThis.ResizeObserver = RO;
+  }
 });

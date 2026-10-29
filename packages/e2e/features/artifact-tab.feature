@@ -1,6 +1,6 @@
 Feature: Open an artifact as a tab (GH-400)
 
-  # The session is a synthetic transcript of an Artifact publish of dash.html (a real publish would go to claude.ai).
+  # The session is a synthetic transcript of an Artifact publish of dash.html (a real publish would go to claude.ai), served by the scenario's own daemon with a CLAUDE_CONFIG_DIR inside the run folder: no model, nothing in the real ~/.claude.
   Background:
     Given a session that published the page "dash.html" titled "Sales dashboard"
 
@@ -54,9 +54,8 @@ Feature: Open an artifact as a tab (GH-400)
     Given the viewport is 1440x900
     When I expand the Artifact card
     And I click Open in tab on the Artifact card
-    And I restart the daemon
-    Then the app is connected
-    And the artifact tab shows the page with the heading "Sales dashboard"
+    And I restart the artifact daemon
+    Then the artifact tab shows the page with the heading "Sales dashboard"
     And I capture "artifact-tab-daemon-restart"
 
   Scenario: A page that is gone is reported

@@ -277,7 +277,8 @@ function TerminalView({
     let fontReady = false;
     let disposed = false;
     const show = () => {
-      if (disposed || !fontReady || !box.current?.offsetParent) return;
+      // A box of 0 size (a split squeezed out): no open, no 2-col fit sent to the shell; the ResizeObserver calls again with the size.
+      if (disposed || !fontReady || !box.current?.offsetParent || !box.current.clientWidth || !box.current.clientHeight) return;
       if (!t.element) t.open(box.current);
       fit.fit();
     };
@@ -347,7 +348,8 @@ function TerminalView({
         if (buffer) v.t.write(buffer);
         // The daemon's size may be another browser's: send this view's.
         v.show();
-        client.request({ type: "terminal.resize", terminalId: id, cols: v.t.cols, rows: v.t.rows }).catch(() => {});
+        // Not opened (a 0-size box): xterm's default size is nobody's; the first fit sends the size.
+        if (v.t.element) client.request({ type: "terminal.resize", terminalId: id, cols: v.t.cols, rows: v.t.rows }).catch(() => {});
       },
       () => {}, // gone (terminal.exit) or disconnected (attached again on reconnect)
     );

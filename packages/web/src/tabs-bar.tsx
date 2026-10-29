@@ -91,6 +91,8 @@ export const TAB_DRAG_TYPE = "application/x-claude-ui-tab";
 let dragged: string | undefined;
 /** The strip tab being dragged (dragover cannot read the data). */
 export const draggedTab = () => dragged;
+// A drop ends every drag; dragend does not fire on a source that was unmounted meanwhile.
+if (typeof window !== "undefined") window.addEventListener("drop", () => (dragged = undefined), true);
 const DRAG_TYPE = TAB_DRAG_TYPE;
 const GROUP_DRAG_TYPE = "application/x-claude-ui-tab-group";
 // Hover time before a compact chip opens its menu: none. Base UI's `delay` on a menu trigger is a rest time (the pointer must stop moving that long), so any value above 0 shows up as waiting; with 0 the menu opens on mouseenter. Mouse only (touch opens by tap); a drag fires no mouseenter, and the drag start closes the menu.
@@ -1107,6 +1109,7 @@ function Tab({
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
+  useEffect(() => () => void (dragged === id && (dragged = undefined)), [id]);
   const button = useRef<HTMLButtonElement>(null);
   const keyOpenedAt = useRef(-Infinity);
   const coarse = useTouchPrimary();

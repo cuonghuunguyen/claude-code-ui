@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { TabsBar, useGroupedTabs, type TabInfo } from "./tabs-bar.tsx";
+import { TabsBar, draggedTab, useGroupedTabs, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
 import { SideLabel } from "./sides.tsx";
 
@@ -1340,4 +1340,22 @@ it("GH-397 a terminal tab shows the terminal icon; a pointer click reports click
   expect(onSelect).toHaveBeenLastCalledWith(T, true);
   await act(async () => btn.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
   expect(onSelect).toHaveBeenLastCalledWith(T, false);
+});
+
+const dragStart = (t: HTMLElement) => act(async () => void t.dispatchEvent(Object.assign(new Event("dragstart", { bubbles: true }), { dataTransfer: { setData() {}, effectAllowed: "" } })));
+
+it("GH-501 a tab removed during its drag does not stay the dragged tab", async () => {
+  const { tab } = await render();
+  await dragStart(tab("a"));
+  expect(draggedTab()).toBe("a");
+  await act(async () => root!.unmount());
+  expect(draggedTab()).toBeUndefined();
+});
+
+it("GH-501 a drop anywhere in the window ends the drag", async () => {
+  const { tab } = await render();
+  await dragStart(tab("a"));
+  expect(draggedTab()).toBe("a");
+  await act(async () => void window.dispatchEvent(new Event("drop")));
+  expect(draggedTab()).toBeUndefined();
 });
