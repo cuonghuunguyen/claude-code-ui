@@ -76,7 +76,7 @@ it("needs input and unread differ by shape, not only by colour", async () => {
 it("click selects; the close button and a middle click close the tab without selecting it", async () => {
   const { tab, onSelect, onClose } = await render();
   await act(async () => tab("a").querySelector<HTMLElement>('[role="tab"]')!.click());
-  expect(onSelect).toHaveBeenCalledWith("a");
+  expect(onSelect).toHaveBeenCalledWith("a", false);
   await act(async () => tab("b").querySelector<HTMLElement>('[data-testid="tab-close"]')!.click());
   expect(onClose).toHaveBeenCalledWith("b");
   await act(async () => void tab("d").dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true })));
@@ -1328,4 +1328,16 @@ it("GH-396 files and graph tabs show the folder and git-graph icons and their la
   expect(rows[1]!.textContent).toContain("Files · web");
   expect(rows[1]!.querySelector(".lucide-folder")).not.toBeNull();
   expect(rows[2]!.querySelector(".lucide-git-graph")).not.toBeNull();
+});
+
+it("GH-397 a terminal tab shows the terminal icon; a pointer click reports click, Enter does not", async () => {
+  const T = "terminal:0f8e7d6c-1234-4abc-8def-0123456789ab";
+  const info = (id: string) => (id === T ? { title: "Terminal · web", kind: "terminal" as const, cwd: "/home/u/web", unread: false, transcript: false } : INFO[id]!);
+  const { tab, onSelect } = await render({ tabs: ["a", T], info, activeId: "a" });
+  expect(tab(T).querySelector(".lucide-square-terminal")).not.toBeNull();
+  const btn = tab(T).querySelector<HTMLElement>('[role="tab"]')!;
+  await act(async () => btn.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+  expect(onSelect).toHaveBeenLastCalledWith(T, true);
+  await act(async () => btn.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
+  expect(onSelect).toHaveBeenLastCalledWith(T, false);
 });

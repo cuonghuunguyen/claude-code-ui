@@ -497,6 +497,12 @@ it("Ask aside is a command only while a session tab is shown, and puts /btw in i
   expect(appCommands(ctx({ askAside })).find((i) => i.id === "aside.ask")).toMatchObject({ title: "Ask aside", keys: undefined });
 });
 
+it("palette moves the terminal between its homes (GH-397)", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.startsWith("terminal.move"));
+  expect(ids(ctx({ homes: { terminal: "bottom" }, moveKind: vi.fn() }))).toEqual(["terminal.move.main", "terminal.move.side"]);
+  expect(ids(ctx({ homes: { terminal: "main" }, moveKind: vi.fn() }))).toEqual(["terminal.move.side", "terminal.move.bottom"]);
+});
+
 it("Run in background is listed only while a foreground shell runs, with Ctrl+Shift+B", () => {
   expect(appCommands(ctx()).find((i) => i.id === "shell.background")).toBeUndefined();
   const run = vi.fn();

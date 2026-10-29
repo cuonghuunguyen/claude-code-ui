@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -73,6 +73,7 @@ function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind
   if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind === "terminal") return <SquareTerminalIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
   // Needs input gets its own shape, not only another dot colour than unread.
@@ -139,7 +140,7 @@ export function TabsBar({
   compact?: boolean;
   activeId?: string;
   info: (id: string) => TabInfo;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, click?: boolean) => void;
   onClose: (id: string) => void;
   /** A row of the phone switcher closed by a left swipe or Delete (the list stays open); default `onClose`. The owner can offer Undo. */
   onSwipeClose?: (id: string) => void;
@@ -1067,7 +1068,7 @@ function Tab({
   /** No move left / right: at the end of the group or of the pinned block. */
   moveFirst: boolean;
   moveLast: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, click?: boolean) => void;
   onClose: (id: string) => void;
   onMove: (from: string, to: string) => void;
   /** Clean up tabs submenu (GH-378): read when the menu renders; absent: no submenu. */
@@ -1161,7 +1162,7 @@ function Tab({
               pinned ? "justify-center px-0" : "pr-7 pl-1.5",
               active ? "text-foreground" : "text-muted-foreground",
             )}
-            onClick={() => onSelect(id)}
+            onClick={(e) => onSelect(id, e.detail > 0)}
             onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget) && (keyOpenedAt.current = performance.now())}
             // OpenCode: double click on the title renames.
             onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}

@@ -148,7 +148,7 @@ import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
 import { PER_CWD, identityOf, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf } from "./pane-ref.ts";
 import { DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
@@ -1955,8 +1955,9 @@ export function App() {
   const inSight = (p: PaneId) => (areaOf(layout, p) === "main" ? kindOf(activeId ?? "") === p && (lg || pane === "session") : shows(p) && !(bottomMax && lg && areaOf(layout, p) === "side"));
   const sideEmpty = lg && areaPanes("side").length === 0;
   // The terminal stays mounted (hidden) while another pane of its open area is selected, so switching tabs keeps it as it was.
-  const termDock = areaOf(layout, "terminal") as DockArea; // never main in this slice
-  const termAreaOpen = lg && (termDock === "side" ? sideShown : bottomShown);
+  const termHome = areaOf(layout, "terminal");
+  const termDock = termHome as DockArea; // only read where termHome is not "main"
+  const termAreaOpen = lg && termHome !== "main" && (termDock === "side" ? sideShown : bottomShown);
   // `termKeep`: it has shown and its area has stayed open since; it resets when the area hides, so hiding unmounts it.
   const termShows = shows("terminal");
   const [termKeep, setTermKeep] = useState(false);
@@ -1969,6 +1970,35 @@ export function App() {
     setSpawnFor(undefined);
     activeOpen.current = false;
   }, [termMounted]);
+  // GH-397: terminal tabs (home = main). One TerminalPanel per open tab, mounted once shown. `termCarry`: the folder whose dock terminal
+  // moved into a tab; that tab shows `hosts.terminal`, so the move never remounts its xterm. `termLoud`: the tab an explicit request
+  // (Ctrl+`, New terminal, a click on its strip tab) is for; any other show is quiet (GH-382). `termReq`: per-tab New terminal / focus counters.
+  const [termCarry, setTermCarry] = useState<string>();
+  const [termSeen, setTermSeen] = useState<ReadonlySet<string>>(new Set());
+  if (kindOf(activeId ?? "") === "terminal" && !termSeen.has(activeId!)) setTermSeen(new Set(termSeen).add(activeId!));
+  const [termLoud, setTermLoud] = useState<string>();
+  if (termLoud && termLoud !== activeId) setTermLoud(undefined);
+  // A pending explicit request (its panel may mount late, GH-382) ends at the user's next key or pointer press: later navigation must not focus the shell.
+  useEffect(() => {
+    if (!termLoud) return;
+    const done = () => setTermLoud(undefined);
+    const kinds = ["keydown", "pointerdown"] as const;
+    for (const k of kinds) window.addEventListener(k, done, true);
+    return () => kinds.forEach((k) => window.removeEventListener(k, done, true));
+  }, [termLoud]);
+  const [termReq, setTermReq] = useState<Record<string, { add: number; focus: number }>>({});
+  const [termSpawn, setTermSpawn] = useState<string>();
+  const termTabs = termHome === "main" ? tabs.filter((t) => kindOf(t) === "terminal" && termSeen.has(t)) : [];
+  const carryRef = termTabs.find((t) => termCarry !== undefined && cwdOfOwner(ownerOf(t)) === termCarry);
+  const termHosts = useRef(new Map<string, HTMLDivElement>());
+  const hostOf = (ref: string) => {
+    let el = termHosts.current.get(ref);
+    if (!el) (el = document.createElement("div"), (el.style.display = "contents"), (el.dataset.paneHost = ref), termHosts.current.set(ref, el));
+    return el;
+  };
+  useEffect(() => void [...termHosts.current.keys()].forEach((k) => tabs.includes(k) || termHosts.current.delete(k)), [tabs]);
+  const termBump = (ref: string, k: "add" | "focus") =>
+    ref === carryRef ? (k === "add" ? setTerminalTick : setTermFocusReq)((n) => n + 1) : setTermReq((m) => ({ ...m, [ref]: { add: m[ref]?.add ?? 0, focus: m[ref]?.focus ?? 0, [k]: (m[ref]?.[k] ?? 0) + 1 } }));
   useEffect(() => void (!bottomShown && setBottomMax(false)), [bottomShown]);
   const openArea = (a: DockArea, v = true) => (a === "side" ? setPanel(v) : setBottomOpen(v));
   /** Selects the pane and, on wide screens, opens its area. */
@@ -1987,6 +2017,12 @@ export function App() {
   const [drag, setDrag] = useState<PaneId>();
   const [dropAt, setDropAt] = useState<DropAt>();
   const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
+  /** Back to a dock: the pane's main tabs close, one toast with Undo (the layout comes back first). */
+  const leaveMain = (p: PaneId) => {
+    if (areaOf(loadLayout(), p) !== "main") return;
+    const prev = loadLayout();
+    closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
+  };
   const move = (p: PaneId, to: Area, before?: PaneId) => {
     if (to === "main") {
       // The main area: a tab of the current session (Changes never lives there).
@@ -1994,16 +2030,18 @@ export function App() {
       saveLayout(movePane(layout, p, "main"));
       if (p === "files") return paneOwner ? showKind("files") : (focusShownPrompt(), setToast("Files moved to the main area. Its tab opens when a session shows."));
       if (p === "graph") return paneOwner && isGit ? showKind("graph") : (focusShownPrompt(), setToast("Git graph moved to the main area. Its tab opens for a git project."));
+      if (p === "terminal") {
+        if (!paneOwner) return (focusShownPrompt(), setToast("Terminal moved to the main area. Its tab opens when a session shows."));
+        // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder.
+        setTermCarry(termMounted && panelCwd === cwdOfOwner(paneOwner) ? panelCwd : undefined);
+        return openPaneTab(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner)); // the instance is quiet: no termLoud
+      }
       const owner = currentId && isSession(currentId) ? currentId : undefined;
       if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
       else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
       return;
     }
-    if (areaOf(layout, p) === "main") {
-      // Back to a dock: its tabs close, one toast with Undo (the layout comes back first).
-      const prev = loadLayout();
-      closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
-    }
+    leaveMain(p);
     const n = movePane(layout, p, to, before);
     if (n !== layout) saveLayout(n);
     // A Terminal pane moved on purpose shows (its empty tab bar with +) even where the folder has no shells.
@@ -2067,7 +2105,7 @@ export function App() {
   };
   /** The narrow pane switcher: Plan with its home in the main area shows the plan tab; a plan tab is left by picking another pane. */
   const switchPane = (p: Pane) => {
-    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : showKind(p as "files" | "graph");
+    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : p === "terminal" ? showTerminal() : showKind(p as "files" | "graph");
     if (p === "session" && paneRef) return open(paneRef.owner);
     selectPane(p);
   };
@@ -2140,10 +2178,22 @@ export function App() {
     open(ref);
     focusTabOf(ref);
   };
+  /** Explicit open of a terminal tab: the shell takes the focus; `spawn`: a shell starts if the folder has none; `add`: New terminal on the shown tab. */
+  const loudTerminal = (ref: string, { spawn = true, add = false } = {}) => {
+    if (add && ref === activeId && termSeen.has(ref)) termBump(ref, "add");
+    else if (spawn) setTermSpawn(ref);
+    setTermLoud(ref);
+    termBump(ref, "focus");
+    if (!lg) setPane("session");
+    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
+    open(ref);
+  };
+  /** Ctrl+`, the terminal buttons, New terminal, the narrow switcher with home = main: the current session's project terminal tab. */
+  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast("Open a session to show Terminal."));
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
-  /** The body of a pane tab by kind (3/8 adds terminal). Plan: Activity; Files and Git graph: CSS hidden, so a hidden tab keeps its tree, editor tabs and loaded graph without effects re-running. */
+  /** The body of a pane tab by kind. Terminal: its instance portals into its own host (or the dock host when carried). Plan: Activity; Files and Git graph: CSS hidden, so a hidden tab keeps its tree, editor tabs and loaded graph without effects re-running. */
   const paneTabBody = (ref: string) => {
     const kind = kindOf(ref);
     if (kind === "plan")
@@ -2155,6 +2205,12 @@ export function App() {
         </Activity>
       );
     const on = ref === activeId;
+    if (kind === "terminal")
+      return (
+        <div key={ref} className={on ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-pane-tab-body={ref} tabIndex={-1}>
+          {termSeen.has(ref) && <PaneSlot host={ref === carryRef ? hosts.terminal : hostOf(ref)} />}
+        </div>
+      );
     const cwd = cwdOfOwner(ownerOf(ref));
     const loading = <p className="m-auto text-muted-foreground text-sm">Loading {kind === "files" ? "files" : "graph"}…</p>;
     return (
@@ -2288,6 +2344,7 @@ export function App() {
   };
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
   const toggleTerminal = () => {
+    if (termHome === "main") return showTerminal();
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
     if (!inSight("terminal")) return (askTerminal(), shows("terminal") && setTermFocusReq((n) => n + 1), reveal("terminal"));
     openArea(termDock, false);
@@ -2370,6 +2427,7 @@ export function App() {
       reveal(p);
     },
     newTerminal: () => {
+      if (termHome === "main") return showTerminal(true);
       if (inSight("terminal")) return setTerminalTick((n) => n + 1);
       askTerminal();
       // It may be the shown pane already, behind a maximized bottom panel: the shell takes the focus once it is in sight.
@@ -2386,7 +2444,7 @@ export function App() {
     viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
     viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     showPlan: shown && !draftShown && latest ? () => showPlan() : undefined,
-    homes: { plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph") },
+    homes: { plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph"), terminal: termHome },
     moveKind: (p, to) => move(p, to),
     focusPrompt: focusShownPrompt,
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
@@ -2527,35 +2585,61 @@ export function App() {
   const prompted = useMemo(() => promptedIds(optimistic, views), [optimistic, views]);
 
 
-  // The terminal panel, rendered in one place only: inside the terminal pane's host.
-  const terminalPanel = () =>
-    panelTarget && (
+  // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
+  type TermProps = { shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
+  const terminalSection = (cwd: string, p: TermProps, dock: string) => (
+    <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
-        <TerminalPanel
-          client={client.current!}
-          status={status}
-          cwd={panelTarget.cwd}
-          ensure={spawnFor === panelTarget.cwd}
-          onEnsured={() => setSpawnFor(undefined)}
-          onTerminals={(n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 }))}
-          onEmpty={() => {
-            // Not wanted any more: its folder shows no terminal until the next active open.
-            setTermWanted((w) => (w.has(panelTarget.cwd) ? new Set([...w].filter((c) => c !== panelTarget.cwd)) : w));
-            setHasShells((h) => ({ ...h, [panelTarget.cwd]: false }));
-            if (!lg) return setPane("session");
-            // The last terminal closed: the area hides, or shows its other pane.
-            const a = termDock;
-            const rest = areaPanes(a).filter((p) => p !== "terminal");
-            if (rest.length) setPane(rest[0]!);
-            else openArea(a, false);
-          }}
-          newTick={terminalTick}
-          shown={shows("terminal")}
-          focusReq={termFocusReq}
-          quiet={moving || termMoveShow}
-        />
+        <TerminalPanel client={client.current!} status={status} cwd={cwd} {...p} />
       </Suspense>
+    </section>
+  );
+  const dockTerminal = () =>
+    panelTarget &&
+    terminalSection(
+      panelTarget.cwd,
+      {
+        ensure: spawnFor === panelTarget.cwd,
+        onEnsured: () => setSpawnFor(undefined),
+        onTerminals: (n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 })),
+        onEmpty: () => {
+          // Not wanted any more: its folder shows no terminal until the next active open.
+          setTermWanted((w) => (w.has(panelTarget.cwd) ? new Set([...w].filter((c) => c !== panelTarget.cwd)) : w));
+          setHasShells((h) => ({ ...h, [panelTarget.cwd]: false }));
+          if (!lg) return setPane("session");
+          // The last terminal closed: the area hides, or shows its other pane.
+          const a = termDock;
+          const rest = areaPanes(a).filter((p) => p !== "terminal");
+          if (rest.length) setPane(rest[0]!);
+          else openArea(a, false);
+        },
+        newTick: terminalTick,
+        shown: shows("terminal"),
+        focusReq: termFocusReq,
+        quiet: moving || termMoveShow,
+      },
+      lg ? areaOf(layout, "terminal") : "side",
     );
+  const tabTerminal = (ref: string) => {
+    const cwd = cwdOfOwner(ownerOf(ref));
+    const carry = ref === carryRef;
+    return (
+      cwd &&
+      terminalSection(
+        cwd,
+        {
+          shown: ref === activeId && (lg || pane === "session"),
+          quiet: termLoud !== ref,
+          ensure: termSpawn === ref,
+          onEnsured: () => setTermSpawn(undefined),
+          newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
+          focusReq: carry ? termFocusReq : termReq[ref]?.focus ?? 0,
+          onEmpty: () => close(ref),
+        },
+        "main",
+      )
+    );
+  };
   const dragProps = { drag, dropAt, onDrag: setDrag, onDropAt: setDropAt };
   /** Drop on an area (header or body): append at its end. */
   const dropHandlers = (a: DockArea) => ({
@@ -2643,7 +2727,7 @@ export function App() {
             renamingFromMenu={renaming?.menu}
             onAction={sessionAction("tab")}
             onRenamed={renamed}
-            onSelect={open}
+            onSelect={(id, click) => (click && kindOf(id) === "terminal" ? loudTerminal(id, { spawn: false }) : open(id))}
             onClose={close}
             onSwipeClose={closeFromList}
             grouping={grouping}
@@ -3173,17 +3257,11 @@ export function App() {
                     ),
                     hosts.plan,
                   )}
-                  {createPortal(
-                    // Mounted only while it shows: the terminal chunk and the shell focus load on show (GH-354).
-                    termMounted && (
-                      <section className={shows("terminal") ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={lg ? areaOf(layout, "terminal") : "side"}>
-                        {terminalPanel()}
-                      </section>
-                    ),
-                    hosts.terminal,
-                  )}
                 </>
               )}
+              {/* GH-397: one position for the dock terminal and the tab it moved into, so a move never remounts it. */}
+              {createPortal(termHome === "main" ? carryRef && tabTerminal(carryRef) : termMounted && dockTerminal(), hosts.terminal)}
+              {termTabs.filter((r) => r !== carryRef).map((r) => createPortal(tabTerminal(r), hostOf(r), r))}
             </>
           )}
         </main>
@@ -3338,7 +3416,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       {shown && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
