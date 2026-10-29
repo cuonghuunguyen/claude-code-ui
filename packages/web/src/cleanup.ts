@@ -67,6 +67,10 @@ export type Row =
   | ({ kind: "worker" } & WorkerCandidate);
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+/** The daemon stops counting files at 1000: that number means "at least". */
+export const countText = (n: number) => (n >= 1000 ? "1000+" : String(n));
+/** "N ignored files", `1000+` when capped. */
+export const ignoredText = (n: number) => `${countText(n)} ignored ${n === 1 ? "file" : "files"}`;
 
 export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "checking"; reason?: string; /** Checking: what the cached result says. */ cached?: ReturnType<typeof rowSafety> } {
   if (r.kind === "worker") {
@@ -123,7 +127,7 @@ export async function runCleanup(items: Item[], onProgress: (done: number) => vo
       const r = (await it.run()) as WorktreeRemoveResult;
       out.removed.push(it.label);
       if (r?.branchKept) out.notes.push(`Branch ${it.label} kept: ${r.branchKept}`);
-      if (r?.ignoredDeleted) out.notes.push(`${it.label}: ${plural(r.ignoredDeleted, "ignored file")} deleted`);
+      if (r?.ignoredDeleted) out.notes.push(`${it.label}: ${ignoredText(r.ignoredDeleted)} deleted`);
     } catch (e) {
       out.skipped.push({ label: it.label, reason: (e as Error).message });
     }

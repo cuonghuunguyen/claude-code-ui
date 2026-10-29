@@ -1029,8 +1029,8 @@ async function repoFacts(cwd: string, fresh = false): Promise<Facts> {
       const [name, upstream = "", track = "", symref = "", tree = ""] = r.replace(/^\n/, "").split("\x1f");
       if (name) refs.set(name, { upstream, track, symref, tree });
     }
-    // The same rule as `defaultBranch`: origin/HEAD's target, else main, else master (local).
-    const base = [refs.get("refs/remotes/origin/HEAD")?.symref, "refs/heads/main", "refs/heads/master"].find((x): x is string => !!x && refs.has(x));
+    // origin/HEAD's target; without it (a clone of an empty repository, a removed set-head) origin's main or master (what a squash merge on the server updates), else the local ones.
+    const base = [refs.get("refs/remotes/origin/HEAD")?.symref, "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"].find((x): x is string => !!x && refs.has(x));
     return { main, list, config, refs, ...(base && { base, baseTree: refs.get(base)!.tree }) };
   };
   const start = () => (lowTier.getStore() ? lowTier.run(neverAborted, build) : build());

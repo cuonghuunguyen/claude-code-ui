@@ -121,6 +121,10 @@ describe("cleanup", () => {
     expect(sent.map((m) => m.expect)).toEqual([{ uncommitted: 0, ahead: 0, ignored: 3 }, { uncommitted: 0, ahead: 0 }]);
     expect("ignored" in sent[1]!.expect).toBe(false);
     expect(r.notes).toEqual(["preview: 5 ignored files deleted"]);
+    // The daemon counts to 1000 and stops: say "1000+".
+    const bigRow = wt("/big", { status: { ...st(), ignored: undefined } });
+    const big = await runCleanup(cleanupItems([bigRow], new Set([bigRow.key]), { deleteBranch: new Set() }, (async () => ({ ignoredDeleted: 1000 })) as never));
+    expect(big.notes).toEqual(["big: 1000+ ignored files deleted"]);
   });
 
   it("runCleanup: sequential, a rejection is skipped with its message, branchKept becomes a note; summaryText 'Removed 2, skipped 1'", async () => {

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
-import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filterRows, rowLabel, rowSafety, runCleanup, summaryText, type CleanupResult, type CleanupScope, type Filter, type Row } from "./cleanup.ts";
+import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filterRows, ignoredText, rowLabel, rowSafety, runCleanup, summaryText, type CleanupResult, type CleanupScope, type Filter, type Row } from "./cleanup.ts";
 import { trapTab } from "./focus-trap.ts";
 import { timeAgo } from "./sessions.ts";
 import { ARCHIVE_DAYS, daysLabel } from "./sidebar-menus.ts";
@@ -320,7 +320,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
     act ? timeAgo(act, now) : undefined,
     checkedAt && now - checkedAt > 5000 ? `checked ${timeAgo(checkedAt, now)}` : undefined,
     r.kind === "worktree" && r.status && r.status.ignored === undefined ? "ignored files: checked at removal" : undefined,
-    r.kind === "worktree" && r.status?.ignored ? `${r.status.ignored >= 1000 ? "1000+" : r.status.ignored} ignored ${r.status.ignored === 1 ? "file" : "files"} will be deleted` : undefined,
+    r.kind === "worktree" && r.status?.ignored ? `${ignoredText(r.status.ignored)} will be deleted` : undefined,
     r.kind === "worktree" && r.status?.upstreamGone ? "remote branch deleted" : undefined,
     safety === "safe" ? reason : undefined,
     r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,

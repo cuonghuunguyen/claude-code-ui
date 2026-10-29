@@ -80,7 +80,7 @@ import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
 import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, timeAgo, worktreeName } from "./sessions.ts";
-import { BLOCK_TEXT, summaryText, type CleanupScope } from "./cleanup.ts";
+import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { appendQuote } from "./quote.ts";
@@ -1497,7 +1497,7 @@ export function App() {
       // The counts the user saw: the daemon checks again and refuses (`stale`) when there is more work now.
       const st = w.status;
       const r = await client.current!.request<WorktreeRemoveResult>({ type: "worktree.remove", cwd: w.project, path: w.path, ...(st && { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } }) });
-      if (r?.ignoredDeleted) setToast(`Removed ${w.branch ?? lastSegment(w.path)}: ${r.ignoredDeleted} ignored ${r.ignoredDeleted === 1 ? "file" : "files"} deleted`);
+      if (r?.ignoredDeleted) setToast(`Removed ${w.branch ?? lastSegment(w.path)}: ${ignoredText(r.ignoredDeleted)} deleted`);
       if (draftCwd === w.path) setDraftCwd(w.project);
       await refreshList();
     } catch (e) {

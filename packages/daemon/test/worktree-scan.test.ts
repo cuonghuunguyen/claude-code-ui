@@ -167,6 +167,32 @@ describe("merged another way", () => {
     expect(await worktreeStatus(main, path, allowed)).toMatchObject({ safety: "has_work", uncommitted: 1 });
   });
 
+  it("without origin/HEAD the squash merge on origin's main still counts: the base falls back to origin/main, then to the local main", async () => {
+    const { root, main } = repo();
+    git(main, "remote", "set-head", "origin", "-d");
+    git(main, "config", "remote.origin.followRemoteHEAD", "never"); // git 2.48+ would create origin/HEAD again on fetch
+    expect(gitOk(main, "rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD")).toBe("");
+    const path = wt(main, "nohead");
+    commit(path, "n.txt", "n\n");
+    // Squash-merged on the server by someone else; the local main stays behind.
+    git(root, "clone", "-q", "o.git", "s");
+    const s = join(root, "s");
+    git(main, "push", "-q", "origin", "nohead:tmp-src"); // another name: no same-name remote branch saves the commit
+    git(s, "fetch", "-q", "origin");
+    git(s, "merge", "--squash", "origin/tmp-src");
+    git(s, "commit", "-qm", "squash nohead");
+    git(s, "push", "-q", "origin", "HEAD:main", ":tmp-src");
+    git(main, "fetch", "-q", "--prune", "origin");
+    expect(await worktreeStatus(main, path, allowed)).toMatchObject({ safety: "safe", mergedInto: "origin/main" });
+    // No remote at all: the local main is the base.
+    git(main, "remote", "remove", "origin");
+    const local = wt(main, "localonly");
+    commit(local, "l.txt", "l\n");
+    git(main, "merge", "--squash", "localonly");
+    git(main, "commit", "-qm", "squash localonly");
+    expect(await worktreeStatus(main, local, allowed)).toMatchObject({ safety: "safe", mergedInto: "main" });
+  });
+
   it("rebase-merged worktree (cherry-picked commits) is safe", async () => {
     const { main } = repo();
     const path = wt(main, "pick");
