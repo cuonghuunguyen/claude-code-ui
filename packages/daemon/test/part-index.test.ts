@@ -160,13 +160,14 @@ describe("PartIndex", () => {
     expect(isAttention("idle", { state: "idle" })).toBe(false);
   });
 
-  it("aux lists unloaded subagent, turn_result and running background Bash parts only; edits lists Edit/Write calls and their results before the boundary", () => {
+  it("aux lists unloaded subagent, turn_result and background Bash parts (any status) only; edits lists Edit/Write calls and their results before the boundary", () => {
     const { index } = build([
       user(1),
       call("e1", "Edit", { file_path: "a" }),
       result("e1"),
       call("w1", "Write", { file_path: "b" }),
       call("bg", "Bash", { run_in_background: true }, "running"),
+      call("bgdone", "Bash", { run_in_background: true }, "done"),
       call("fg", "Bash", {}, "running"),
       { ...call("moved", "Bash", {}, "running"), shell: "background" } as Part,
       { ...call("fg2", "Bash", {}, "running"), shell: "foreground" } as Part,
@@ -177,7 +178,7 @@ describe("PartIndex", () => {
       ...turns(12, 2),
     ]);
     const cursor = index.lastPage().older!;
-    expect(index.aux(cursor.pos).map((x) => x.part.id)).toEqual(["bg", "moved", "sa", "r1", "r2", "r3"]);
+    expect(index.aux(cursor.pos).map((x) => x.part.id)).toEqual(["bg", "bgdone", "moved", "sa", "r1", "r2", "r3"]);
     expect(index.edits(cursor.pos).map((x) => x.part.id)).toEqual(["e1", "e1:result", "w1"]);
   });
 

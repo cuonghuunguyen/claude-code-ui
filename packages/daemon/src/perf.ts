@@ -14,7 +14,7 @@ export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "plugins.restart", "plugins.setEnabled", "plugins.uninstall", "plugins.update", "project.open", "project.remove", "push.focus", "push.key", "push.subscribe",
   "question.respond", "session.archive", "session.backgroundShell", "session.bash", "session.cancelContinue", "session.commands", "session.create", "session.defaultMode", "session.delete", "session.dequeue", "session.enqueue", "session.sendQueued",
   "session.edits", "session.ids", "session.interrupt", "session.list", "session.media", "session.page", "session.prompt", "session.rename", "session.rewind", "session.rewindPreview", "session.setEffort",
-  "session.setModel", "session.setPermissionMode", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
+  "session.setModel", "session.setPermissionMode", "session.shellOutput", "session.stopShell", "session.stopSubagent", "session.subscribe", "session.unsubscribe", "sessions.search", "settings.get", "settings.set",
   "side.check", "side.start", "skills.list", "skills.setState", "terminal.attach", "terminal.close", "terminal.create", "terminal.detach", "terminal.input", "terminal.list",
   "terminal.resize", "update.install", "update.restart", "aside.open", "aside.close", "aside.keep", "worker.close", "worker.remove", "worktree.branches", "worktree.create", "worktree.pr", "worktree.remove", "worktree.status",
 ]);

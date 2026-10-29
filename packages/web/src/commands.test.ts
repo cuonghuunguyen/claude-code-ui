@@ -62,12 +62,20 @@ describe("dialog commands", () => {
     expect(withDialogCommands([cmd("resume")]).filter((c) => c.name === "resume")).toEqual([expect.objectContaining({ description: "Resume a previous session" })]);
   });
 
+  it("/tasks and /bashes alone open the shells list, also when the CLI has a command of that name", () => {
+    expect(dialogOf("/tasks")).toBe("shells");
+    expect(dialogOf("/bashes", [cmd("tasks")])).toBe("shells");
+    expect(dialogOf("/tasks", [cmd("tasks")])).toBe("shells");
+    expect(dialogOf("/tasks x")).toBeUndefined();
+    expect(withDialogCommands([cmd("tasks")]).filter((c) => c.name === "tasks")).toEqual([expect.objectContaining({ description: "List and manage background shells" })]);
+  });
+
   it("/mcp alone opens the MCP servers dialog, with or without the CLI's own mcp row", () => {
     expect(dialogOf(" /mcp ")).toBe("mcp");
     expect(dialogOf("/mcp list")).toBeUndefined();
     expect(dialogOf("/mcpx")).toBeUndefined();
     const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
-    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
     expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
   });
 
@@ -77,7 +85,7 @@ describe("dialog commands", () => {
     expect(dialogOf("/plugin", [cmd("plugin")])).toBeUndefined();
     expect(dialogOf("/plugins", [cmd("plugin")])).toBe("plugins");
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
-    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "resume", "btw"]);
+    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "tasks", "resume", "btw"]);
     expect(withDialogCommands([cmd("plugins")]).filter((r) => r.name === "plugins").map((r) => r.description)).toEqual(["plugins desc"]);
     expect(matchCommands(withDialogCommands([]), "/market")!.map((c) => c.name)).toEqual(["plugins"]);
   });
@@ -94,8 +102,8 @@ describe("/skills and /help", () => {
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
   });
   it("the picker lists /skills with the extension's description unless the CLI has it", () => {
-    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
-    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "Resume a previous session", ASIDE_COMMAND.description]);
+    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
+    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "List and manage background shells", "Resume a previous session", ASIDE_COMMAND.description]);
   });
 });
 

@@ -52,7 +52,7 @@ export const asideOf = (text: string) => /^\/btw(?:\s+([\s\S]*))?$/.exec(text.tr
 export const ASIDE_COMMAND: SlashCommand = { name: "btw", description: "Ask an aside: a read-only side conversation forked from this session", argumentHint: "<question>" };
 
 /** The dialogs the web app opens itself. */
-export type DialogName = "mcp" | "skills" | "plugins" | "resume";
+export type DialogName = "mcp" | "skills" | "plugins" | "resume" | "shells";
 
 /**
  * Commands the web app handles itself, like the VS Code extension: typed alone they open a dialog and are not sent.
@@ -62,6 +62,7 @@ export const DIALOG_COMMANDS: (SlashCommand & { dialog: DialogName; always?: boo
   { name: "mcp", description: "Configure Model Context Protocol servers", argumentHint: "", dialog: "mcp", always: true },
   { name: "skills", description: "List available skills", argumentHint: "", dialog: "skills" },
   { name: "plugins", aliases: ["plugin", "marketplace"], description: "Install, enable, or disable plugins", argumentHint: "", dialog: "plugins" },
+  { name: "tasks", aliases: ["bashes"], description: "List and manage background shells", argumentHint: "", dialog: "shells", always: true },
   { name: "resume", description: "Resume a previous session", argumentHint: "", dialog: "resume", always: true },
 ];
 
@@ -74,7 +75,7 @@ export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => 
   ASIDE_COMMAND,
 ];
 
-/** The dialog a prompt opens instead of being sent: `/mcp` alone; `/resume` alone or with text; `/skills`, `/help`, `/plugins`, `/plugin`, `/marketplace` alone unless the CLI has a command of that name. */
+/** The dialog a prompt opens instead of being sent: `/mcp`, `/tasks`, `/bashes` alone; `/resume` alone or with text; `/skills`, `/help`, `/plugins`, `/plugin`, `/marketplace` alone unless the CLI has a command of that name. */
 export function dialogOf(text: string, commands: SlashCommand[] = []): DialogName | undefined {
   const m = /^\/(\S+)(\s+\S[\s\S]*)?$/.exec(text.trim());
   const name = m?.[1];

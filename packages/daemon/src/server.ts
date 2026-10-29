@@ -1819,6 +1819,29 @@ export function createDaemon(opts: {
           }
           return reply({});
         }
+        case "session.shellOutput": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          let r;
+          try {
+            r = await s.shellOutput(msg.toolUseId);
+          } catch (e) {
+            return fail("no_output", (e as Error).message);
+          }
+          return r ? reply(r) : fail("no_output", "Output is not available");
+        }
+        case "session.stopShell": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          try {
+            if (!(await s.stopSubagent(msg.toolUseId))) return fail("unknown_shell", "no running shell with that ID");
+          } catch (e) {
+            return fail("stop_failed", (e as Error).message);
+          }
+          return reply({});
+        }
         case "permission.respond": {
           if (typeof msg.requestId !== "string" || !["allow", "allow_always", "deny"].includes(msg.decision))
             return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");

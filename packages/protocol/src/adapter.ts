@@ -59,13 +59,14 @@ export function bashRecords(command: string, stdout: string, stderr: string, exi
 const NUDGE = /^\[Your previous response had no visible output\./;
 // A background subagent's placeholder tool_result names its agentId, which is the task ID of its notifications (SDK 0.3.285).
 const ASYNC_LAUNCHED = /^Async agent launched successfully\.[\s\S]*?^agentId: (\w+)/m;
-// A Bash call the user moved to the background: its tool_result names the task (SDK 0.3.285; only the transcript has no tool_use_result, so only replay matches the text).
-const MANUALLY_BACKGROUNDED = /^Command was manually backgrounded by user with ID: (\w+)\./;
+// A background Bash call's tool_result names its task and output file (run_in_background, or moved there; SDK 0.3.285).
+// The file name must be <taskId>.output. The daemon reads the file only inside the CLI's task folder (shell-output.ts).
+const SHELL_PLACEHOLDER = /^Command (?:running in background|was manually backgrounded by user) with ID: (\w+)\. Output is being written to: (.+?[\\/]\1\.output)\./;
 // SendMessage's tool_result when it resumed a finished subagent run (SDK 0.3.285); a queued message names no resumedAgentId.
 const RESUMED = /"resumedAgentId":"(\w+)"/;
 // A transcript records a background task's notification as this user text; a notice after the run resumed has no tool-use-id,
 // or the SendMessage call's.
-const NOTIFICATION_TAG = /<(task-id|tool-use-id|status)>(.*?)<\/\1>/g;
+const NOTIFICATION_TAG = /<(task-id|tool-use-id|status|summary)>(.*?)<\/\1>/g;
 // A transcript records a slash command as these tags; live the prompt's own user_text shows it.
 const COMMAND_TAG = /<(command-name|command-message|command-args)>(.*?)<\/\1>/gs;
 
@@ -104,6 +105,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const background = new Set<string>();
   // Background task ID -> its tool_use_id, for a notification that names only the task.
   const tasks = new Map<string, string>();
+  // Background Bash call -> its task output file (GH-442 shells list).
+  const outputs = new Map<string, string>();
   // Subagent run ID -> time of its latest message, the end of a run that stopped without a notice.
   const lastSeen = new Map<string, number>();
   // Paths whose original file was already sent: the changes tab needs only the first one.
@@ -129,7 +132,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   function setStatus(toolUseId: string, status: ToolStatus, again = false): Part[] {
     const call = calls.get(toolUseId);
     if (!call || (call.status === status && !(again && call.type === "subagent"))) return [];
-    const next = call.type === "subagent" && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
+    const next = (call.type === "subagent" || call.startedAt !== undefined) && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
     calls.set(toolUseId, next);
     return [next];
   }
@@ -138,16 +141,24 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   function markShell(toolUseId: string, shell: "foreground" | "background"): Part[] {
     const call = calls.get(toolUseId);
     if (call?.type !== "tool_call" || call.tool !== "Bash" || call.shell === shell) return [];
-    const next = { ...call, shell };
+    const next = { ...call, shell, startedAt: call.startedAt ?? now };
     calls.set(toolUseId, next);
     return [next];
   }
 
   /** A background task's notification (live or from a transcript) ends its call; a resumed run's names the SendMessage call. */
-  function taskEnded(taskId: string | undefined, toolUseId: string | undefined, status: string | undefined): Part[] {
+  function taskEnded(taskId: string | undefined, toolUseId: string | undefined, status: string | undefined, summary?: string): Part[] {
     const id = (taskId ? tasks.get(taskId) : undefined) ?? toolUseId;
     // A transcript records a stopped task as "killed" (CLI 2.1.285); live it is "stopped".
-    return id ? setStatus(id, status === "completed" ? "done" : status === "stopped" || status === "killed" ? "stopped" : "error", true) : [];
+    const parts = id ? setStatus(id, status === "completed" ? "done" : status === "stopped" || status === "killed" ? "stopped" : "error", true) : [];
+    // The CLI's own endings only ("... failed with exit code N", "... completed (exit code N)"): the command text before them may say anything.
+    const m = status === "stopped" || status === "killed" ? null : /(?:failed with exit code (\d+)|completed \(exit code (\d+)\))$/.exec(summary ?? "");
+    const code = m?.[1] ?? m?.[2];
+    const call = id ? calls.get(id) : undefined;
+    if (code === undefined || call?.type !== "tool_call") return parts;
+    const next = { ...call, exitCode: Number(code) };
+    calls.set(call.id, next);
+    return [next];
   }
 
   /** SendMessage resumed the ended background run of task `taskId`: it runs again in its own subagent part. */
@@ -265,7 +276,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           if (synthetic && boundary) return [{ ...boundary, summary: content }];
           if (content.startsWith("<task-notification>")) {
             const tags = new Map([...content.matchAll(NOTIFICATION_TAG)].map((t) => [t[1], t[2]]));
-            return taskEnded(tags.get("task-id"), tags.get("tool-use-id"), tags.get("status"));
+            return taskEnded(tags.get("task-id"), tags.get("tool-use-id"), tags.get("status"), tags.get("summary"));
           }
           if (synthetic) return [];
           const input = BASH_INPUT.exec(content);
@@ -310,11 +321,12 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             background.add(b.tool_use_id);
             tasks.set(launched[1]!, b.tool_use_id);
           }
-          // Replay only: a live result carries tool_use_result, so plain output that quotes the text does not match.
-          const moved = m.tool_use_result === undefined && typeof output === "string" && call?.type === "tool_call" && call.tool === "Bash" ? MANUALLY_BACKGROUNDED.exec(output) : null;
-          if (moved) {
+          const shell = typeof output === "string" && call?.type === "tool_call" && call.tool === "Bash" ? SHELL_PLACEHOLDER.exec(output) : null;
+          // Live: the task_started / task_updated before it marked the call; replay only (no tool_use_result): the text marks it.
+          if (shell && call?.type === "tool_call" && (call.shell === "background" || m.tool_use_result === undefined)) {
+            outputs.set(b.tool_use_id, shell[2]!);
             background.add(b.tool_use_id);
-            tasks.set(moved[1]!, b.tool_use_id);
+            tasks.set(shell[1]!, b.tool_use_id);
             parts.push(...markShell(b.tool_use_id, "background"));
           }
           // A stopped run's tool_result is an error ("Agent stopped"); it stays stopped.
@@ -385,7 +397,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           background.add(id);
           return markShell(id, "background");
         }
-        if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status);
+        if (m.type === "system" && m.subtype === "task_notification") return taskEnded(m.task_id, m.tool_use_id, m.status, m.summary);
         // Claude Code's banners: "info" only in its transcript mode, "notice" gray, the rest prominent. Progress notices of one
         // tool call (tool_use_id) share one line.
         if (m.type === "system" && m.subtype === "informational")
@@ -440,6 +452,9 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   /** The call that started background task `taskId` (its Agent call for a subagent run, also after SendMessage resumed it). */
   const taskCall = (taskId: string) => tasks.get(taskId);
 
+  /** The task output file of background Bash call `toolUseId` (from its placeholder result). */
+  const outputFile = (toolUseId: string) => outputs.get(toolUseId);
+
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { byCoordinator, convert, commands, deny, edit, endCalls, openCalls, taskCall };
+  return { byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
 }

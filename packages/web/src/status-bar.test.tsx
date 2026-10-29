@@ -100,9 +100,10 @@ it("refreshes git after each turn", async () => {
   expect(text()).toContain("diff=(+2,-0)");
 });
 
-it("click on shells opens the list; the trigger keeps the visible text as accessible name (WCAG 2.5.3) and is at least 24px high (WCAG 2.5.8)", async () => {
+it("click on shells calls onShells (no popover); the trigger keeps the visible text as accessible name (WCAG 2.5.3) and is at least 24px high (WCAG 2.5.8)", async () => {
   const v = view(bash("a", { command: "npm run dev", description: "Start dev server", run_in_background: true }, "running"));
-  const { el } = await render({ view: v });
+  const onShells = vi.fn();
+  const { el } = await render({ view: v, onShells });
   const triggers = [...el.querySelectorAll<HTMLElement>("button")];
   expect(triggers.length).toBe(1);
   expect(triggers[0].className).toContain("min-h-6");
@@ -110,7 +111,8 @@ it("click on shells opens the list; the trigger keeps the visible text as access
   const t = el.querySelector('[data-field="shells"]')!;
   expect(document.getElementById(t.getAttribute("aria-describedby")!)?.textContent).toBe("Background shells, show list");
   await act(async () => (t as HTMLElement).click());
-  expect(document.querySelector('[data-testid="shells"]')?.textContent).toContain("Start dev server");
+  expect(onShells).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[data-testid="shells"]')).toBeNull();
 });
 
 it("totals add aux turn results of the unloaded region", () => {

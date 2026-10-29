@@ -41,7 +41,7 @@ import type {
   WorktreeCreateResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult } from "@claude-ui/protocol";
+import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -68,6 +68,7 @@ import { NotificationStack, useNotifications, type CardItem } from "./notificati
 import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 import { SkillsDialog } from "./skills-dialog.tsx";
+import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { nextReloadFailed } from "./plugins.ts";
@@ -252,6 +253,7 @@ export function App() {
   const [mcp, setMcp] = useState<{ open: boolean; cwd: string; sessionId?: string; server?: string }>();
   // "Slash commands" dialog, same rules.
   const [skillsDialog, setSkillsDialog] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
+  const [shellsDialog, setShellsDialog] = useState<{ open: boolean; sessionId?: string }>();
   // config.changed count per project cwd: an open dialog of that project refreshes.
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1814,6 +1816,7 @@ export function App() {
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
+                        onShells={() => openShells(s.id)}
                         onAside={(q) => openAside(s.id, q)}
                         signalOnly={signalOnly}
                         onAnswer={answer}
@@ -2297,6 +2300,8 @@ export function App() {
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
+  /** Shells list (GH-442) of session `sessionId`. */
+  const openShells = (sessionId = projectSession) => sessionId && setShellsDialog({ open: true, sessionId });
   /** `/resume` (GH-100): shows the sidebar (the drawer below md) with the session search on this project's repository, then the typed text. */
   const openResume = (arg?: string) => {
     if (!project) return;
@@ -2305,7 +2310,7 @@ export function App() {
     const name = projectName(projectOf(project, worktrees));
     setResumeSearch((s) => ({ text: resumeSearchText(name, arg), seq: (s?.seq ?? 0) + 1 }));
   };
-  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : openSkills());
+  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : d === "shells" ? openShells() : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -2465,6 +2470,7 @@ export function App() {
     resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
+    openShells: shown && !draftShown ? () => openShells(shown.id) : undefined,
     openPlugins: project ? openPlugins : undefined,
   });
   // Guided tour. The tour gets its key text only from here (the user's keymap, not the palette rows).
@@ -3407,6 +3413,15 @@ export function App() {
           onClose={() => setSkillsDialog({ ...skillsDialog, open: false })}
         />
       )}
+      {shellsDialog && (
+        <ShellsDialog
+          open={shellsDialog.open}
+          view={shellsDialog.sessionId ? views[shellsDialog.sessionId] : undefined}
+          output={(toolUseId) => client.current!.request<ShellOutputResult>({ type: "session.shellOutput", sessionId: shellsDialog.sessionId!, toolUseId })}
+          kill={(toolUseId) => client.current!.request({ type: "session.stopShell", sessionId: shellsDialog.sessionId!, toolUseId })}
+          onClose={() => setShellsDialog({ ...shellsDialog, open: false })}
+        />
+      )}
       {plugins && (
         <PluginsDialog
           open={plugins.open}
@@ -4000,6 +4015,7 @@ export function SessionPane({
   connected,
   onGitStatus,
   onDialog,
+  onShells,
   onAside,
   aside = false,
   signalOnly = false,
@@ -4071,6 +4087,8 @@ export function SessionPane({
   onGitStatus?: () => Promise<GitStatus | null>;
   /** `/mcp`, `/skills`, `/plugins` typed alone, `/resume` with or without text: opens that dialog instead of sending. */
   onDialog?: (dialog: DialogName, arg?: string) => void;
+  /** The status bar's shells field: opens the list of this pane's own session (split view: not the active one's). */
+  onShells?: () => void;
   /** /btw typed in the prompt box (docs/spec.md "Aside"): opens the Aside; rejects with the reason it did not. */
   onAside?: (question: string) => Promise<unknown>;
   /** This pane is an Aside popup's: Esc stops its turn only from inside the popup; an owner pane's only from outside. */
@@ -4398,7 +4416,7 @@ export function SessionPane({
             />
           </>
         )}
-        <StatusBar view={view} git={onGitStatus} />
+        <StatusBar view={view} git={onGitStatus} onShells={onShells} />
       </div>
     </AgentLinksContext>
     </BackgroundShellContext>

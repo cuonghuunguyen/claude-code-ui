@@ -92,6 +92,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
   | { type: "session.backgroundShell"; sessionId: string; toolUseId: string }
+  /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file (stdout and stderr merged, at most MAX_BASH_OUTPUT_CHARS chars); reply ShellOutputResult. Error `no_output` (no file known, it lies outside the CLI's task folder, or it is gone). */
+  | { type: "session.shellOutput"; sessionId: string; toolUseId: string }
+  /** Kill (GH-442): stops the running background shell `toolUseId` (`stopTask()`); its task_notification ends it. Errors `unknown_shell` (no task of that call runs), `stop_failed`. */
+  | { type: "session.stopShell"; sessionId: string; toolUseId: string }
   /**
    * First answer wins; a later one gets `{ settled: false }`. "allow_always" applies `suggestions[ruleIndex]`
    * (all suggestions when ruleIndex is omitted). `message`: feedback for Claude with "deny".
@@ -747,6 +751,8 @@ export type SkillRow = {
   advertised: boolean;
   handles?: SkillHandles;
 };
+/** session.shellOutput: `truncated` when the file holds more than `output`. */
+export type ShellOutputResult = { output: string; truncated: boolean };
 export type SkillsResult = { skills: SkillRow[] };
 /** `confirmed` false: saved, but the session's dialog still shows the previous state after 5 reads. */
 export type SkillsSetStateResult = SkillsResult & { confirmed: boolean };
