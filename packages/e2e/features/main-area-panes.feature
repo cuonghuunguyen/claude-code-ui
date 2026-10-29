@@ -22,19 +22,19 @@ Feature: Files and Git graph in the main area
     And I move the "Git graph" pane to the main area from its tab menu
     And I close the "Files" tab from its tab menu
     Then there is no "Files" tab
-    When I press "Control+Shift+E"
+    When I press "ControlOrMeta+Shift+E"
     Then there is one "Files" tab
     And the "Files" tab has the focus
     When I open a second session with a finished reply
-    And I press "Control+Shift+E"
+    And I press "ControlOrMeta+Shift+E"
     Then there is one "Files" tab
     And the "Files" tab has the focus
-    When I press "Control+Shift+H"
+    When I press "ControlOrMeta+Shift+H"
     Then there is one "Git graph" tab
     And the "Git graph" tab has the focus
     And I capture "keys-one-tab-per-folder"
     When I open the New session tab
-    And I press "Control+Shift+E"
+    And I press "ControlOrMeta+Shift+E"
     Then there is one "Files" tab
     And the "Files" tab has the focus
     And I capture "keys-from-new-session"
