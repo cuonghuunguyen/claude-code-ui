@@ -50,7 +50,7 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
       <Popover.Popup
         data-testid="context-breakdown"
-        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
+        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
         <Popover.Title className="font-medium">Context window</Popover.Title>
         <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">{tokens}</p>
@@ -109,7 +109,7 @@ export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: To
         <span
           id={tip}
           role="tooltip"
-          className="pointer-events-none absolute right-0 bottom-full z-50 mb-2 hidden w-max min-w-40 flex-col gap-1 rounded-md bg-popover px-3 py-2 text-[12px] text-popover-foreground tabular-nums shadow-floating group-hover:flex group-has-focus-visible:flex group-has-data-popup-open:hidden! pointer-coarse:hidden!"
+          className="pointer-events-none absolute right-0 bottom-full z-50 mb-2 hidden w-max min-w-40 flex-col gap-1 rounded-md bg-popover px-3 py-2 text-[12px] text-popover-foreground tabular-nums shadow-floating ring-[0.5px] ring-foreground/15 group-hover:flex group-has-focus-visible:flex group-has-data-popup-open:hidden! pointer-coarse:hidden!"
         >
           {rows.map(([name, value]) => (
             <span key={name} className="flex items-center gap-4">

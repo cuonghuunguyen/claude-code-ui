@@ -185,7 +185,7 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
         data-step={step.id}
         data-placement={sheet ? `sheet-${dock}` : (placed?.side ?? "center")}
         onKeyDown={trapTab}
-        className={`fixed z-[1101] flex max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-lg bg-popover p-4 text-popover-foreground shadow-floating ${reduced ? "" : "animate-[guide-in_160ms_ease-out] motion-reduce:animate-none"} ${move}`}
+        className={`fixed z-[1101] flex max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-lg bg-popover p-4 text-popover-foreground shadow-floating ring-[0.5px] ring-foreground/15 ${reduced ? "" : "animate-[guide-in_160ms_ease-out] motion-reduce:animate-none"} ${move}`}
         style={style}
       >
         {arrow && <span aria-hidden data-testid="guide-arrow" className="absolute size-2 rotate-45 bg-popover" style={arrow} />}

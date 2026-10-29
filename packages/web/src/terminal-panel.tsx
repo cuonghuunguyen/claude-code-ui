@@ -13,7 +13,8 @@ import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal
 import { leavesTerminal, specOf } from "./keymap.ts";
 import { withKey } from "./shortcuts.ts";
 import { IconButton } from "./tabs-bar.tsx";
-import { useDark } from "./theme.ts";
+import { useColorTheme, useDark } from "./theme.ts";
+import { terminalTheme } from "./themes.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -263,6 +264,7 @@ function TerminalView({
   activeRef.current = active;
   connected.current = status === "connected";
   const dark = useDark();
+  const colorTheme = useColorTheme();
 
   useEffect(() => {
     // OpenCode terminal.tsx options.
@@ -359,12 +361,9 @@ function TerminalView({
   }, [active, focusTick]);
 
   useEffect(() => {
-    const css = getComputedStyle(document.documentElement);
-    const fg = css.getPropertyValue("--foreground").trim();
-    const bg = css.getPropertyValue("--card").trim();
-    // OpenCode: selection = foreground at 25% (dark) / 20% (light).
-    if (term.current) term.current.t.options.theme = { foreground: fg, cursor: fg, background: bg, selectionBackground: fg.length === 7 ? fg + (dark ? "40" : "33") : undefined };
-  }, [dark]);
+    // OpenCode: selection = foreground at 25% (dark) / 20% (light); ANSI colors from the colour theme's palette (themes.ts).
+    if (term.current) term.current.t.options.theme = terminalTheme(colorTheme, dark ? "dark" : "light");
+  }, [dark, colorTheme]);
 
   // FitAddon sizes xterm from its parent's width, padding included: the padding goes on a wrapper, not on the box.
   // letter-spacing 0: xterm's DOM renderer adds the gap between its canvas and DOM measure of "W" (0.056px on Linux

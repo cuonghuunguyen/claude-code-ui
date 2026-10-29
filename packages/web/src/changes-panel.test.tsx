@@ -11,7 +11,7 @@ import { saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
-const diff = vi.hoisted(() => ({ options: undefined as undefined | { disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
+const diff = vi.hoisted(() => ({ options: undefined as undefined | { theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
 }));
@@ -1408,4 +1408,17 @@ describe("submodule and nested repository rows", () => {
     expect(selector()!.getAttribute("aria-label")).toContain("lib");
     expect(el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path")).toBe("/p/libs/lib/a.txt");
   });
+});
+
+it("GH-468: a colour theme change hands that theme's diff themes to the diff", async () => {
+  const client = fakeClient({ "/p/src/a.ts": "a = 2\nb\n" });
+  document.documentElement.removeAttribute("data-theme");
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/src/a.ts", "a = 1", "a = 2"), original("e1", "a = 1\nb\n")])} cwd="/p" onOpen={() => {}} />));
+  await flush();
+  expect(diff.options!.theme).toEqual({ light: "claude-ui-light", dark: "claude-ui-dark" });
+  await act(async () => void document.documentElement.setAttribute("data-theme", "catppuccin"));
+  expect(diff.options!.theme).toEqual({ light: "claude-ui-catppuccin-light", dark: "claude-ui-catppuccin-dark" });
+  await act(async () => void document.documentElement.setAttribute("data-theme", "dracula"));
+  expect(diff.options!.theme).toEqual({ light: "claude-ui-light", dark: "claude-ui-dracula-dark" });
+  document.documentElement.removeAttribute("data-theme");
 });

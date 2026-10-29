@@ -364,7 +364,7 @@ export function FilesPanel({
           tabIndex={empty ? undefined : -1}
           role={empty ? undefined : "region"}
           aria-label={empty ? undefined : "File tree"}
-          className={cn("flex flex-col outline-none", empty ? "min-h-0 flex-1" : "absolute inset-y-0 left-0 z-20 w-[min(320px,85%)] border-r bg-card shadow-floating")}
+          className={cn("flex flex-col outline-none", empty ? "min-h-0 flex-1" : "absolute inset-y-0 left-0 z-20 w-[min(320px,85%)] border-r bg-card shadow-floating ring-[0.5px] ring-foreground/15")}
           data-testid={empty ? undefined : "file-tree-drawer"}
           onKeyDown={(e) => {
             if (!overlay) return;

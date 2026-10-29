@@ -172,7 +172,7 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
           <Popover.Popup
             initialFocus={false}
             data-testid="agent-map"
-            className="w-96 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 motion-reduce:animate-none"
+            className="w-96 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 motion-reduce:animate-none"
           >
             <Popover.Title className="px-2 pt-1.5 pb-1 font-medium text-[13px] text-muted-foreground">Agent map</Popover.Title>
             <AgentTree
@@ -343,7 +343,7 @@ export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run
           </Menu.Trigger>
           <Menu.Portal>
             <Menu.Positioner side="bottom" align="end" sideOffset={4} collisionPadding={16} className="z-50">
-              <Menu.Popup className="w-72 max-w-[calc(100vw-32px)] rounded-md bg-popover p-0.5 text-popover-foreground text-sm shadow-floating outline-none">
+              <Menu.Popup className="w-72 max-w-[calc(100vw-32px)] rounded-2xl border bg-popover p-0.5 text-popover-foreground text-sm shadow-floating outline-none">
                 {children.map((c) => (
                   <Menu.Item
                     key={c.id}

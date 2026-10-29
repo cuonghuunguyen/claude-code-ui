@@ -427,7 +427,7 @@ export function TabsBar({
               {focus && focus.count > 0 && <span className="ml-auto flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums" data-testid="focus-badge"><CircleAlertIcon className="size-3" aria-hidden />{focus.count}</span>}
               <span className={cn("text-muted-foreground tabular-nums", !(focus && focus.count > 0) && "ml-auto")}>{given.length}</span>
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] overscroll-contain rounded-md p-0.5 shadow-floating! ring-0">
+            <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] overscroll-contain p-0.5">
               {focus && (
                 <SelectItem value={FOCUS_TAB} className={ROW}>
                   <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden />

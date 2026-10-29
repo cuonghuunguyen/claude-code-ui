@@ -171,7 +171,7 @@ type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
 // The active tab lives in the URL hash, so a reload reopens it.
 const hashTab = () => tabFromHash(location.hash);
-const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-raised";
+const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised";
 // xterm (~300 KB) loads with the first opened terminal panel, not with the app.
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
@@ -3139,7 +3139,7 @@ export function App() {
         <aside
           data-testid="sidebar"
           style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
-          className={`fixed inset-y-0 left-0 z-40 flex w-[min(85vw,360px)] shrink-0 md:w-(--sidebar-w) flex-col gap-3 bg-card p-3 shadow-floating transition-transform md:static md:translate-x-0 md:bg-transparent md:p-1 md:shadow-none ${sidebar ? "" : "md:hidden"} ${drawer ? "translate-x-0" : "-translate-x-full"}`}
+          className={`fixed inset-y-0 left-0 z-40 flex w-[min(85vw,360px)] shrink-0 md:w-(--sidebar-w) flex-col gap-3 bg-card p-3 shadow-floating ring-[0.5px] ring-foreground/15 md:ring-0 transition-transform md:static md:translate-x-0 md:bg-transparent md:p-1 md:shadow-none ${sidebar ? "" : "md:hidden"} ${drawer ? "translate-x-0" : "-translate-x-full"}`}
         >
           <ConnectionBadge status={status} />
           <div className="flex items-center gap-2 sm:hidden" data-testid="drawer-tools">
@@ -3685,7 +3685,7 @@ export function App() {
       {/* Always mounted so a screen reader announces the hint when it fills in. */}
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
         {prefixOn && (
-          <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2 text-xs shadow-floating">
+          <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2 text-xs shadow-floating ring-[0.5px] ring-foreground/15">
             <span className="font-medium">{keyText(specOf("leader"))} then</span>
             {PREFIX_KEYS.map((p) => (
               <span key={p.key} className="text-muted-foreground">
@@ -4091,7 +4091,7 @@ export function NewSession({
             </span>
             <SideBadge cwd={project} />
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-64 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-64 max-w-[calc(100vw-2rem)] p-0.5">
             {projects.map((p) => (
               <SelectItem key={p} value={p} className={ROW}>
                 <ProjectAvatar cwd={p} />
@@ -4120,7 +4120,7 @@ export function NewSession({
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
                 <span className="min-w-0 max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] rounded-md p-0.5 shadow-floating! ring-0">
+              <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] p-0.5">
                 <SelectGroup>
                   <SelectLabel>Run session in</SelectLabel>
                   {runIn.map((w) => (

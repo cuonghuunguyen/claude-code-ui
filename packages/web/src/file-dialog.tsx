@@ -83,7 +83,7 @@ export function FileDialog({
           aria-modal="true"
           aria-label="Files"
           data-testid="file-dialog"
-          className="fixed inset-0 z-50 m-auto flex h-[min(100dvh-32px,90dvh)] w-[min(100vw-32px,1200px)] flex-col overflow-hidden rounded-xl bg-card text-foreground shadow-floating outline-none max-sm:h-dvh max-sm:w-full max-sm:rounded-none"
+          className="fixed inset-0 z-50 m-auto flex h-[min(100dvh-32px,90dvh)] w-[min(100vw-32px,1200px)] flex-col overflow-hidden rounded-2xl border bg-card text-foreground shadow-floating outline-none max-sm:h-dvh max-sm:w-full max-sm:rounded-none"
         >
           {/* Unmounted with `open`, not after the close transition: the Files tab's editor takes the parked state over in the same commit. */}
           {open && (

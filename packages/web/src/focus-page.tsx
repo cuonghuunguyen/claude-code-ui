@@ -217,7 +217,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const tasks = view ? (rowTodos(view).length ? rowTodos(view) : view.lastTodos) : [];
   const n = waiting.length ? new Set(waiting.map((w) => w.sessionId)).size : 0;
   return (
-    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-card shadow-raised" data-testid="focus-page">
+    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
           <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">Focus</h1>

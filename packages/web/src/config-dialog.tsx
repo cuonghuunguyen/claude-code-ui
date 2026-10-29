@@ -25,7 +25,7 @@ export function ConfigDialog({ title, open, onClose, busy, footer, children, tes
         <Dialog.Popup
           finalFocus={() => shownPrompt() ?? true}
           onKeyDown={trapTab}
-          className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-560px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,560px)] w-[min(100vw-24px,640px)] flex-col rounded-xl bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:rounded-none"
+          className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-560px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,560px)] w-[min(100vw-24px,640px)] flex-col rounded-2xl border bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:rounded-none"
           data-testid={testId}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
           aria-modal="true"

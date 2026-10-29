@@ -88,7 +88,7 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
       <Popover.Popup
         data-testid="plan-usage"
-        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-xl bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
+        className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
         <div className="flex items-baseline justify-between gap-2">
           <Popover.Title className="font-medium">Plan usage</Popover.Title>
