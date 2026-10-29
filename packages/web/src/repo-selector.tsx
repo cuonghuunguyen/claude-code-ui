@@ -195,7 +195,7 @@ export function RepoSelector({ list, truncated, selected, onSelect, submoduleLim
           <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
           <Dialog.Popup
             aria-modal="true"
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-floating outline-none"
+            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-floating ring-[0.5px] ring-foreground/15 outline-none"
             data-testid="repo-sheet"
           >
             <Dialog.Title className="px-4 py-3 font-medium text-[15px]">Repositories</Dialog.Title>

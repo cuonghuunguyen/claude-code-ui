@@ -53,8 +53,14 @@ describe("tokensOf", () => {
     expect(dark["--muted"]).toBe(catppuccin.dark!.side);
   });
 
-  it("leaves context, graph, avatar, overlay and elevation tokens to Default", () => {
-    for (const name of Object.keys(dark)) expect(name).not.toMatch(/^--(context|graph|avatar|overlay|elevation)/);
+  it("leaves avatar, overlay and elevation tokens to Default; graph and context only as lightness-moved overrides", () => {
+    for (const t of THEMES) for (const mode of ["light", "dark"] as const) {
+      const p = t[mode];
+      if (!p) continue;
+      const names = Object.keys(tokensOf(p, mode));
+      expect(names.filter((n) => /^--(avatar|overlay|elevation)/.test(n))).toEqual([]);
+      expect(names.filter((n) => /^--(graph|context)-/.test(n)).sort()).toEqual(Object.keys(p.x ?? {}).sort());
+    }
   });
 });
 
@@ -76,9 +82,25 @@ describe("terminalTheme", () => {
     expect(terminalTheme("catppuccin", "dark")).toMatchObject({
       foreground: p.fg, background: p.card, cursor: p.fg, selectionBackground: p.fg + "40",
       black: p.side, red: p.err, green: p.ok, yellow: p.warn, blue: p.fn, magenta: p.kw, cyan: p.info, white: p.muted,
-      brightBlack: p.side, brightRed: p.err, brightGreen: p.ok, brightYellow: p.warn, brightBlue: p.fn, brightMagenta: p.kw, brightCyan: p.info, brightWhite: p.muted,
+      brightBlack: p.cmt, brightRed: p.err, brightGreen: p.ok, brightYellow: p.warn, brightBlue: p.fn, brightMagenta: p.kw, brightCyan: p.info, brightWhite: p.muted,
     });
     expect(terminalTheme("catppuccin", "light").selectionBackground).toBe(catppuccin.light!.fg + "33");
+  });
+
+  it("black is the foreground in light themes (readable), the side surface in dark ones", () => {
+    expect(terminalTheme("catppuccin", "light")).toMatchObject({ black: catppuccin.light!.fg, brightBlack: catppuccin.light!.cmt });
+  });
+
+  // 3:1 on the terminal background for every ANSI colour. The one intentional exception: black on dark themes is the side surface (dark by definition of ANSI black).
+  const lum = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+  const ratio = (a: string, b: string) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
+  it.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("%s %s: all 16 ANSI colors reach 3:1 on the terminal background", (id, mode) => {
+    const t = terminalTheme(id, mode);
+    for (const [name, c] of Object.entries(t).filter(([k]) => !["foreground", "background", "cursor", "selectionBackground"].includes(k))) {
+      if (mode === "dark" && name === "black") continue;
+      expect(ratio(c, t.background!), name).toBeGreaterThanOrEqual(3);
+    }
+    expect(Object.keys(t).filter((k) => /^(bright)?[A-Za-z]+$/.test(k) && !["foreground", "background", "cursor"].includes(k))).toHaveLength(17); // 16 ANSI + selectionBackground
   });
 
   it("Default and Dracula light return the Default surface with no ANSI keys", () => {

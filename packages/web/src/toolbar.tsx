@@ -90,9 +90,9 @@ export function Chooser<T extends string>({
         {icon}
         <SelectValue className="truncate">{(v: T) => items.find((i) => i.value === v)?.trigger ?? items.find((i) => i.value === v)?.label ?? v}</SelectValue>
       </SelectTrigger>
-      {/* OpenCode menu-v2: 2px padding, radius 6; item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
+      {/* OpenCode menu-v2: 2px padding, radius 12 (Select popup); item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
           `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 p-0.5 shadow-floating! ring-0">
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 p-0.5">
         {items.map((i) => (
           <SelectItem
             key={i.value}

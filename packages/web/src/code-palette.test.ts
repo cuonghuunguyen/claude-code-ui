@@ -136,6 +136,7 @@ it("registerDiffThemes registers both themes with @pierre/diffs, once", async ()
 });
 
 // GH-468: one diff theme per colour theme and mode, built from the theme's own --syntax-* values.
+// Known gap (accepted): light pierre uses #636363 for punctuation and parameter, a colour-keyed map cannot split them, so light-theme diffs show parameters in the muted colour (editor: foreground).
 describe.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("diff theme %s %s", (id, mode) => {
   const p = THEMES.find((t) => t.id === id)![mode]!;
   const tok = tokensOf(p, mode);

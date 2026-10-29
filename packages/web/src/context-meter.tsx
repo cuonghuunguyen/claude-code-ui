@@ -109,7 +109,7 @@ export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: To
         <span
           id={tip}
           role="tooltip"
-          className="pointer-events-none absolute right-0 bottom-full z-50 mb-2 hidden w-max min-w-40 flex-col gap-1 rounded-md bg-popover px-3 py-2 text-[12px] text-popover-foreground tabular-nums shadow-floating group-hover:flex group-has-focus-visible:flex group-has-data-popup-open:hidden! pointer-coarse:hidden!"
+          className="pointer-events-none absolute right-0 bottom-full z-50 mb-2 hidden w-max min-w-40 flex-col gap-1 rounded-md bg-popover px-3 py-2 text-[12px] text-popover-foreground tabular-nums shadow-floating ring-[0.5px] ring-foreground/15 group-hover:flex group-has-focus-visible:flex group-has-data-popup-open:hidden! pointer-coarse:hidden!"
         >
           {rows.map(([name, value]) => (
             <span key={name} className="flex items-center gap-4">

@@ -68,7 +68,7 @@ SOFTWARE.
 - **Catppuccin** (Latte, Mocha): https://github.com/catppuccin/catppuccin, MIT License, Copyright (c) 2021 Catppuccin.
 - **Tokyo Night** (Day, Night): https://github.com/folke/tokyonight.nvim, Apache License 2.0, Folke Lemaitre. The repository has no NOTICE file. Changes: colour values only, some moved in lightness for contrast; the Apache License 2.0 text follows below.
 - **Solarized**: https://github.com/altercation/solarized, MIT License, Copyright (c) 2011 Ethan Schoonover.
-- **Nord**: https://github.com/nordtheme/nord, MIT License, Copyright (c) 2016-present Sven Greb.
+- **Nord**: https://github.com/nordtheme/nord, MIT License, Copyright (c) 2016-present Sven Greb (https://www.svengreb.de).
 - **Dracula**: https://github.com/dracula/dracula-theme, MIT License, Copyright (c) 2023 Dracula Theme.
 - **One Light / One Dark**: https://github.com/atom/atom (`packages/one-light-syntax`, `packages/one-dark-syntax`; archived), MIT License, Copyright (c) 2011-2022 GitHub Inc.
 
@@ -79,7 +79,7 @@ MIT License
 
 Copyright (c) 2021 Catppuccin
 Copyright (c) 2011 Ethan Schoonover
-Copyright (c) 2016-present Sven Greb
+Copyright (c) 2016-present Sven Greb (https://www.svengreb.de)
 Copyright (c) 2023 Dracula Theme
 Copyright (c) 2011-2022 GitHub Inc.
 
