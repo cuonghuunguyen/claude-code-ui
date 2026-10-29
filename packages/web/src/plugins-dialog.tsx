@@ -585,7 +585,7 @@ function SmallDialog({ title, message, close, closePrimary, onClose, children, t
           onKeyDown={trapTab}
           aria-modal="true"
           role="alertdialog"
-          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-[min(100vw-24px,400px)] flex-col gap-2 rounded-xl bg-card p-4 text-foreground shadow-floating outline-none"
+          className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex w-[min(100vw-24px,400px)] flex-col gap-2 rounded-2xl border bg-card p-4 text-foreground shadow-floating outline-none"
           data-testid={testId}
         >
           <Dialog.Title className="font-medium text-[15px]">{title}</Dialog.Title>

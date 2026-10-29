@@ -245,7 +245,7 @@ export function VirtualTimeline<T>({
       </div>
       {loadingOlder && (
         <div role="status" aria-live="polite" data-testid="loading-older" className="pointer-events-none absolute inset-x-0 top-2 z-20 flex justify-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-background/90 px-3 py-1 text-muted-foreground text-xs shadow-raised">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-background/90 px-3 py-1 text-muted-foreground text-xs shadow-raised ring-[0.5px] ring-foreground/15">
             <LoaderCircleIcon aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />
             Loading earlier messages…
           </span>
@@ -279,7 +279,7 @@ export function VirtualTimeline<T>({
         title="Jump to latest"
         data-testid="scroll-to-bottom"
         inert={pinned}
-        className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}
+        className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised ring-[0.5px] ring-foreground/15 outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}
         onClick={() => {
           v.scrollToEnd({ behavior: matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
           onJump?.();

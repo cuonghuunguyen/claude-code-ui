@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import pierreLight from "@pierre/theme/pierre-light";
 import pierreDark from "@pierre/theme/pierre-dark";
-import { ADJUST, adjustTheme, DIFF_THEMES, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
+import { ADJUST, adjustTheme, DIFF_THEMES, diffThemes, paletteTheme, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
+import { THEMES, tokensOf } from "./themes.ts";
 
 // GH-394: one palette for the editor and every diff. Every colour must reach 4.5:1 on every background code sits on.
 const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
@@ -132,4 +133,58 @@ it("registerDiffThemes registers both themes with @pierre/diffs, once", async ()
     expect(t.name).toBe(DIFF_THEMES[mode]);
     expect(t.bg).toBe(cssVar(MODE[mode].selector, "card"));
   }
+});
+
+// GH-468: one diff theme per colour theme and mode, built from the theme's own --syntax-* values.
+// Known gap (accepted): light pierre uses #636363 for punctuation and parameter, a colour-keyed map cannot split them, so light-theme diffs show parameters in the muted colour (editor: foreground).
+describe.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("diff theme %s %s", (id, mode) => {
+  const p = THEMES.find((t) => t.id === id)![mode]!;
+  const tok = tokensOf(p, mode);
+  const built = paletteTheme(id, mode, themes[mode]);
+  const colors = built.colors as Record<string, string>;
+
+  it("sits on the theme's card and foreground; added and removed lines follow its ok and err", () => {
+    expect(colors["editor.background"]).toBe(p.card);
+    expect(colors["editor.foreground"]).toBe(p.fg);
+    expect(colors["gitDecoration.addedResourceForeground"]).toBe(p.ok);
+    expect(colors["gitDecoration.deletedResourceForeground"]).toBe(p.err);
+    expect(built.type).toBe(mode);
+    expect(built.name).toBe(`claude-ui-${id}-${mode}`);
+  });
+
+  it("every foreground is one of the theme's --syntax-* values or its foreground", () => {
+    const allowed = new Set([...Object.entries(tok).filter(([k]) => k.startsWith("--syntax-")).map(([, v]) => v), p.fg]);
+    const used = [
+      ...built.tokenColors!.map((r) => (r as { settings?: { foreground?: string } }).settings?.foreground),
+      ...Object.values(built.semanticTokenColors as Record<string, string | { foreground?: string }>).map((v) => (typeof v === "string" ? v : v.foreground)),
+    ].filter((c): c is string => !!c && c.startsWith("#"));
+    for (const c of used) expect(allowed.has(c.toLowerCase()), c).toBe(true);
+  });
+
+  it("every syntax colour reaches 4.5:1 on the editor, its active line, and the diff's context, added and removed lines", () => {
+    const m = MODE[mode];
+    const bgs = {
+      card: p.card,
+      active: over(tok["--accent"]!.slice(0, 7), parseInt(tok["--accent"]!.slice(7, 9), 16) / 255, p.card),
+      context: mixLab(p.card, m.ctxMix, m.mixer),
+      added: mixLab(p.card, m.addMix, p.ok),
+      removed: mixLab(p.card, m.addMix, p.err),
+    };
+    for (const [name, v] of Object.entries(tok).filter(([k]) => k.startsWith("--syntax-")))
+      for (const [bgName, bg] of Object.entries(bgs)) expect(contrast(v, bg), `${name} on ${bgName} ${bg}`).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+it("diffThemes: Dracula's light is Default's light theme; others have their own", () => {
+  expect(diffThemes("dracula")).toEqual({ light: DIFF_THEMES.light, dark: "claude-ui-dracula-dark" });
+  expect(diffThemes("default")).toEqual(DIFF_THEMES);
+  expect(diffThemes("catppuccin").dark).toBe("claude-ui-catppuccin-dark");
+});
+
+it("registerDiffThemes registers Default and every theme and mode (13 names)", async () => {
+  const { resolveTheme } = await import("@pierre/diffs");
+  registerDiffThemes();
+  const names = new Set(THEMES.flatMap((t) => Object.values(diffThemes(t.id))));
+  expect(names.size).toBe(13);
+  for (const n of names) expect((await resolveTheme(n as never)).name).toBe(n);
 });

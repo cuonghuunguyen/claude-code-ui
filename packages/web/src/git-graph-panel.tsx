@@ -20,7 +20,8 @@ import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 import { noteRefs } from "./git-refs.ts";
 import { timeAgo } from "./sessions.ts";
-import { useDark } from "./theme.ts";
+import { useColorTheme, useDark } from "./theme.ts";
+import { diffThemes } from "./code-palette.ts";
 import { DIFF_OPTIONS } from "./tool-card.tsx";
 
 type Client = ReturnType<typeof connect>;
@@ -490,6 +491,7 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
 
 /** The diff of one file of a commit: parent side and commit side from git.fileAt (an added file asks only the commit side). */
 function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }: { detail: GitCommitDetail; file: GitFileChange; client: Client; cwd: string; ex: { exact?: true }; dark: boolean; narrow: boolean; onBack: () => void }) {
+  const colorTheme = useColorTheme();
   const [sides, setSides] = useState<{ before: string; after: string }>();
   const [err, setErr] = useState<{ text: string; notice: boolean }>();
   const [drawn, setDrawn] = useState(false);
@@ -503,8 +505,8 @@ function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }:
     return () => void (live = false);
   }, [d.hash, f.path]);
   const options = useMemo(
-    () => ({ ...DIFF_OPTIONS, diffStyle: narrow ? ("unified" as const) : storedStyle(), themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
-    [narrow, dark],
+    () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle: narrow ? ("unified" as const) : storedStyle(), themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
+    [narrow, dark, colorTheme],
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="commit-file-diff">

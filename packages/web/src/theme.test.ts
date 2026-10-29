@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AVATAR_COLORS } from "./tabs.ts";
+import { THEMES, tokensOf, type Mode } from "./themes.ts";
 
 // WCAG contrast of every text/background token pair in index.css, light and dark (4.5:1 text, 3:1 icons).
 const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
@@ -28,9 +29,24 @@ const SURFACES = ["background", "card", "popover", "muted", "secondary"];
 const SYNTAX = ["comment", "punctuation", "parameter", "keyword", "type", "function", "variable", "builtin", "string", "number", "constant", "operator", "decorator", "tag", "attribute", "regexp", "escape", "critical"];
 const TEXT = ["foreground", "muted-foreground", "destructive", "success", "warning", "info"];
 
-for (const theme of [":root", ".dark"]) {
-  describe(`theme ${theme}`, () => {
-    const t = tokens(theme);
+// Default (index.css) plus every theme x mode: the theme's tokens over Default's (context, graph, avatar and elevation stay Default).
+const PAIRS = [
+  { name: "default light", mode: "light" as Mode, t: tokens(":root") },
+  { name: "default dark", mode: "dark" as Mode, t: tokens(".dark") },
+  ...THEMES.flatMap((th) =>
+    (["light", "dark"] as const).flatMap((mode) => {
+      const p = th[mode];
+      if (!p) return [];
+      const own = Object.fromEntries(Object.entries(tokensOf(p, mode)).map(([k, v]) => [k.slice(2), v]));
+      return [{ name: `${th.id} ${mode}`, mode, t: { ...tokens(mode === "light" ? ":root" : ".dark"), ...own } }];
+    }),
+  ),
+];
+
+it("covers Default and every theme in both modes (Dracula: dark only)", () => expect(PAIRS).toHaveLength(2 + 5 * 2 + 1));
+
+for (const { name, mode, t } of PAIRS) {
+  describe(`theme ${name}`, () => {
     const solid = (name: string) => {
       expect(t[name], `--${name}`).toBeDefined();
       return over(t[name]!, t.card!);
@@ -52,8 +68,8 @@ for (const theme of [":root", ".dark"]) {
         for (const fg of ["accent-foreground", "muted-foreground"]) expect(contrast(solid(fg), over(t.accent!, t[bg]!))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("keybind chip: OpenCode bg-layer-03 (#eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
-      expect(t.kbd).toBe(theme === ":root" ? "#eeeeee" : "#3a3a3a");
+    it("keybind chip (Default: OpenCode bg-layer-03 #eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
+      if (name.startsWith("default")) expect(t.kbd).toBe(mode === "light" ? "#eeeeee" : "#3a3a3a");
       expect(contrast(solid("muted-foreground"), solid("kbd"))).toBeGreaterThanOrEqual(4.5);
     });
 

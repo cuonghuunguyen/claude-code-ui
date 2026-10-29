@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 
 /** Surface of a toast (Toast, UpdateToast, StaleToast, the notification card); the ToastRegion places it. */
-export const TOAST_CARD = "pointer-events-auto rounded-lg bg-card p-3 text-foreground shadow-floating";
+export const TOAST_CARD = "pointer-events-auto rounded-lg bg-card p-3 text-foreground shadow-floating ring-[0.5px] ring-foreground/15";
 
 /** The one corner every toast stacks in (first child nearest the corner), so two at once never cover each other. Clicks pass through the gaps. */
 export function ToastRegion({ children }: { children?: ReactNode }) {
