@@ -190,6 +190,24 @@ describe("PartIndex", () => {
     expect(index.edits(cursor.pos).map((x) => x.part.id)).toEqual(["e1", "e1:result", "w1"]);
   });
 
+  it("artifacts lists done Artifact publishes and their results before the boundary, not other Artifact actions or failed publishes (GH-176)", () => {
+    const { index } = build([
+      user(1),
+      call("p1", "Artifact", { file_path: "a.html" }),
+      result("p1"),
+      call("p2", "Artifact", { action: "publish", file_path: "b.html" }),
+      call("run", "Artifact", { file_path: "c.html" }, "running"),
+      call("err", "Artifact", { file_path: "d.html" }, "error" as never),
+      call("up", "Artifact", { asset: true, file_path: "e.png" }),
+      call("qs", "Artifact", { action: "quickstart" }),
+      call("rd", "Artifact", { action: "read", url: "u" }),
+      call("db", "ArtifactData", {}),
+      call("cm", "ArtifactComments", {}),
+      ...turns(12, 2),
+    ]);
+    expect(index.artifacts(index.lastPage().older!.pos).map((x) => x.part.id)).toEqual(["p1", "p1:result", "p2"]);
+  });
+
   it("aux carries the newest ExitPlanMode call before the cursor, at most one", () => {
     const { index } = build([
       user(1),

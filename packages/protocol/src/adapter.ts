@@ -136,7 +136,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   function setStatus(toolUseId: string, status: ToolStatus, again = false): Part[] {
     const call = calls.get(toolUseId);
     if (!call || (call.status === status && !(again && call.type === "subagent"))) return [];
-    const next = (call.type === "subagent" || call.startedAt !== undefined) && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
+    const next = (call.type === "subagent" || call.startedAt !== undefined || (call.tool === "Artifact" && status === "done")) && ENDED.has(status) ? { ...call, status, endedAt: now } : { ...call, status };
     calls.set(toolUseId, next);
     return [next];
   }

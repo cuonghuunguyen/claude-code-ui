@@ -81,3 +81,10 @@ export function planOfCall(parts: readonly Part[], at: number, dirs?: readonly s
   while (from > 0 && parts[from - 1]!.type === "tool_call") from--;
   return edited(own, given, from);
 }
+
+/** A done Artifact publish (GH-176): action absent or "publish", not an asset upload. Daemon and Artifacts pane share it. */
+export function isArtifactPublish(p: Part): p is Call {
+  if (p.type !== "tool_call" || p.tool !== "Artifact" || p.status !== "done") return false;
+  const i = (p.input ?? {}) as { action?: unknown; asset?: unknown };
+  return (i.action === undefined || i.action === "publish") && i.asset !== true;
+}

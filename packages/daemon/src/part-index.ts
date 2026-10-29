@@ -1,6 +1,6 @@
 // Materialized view of a session's event log (docs/spec.md "Event log and sequence numbers", paged subscribe): the same fold the
 // client's applyEvent does, kept so the daemon can send whole-turn pages instead of replaying every delta.
-import { isAttention, isBackgroundShell, isEditOf, isPlanFileWrite, planOfCall, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
+import { isArtifactPublish, isAttention, isBackgroundShell, isEditOf, isPlanFileWrite, planOfCall, PAGE_PARTS, PAGE_TURNS, TIMELINE_EXCLUDED } from "@claude-ui/protocol";
 import type { Event, Part, PosPart, SessionState, TimelinePage } from "@claude-ui/protocol";
 
 type Entry = { part: Part; pos: number; seq: number };
@@ -157,6 +157,15 @@ export class PartIndex {
     const calls = new Set<string>();
     return this.scan(beforePos, (p) => {
       if (p.type === "tool_call" && EDIT_TOOLS.has(p.tool)) return !!calls.add(p.toolUseId);
+      return p.type === "tool_result" && calls.has(p.toolUseId);
+    });
+  }
+
+  /** Done Artifact publishes before `beforePos` and their results (GH-176; the same filter as the client's artifact list). */
+  artifacts(beforePos: number): PosPart[] {
+    const calls = new Set<string>();
+    return this.scan(beforePos, (p) => {
+      if (p.type === "tool_call") return isArtifactPublish(p) && !!calls.add(p.toolUseId);
       return p.type === "tool_result" && calls.has(p.toolUseId);
     });
   }

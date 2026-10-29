@@ -414,6 +414,12 @@ export class Session {
     return pos === undefined ? undefined : this.index.edits(pos);
   }
 
+  /** Done Artifact publish parts older than the part `before`; undefined = unknown cursor (GH-176). */
+  artifacts(before: string): PosPart[] | undefined {
+    const pos = this.index.posOf(before);
+    return pos === undefined ? undefined : this.index.artifacts(pos);
+  }
+
   /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
   subscribe(sinceSeq: number, listener: Listener): () => void {
     // A restored session has no query before its first prompt: its commands load when a tab first opens it (Infinity: the daemon's own observer, no tab).
