@@ -10,7 +10,7 @@ import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQue
 import { taskDirs } from "../src/shell-output.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -733,6 +733,30 @@ describe("Session /clear", () => {
     expect(s.untitled()).toBe(false);
     heirs[0]!.prompt("x");
     expect(heirs[0]!.untitled()).toBe(false);
+  });
+
+  it("the new session after /clear reads the output of a shell started before it", async () => {
+    const heirs: Session[] = [];
+    const s = new Session("/repo", { query: clearQuery as never, onCleared: (h) => heirs.push(h) });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("bgfile");
+    await until(events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    expect(await s.shellOutput("bg")).toEqual({ output: "out\n", truncated: false });
+    s.prompt("/clear");
+    await until(events, (e) => e.part.type === "session_cleared");
+    expect(await heirs[0]!.shellOutput("bg")).toEqual({ output: "out\n", truncated: false });
+    // The old session shows its shells stopped: no output.
+    expect(await s.shellOutput("bg")).toBeUndefined();
+    // A second /clear keeps the chain.
+    // The fake CLI answers the next prompt only after the stopped task's notification.
+    await heirs[0]!.stopShell("bg");
+    stopped.length = 0; // shared with the other tests
+    const events2: Event[] = [];
+    heirs[0]!.subscribe(0, (e) => events2.push(e));
+    heirs[0]!.prompt("/clear");
+    await until(events2, (e) => e.part.type === "session_cleared");
+    expect(await heirs[1]!.shellOutput("bg")).toEqual({ output: "out\n", truncated: false });
   });
 
   it("onCleared gets the new session and the one that was cleared", async () => {
@@ -2197,6 +2221,29 @@ describe("Session bash mode in the background (GH-485)", () => {
     await until(u.events, (e) => e.part.type === "session_cleared");
     expect(await u.s.stopShell(id2)).toBe(true);
     expect(u.ctl.killed).toBe(1);
+  });
+
+  it("a notice of a command that ended during the /clear turn is dropped and starts no turn in the old session", async () => {
+    const t = setup(clearQuery);
+    t.s.prompt("hi");
+    await until(t.events, (e) => e.part.type === "turn_result");
+    await until(t.events, () => t.s.info().state === "idle");
+    const id = await moved(t);
+    await until(t.events, () => inputs.some((m) => m.uuid === id));
+    clearState.delayMs = 200;
+    try {
+      t.s.prompt("/clear");
+      await until(t.events, () => t.s.info().state === "running");
+      const [n, c] = [notices().length, calls.length];
+      t.ctl.finish({ stdout: "late", exitCode: 0 });
+      await until(t.events, (e) => e.part.type === "session_cleared");
+      await new Promise((r) => setTimeout(r, 30));
+      expect(notices().length).toBe(n);
+      expect(calls.length).toBe(c);
+      expect(t.s.info().state).toBe("idle");
+    } finally {
+      clearState.delayMs = 0;
+    }
   });
 
   type Seen = { uuid?: string; content: string; shouldQuery?: boolean };

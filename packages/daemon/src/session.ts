@@ -188,6 +188,8 @@ export class Session {
   private settling: Promise<unknown> = Promise.resolve();
   /** SDK task ID of each running subagent run by its Agent call's toolUseId (task_started, a resume's too; dropped at task_notification). */
   private tasks = new Map<string, string>();
+  /** Session IDs this session's live query ran under before a /clear handed it over: their CLI task folders hold the output files of the shells it took over. */
+  private taskSessions: string[] = [];
   /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
   private usageRequest = 0;
   /** Open from start() until the CLI sends its first message (performance monitor, GH-272). */
@@ -423,6 +425,7 @@ export class Session {
   async close() {
     this.bashRun?.kill();
     for (const b of this.bashShells.values()) ((b.cleared = true), b.run.kill());
+    this.bashNotices = [];
     clearTimeout(this.externalQuiet);
     clearTimeout(this.staleTimer);
     this.generation++;
@@ -716,7 +719,7 @@ export class Session {
   /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file; undefined when none is known, it lies outside the CLI's task folder, or it is gone. */
   async shellOutput(toolUseId: string) {
     const file = this.adapter.outputFile(toolUseId);
-    return file ? readTail(file, taskDirs(this.cwd, this.id)) : undefined;
+    return file ? readTail(file, [this.id, ...this.taskSessions].flatMap((id) => taskDirs(this.cwd, id))) : undefined;
   }
 
   /** Dry run of a code rewind to before this prompt. */
@@ -1269,7 +1272,10 @@ export class Session {
     }
     // A command moved to the background keeps running here (list, Kill); its end notice is dropped: the heir's CLI does not know it.
     for (const b of this.bashShells.values()) b.cleared = true;
+    // A notice queued before `cleared` was set (the command ended during the /clear turn) would start a CLI turn here at the setState below.
+    this.bashNotices = [];
     heir.tasks = this.tasks;
+    heir.taskSessions = [...this.taskSessions, this.id];
     this.tasks = new Map();
     heir.backgroundLevel = this.backgroundLevel;
     heir.ambientTasks = this.ambientTasks;
