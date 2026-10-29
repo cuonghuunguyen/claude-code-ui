@@ -5,7 +5,7 @@ import { expect, type Page } from "@playwright/test";
 import { fakeJira } from "../support/fake-jira.ts";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
 import { sendPrompt } from "../support/flow.ts";
-import { runDir } from "../support/paths.ts";
+import { daemonConfigDir, runDir } from "../support/paths.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
 const modal = (page: Page) => page.getByTestId("create-worktree");
@@ -350,4 +350,22 @@ Then("the Jira token is set", async ({ page }) => {
 Then("the Ticket tab asks to set up Jira", async ({ page }) => {
   await expect(page.getByTestId("create-worktree-no-jira")).toBeVisible();
   await expect(page.getByTestId("create-worktree-ticket-row")).toHaveCount(0);
+});
+
+// GH-487: a token of the old format (no host saved next to it) is dropped; Settings says why.
+Given("the daemon's saved Jira token has the old format without a host", async () => {
+  writeFileSync(join(daemonConfigDir(runDir()), "secrets.json"), JSON.stringify({ jiraToken: TOKEN }), { mode: 0o600 });
+});
+
+Then("Settings › Jira says the saved token was cleared by a security update", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-reset")).toHaveText("Your saved token was cleared by a security update. Enter it again.");
+});
+
+When("I save the Jira token {string}", async ({ page }, value: string) => {
+  await page.getByTestId("settings-jira-token").fill(value);
+  await page.getByTestId("settings-jira-token-save").click();
+});
+
+Then("Settings › Jira shows no token reset notice", async ({ page }) => {
+  await expect(page.getByTestId("settings-jira-token-reset")).toHaveCount(0);
 });

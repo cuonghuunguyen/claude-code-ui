@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ failGet = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -33,6 +33,7 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
+  let jiraTokenReset = tokenReset;
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
@@ -43,9 +44,9 @@ async function render({ failGet = false, group, daemon = { host: "box" } as { ho
       settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
-    if (msg.type === "jira.token") jiraToken = msg.token !== null;
+    if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
     if (msg.type === "jira.test") return { user: "Ann Example" };
-    return { settings, ...(daemon && { daemon }), jiraToken };
+    return { settings, ...(daemon && { daemon }), jiraToken, ...(jiraTokenReset && { jiraTokenReset: true }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -366,6 +367,24 @@ it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only 
   await act(async () => q("settings-jira-token-clear")!.click());
   expect(calls.filter((c) => c.type === "jira.token").at(-1)).toEqual({ type: "jira.token", token: null });
   expect(q("settings-jira-token-set")).toBeNull();
+});
+
+it("Jira: a token cleared by the security update says so under the token field until a token is saved (GH-487)", async () => {
+  const { q, pick } = await render({ tokenReset: true });
+  await pick("jira");
+  expect(q("settings-jira-token-reset")!.textContent).toBe("Your saved token was cleared by a security update. Enter it again.");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(q("settings-jira-token"), "tok-123");
+    q("settings-jira-token")!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("settings-jira-token-save")!.click());
+  expect(q("settings-jira-token-reset")).toBeNull();
+});
+
+it("Jira: no notice when no token was cleared (GH-487)", async () => {
+  const { q, pick } = await render();
+  await pick("jira");
+  expect(q("settings-jira-token-reset")).toBeNull();
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {

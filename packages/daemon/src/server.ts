@@ -393,9 +393,9 @@ export function createDaemon(opts: {
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
   const secrets = opts.secrets ?? createSecrets();
-  const jira = createJira({ config: () => appSettings.get().jira, token: () => secrets.jiraToken(), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
+  const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
-  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken() });
+  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
   // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
   const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });
   setPerf(perfMon);
@@ -1847,7 +1847,7 @@ export function createDaemon(opts: {
         case "jira.token": {
           if (msg.token !== null && typeof msg.token !== "string") return fail("bad_settings", "token must be a string or null");
           try {
-            secrets.setJiraToken(msg.token === null ? null : msg.token.trim());
+            secrets.setJiraToken(msg.token === null ? null : msg.token.trim(), jiraOrigin(appSettings.get().jira.url));
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
@@ -1867,13 +1867,15 @@ export function createDaemon(opts: {
         }
         case "settings.set": {
           try {
-            const before = jiraOrigin(appSettings.get().jira.url);
             const settings = appSettings.set(msg.patch);
-            // GH-451: the token belongs to the Jira it was entered for; another origin (or no URL) must never receive it.
-            if (before && jiraOrigin(settings.jira.url) !== before && secrets.jiraToken()) secrets.setJiraToken(null);
+            const origin = jiraOrigin(settings.jira.url);
+            const bound = secrets.jiraTokenOrigin();
+            // GH-487: a token saved without URL takes the first URL set here (never a hand edit); a token of another origin is dropped (cleanup, it is never sent anyway).
+            if (bound === "" && origin && msg.patch?.jira?.url !== undefined) secrets.setJiraToken(secrets.jiraToken("")!, origin);
+            else if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             perfMon.setEnabled(settings.performance.monitor);
-            broadcast({ type: "settings_changed", settings, jiraToken: !!secrets.jiraToken() });
+            broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
             return reply(settingsReply(settings));
           } catch (err) {
             return fail("bad_settings", (err as Error).message);

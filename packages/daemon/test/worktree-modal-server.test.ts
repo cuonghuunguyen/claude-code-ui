@@ -234,4 +234,67 @@ describe("Jira over the wire", () => {
     for (const req of [{ type: "jira.test" }, { type: "jira.search" }] as const) expect(await c.request(req)).toMatchObject({ code: "jira_not_configured", message: expect.stringContaining("https") });
     expect(jiraFetch).not.toHaveBeenCalled();
   });
+  it("a hand edit of settings.json to another host never sends the token (GH-487)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const settingsFile = join(root, "cfg", "settings.json");
+    const logs: string[] = [];
+    const spies = (["log", "warn", "error", "info", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logs.push(a.map(String).join(" "))));
+    closers.push(() => spies.forEach((s) => s.mockRestore()));
+    fake = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, user: "Dana Center", issues: [] });
+    const fakeB = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, user: "Dana Center", issues: [] });
+    closers.push(() => fakeB.close());
+    const c = await client(await daemon({ root, secretsFile: join(root, "cfg", "secrets.json"), settingsFile }));
+    const setUrl = (url: string) => c.request({ type: "settings.set", patch: { jira: { url } } });
+    await setUrl(fake.url);
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ result: { user: "Dana Center" } });
+    writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
+    for (const req of [{ type: "jira.test" }, { type: "jira.search" }] as const) expect(await c.request(req)).toMatchObject({ code: "jira_not_configured" });
+    expect(await c.request({ type: "settings.get" })).toMatchObject({ result: { jiraToken: false } });
+    expect(fakeB.requests).toEqual([]);
+    // Part 2: a token saved without URL, then a hand edit: never bound by the edit.
+    await c.request({ type: "jira.token", token: null });
+    await setUrl("");
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    expect(await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } })).toMatchObject({ result: { jiraToken: false } });
+    expect(fakeB.requests).toEqual([]);
+    for (const text of [...c.raw, ...logs]) expect(text).not.toContain(JIRA_TOKEN);
+  });
+
+  it("a crash between the URL write and the token clear leaves a token that is never sent (GH-487)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    fake = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, issues: [] });
+    const fakeB = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, issues: [] });
+    closers.push(() => fakeB.close());
+    writeFileSync(join(root, "cfg", "settings.json"), JSON.stringify({ jira: { url: fakeB.url } }));
+    writeFileSync(join(root, "cfg", "secrets.json"), JSON.stringify({ jiraToken: JIRA_TOKEN, jiraOrigin: new URL(fake.url).origin }));
+    const c = await client(await daemon({ root, secretsFile: join(root, "cfg", "secrets.json"), settingsFile: join(root, "cfg", "settings.json") }));
+    expect(await c.request({ type: "settings.get" })).toMatchObject({ result: { jiraToken: false } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    expect(fakeB.requests).toEqual([]);
+  });
+
+  it("an old-format secrets.json token is not sent, is reported as reset and must be entered again (GH-487)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const secretsFile = join(root, "cfg", "secrets.json");
+    fake = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, user: "Dana Center", issues: [] });
+    writeFileSync(join(root, "cfg", "settings.json"), JSON.stringify({ jira: { url: fake.url } }));
+    writeFileSync(secretsFile, JSON.stringify({ jiraToken: JIRA_TOKEN }));
+    const c = await client(await daemon({ root, secretsFile, settingsFile: join(root, "cfg", "settings.json") }));
+    expect(await c.request({ type: "settings.get" })).toMatchObject({ result: { jiraToken: false, jiraTokenReset: true } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    expect(fake.requests).toEqual([]);
+    // An unrelated settings change keeps the flag.
+    expect(await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } })).toMatchObject({ result: { jiraTokenReset: true } });
+    const saved = await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    expect(saved.result.jiraToken).toBe(true);
+    expect(saved.result.jiraTokenReset).toBeUndefined();
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ result: { user: "Dana Center" } });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8"))).toEqual({ jiraToken: JIRA_TOKEN, jiraOrigin: new URL(fake.url).origin });
+  });
 });

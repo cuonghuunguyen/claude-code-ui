@@ -65,3 +65,16 @@ Feature: Settings › Jira protects the token (GH-451)
     When I set the Jira URL to ""
     Then the Jira token is not set
     And I capture "token cleared by empty url"
+
+  Scenario: A token saved before the update is cleared and Settings says why
+    Given a fake Jira with my tickets PRJ-1 and PRJ-2 and another ticket PRJ-3
+    And the daemon's saved Jira token has the old format without a host
+    And I open the scratch project
+    When I open Settings › Jira
+    And I set the Jira URL to the fake Jira
+    Then the Jira token is not set
+    And Settings › Jira says the saved token was cleared by a security update
+    And I capture "token reset notice"
+    When I save the Jira token "e2e-jira-token"
+    Then the Jira token is set
+    And Settings › Jira shows no token reset notice
