@@ -48,7 +48,7 @@ export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request,
         placeholder={o.placeholder}
         onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}
         onBlur={() => commit(k)}
-        onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && e.currentTarget.blur()}
+        onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())} // preventDefault: on a phone the focus falls to Back and this Enter would click it
         disabled={saving}
         className={INPUT}
         aria-describedby={`settings-jira-${k}-hint`}
