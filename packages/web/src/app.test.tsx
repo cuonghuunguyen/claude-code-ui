@@ -1028,7 +1028,7 @@ it("dropping a pane on the area body appends it; a session tab drag is not a tar
   await dnd(q("side-panel"), "dragover", data);
   expect(q("side-panel")!.className).toContain("outline-primary");
   await dnd(q("side-panel"), "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "artifacts", "terminal"]);
   const other = new Map<string, string>();
   await dnd(q("side-panel"), "dragover", other, ["application/x-claude-ui-tab"]);
   expect(q("side-panel")!.className).not.toContain("outline-primary");
@@ -1044,7 +1044,7 @@ it("dropping a pane on an area's content (inside a pane host) moves it and fills
   expect(q("side-panel")!.className).toContain("outline-primary");
   expect(q("side-panel")!.hasAttribute("data-drop-target")).toBe(true);
   await dnd(body, "drop", data);
-  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "terminal"]);
+  expect(layoutKey()!.areas.side).toEqual(["changes", "files", "graph", "plan", "artifacts", "terminal"]);
 });
 
 /** Terminal in the side panel, Files in a maximized bottom panel: the side panel is hidden behind the maximize. */
@@ -5894,6 +5894,74 @@ describe("GH-400 an artifact as a tab", () => {
       expect(menuItem("splitRight")!.hasAttribute("data-disabled")).toBe(false);
       await act(async () => menuItem("splitRight")!.click());
       expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${REF}"]`)).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("GH-176 Artifacts pane", () => {
+  const PART = "toolu_art1";
+  const REF = `artifact:${ID}:${PART}`;
+  const publish = { type: "tool_call", id: PART, toolUseId: PART, tool: "Artifact", input: { file_path: "/p/demo/dash.html", title: "Sales dashboard" }, status: "done", endedAt: Date.now() };
+  const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
+  const send = (seq: number, part: unknown) => act(async () => emit({ type: "event", sessionId: ID, seq, part }));
+  const mountWith = () => remount({ "artifact.preview": { url: `/artifact/${"a".repeat(32)}/dash.html?v=1`, size: 1, mtime: 1 } });
+  const menu = async (id: string) => act(async () => void el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [role="option"]')];
+  const toSession = () => act(async () => void ((location.hash = `#${ID}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+
+  it("the dock tab appears only once the session has a done publish; the pane lists it and previews the newest", async () => {
+    const restore = await mountWith();
+    try {
+      expect(sideTabs()).not.toContain("pane-artifacts");
+      await send(1, { ...publish, status: "running" });
+      expect(sideTabs()).not.toContain("pane-artifacts");
+      await send(2, publish);
+      expect(sideTabs()).toContain("pane-artifacts");
+      await pickSide(/artifacts/i);
+      expect(rows().map((r) => r.textContent)).toEqual([expect.stringContaining("Sales dashboard")]);
+      expect(sent.some((m) => m.type === "artifact.preview" && (m as { partId?: string }).partId === PART)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Open in tab opens artifact:<sid>:<part>; its tab menu Move to Artifacts closes it and selects the row", async () => {
+    const restore = await mountWith();
+    try {
+      await send(1, publish);
+      await pickSide(/artifacts/i);
+      await act(async () => [...el.querySelectorAll<HTMLButtonElement>('[data-testid="side-panel"] button')].find((b) => b.textContent === "Open in tab")!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 40)));
+      expect(tabIds()).toEqual([ID, REF]);
+      await menu(REF);
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-moveToArtifacts"]')!.click());
+      expect(tabIds()).toEqual([ID]);
+      expect(rows()[0]!.getAttribute("aria-selected")).toBe("true");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the move command takes Artifacts to the main area: an artifacts:<sid> tab opens, the dock tab is gone", async () => {
+    const restore = await mountWith();
+    try {
+      await send(1, publish);
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => {
+        const input = document.querySelector<HTMLInputElement>('[data-testid="palette"] input')!;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Move artifacts to main");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="palette"] [role="option"]')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 40)));
+      expect(tabIds()).toEqual([ID, `artifacts:${ID}`]);
+      expect(layoutNow()!.areas.main).toEqual(["artifacts"]);
+      expect(sideTabs()).not.toContain("pane-artifacts");
+      await toSession();
     } finally {
       restore();
     }

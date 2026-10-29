@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
-import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
 import type { SessionInfo, Snapshot } from "@claude-ui/protocol";
 
 const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s", seq, part });
@@ -339,6 +339,18 @@ describe("paging", () => {
     expect(withEdits(s, "old", [{ part: edit, pos: 12 }])).toBe(s);
     expect(partOf(next, "e1")).toBe(edit);
     expect(wholeParts(next).map((p) => p.id)).toEqual(["e1", "u9", "a9"]);
+  });
+});
+
+describe("withArtifacts (GH-176)", () => {
+  it("merges publishes by pos into aux once per boundary and sets its own flag", () => {
+    const pub: Part = { type: "tool_call", id: "p1", toolUseId: "p1", tool: "Artifact", input: {}, status: "done" };
+    const s: SessionView = { ...emptySession(), older: { before: "u9", pos: 90 } };
+    const next = withArtifacts(s, "u9", [{ part: pub, pos: 12 }]);
+    expect(next).toMatchObject({ auxArtifacts: true });
+    expect(next.auxEdits).toBeUndefined();
+    expect(withArtifacts(next, "u9", [{ part: pub, pos: 12 }]).aux).toHaveLength(1);
+    expect(withArtifacts(s, "old", [{ part: pub, pos: 12 }])).toBe(s);
   });
 });
 

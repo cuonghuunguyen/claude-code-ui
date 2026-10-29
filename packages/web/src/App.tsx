@@ -32,6 +32,7 @@ import type {
   SubscribeResult,
   PageResult,
   EditsResult,
+  ArtifactsResult,
   TodoItem,
   UploadResult,
   GitStatus,
@@ -60,6 +61,8 @@ import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { ArtifactTab } from "./artifact-tab.tsx";
+import { ArtifactsPane, selectArtifact } from "./artifacts-pane.tsx";
+import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
@@ -104,7 +107,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
@@ -597,6 +600,7 @@ export function App() {
   const [olderLoading, setOlderLoading] = useState<Record<string, boolean>>({});
   const resnapshotting = useRef(new Set<string>());
   const editsAsked = useRef(new Set<string>());
+  const artifactsAsked = useRef(new Set<string>());
   /** Per session, the epoch and cursor whose page request failed, and when: retried only by a scroll event, at most every PAGE_RETRY_MS. */
   const failedPage = useRef(new Map<string, { key: string; at: number }>());
   const runRequested = useRef(new Set<string>());
@@ -689,6 +693,7 @@ export function App() {
       // A snapshot replaces the view: its older edits and failed cursor are asked again.
       if (r.snapshot) {
         for (const k of editsAsked.current) if (k.startsWith(`${sessionId}:`)) editsAsked.current.delete(k);
+        for (const k of artifactsAsked.current) if (k.startsWith(`${sessionId}:`)) artifactsAsked.current.delete(k);
         failedPage.current.delete(sessionId);
         for (const k of runRequested.current) if (k.startsWith(`${sessionId}:`)) runRequested.current.delete(k);
       }
@@ -1201,6 +1206,7 @@ export function App() {
     else if (c === "splitRight" || c === "splitDown") splitTab(id, c === "splitRight" ? "row" : "col");
     else if (c === "moveSide" || c === "moveBottom") move(kindOf(id) as PaneId, c === "moveSide" ? "side" : "bottom");
     else if (c === "moveToFiles") moveToFiles(id);
+    else if (c === "moveToArtifacts") moveToArtifacts(id);
     else if (c === "revealInFiles") revealInFiles(id);
     else if (c === "copyPath") copyText(pathOf(id), "path");
     else if (c === "copyRel") copyText(pathOf(id) && relPath(pathOf(id)!, cwdOfOwner(ownerOf(id)) ?? ""), "relative path");
@@ -1977,6 +1983,25 @@ export function App() {
       () => editsAsked.current.delete(key),
     );
   }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
+  // The Artifacts pane needs the Artifact publishes of the unloaded region (GH-176): asked once per boundary, by the effect for the shown session and by the pane for its own.
+  const requestArtifacts = useCallback((id: string) => {
+    const v = viewsRef.current[id];
+    if (!v?.older || v.auxArtifacts || !v.logEpoch) return;
+    const { before } = v.older;
+    const epoch = v.logEpoch;
+    const key = `${id}:${epoch}:${before}`;
+    if (artifactsAsked.current.has(key)) return;
+    artifactsAsked.current.add(key);
+    client.current?.request<ArtifactsResult>({ type: "session.artifacts", sessionId: id, logEpoch: epoch, before }).then(
+      (r) => setViews((vs) => (vs[id]?.logEpoch === epoch ? { ...vs, [id]: withArtifacts(vs[id]!, before, r.parts) } : vs)),
+      () => artifactsAsked.current.delete(key),
+    );
+  }, []);
+  useEffect(() => {
+    if (panelTarget?.sessionId) requestArtifacts(panelTarget.sessionId);
+  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxArtifacts, panelView?.logEpoch, requestArtifacts]);
+  const panelHasArtifacts = useMemo(() => !!panelView && sessionArtifacts(panelView).length > 0, [panelView?.parts, panelView?.aux]);
+  const artifactLoad = (owner: string) => (partId: string) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: owner, partId });
   const panelPlan = useMemo(() => (panelView ? latestPlan(panelView) : undefined), [panelView?.parts, panelView?.aux]);
   const changedPaths = useMemo(() => (panelView ? sessionChanges(panelView).map((c) => c.path) : []), [panelView?.parts, panelView?.aux]);
   // The pane tab counts the files the changes panel lists (a file created and deleted again is not listed).
@@ -2027,7 +2052,8 @@ export function App() {
   };
   // A restored narrow Terminal pane without shells shows the session.
   const planListed = !!panelPlan && areaOf(layout, "plan") !== "main";
-  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) || (histPane !== "session" && canMain(histPane) && areaOf(layout, histPane) === "main") ? "session" : histPane;
+  const artifactsListed = panelHasArtifacts && areaOf(layout, "artifacts") !== "main";
+  const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) || (histPane === "artifacts" && !artifactsListed) || (histPane !== "session" && canMain(histPane) && areaOf(layout, histPane) === "main") ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
   const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
@@ -2057,7 +2083,7 @@ export function App() {
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
   // The Plan pane lists only while the current session has a plan and its home is a dock.
-  const available = (p: PaneId) => (p === "plan" ? planListed : p !== "graph" || isGit);
+  const available = (p: PaneId) => (p === "plan" ? planListed : p === "artifacts" ? artifactsListed : p !== "graph" || isGit);
   /** Narrow: the side column holds every pane. */
   const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS.filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
   /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
@@ -2130,7 +2156,7 @@ export function App() {
     if (p === "session") return;
     const a = areaOf(layout, p);
     // Main home: the tab of the current session. Plan opens on wide screens only (narrow: the switcher), Files and Git graph everywhere.
-    if (a === "main") return void (p === "plan" ? lg && currentId && isSession(currentId) && openPaneTab(refOf({ kind: "plan", owner: currentId })) : (p === "files" || p === "graph") && showKind(p));
+    if (a === "main") return void (p === "plan" || p === "artifacts" ? lg && currentId && isSession(currentId) && openPaneTab(refOf({ kind: p, owner: currentId })) : (p === "files" || p === "graph") && showKind(p));
     if (!lg) return;
     // A maximized bottom panel hides everything else: a pane outside it needs the restore.
     if (a === "side") setBottomMax(false);
@@ -2160,6 +2186,7 @@ export function App() {
         return openPaneTab(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner)); // the instance is quiet: no termLoud
       }
       const owner = currentId && isSession(currentId) ? currentId : undefined;
+      if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? openPaneTab(refOf({ kind: "artifacts", owner })) : (focusShownPrompt(), setToast("Artifacts moved to the main area. Its tab opens when the session has artifacts."));
       if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
       else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
       return;
@@ -2229,7 +2256,7 @@ export function App() {
   };
   /** The narrow pane switcher: Plan with its home in the main area shows the plan tab; a plan tab is left by picking another pane. */
   const switchPane = (p: Pane) => {
-    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : p === "terminal" ? showTerminal() : showKind(p as "files" | "graph");
+    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : p === "artifacts" ? showArtifacts() : p === "terminal" ? showTerminal() : showKind(p as "files" | "graph");
     if (p === "session" && paneRef) return open(paneRef.owner);
     selectPane(p);
   };
@@ -2280,6 +2307,20 @@ export function App() {
     if (!sid || !isSession(sid)) return;
     if (areaOf(loadLayout(), "plan") === "main") return openPaneTab(refOf({ kind: "plan", owner: sid }));
     reveal("plan");
+  };
+  /** Artifacts pane (GH-176): its tab in the main area, or the dock pane, of session `sid`. */
+  const showArtifacts = (sid = currentId) => {
+    if (!sid || !isSession(sid)) return;
+    if (areaOf(loadLayout(), "artifacts") === "main") return openPaneTab(refOf({ kind: "artifacts", owner: sid }));
+    reveal("artifacts");
+  };
+  /** Move to Artifacts: the artifact tab closes and the pane selects its row. */
+  const moveToArtifacts = (ref: string) => {
+    const part = partIdOf(ref);
+    if (!part) return;
+    closeGroup([ref], true);
+    selectArtifact(ownerOf(ref), part);
+    showArtifacts(ownerOf(ref));
   };
   // A file tab that left the strip without Move to Files (its owner was removed or deleted) hands its file back to Files with the draft.
   useEffect(() => {
@@ -2379,6 +2420,16 @@ export function App() {
           </div>
         </Activity>
       );
+    if (kind === "artifacts") {
+      const owner = ownerOf(ref);
+      return (
+        <Activity key={ref} mode={here ? "visible" : "hidden"}>
+          <div {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
+            <ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} />
+          </div>
+        </Activity>
+      );
+    }
     const on = ref === activeId;
     if (kind === "terminal")
       return (
@@ -2682,8 +2733,9 @@ export function App() {
     viewChanges: shown && !draftShown ? () => openViewer({ kind: "changes" }) : undefined,
     viewPlan: shown && !draftShown && latest ? () => openViewer({ kind: "plan", plan: latest }) : undefined,
     showPlan: shown && !draftShown && latest ? () => showPlan() : undefined,
+    showArtifacts: shown && !draftShown && panelHasArtifacts ? () => showArtifacts() : undefined,
     openFileTab: activeFilesPath ? () => openFileTab(activeFilesPath) : undefined,
-    homes: { plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph"), terminal: termHome },
+    homes: { artifacts: panelHasArtifacts ? areaOf(layout, "artifacts") : undefined, plan: areaOf(layout, "plan"), files: areaOf(layout, "files"), graph: areaOf(layout, "graph"), terminal: termHome },
     moveKind: (p, to) => move(p, to),
     focusPrompt: (id?: string) => {
       const s = !id && splitShown && isPaneRef(activeId) ? split!.ids.find(isSession) : undefined;
@@ -3251,7 +3303,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : []), ...(panelHasArtifacts ? (["artifacts"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -3514,6 +3566,14 @@ export function App() {
                       </div>
                     ),
                     hosts.plan,
+                  )}
+                  {createPortal(
+                    areaOf(layout, "artifacts") !== "main" && panelTarget.sessionId && (
+                      <div className={shows("artifacts") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label="Artifacts" load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} />
+                      </div>
+                    ),
+                    hosts.artifacts,
                   )}
                 </>
               )}

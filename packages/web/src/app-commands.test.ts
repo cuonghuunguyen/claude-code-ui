@@ -484,6 +484,20 @@ it("GH-395 Show plan is listed only with showPlan; move commands list the two ot
   expect(ids(ctx({ homes: { plan: "main" }, moveKind: vi.fn() })).filter((i) => i.startsWith("plan.move"))).toEqual(["plan.move.side", "plan.move.bottom"]);
 });
 
+it("GH-176 Show artifacts is listed only with showArtifacts; artifacts has move rows to the other homes", () => {
+  const ids = (x: CommandContext) => appCommands(x).map((i) => i.id);
+  expect(ids(ctx())).not.toContain("artifacts.show");
+  const showArtifacts = vi.fn();
+  const c = ctx({ showArtifacts, homes: { artifacts: "side" }, moveKind: vi.fn() });
+  expect(appCommands(c).find((x) => x.id === "artifacts.show")).toMatchObject({ title: "Show artifacts" });
+  run(c, "artifacts.show");
+  expect(showArtifacts).toHaveBeenCalledOnce();
+  expect(ids(c).filter((i) => i.startsWith("artifacts.move"))).toEqual(["artifacts.move.main", "artifacts.move.bottom"]);
+  expect(appCommands(c).find((x) => x.id === "artifacts.move.main")).toMatchObject({ title: "Move artifacts to main area" });
+  run(c, "artifacts.move.bottom");
+  expect(c.moveKind).toHaveBeenCalledWith("artifacts", "bottom");
+});
+
 it("GH-396 move rows per kind list the two other homes: files, graph (git only) and plan; none for changes", () => {
   const ids = (x: CommandContext) => appCommands(x).map((i) => i.id).filter((i) => i.includes(".move."));
   const homes = { plan: "side", files: "side", graph: "main" } as const;

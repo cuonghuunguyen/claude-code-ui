@@ -1,9 +1,9 @@
-// Pane refs (GH-395/396, docs/spec.md "Titlebar tabs"): strip/tab ids of non-session panes, `plan:<session uuid>`, `files:<session uuid>`, `graph:<session uuid>`, `terminal:<session uuid>` (GH-397). Sessions stay bare uuids.
-export type PaneKind = "plan" | "files" | "graph" | "terminal" | "file" | "artifact"; // "file" (GH-399): one file as a tab, `file:<uuid>:<absolute path>`; "artifact" (GH-400): `artifact:<uuid>:<part id>`
+// Pane refs (GH-395/396, docs/spec.md "Titlebar tabs"): strip/tab ids of non-session panes, `plan:<session uuid>`, `artifacts:<session uuid>` (GH-176), `files:<session uuid>`, `graph:<session uuid>`, `terminal:<session uuid>` (GH-397). Sessions stay bare uuids.
+export type PaneKind = "plan" | "files" | "graph" | "terminal" | "file" | "artifact" | "artifacts"; // "file" (GH-399): one file as a tab, `file:<uuid>:<absolute path>`; "artifact" (GH-400): `artifact:<uuid>:<part id>`
 export type PaneRef = { kind: PaneKind; owner: string; /** Kind "file". */ path?: string; /** Kind "artifact": the Artifact publish part. */ part?: string };
 
 // Lowercase only, like the session ids the daemon makes: tabs compare ids as exact strings, so one session has one ref.
-const REF = /^(plan|files|graph|terminal):([0-9a-f-]{36})$/;
+const REF = /^(plan|files|graph|terminal|artifacts):([0-9a-f-]{36})$/;
 // The path may hold colons (`C:\\a`), so it is everything after the owner.
 const FILE_REF = /^file:([0-9a-f-]{36}):([\s\S]+)$/;
 const ARTIFACT_REF = /^artifact:([0-9a-f-]{36}):([\s\S]+)$/;
@@ -28,7 +28,7 @@ export const isPaneRef = (id: unknown): id is string => typeof id === "string" &
 /** The owner session of a ref; the id itself for anything else. */
 export const ownerOf = (id: string): string => parseRef(id)?.owner ?? id;
 export const kindOf = (id: string): PaneKind | undefined => parseRef(id)?.kind;
-export const KIND_LABEL: Record<PaneKind, string> = { plan: "Plan", files: "Files", graph: "Git graph", terminal: "Terminal", file: "File", artifact: "Artifact" };
+export const KIND_LABEL: Record<PaneKind, string> = { plan: "Plan", files: "Files", graph: "Git graph", terminal: "Terminal", file: "File", artifact: "Artifact", artifacts: "Artifacts" };
 /** Kinds whose identity is the owner's folder (design §1.3): one tab per project folder. */
 export const PER_CWD: readonly PaneKind[] = ["files", "graph", "terminal"];
 /** What "already open" compares: `<kind>@<cwd>` for per-folder kinds with a known cwd, else the ref. */

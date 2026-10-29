@@ -85,11 +85,13 @@ export type CommandContext = {
   viewPlan?: () => void;
   /** GH-395: reveals the current session's plan (its tab in the main area, or the dock Plan pane). Absent without a plan. */
   showPlan?: () => void;
+  /** GH-176: reveals the current session's Artifacts pane. Absent while it has no artifacts. */
+  showArtifacts?: () => void;
   /** GH-399: the file the Files editor shows becomes a main-area tab. Absent unless a Files editor shows a file inside the owner's folder. */
   openFileTab?: () => void;
   /** Where the Plan, Files and Git graph panes live, and the move to another home; absent: no move rows. Changes never moves. */
-  homes?: Partial<Record<"plan" | "files" | "graph" | "terminal", Area>>;
-  moveKind?: (p: "plan" | "files" | "graph" | "terminal", to: Area) => void;
+  homes?: Partial<Record<"plan" | "files" | "graph" | "terminal" | "artifacts", Area>>;
+  moveKind?: (p: "plan" | "files" | "graph" | "terminal" | "artifacts", to: Area) => void;
   /** Git graph needs a repository. */
   isGit?: boolean;
   /** `id`: the tab just selected; default the shown one. */
@@ -186,8 +188,9 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
     c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
+    c.showArtifacts && cmd("artifacts.show", "Show artifacts", c.showArtifacts),
     c.openFileTab && cmd("file.openInTab", "Open in tab", c.openFileTab),
-    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal", "artifacts"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
     c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
     cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),

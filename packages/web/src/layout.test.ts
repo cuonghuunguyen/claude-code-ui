@@ -15,20 +15,20 @@ it("parseLayout: bad input reads as the default", () => {
 
 it("parseLayout: appends missing panes, drops unknown and duplicate ones", () => {
   const l = parseLayout('{"side":"left","areas":{"side":["files","zzz","files"],"bottom":["terminal","changes"]}}');
-  expect(l).toEqual({ side: "left", areas: { side: ["files", "graph", "plan"], bottom: ["terminal", "changes"], main: [] } });
+  expect(l).toEqual({ side: "left", areas: { side: ["files", "graph", "plan", "artifacts"], bottom: ["terminal", "changes"], main: [] } });
   expect(parseLayout('{"side":"top","areas":{}}').side).toBe("right");
 });
 
 it("parseLayout: GH-354 terminalDock=side migrates when no layout is stored", () => {
-  expect(parseLayout(null, "side").areas).toEqual({ side: ["changes", "files", "graph", "plan", "terminal"], bottom: [], main: [] });
+  expect(parseLayout(null, "side").areas).toEqual({ side: ["changes", "files", "graph", "plan", "artifacts", "terminal"], bottom: [], main: [] });
   expect(parseLayout(null, "bottom")).toEqual(DEFAULT_LAYOUT);
 });
 
 it("movePane: other area end, reorder before, no-op returns the same object", () => {
   const l = DEFAULT_LAYOUT;
-  expect(movePane(l, "files", "bottom").areas).toEqual({ side: ["changes", "graph", "plan"], bottom: ["terminal", "files"], main: [] });
+  expect(movePane(l, "files", "bottom").areas).toEqual({ side: ["changes", "graph", "plan", "artifacts"], bottom: ["terminal", "files"], main: [] });
   expect(movePane(l, "files", "bottom", "terminal").areas.bottom).toEqual(["files", "terminal"]);
-  expect(movePane(l, "graph", "side", "changes").areas.side).toEqual(["graph", "changes", "files", "plan"]);
+  expect(movePane(l, "graph", "side", "changes").areas.side).toEqual(["graph", "changes", "files", "plan", "artifacts"]);
   expect(movePane(l, "files", "side", "graph")).toBe(l);
   expect(movePane(l, "terminal", "bottom")).toBe(l);
   expect(movePane(l, "files", "bottom", "changes").areas.bottom).toEqual(["terminal", "files"]);
@@ -36,13 +36,13 @@ it("movePane: other area end, reorder before, no-op returns the same object", ()
 
 it("parseLayout: an old stored layout without plan and main puts Plan at the end of the side panel and main empty", () => {
   const l = parseLayout('{"side":"right","areas":{"side":["files","changes","graph"],"bottom":["terminal"]}}');
-  expect(l.areas).toEqual({ side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: [] });
+  expect(l.areas).toEqual({ side: ["files", "changes", "graph", "plan", "artifacts"], bottom: ["terminal"], main: [] });
 });
 
 it("parseLayout keeps files and graph in main and still drops changes from main to its default area (GH-397: terminal may be in main)", () => {
   const l = parseLayout('{"side":"right","areas":{"side":[],"bottom":[],"main":["plan","changes","files","graph","terminal"]}}');
   expect(l.areas.main).toEqual(["plan", "files", "graph", "terminal"]);
-  expect(l.areas.side).toEqual(["changes"]);
+  expect(l.areas.side).toEqual(["changes", "artifacts"]);
   expect(l.areas.bottom).toEqual([]);
 });
 
@@ -66,7 +66,7 @@ it("movePane to main refuses changes (same object) and moves plan", () => {
 it("movePane moves files and graph to main; changes stays (same object)", () => {
   const n = movePane(movePane(DEFAULT_LAYOUT, "files", "main"), "graph", "main");
   expect(n.areas.main).toEqual(["files", "graph"]);
-  expect(n.areas.side).toEqual(["changes", "plan"]);
+  expect(n.areas.side).toEqual(["changes", "plan", "artifacts"]);
   expect(movePane(n, "changes", "main")).toBe(n);
 });
 
@@ -81,8 +81,8 @@ it("withPane does not remember a dock tab for files with home main", () => {
   expect(withPane({}, "files", l)).toEqual({ narrow: "files" });
 });
 
-it("DEFAULT_LAYOUT has plan after graph in the side panel", () => {
-  expect(DEFAULT_LAYOUT.areas.side).toEqual(["changes", "files", "graph", "plan"]);
+it("DEFAULT_LAYOUT has plan, then artifacts after graph in the side panel", () => {
+  expect(DEFAULT_LAYOUT.areas.side).toEqual(["changes", "files", "graph", "plan", "artifacts"]);
   expect(DEFAULT_LAYOUT.areas.main).toEqual([]);
 });
 
@@ -211,4 +211,11 @@ it("blocked storage keeps the remembered tabs in memory", () => {
   });
   rememberPane("graph");
   expect(loadPaneTabs().side).toBe("graph");
+});
+
+it("GH-176 artifacts may have the main home; an old layout without it gets it in the side panel", () => {
+  const n = movePane(DEFAULT_LAYOUT, "artifacts", "main");
+  expect(n.areas.main).toEqual(["artifacts"]);
+  expect(areaOf(n, "artifacts")).toBe("main");
+  expect(parseLayout('{"side":"right","areas":{"side":["files"],"bottom":[]}}').areas.side.at(-1)).toBe("artifacts");
 });
