@@ -542,7 +542,7 @@ export function App() {
   const lastRemovingWt = useRef(removingWt);
   if (removingWt) lastRemovingWt.current = removingWt;
   // Remove worker dialog (GH-358): `project`/`path`: the worker's own worktree when the app may remove it; `text`: its status; `others`: other listed sessions in it.
-  const [removingWorker, setRemovingWorker] = useState<{ id: string; name: string; project?: string; path?: string; branch?: string; text?: string; others: number; loading: boolean; error?: string }>();
+  const [removingWorker, setRemovingWorker] = useState<{ id: string; name: string; project?: string; path?: string; branch?: string; text?: string; status?: WorktreeStatusResult; others: number; loading: boolean; error?: string }>();
   const lastRemovingWorker = useRef(removingWorker);
   if (removingWorker) lastRemovingWorker.current = removingWorker;
   const [alsoWorktree, setAlsoWorktree] = useState(false);
@@ -1656,7 +1656,7 @@ export function App() {
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: hit.project, path: hit.path });
       if (st.safety === "blocked") setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: `Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}` } : c));
-      else setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[hit.project], hit.path) }) } : c));
+      else setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, status: st, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[hit.project], hit.path) }) } : c));
     } catch (e) {
       setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: (e as Error).message } : c));
     }
@@ -1669,7 +1669,7 @@ export function App() {
       return setError((e as Error).message);
     }
     setToast(`Removed worker ${w.name}`);
-    if (withWorktree && w.project && w.path) await removeWorktree({ project: w.project, path: w.path });
+    if (withWorktree && w.project && w.path) await removeWorktree({ project: w.project, path: w.path, status: w.status });
   }
 
   /** Archive idle sessions older than N days: shown at once; a failed request restores the list. At most 8 requests at a time. */
