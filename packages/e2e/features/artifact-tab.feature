@@ -20,7 +20,7 @@ Feature: Open an artifact as a tab (GH-400)
     Given the viewport is 1440x900
     When I expand the Artifact card
     And I click Open in tab on the Artifact card
-    And I click the first session tab
+    And I click the session tab "Publish the dashboard"
     And I click Open in tab on the Artifact card
     Then there is one artifact tab "Sales dashboard"
     And the artifact tab "Sales dashboard" is active and focused
@@ -34,7 +34,7 @@ Feature: Open an artifact as a tab (GH-400)
     And I close the artifact tab "Sales dashboard"
     Then the Artifact card still shows the page
     When I click Open in tab on the Artifact card
-    And I click the first session tab
+    And I click the session tab "Publish the dashboard"
     And I click Hide preview on the Artifact card
     And I click the artifact tab "Sales dashboard"
     Then the artifact tab shows the page with the heading "Sales dashboard"
@@ -69,6 +69,7 @@ Feature: Open an artifact as a tab (GH-400)
 
   Scenario: Split right shows the artifact beside its session
     Given the viewport is 1440x900
+    And I hide the side panel
     When I expand the Artifact card
     And I click Open in tab on the Artifact card
     And I choose "Split right" in the menu of the artifact tab "Sales dashboard"
