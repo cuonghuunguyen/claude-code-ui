@@ -112,3 +112,14 @@ it("after a successful Kill the dialog says Claude will be told on the next mess
   await draw(view(bash("a", { command: "ping localhost" }, "stopped")));
   expect(q("shell-told")?.textContent).toBe("Claude will be told on your next message.");
 });
+
+it("a finished shell has no Kill button; output not available shows an error", async () => {
+  const output = async () => {
+    throw new Error("Output is not available");
+  };
+  await render(view(bash("a", { command: "echo hi" }, "done", { exitCode: 0 })), { output });
+  await click(q("shell-row"));
+  expect(q("shell-kill")).toBeNull();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Output not available: Output is not available");
+  expect(q("shell-output")).toBeNull();
+});

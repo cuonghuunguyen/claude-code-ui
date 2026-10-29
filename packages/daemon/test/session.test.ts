@@ -2179,6 +2179,17 @@ describe("Session background work", () => {
     }
   });
 
+  it("Stop agent while the parent turn runs: the session stays running until the turn's result, then idle without working", async () => {
+    const { events, s, send } = await setup();
+    await bg(send);
+    expect(await s.stopSubagent("agent-bg")).toBe(true);
+    await send(done("t1", "agent-bg", "stopped"), ["running"]);
+    expect(s.working()).toBe(true);
+    await send(result(), ["running", "idle"]);
+    expect(log(events).at(-1)).toBe("idle");
+    expect(s.working()).toBe(false);
+  });
+
   // GH-239: an Artifact publish arms the CLI's comment monitor, a monitor_ws task flagged ambient that lives as long as the artifact
   // is watched; it never gets a task_notification while the CLI is idle.
   const level = (...tasks: { task_id: string; ambient?: boolean }[]) => ({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: "x", tasks: tasks.map((t) => ({ task_type: "local_agent", description: "d", ...t })) });
