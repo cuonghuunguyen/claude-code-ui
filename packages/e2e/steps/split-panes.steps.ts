@@ -43,7 +43,8 @@ When("I hold the {string} tab over the right edge of the session area", async ({
   await tab.hover();
   await page.mouse.down();
   const box = (await area(page).boundingBox())!;
-  await page.mouse.move(box.x + box.width - 20, box.y + box.height / 2, { steps: 5 });
+  // Not at the very edge: with the side panel hidden, a drop strip covers it.
+  await page.mouse.move(box.x + box.width * 0.85, box.y + box.height / 2, { steps: 5 });
 });
 
 Then("the drop overlay says {string}", async ({ page }, text: string) => {
@@ -106,6 +107,8 @@ When("I hold the {string} tab over the session split", async ({ page }, kind: st
   // The outer thirds of the whole area are edge zones: aim at the part of the split inside the middle third.
   const x = (Math.max(box.x, a.x + a.width / 3) + Math.min(box.x + box.width, a.x + (2 * a.width) / 3)) / 2;
   await page.mouse.move(x, box.y + box.height / 2, { steps: 8 });
+  // Chromium sends dragover on the next move: one more so the overlay follows the last position.
+  await page.mouse.move(x + 2, box.y + box.height / 2, { steps: 2 });
 });
 
 Then("the terminal of the split is ready", async ({ page }) => {

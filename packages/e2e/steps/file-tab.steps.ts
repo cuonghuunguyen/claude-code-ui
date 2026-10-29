@@ -39,6 +39,12 @@ When("I type {string} at the start of the file tab {string}", async ({ page }, t
 });
 
 When("I click Open in tab in the Files header", async ({ page }) => {
+  // Narrow Files panel: an open tree drawer's scrim covers the header buttons.
+  const drawer = page.getByTestId("file-tree-drawer");
+  if (await drawer.isVisible()) {
+    await page.getByTestId("toggle-tree").click();
+    await expect(drawer).toBeHidden();
+  }
   await page.getByTestId("files-panel").getByTestId("open-in-tab").click();
 });
 
