@@ -61,6 +61,9 @@ export function FileDialog({
   // App clears the opener with the dialog, and Base UI asks finalFocus after that render.
   const lastOpener = useRef(opener);
   if (open) lastOpener.current = opener;
+  // Open in tab: the caller focused the new tab's editor, so the close must not pull the focus back to the opener (GH-504).
+  const keepFocus = useRef(false);
+  if (open) keepFocus.current = false;
   const [showTree, setShowTree] = useState(true);
   return (
     <Dialog.Root
@@ -77,7 +80,7 @@ export function FileDialog({
         <Dialog.Popup
           // Pop out with a fine pointer: the editor (Ctrl+Z works at once). Touch (keeps the keyboard closed), a Read card and a file link: Base UI's default.
           initialFocus={() => (popOutByMouseOrKeys(opener) ? (store.view.current?.contentDOM ?? true) : true)}
-          finalFocus={() => (lastOpener.current?.isConnected ? lastOpener.current : (replacement(lastOpener.current) ?? shownPrompt() ?? true))}
+          finalFocus={() => (keepFocus.current ? false : lastOpener.current?.isConnected ? lastOpener.current : (replacement(lastOpener.current) ?? shownPrompt() ?? true))}
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
           aria-modal="true"
@@ -99,7 +102,7 @@ export function FileDialog({
               repos={repos}
               onShowGraph={onShowGraph}
               onOpenInFiles={onOpenInFiles}
-              onOpenTab={onOpenTab}
+              onOpenTab={onOpenTab && ((p) => ((keepFocus.current = true), onOpenTab(p)))}
               onItem={onItem}
               showTree={showTree}
               onToggleTree={() => setShowTree((v) => !v)}

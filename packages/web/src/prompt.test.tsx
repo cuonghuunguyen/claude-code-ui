@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
+import { Activity, act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
@@ -8,6 +8,8 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
 import { loadSendMode, saveSendMode } from "./send-mode.ts";
 import { QuestionPanel } from "./question.tsx";
+import { saveDraft } from "./drafts.ts";
+import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,7 +27,8 @@ const models: ModelInfo[] = [
 ];
 const noop = () => {};
 let unmount = noop;
-afterEach(() => (unmount(), localStorage.clear()));
+let activity: "visible" | "hidden" = "visible";
+afterEach(() => (unmount(), localStorage.clear(), (activity = "visible")));
 
 async function render(over: Partial<ComponentProps<typeof SessionPane>> = {}, view: SessionView = emptySession()) {
   const el = document.createElement("div");
@@ -51,10 +54,10 @@ async function render(over: Partial<ComponentProps<typeof SessionPane>> = {}, vi
     connected: true,
     ...over,
   };
-  await act(async () => root.render(<SessionPane {...props} />));
+  await act(async () => root.render(<Activity mode={activity}><SessionPane {...props} /></Activity>));
   unmount = () => (root.unmount(), el.remove());
   const $ = (id: string) => el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { el, $, box: el.querySelector("textarea")!, rerender: (p: Partial<ComponentProps<typeof SessionPane>>) => act(async () => root.render(<SessionPane {...props} {...p} />)) };
+  return { el, $, box: el.querySelector("textarea")!, rerender: (p: Partial<ComponentProps<typeof SessionPane>>) => act(async () => root.render(<Activity mode={activity}><SessionPane {...props} {...p} /></Activity>)) };
 }
 
 async function type(box: HTMLTextAreaElement, text: string) {
@@ -1552,4 +1555,28 @@ it("while a permission card replaces the prompt box, Ask aside still opens an As
   const e = await render({ onAside, insert: "/btw ", onInserted }, perm);
   expect(e.el.querySelector('input[aria-label="Aside question"]')).not.toBeNull();
   expect(onInserted).toHaveBeenCalled();
+});
+
+it("GH-505 a mounted prompt box picks up a draft written for it, keeping what the user typed", async () => {
+  const d = await render();
+  expect(d.box.value).toBe("");
+  saveDraft("s1", "run the tests");
+  await act(async () => announceDraft("s1"));
+  expect(d.box.value).toBe("run the tests");
+  await type(d.box, "mine");
+  await act(async () => (flushDrafts(), saveDraft("s1", "mine\n\nnext"), announceDraft("s1")));
+  expect(d.box.value).toBe("mine\n\nnext");
+  await act(async () => (saveDraft("other", "x"), announceDraft("other")));
+  expect(d.box.value).toBe("mine\n\nnext");
+});
+
+it("GH-505 a box in a hidden pane shows the draft written meanwhile when the pane is shown again", async () => {
+  const d = await render();
+  await type(d.box, "mine");
+  activity = "hidden";
+  await d.rerender({});
+  saveDraft("s1", "mine\n\nnext");
+  activity = "visible";
+  await d.rerender({});
+  expect(d.box.value).toBe("mine\n\nnext");
 });
