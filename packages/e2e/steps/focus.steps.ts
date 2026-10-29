@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { TURN_MS } from "../support/ui.ts";
+import { TURN_MS, promptBox } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 async function clickFocus(page: Page) {
@@ -61,4 +61,57 @@ Then("the Focus detail has a Question card", async ({ page }) => {
 
 Then("the Focus row for the request shows {string}", async ({ page }, text: string) => {
   await expect(page.locator('[data-testid="focus-row"][aria-current="true"]')).toContainText(text);
+});
+
+// ---- GH-305: focus-rows.feature ----
+
+const group = (page: Page) => page.getByTestId("focus-group").first();
+const toggle = (page: Page) => group(page).getByTestId("focus-group-toggle").first();
+
+Then("Focus shows a worker group with a permission row nested under its coordinator", async ({ page }) => {
+  await expect(group(page)).toBeVisible({ timeout: TURN_MS });
+  await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
+  await expect(group(page).getByTestId("focus-workers").locator('[data-testid="focus-row"][data-kind="permission"]').first()).toBeVisible({ timeout: TURN_MS });
+});
+
+When("I collapse the Focus worker group", async ({ page }) => {
+  await toggle(page).click();
+});
+
+When("I expand the Focus worker group", async ({ page }) => {
+  await toggle(page).click();
+  await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
+});
+
+Then("the Focus worker group is collapsed", async ({ page }) => {
+  await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
+  await expect(group(page).getByTestId("focus-workers")).toHaveCount(0);
+});
+
+When("I enable Next for you in Settings", async ({ page }) => {
+  await page.locator('[data-testid="open-settings"]:visible').first().click();
+  await page.getByTestId("settings-group-focus").click();
+  const switchEl = page.getByTestId("settings-focus-nextForYou");
+  if ((await switchEl.getAttribute("aria-checked")) !== "true") await switchEl.click();
+  await expect(switchEl).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-dialog")).toBeHidden();
+});
+
+Then("a Finished row in Focus shows a Next for you chip", async ({ page }) => {
+  await expect(page.getByTestId("focus-suggestion").first()).toBeVisible({ timeout: TURN_MS });
+  await expect(page.getByTestId("focus-suggestion").first()).toContainText("Next for you");
+});
+
+When("I click the Next for you chip", async ({ page }) => {
+  await page.getByTestId("focus-suggestion").first().click();
+});
+
+Then("the session opens with a prompt box that is not empty", async ({ page }) => {
+  await expect(page.getByTestId("focus-page")).toBeHidden();
+  await expect(promptBox(page)).toHaveValue(/\S/, { timeout: 15_000 });
+});
+
+Then("Focus shows a Finished row", async ({ page }) => {
+  await expect(page.locator('[data-testid="focus-row"][data-kind="finished"]').first()).toBeVisible({ timeout: TURN_MS });
 });
