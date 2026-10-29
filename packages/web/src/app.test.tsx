@@ -2292,7 +2292,7 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("a closed tab of an error session drops its view; the next list refresh follows it in the background again (GH-305)", async () => {
-    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error" }], projects: ["/p/demo"] } });
+    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error", lastActivity: Date.now() }], projects: ["/p/demo"] } });
     try {
       await closeActive();
       expect(sent).toContainEqual({ type: "session.unsubscribe", sessionId: ID });
@@ -2306,10 +2306,21 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("an error session without a tab is followed in the background after a load, so its unread state and Focus row are known (GH-305)", async () => {
-    const errored = { ...other, state: "error" as const };
+    const errored = { ...other, state: "error" as const, lastActivity: Date.now() };
     const restore = await remount({ "session.list": { sessions: [session, errored], projects: ["/p/demo", "/p/other"] } });
     try {
       expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: errored.id, background: true }));
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("an old error session (last activity over 24 h ago) without a tab is not followed (GH-305)", async () => {
+    const old = { ...other, state: "error" as const, lastActivity: Date.now() - 48 * 3_600_000 };
+    const restore = await remount({ "session.list": { sessions: [session, old], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === old.id)).toEqual([]);
     } finally {
       sent.length = 0;
       restore();

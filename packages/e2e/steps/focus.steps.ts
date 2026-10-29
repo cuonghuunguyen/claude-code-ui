@@ -99,7 +99,8 @@ When("I enable Next for you in Settings", async ({ page }) => {
 });
 
 Then("a Finished row in Focus shows a Next for you chip", async ({ page }) => {
-  await expect(page.getByTestId("focus-suggestion").first()).toBeVisible({ timeout: TURN_MS });
+  // Timing-dependent: the CLI sends the suggestion a few seconds after the turn, and not always.
+  await expect(page.getByTestId("focus-suggestion").first()).toBeVisible({ timeout: TURN_MS * 2 });
   await expect(page.getByTestId("focus-suggestion").first()).toContainText("Next for you");
 });
 

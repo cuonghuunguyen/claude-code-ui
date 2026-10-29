@@ -1,7 +1,7 @@
 # GH-305. Not run in the build stage: needs a real Claude on Haiku (see packages/e2e/README.md).
 # Not covered here: the usage-limit row (a real limit cannot be forced; focus.test.ts, focus-page.test.tsx) and the error row
 # after a page reload (no step puts a real session into `error` reliably; focus.test.ts, app.test.tsx).
-# Scenario "Next for you chip": the CLI decides whether it sends a suggestion (none on the first turn); the scenario can be flaky.
+# Scenario "Next for you chip" is timing-dependent: the CLI sends a suggestion a few seconds after the turn (none on the first turn, not always), so the step waits generously; it can be flaky.
 Feature: Focus rows
 
   Scenario: Worker rows nest under their coordinator

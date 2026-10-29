@@ -365,7 +365,8 @@ it("the detail pane shows the last todo list of a finished (idle) session and th
 // ---- GH-305: nested worker rows ----
 const nested = (): State => ({
   list: [item("c", { state: "idle", coordinator: true }), item("w1", { coordinatorId: "c", workerName: "one" }), item("w2", { coordinatorId: "c", workerName: "two", state: "closed" })],
-  views: { w1: view([bash("r1", "ls", NOW - 5000)]), w2: view([question("r2", NOW - 4000)]) },
+  views: { w1: view([bash("r1", "ls", NOW - 5000)]) },
+  unread: ["w2"],
 });
 const group = () => el.querySelector<HTMLElement>('[data-testid="focus-group"]');
 const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="focus-group-toggle"]')!;
@@ -457,4 +458,14 @@ it("a closed unread session without a view shows a Finished row; its detail has 
   expect(el.querySelector('[data-testid="focus-context"]')).toBeNull();
   await act(async () => button("Open session").click());
   expect(open).toHaveBeenCalledWith("z");
+});
+
+it("rows of closed workers are neither shown nor counted: section count, subtitle and the +N more count match the shown rows", async () => {
+  const list = [item("c", { state: "idle", coordinator: true, lastActivity: NOW }), item("w1", { coordinatorId: "c", lastActivity: NOW }), ...[1, 2, 3, 4, 5, 6].map((n) => item(`x${n}`, { coordinatorId: "c", state: "closed", lastActivity: NOW })), item("f", { state: "closed", lastActivity: NOW })];
+  await render({ list, views: { w1: view([bash("r1", "ls", NOW - 5000)]) }, unread: ["f", ...[1, 2, 3, 4, 5, 6].map((n) => `x${n}`)] });
+  expect(el.textContent).toContain("Needs you · 1");
+  expect(el.textContent).toContain("Finished while you were away · 1");
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("1 needs you · 1 to review");
+  expect(el.querySelector('[data-testid="focus-more"]')).toBeNull();
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["permission", "finished"]);
 });

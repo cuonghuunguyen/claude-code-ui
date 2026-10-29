@@ -327,9 +327,9 @@ it("nestRows: a coordinator without its own row gets a group with no own rows; a
   expect([g!.root, ...tags(g!)]).toEqual(["c", [], ["w2", "w1"]]);
 });
 
-it("nestRows: rows of closed workers are dropped; closed coordinators and other sessions stay", () => {
-  const list = [item("c", { state: "closed" }), item("w1", { coordinatorId: "c", state: "closed" }), item("w2", { coordinatorId: "c" })];
-  expect(nestRows([r("w1"), r("w2"), r("c")], list).map((g) => [g.root, ...tags(g)])).toEqual([["c", ["c"], ["w2"]]]);
+it("attentionRows: no row for a closed worker whose coordinator is listed (so counts match what shows); a closed coordinator or a worker of an archived coordinator keeps its row", () => {
+  const list = [item("c", { state: "closed", lastActivity: NOW - min }), item("w1", { coordinatorId: "c", state: "closed", lastActivity: NOW - min }), item("a", { archived: true }), item("w2", { coordinatorId: "a", state: "closed", lastActivity: NOW - min })];
+  expect(attentionRows(input(list, {}, { unread: ["c", "w1", "w2"] })).map((x) => x.sessionId)).toEqual(["c", "w2"]);
 });
 
 it("nestRows: several own rows of a coordinator stay together as its own rows", () => {

@@ -893,6 +893,13 @@ export class Session {
     this.emit({ type: "auto_continue", id: "auto_continue", at });
   }
 
+  /** Settings › Focus › Next for you was turned off: the shown suggestion goes. */
+  clearSuggestion() {
+    if (!this.suggested) return;
+    this.suggested = false;
+    this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
+  }
+
   /** The turn ended at the usage limit (`resetsAt` ms when known): the Focus page's limit row, also with auto-continue off. Cleared when the next turn starts. */
   setLimitStop(resetsAt: number | undefined) {
     this.limitStopped = true;

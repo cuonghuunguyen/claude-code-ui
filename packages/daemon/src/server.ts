@@ -1976,6 +1976,7 @@ export function createDaemon(opts: {
             if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
             if (urlPatched && !origin) secrets.endJiraTokenReset();
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
+            if (!settings.focus.nextForYou) for (const s of sessions.values()) s.clearSuggestion();
             perfMon.setEnabled(settings.performance.monitor);
             broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
             return reply(settingsReply(settings));

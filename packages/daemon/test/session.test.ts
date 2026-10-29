@@ -2965,4 +2965,17 @@ describe("Next for you (GH-305)", () => {
     await until(t.events, (e) => e.part.type === "prompt_suggestion" && e.part.text === null);
     expect(suggestions(t.events)).toEqual(["run the tests", null]);
   });
+
+  it("clearSuggestion (setting turned off) clears a shown suggestion once and does nothing without one", async () => {
+    const t = await setup({ promptSuggestions: () => true });
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual([]);
+    t.next(result());
+    await until(t.events, (e) => e.part.type === "session_state" && e.part.state === "idle");
+    t.next({ type: "prompt_suggestion", suggestion: "run the tests", uuid: randomUUID(), session_id: "x" });
+    await until(t.events, (e) => e.part.type === "prompt_suggestion");
+    t.s.clearSuggestion();
+    t.s.clearSuggestion();
+    expect(suggestions(t.events)).toEqual(["run the tests", null]);
+  });
 });

@@ -202,7 +202,10 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
   const cwdOf = new Map(i.list.map((s) => [s.id, s.cwd]));
   const rows: AttentionRow[] = i.waiting.map((w) => rowOfRequest(w, cwdOf.get(w.sessionId) ?? ""));
   const waits = new Set(i.waiting.map((w) => w.sessionId));
+  // A closed worker (a daemon restart closes every worker) of a listed coordinator has no row: the page hides it, so it must not count either.
+  const listed = new Set(i.list.filter((s) => !s.archived).map((s) => s.id));
   for (const s of i.list) {
+    if (s.state === "closed" && s.coordinatorId && listed.has(s.coordinatorId)) continue;
     const view = i.views[s.id];
     if (s.archived || waits.has(s.id)) continue;
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
@@ -264,18 +267,16 @@ export type FocusGroup<T> = { root: string; own: T[]; workers: T[] };
 
 /**
  * Groups the rows of one Focus list by root coordinator, in the rows' order (a group sits where its first row is, so the kind order
- * holds). Rows of closed workers are left out (a daemon restart closes every worker). A worker whose coordinator is not listed (archived)
+ * holds). A worker whose coordinator is not listed (archived)
  * is a plain row. Only the display nests: Next waiting follows the flat order.
  */
 export function nestRows<T>(rows: T[], list: SessionListItem[], idOf: (row: T) => string = (r) => (r as { sessionId: string }).sessionId): FocusGroup<T>[] {
   const rootOf = new Map<string, string>();
   for (const [root, ws] of nestWorkers(list, false).workers) for (const w of ws) rootOf.set(w.id, root);
-  const closed = new Set(list.filter((s) => s.state === "closed").map((s) => s.id));
   const groups = new Map<string, FocusGroup<T>>();
   for (const row of rows) {
     const id = idOf(row);
     const root = rootOf.get(id);
-    if (root && closed.has(id)) continue;
     const g = groups.get(root ?? id) ?? groups.set(root ?? id, { root: root ?? id, own: [], workers: [] }).get(root ?? id)!;
     (root ? g.workers : g.own).push(row);
   }
