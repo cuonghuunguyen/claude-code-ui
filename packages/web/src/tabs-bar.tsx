@@ -16,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { GHOST, ROW } from "./toolbar.tsx";
 import { SideLabel } from "./sides.tsx";
-import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
+import { ROW_SWIPE, enterFrom, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
@@ -461,11 +461,11 @@ export function TabsBar({
               aria-label="Switch tab"
               data-testid="tab-switcher"
               // touch-action none: a touch that starts here is never a browser scroll (no pull-to-refresh, no rubber band, no double-tap zoom), and the vertical swipe is ours.
-              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none bg-secondary! px-1.5 font-medium text-foreground`}
+              className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none overflow-hidden bg-secondary! px-1.5 font-medium text-foreground`}
               {...trigger.props}
             >
               {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} kind={active.kind} /> : null}
-              <span className="flex min-w-0 flex-col text-left" style={trigger.style}>
+              <span ref={trigger.title} className="flex min-w-0 flex-col text-left">
                 <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
               </span>
@@ -792,14 +792,21 @@ const TRIGGER_BOUNCE = 12;
  * The browser's own scroll is stopped by `touch-action: none` on the button plus a non-passive touchmove here (React's touch listeners are passive); never on touchstart, which would kill the tap.
  */
 function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect: (id: string) => void, swiped: RefObject<number>) {
-  const [view, setView] = useState({ offset: 0, motion: false });
+  // GH-507: the title is moved through its style, not React state: every pointermove re-rendered the bar, and the settle needed a second render on a timer.
+  const title = useRef<HTMLElement>(null);
+  const shown = useRef(0);
+  const place = (y: number, animate: boolean) => {
+    const el = title.current;
+    if (!el) return;
+    shown.current = y;
+    el.style.transition = animate && !reducedMotion() ? "transform 200ms ease-out" : "none";
+    el.style.transform = y ? `translateY(${y}px)` : "";
+  };
   const state = useRef<SwipeState>({ phase: "idle" });
   const cfg = useRef<SwipeConfig>({ ...ROW_SWIPE, axis: "y", allow: "both", commitFraction: 0.5, commitMin: 24, flickVelocity: 0.4, flickMin: 12, rubberLimit: TRIGGER_BOUNCE });
   const height = useRef(0);
   const edge = useRef(false);
   const pointer = useRef(-1);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
   const ref = useCallback((el: HTMLElement | null) => {
     if (!el) return;
     const start = (e: TouchEvent) => void (edge.current = (e.touches[0]?.clientY ?? Infinity) < TRIGGER_EDGE);
@@ -817,15 +824,18 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
     if (next.phase === "dragging") {
       swiped.current = performance.now();
       if (before.phase !== "dragging") e.currentTarget.setPointerCapture?.(e.pointerId);
-      setView({ offset: Math.max(-TRIGGER_BOUNCE, Math.min(TRIGGER_BOUNCE, next.offset)), motion: false });
+      // The title follows the finger up to one button height (a blocked end is already rubber-banded within TRIGGER_BOUNCE).
+      place(Math.max(-height.current, Math.min(height.current, next.offset)), false);
     } else if (next.phase === "committed" || next.phase === "settling") {
       swiped.current = performance.now();
       const to = next.phase === "committed" ? stepNoWrap(order, activeId, next.dir < 0 ? 1 : -1) : undefined;
-      if (to) onSelect(to);
-      // The new title slides in from the swiping direction (instant under reduced motion).
-      const slide = to && !reducedMotion() ? (next.phase === "committed" ? next.dir : 0) * TRIGGER_BOUNCE : 0;
-      setView({ offset: slide, motion: false });
-      timer.current = setTimeout(() => setView({ offset: 0, motion: !reducedMotion() }), 16);
+      if (to && next.phase === "committed") {
+        // One transition: the new title (rendered in this event's sync flush, before the next paint) enters from the finger's far side.
+        place(enterFrom(shown.current, next.dir, height.current), false);
+        void title.current?.offsetHeight;
+        onSelect(to);
+      }
+      place(0, true);
     }
   };
   const props = {
@@ -850,11 +860,10 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
     onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => {
       if (e.pointerId !== pointer.current || state.current.phase === "idle") return;
       state.current = { phase: "idle" };
-      setView({ offset: 0, motion: !reducedMotion() });
+      place(0, true);
     },
   };
-  const style: CSSProperties | undefined = view.offset || view.motion ? { transform: `translateY(${view.offset}px)`, transition: view.motion ? "transform 150ms ease-out" : "none" } : undefined;
-  return { ref, props, style };
+  return { ref, props, title };
 }
 
 /** The pinned Focus tab: first in the strip, a count of the sessions waiting for the user (a shape and a number, not only a color). */

@@ -34,6 +34,9 @@ export const rubber = (offset: number, limit: number) => (offset === 0 ? 0 : Mat
 /** The content fades to half while it leaves. */
 export const opacityFor = (offset: number, size: number) => 1 - 0.5 * Math.min(1, Math.abs(offset) / (size || 1));
 
+/** After a commit the new content starts one `size` further along (a carousel), so it keeps moving the finger's way into place. */
+export const enterFrom = (offset: number, dir: -1 | 1, size: number) => offset - dir * size;
+
 export type SwipeState =
   | { phase: "idle" }
   | { phase: "pending"; start: Sample; samples: Sample[] }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_SWIPE, mirror, opacityFor, rubber, swipe, type Sample, type SwipeConfig, type SwipeState } from "./swipe.ts";
+import { ROW_SWIPE, enterFrom, mirror, opacityFor, rubber, swipe, type Sample, type SwipeConfig, type SwipeState } from "./swipe.ts";
 
 const SIZE = 300;
 const at = (x: number, y: number, t: number): Sample => ({ x, y, t });
@@ -170,5 +170,14 @@ describe("vertical (trigger) config", () => {
     const { s, trail } = run(drag(0, 300, -90), cfg, 44);
     expect(s.phase).toBe("settling");
     for (const st of trail) if (st.phase === "dragging") expect(Math.abs(st.offset)).toBeLessThanOrEqual(12);
+  });
+});
+
+// GH-507: after a commit the new title enters one switcher height further along, so it keeps moving the finger's way.
+describe("enterFrom", () => {
+  it("puts the next tab below after an up swipe and above after a down swipe, continuing from the drag offset", () => {
+    expect(enterFrom(-30, -1, 44)).toBe(14);
+    expect(enterFrom(30, 1, 44)).toBe(-14);
+    expect(enterFrom(0, -1, 44)).toBe(44);
   });
 });
