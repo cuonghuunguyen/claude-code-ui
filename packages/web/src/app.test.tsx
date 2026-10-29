@@ -5363,6 +5363,10 @@ describe("GH-397 Terminal in the main area", () => {
 describe("GH-399 a file as a tab", () => {
   const A = `file:${ID}:/p/demo/a.ts`;
   const B = `file:${ID}:/p/demo/b.ts`;
+  const OTHERP = "aaaaaaaa-8888-7777-6666-555555555555";
+  const SAMEP = "99999999-8888-7777-6666-555555555555";
+  const elsewhere: SessionListItem = { ...session, id: OTHERP, cwd: "/p/other", title: "Elsewhere" };
+  const sameFolder: SessionListItem = { ...session, id: SAMEP, cwd: "/p/demo", title: "Same" };
   const disk: Record<string, string> = { "/p/demo/a.ts": "alpha", "/p/demo/b.ts": "beta" };
   const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
   const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
@@ -5378,7 +5382,7 @@ describe("GH-399 a file as a tab", () => {
     await act(async () => v.dispatch({ changes: { from: 0, insert } }));
   };
   const toSession = () => act(async () => void ((location.hash = `#${ID}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
-  /** Quick open works from the session tab only. */
+  /** Quick open starts from the session tab: from a file tab its owner is that tab owner too, but the tests keep one path. */
   const quickOpen = async (path: string, init: KeyboardEventInit = {}) => {
     await toSession();
     await press({ key: "p", code: "KeyP", ctrlKey: true });
@@ -5389,11 +5393,11 @@ describe("GH-399 a file as a tab", () => {
     await press({ key: "Enter", ...init }, input);
     await settle();
   };
-  async function mount(o: { tabs?: string[]; hash?: string } = {}) {
+  async function mount(o: { tabs?: string[]; hash?: string; list?: unknown } = {}) {
     if (o.tabs) localStorage.setItem("claude-ui.tabs", JSON.stringify(o.tabs));
     if (o.hash) location.hash = `#${encodeURIComponent(o.hash)}`;
     sent.length = 0;
-    return remount({ "fs.search": { paths: ["a.ts", "b.ts"] }, "fs.read": (m: { path: string }) => ({ content: disk[m.path] ?? "x", mtime: 1 }) });
+    return remount({ ...(o.list ? { "session.list": o.list } : {}), "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, sameFolder, elsewhere].find((x) => x.id === m.sessionId) ?? session }), "fs.search": { paths: ["a.ts", "b.ts"] }, "fs.read": (m: { path: string }) => ({ content: disk[m.path] ?? "x", mtime: 1 }) });
   }
 
   it("Alt+Enter in Quick open opens the file as a tab right of the session, active with its text; again focuses the same tab", async () => {
@@ -5527,6 +5531,149 @@ describe("GH-399 a file as a tab", () => {
       await quickOpen("a.ts", { altKey: true });
       await tabMenu(A);
       expect(menuItem("splitRight")!.hasAttribute("data-disabled")).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+  const filesDraft = () => el.querySelector('[data-testid="files-panel"] .cm-content')?.textContent;
+
+  it("a deleted owner returns the file to Files with its draft", async () => {
+    const restore = await mount({ tabs: [ID, SAMEP], list: { sessions: [session, sameFolder], projects: ["/p/demo"] } });
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await editView(A, "X");
+      await toSession();
+      replies["session.list"] = { sessions: [sameFolder], projects: ["/p/demo"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed", deleted: ID }));
+      await settle();
+      expect(tabIds()).not.toContain(A);
+      await act(async () => void ((location.hash = `#${SAMEP}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+      await settle();
+      expect(filesDraft()).toBe("Xalpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("a removed project (its tabs close with the list refresh) returns the file to Files with its draft", async () => {
+    const restore = await mount({ tabs: [ID, OTHERP], list: { sessions: [session, elsewhere], projects: ["/p/demo", "/p/other"] } });
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await editView(A, "X");
+      replies["session.list"] = { sessions: [elsewhere], projects: ["/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await settle();
+      expect(tabIds()).toEqual([OTHERP]);
+      replies["session.list"] = { sessions: [session, elsewhere], projects: ["/p/demo", "/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => void ((location.hash = `#${ID}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+      await settle();
+      expect(filesDraft()).toBe("Xalpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Reopen closed tab after Move to Files shows the file in the tab only, not also in Files", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await tabMenu(A);
+      await act(async () => menuItem("moveToFiles")!.click());
+      await settle();
+      expect(el.querySelectorAll('[data-testid="files-panel"] [data-testid="editor-tab"]')).toHaveLength(1);
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reopen closed tab"));
+      await act(async () => row!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, A]);
+      expect(el.querySelectorAll('[data-testid="files-panel"] [data-testid="editor-tab"]')).toHaveLength(0);
+      expect(bodyOf(A)!.querySelector(".cm-content")!.textContent).toBe("alpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Close tab group with a dirty file tab asks once: the group question names the unsaved file", async () => {
+    localStorage.setItem("claude-ui.tabCompact", "1");
+    const restore = await mount();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await editView(A, "X");
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Close tab group"));
+      await act(async () => row!.click());
+      await settle();
+      expect(document.body.textContent).toContain("Unsaved edits in 1 file tab are discarded.");
+      const confirmBtn = [...document.querySelectorAll<HTMLElement>("[role=alertdialog] button, [role=dialog] button")].find((b) => b.textContent === "Close group")!;
+      await act(async () => confirmBtn.click());
+      await settle();
+      expect(ask).not.toHaveBeenCalled();
+      expect(tabIds()).not.toContain(A);
+    } finally {
+      ask.mockRestore();
+      restore();
+    }
+  });
+
+  it("Quick open from a file tab opens the owner's project files", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await press({ key: "p", code: "KeyP", ctrlKey: true });
+      await settle();
+      expect(document.querySelector('[data-testid="quick-open"]')).not.toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Moving a file from Files to a tab keeps the cursor and the undo depth", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts");
+      const { EditorView } = await import("@codemirror/view");
+      const { undoDepth } = await import("@codemirror/commands");
+      const files = el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
+      const v1 = EditorView.findFromDOM(files.querySelector<HTMLElement>(".cm-editor")!)!;
+      await act(async () => v1.dispatch({ changes: { from: 0, insert: "X" }, selection: { anchor: 3 }, userEvent: "input.type" }));
+      await act(async () => v1.dispatch({ changes: { from: 1, insert: "Y" }, selection: { anchor: 3 }, userEvent: "select" }));
+      const depth = undoDepth(v1.state);
+      const head = v1.state.selection.main.head;
+      expect(depth).toBeGreaterThan(0);
+      expect(head).toBe(3);
+      await act(async () => files.querySelector<HTMLElement>('[data-testid="open-in-tab"]')!.click());
+      await settle();
+      const v2 = EditorView.findFromDOM(bodyOf(A)!.querySelector<HTMLElement>(".cm-editor")!)!;
+      expect(v2.state.selection.main.head).toBe(head);
+      expect(undoDepth(v2.state)).toBe(depth);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Clean up keeps a file tab with unsaved edits and closes a clean one of an archived owner", async () => {
+    const restore = await mount({ tabs: [ID, SAMEP], list: { sessions: [session, sameFolder], projects: ["/p/demo"] } });
+    try {
+      await quickOpen("a.ts", { altKey: true });
+      await quickOpen("b.ts", { altKey: true });
+      await editView(B, "Y");
+      replies["session.list"] = { sessions: [{ ...session, archived: true }, sameFolder], projects: ["/p/demo"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => void ((location.hash = `#${SAMEP}`), window.dispatchEvent(new HashChangeEvent("hashchange"))));
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      const input = document.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Clean up tabs");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const rowOf = (t: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(t));
+      await act(async () => rowOf("Clean up tabs…")!.click());
+      await act(async () => rowOf("Close tabs of archived or deleted sessions")!.click());
+      await settle();
+      expect(tabIds()).toContain(B);
+      expect(tabIds()).not.toContain(A);
     } finally {
       restore();
     }

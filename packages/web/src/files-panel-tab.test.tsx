@@ -137,3 +137,20 @@ it("a file that cannot be read shows the read error in its FileTab instead of an
   expect(q(el, "file-tab-loading")!.textContent).toBe("No such file");
   expect(s2.get().tabs["/p/gone.ts"]).toBeUndefined();
 });
+
+it("revealPath reveals once and tells the app (onRevealed) so a later mount does not reveal it again", async () => {
+  const { client, store } = setup();
+  const onRevealed = vi.fn();
+  const draw = (seq: number) => act(async () => root!.render(<FilesPanel client={client} status="connected" cwd="/p" editors={store} revealPath={{ path: "/p/a.ts", seq }} onRevealed={onRevealed} onSend={() => {}} showTree onToggleTree={() => {}} />));
+  await draw(1);
+  expect(onRevealed).toHaveBeenCalledTimes(1);
+  await draw(1);
+  expect(onRevealed).toHaveBeenCalledTimes(1);
+});
+
+it("a FileTab whose store tab is a Files tab again (Reopen after Move to Files) makes it an item", async () => {
+  const { client, store } = setup();
+  await store.open("/p/a.ts", { cwd: "/p", preview: false });
+  await act(async () => root!.render(<FileTab store={store} client={client} path="/p/a.ts" cwd="/p" onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
+  expect(store.get().tabs["/p/a.ts"]!.item).toBe(true);
+});

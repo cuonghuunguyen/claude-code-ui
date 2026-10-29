@@ -75,6 +75,7 @@ export function FilesPanel({
   onOpenTab,
   onItem,
   revealPath,
+  onRevealed,
   headerEnd,
   sync = true,
 }: {
@@ -121,6 +122,8 @@ export function FilesPanel({
   /** A Files open of a path that is a file tab already: App focuses that tab (one place per file). */
   onItem?: (path: string) => void;
   /** Reveal in Files: the tree shows this file (a new `seq` reveals again). */
+  /** The reveal request was carried out: the app clears it, so a later mount does not reveal it again. */
+  onRevealed?: () => void;
   revealPath?: { path: string; seq: number; /** A folder (a breadcrumb click in a file tab). */ dir?: boolean };
   headerEnd?: ReactNode;
   /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
@@ -243,7 +246,9 @@ export function FilesPanel({
   }
   // Reveal in Files (GH-399): the tree shows the file of a tab.
   useEffect(() => {
-    if (revealPath) revealFolder(revealPath.path, !!revealPath.dir);
+    if (!revealPath) return;
+    revealFolder(revealPath.path, !!revealPath.dir);
+    onRevealed?.();
   }, [revealPath?.seq]);
 
   const treeNav = (
@@ -656,7 +661,10 @@ export function FileTab({
   const viewRef = useRef<EditorView>(undefined);
   const loaded = !!tabs[path];
   useEffect(() => {
-    if (!store.get().tabs[path]) void store.open(path, { cwd, item: true });
+    const t = store.get().tabs[path];
+    // Reopen closed tab after Move to Files: the store tab is a Files tab again and must leave Files.
+    if (!t) void store.open(path, { cwd, item: true });
+    else if (!t.item) store.toItem(path);
   }, [path]);
   useEffect(() => {
     if (!focusKey || !loaded) return;

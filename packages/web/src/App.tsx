@@ -1070,11 +1070,14 @@ export function App() {
   }
 
   /** File tabs (GH-399) with unsaved edits ask once for all of `ids`; Cancel keeps those tabs. Returns the ids that may close. */
-  function askDirtyFiles(ids: string[]): string[] {
-    const dirty = ids.filter((id) => {
+  const dirtyFiles = (ids: string[]) =>
+    ids.filter((id) => {
       const t = isItem(id) ? editors.get().tabs[pathOf(id)!] : undefined;
       return !!t && isDirty(t);
     });
+  const dirtyFileCount = (ids: string[]) => dirtyFiles(ids).length;
+  function askDirtyFiles(ids: string[]): string[] {
+    const dirty = dirtyFiles(ids);
     if (!dirty.length) return ids;
     const text = dirty.length === 1 ? `Discard unsaved changes to ${baseName(pathOf(dirty[0]!)!)}?` : `Discard unsaved changes to ${dirty.length} files?`;
     return confirm(text) ? ids : ids.filter((id) => !dirty.includes(id));
@@ -2270,6 +2273,11 @@ export function App() {
     if (areaOf(loadLayout(), "plan") === "main") return openPaneTab(refOf({ kind: "plan", owner: sid }));
     reveal("plan");
   };
+  // A file tab that left the strip without Move to Files (its owner was removed or deleted) hands its file back to Files with the draft.
+  useEffect(() => {
+    const refs = new Set(tabs.map((t) => pathOf(t)));
+    for (const t of Object.values(editorTabs)) if (t.item && !refs.has(t.path)) editors.toFiles(t.path);
+  }, [tabs, editorTabs]);
   /** Files in the main area: its tab (of `owner`'s folder); in a dock: the dock. */
   const showFiles = (owner = paneOwner) => (areaOf(loadLayout(), "files") === "main" ? showKind("files", owner) : reveal("files"));
   /** Open in tab (GH-399): `path` (inside the owner's folder) as a main-area tab right of the owner's tab, one tab per file. The file leaves Files with its draft, cursor and undo history. */
@@ -2277,7 +2285,7 @@ export function App() {
     const cwd = owner ? cwdOfOwner(owner) : undefined;
     if (!owner || !cwd || !inDir(path, cwd)) return;
     const ref = paneTabFor(tabsRef.current, "file", owner, cwdOfOwner, path);
-    // A file not loaded yet is read by its tab (a reload does the same).
+    // A file not loaded yet is read by its tab (a reload does the same). The item flag first: the Files editor parks its cursor and undo history before the tab mounts.
     editors.toItem(path);
     setFileDialog(undefined);
     setTabs((t) => insertPaneTab(t, ref, groupOfTab));
@@ -2287,7 +2295,8 @@ export function App() {
   /** A Files open of a path that is a file tab: that tab takes the focus. */
   const focusFileTab = (path: string) => {
     const ref = tabsRef.current.find((t) => pathOf(t) === path);
-    if (!ref) return;
+    // No ref (its owner is gone): the file goes back to Files with its draft.
+    if (!ref) return void editors.toFiles(path);
     setFileDialog(undefined);
     open(ref);
     setFileFocus((f) => ({ ref, seq: (f?.seq ?? 0) + 1 }));
@@ -2411,6 +2420,7 @@ export function App() {
             onOpenTab={(p) => openFileTab(p, ownerOf(ref))}
             onItem={focusFileTab}
             revealPath={treeReveal && inDir(treeReveal.path, cwd) ? treeReveal : undefined}
+            onRevealed={() => setTreeReveal(undefined)}
             onOpened={() => setOpenFile(undefined)}
             watch={[]}
             showTree={fileTree}
@@ -2990,12 +3000,13 @@ export function App() {
       <ConfirmDialog
         open={closingGroup !== undefined}
         title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
-        description="Sessions keep running. Reopen them from the sidebar or with Reopen closed tab."
+        description={`Sessions keep running. Reopen them from the sidebar or with Reopen closed tab.${dirtyFileCount(lastClosingGroup.current.ids) ? ` Unsaved edits in ${dirtyFileCount(lastClosingGroup.current.ids)} file ${dirtyFileCount(lastClosingGroup.current.ids) === 1 ? "tab" : "tabs"} are discarded.` : ""}`}
         confirm="Close group"
         onConfirm={() => {
           const g = closingGroup!;
           setClosingGroup(undefined);
-          closeGroup(g.ids);
+          // The group question names the unsaved file tabs: no second question.
+          closeGroup(g.ids, true);
         }}
         onCancel={() => setClosingGroup(undefined)}
         // Cancel: back to the chip; closed: the tab that took over (it is in the Tab order), else New session.
@@ -3395,6 +3406,7 @@ export function App() {
                         onOpenTab={openFileTab}
                         onItem={focusFileTab}
                         revealPath={treeReveal && inDir(treeReveal.path, panelTarget.cwd) ? treeReveal : undefined}
+                        onRevealed={() => setTreeReveal(undefined)}
                         onOpened={() => setOpenFile(undefined)}
                         watch={changedPaths}
                         showTree={fileTree}
