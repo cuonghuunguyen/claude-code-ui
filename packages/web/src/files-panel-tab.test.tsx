@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 // GH-399: a file as a main-area tab, its entry points in the Files panel, and the FileTab body.
-import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -163,26 +162,4 @@ it("a file tab restored with a saved draft shows the draft, dirty, and does not 
   expect(store.get().tabs["/p/a.ts"]).toMatchObject({ disk: "a", draft: "mine", item: true });
   expect(el.textContent).toContain("mine");
   expect(request.mock.calls.filter(([m]) => m.type === "fs.read")).toHaveLength(1);
-});
-
-it("GH-504 a new focusKey keeps claiming the editor focus until focus sticks and the closing modal dialog is gone", async () => {
-  const { client, store, el } = setup();
-  await store.open("/p/a.ts", { cwd: "/p", item: true });
-  window.matchMedia = ((q: string) => ({ matches: q.includes("fine"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
-  const real = EditorView.prototype.focus;
-  let ignored = 3;
-  const spy = vi.spyOn(EditorView.prototype, "focus").mockImplementation(function (this: EditorView) {
-    if (ignored-- > 0) return;
-    real.call(this);
-  });
-  const modal = document.createElement("div");
-  modal.setAttribute("aria-modal", "true");
-  document.body.append(modal);
-  // The modal's focus trap pulls the focus away once, then the modal unmounts.
-  setTimeout(() => (document.activeElement as HTMLElement | null)?.blur(), 60);
-  setTimeout(() => modal.remove(), 120);
-  await act(async () => root!.render(<FileTab store={store} client={client} path="/p/a.ts" cwd="/p" focusKey={1} onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
-  await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
-  expect(document.activeElement).toBe(el.querySelector(".cm-content"));
-  spy.mockRestore();
 });

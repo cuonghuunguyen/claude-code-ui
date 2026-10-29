@@ -5,7 +5,6 @@ import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRight
 import { Button } from "@/components/ui/button";
 import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { loadDraft, saveDraft } from "./drafts.ts";
-import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
@@ -199,12 +198,10 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     const button = target && [...page.current!.querySelectorAll<HTMLElement>("[data-row-id]")].find((b) => b.dataset.rowId === target);
     (button || heading.current)?.focus();
   });
-  // The suggestion goes into the session's draft (after a blank line when there is one); a box that mounts reads it, a mounted one on the announcement.
+  // The suggestion goes into the session's draft (after a blank line when there is one); the prompt box reads it when it mounts.
   const pickSuggestion = (id: string, text: string) => {
-    flushDrafts(); // a mounted box saves what the user typed first
     const d = loadDraft(id);
     saveDraft(id, d ? `${d}\n\n${text}` : text);
-    announceDraft(id);
     onOpenSession(id);
   };
   const renderRow = (r: AttentionRow) => (

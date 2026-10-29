@@ -97,7 +97,7 @@ import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
-import { flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
+import { flushDrafts, useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -5023,22 +5023,6 @@ function PromptBox({
   const [bash, setBash] = useState(false);
   const stored = useMemo(() => expandPastes(text, prunePastes(text, pastes), "0000"), [text, pastes]);
   const dropDraft = useDraft(draftKey, stored, bash, initialText);
-  // GH-505: the Focus chip saves a draft for a box that exists already; the chip flushed the typed text first, so the stored draft contains it.
-  // A box in a hidden Activity has no listener (its effects are off), so it also reads the draft when its effects come back.
-  const storedNow = useRef(stored);
-  storedNow.current = stored;
-  useEffect(() => {
-    if (!draftKey) return;
-    const sync = () => {
-      const d = loadDraft(draftKey);
-      if (d === storedNow.current) return;
-      const p = collapsePasted(d);
-      setText(p.text);
-      setPastes(p.pastes);
-    };
-    sync();
-    return onDraftWritten(draftKey, sync);
-  }, [draftKey]);
   // Pastes stay while the box lives: a token that is cut, pasted back or undone must still find its text. Only a draft save and a send leave out the ones without a token; a send clears all.
   // The prompt box covers the dock's bottom 36px (OpenCode prompt lift), only when it directly follows the dock.
   const lift = !!todos && !blocked && !sendError && !images.length;

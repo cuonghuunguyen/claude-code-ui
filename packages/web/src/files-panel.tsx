@@ -670,13 +670,8 @@ export function FileTab({
   useEffect(() => {
     if (!focusKey || !loaded) return;
     if (!window.matchMedia?.("(pointer: fine)").matches) return onFocusTab();
-    let frames = 60;
-    // Until it sticks and no modal dialog is left: a closing one keeps the page behind it inert and its focus trap pulls the focus back (GH-504).
-    const focus = () => {
-      const v = viewRef.current;
-      v?.focus();
-      if ((document.activeElement !== v?.contentDOM || document.querySelector("[aria-modal=true]")) && frames-- > 0) requestAnimationFrame(focus);
-    };
+    let frames = 30;
+    const focus = () => (viewRef.current ? viewRef.current.focus() : frames-- > 0 && requestAnimationFrame(focus));
     requestAnimationFrame(focus);
   }, [focusKey, loaded]);
   if (!loaded)
