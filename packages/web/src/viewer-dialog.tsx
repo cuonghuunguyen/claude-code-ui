@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import type { EditorView } from "@codemirror/view";
 import type { FsMediaResult, FsReadResult } from "@claude-ui/protocol";
-import { Columns2Icon, RotateCwIcon, Rows2Icon, SquareArrowOutUpRightIcon, XIcon } from "lucide-react";
+import { Columns2Icon, ExternalLinkIcon, RotateCwIcon, Rows2Icon, SquareArrowOutUpRightIcon, XIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useNarrow } from "@/lib/use-narrow.ts";
@@ -18,7 +18,7 @@ import { CodeEditor } from "./files-panel.tsx";
 import { shownPrompt } from "./config-dialog.tsx";
 import { trapTab } from "./focus-trap.ts";
 import { MediaView } from "./media-view.tsx";
-import { relPath } from "./paths.ts";
+import { inDir, relPath } from "./paths.ts";
 import type { SessionView } from "./store.ts";
 import { CwdContext, InputDiff } from "./tool-card.tsx";
 import { callPath, type ViewerTarget } from "./viewer.ts";
@@ -43,6 +43,7 @@ export function ViewerDialog({
   ignoreSubmodules,
   onClose,
   onOpenInEditor,
+  onOpenInTab,
 }: {
   target: PopupTarget | undefined;
   opener?: HTMLElement | null;
@@ -56,6 +57,8 @@ export function ViewerDialog({
   onClose: () => void;
   /** Opens `path` in the Files tab (at `line`) and closes the viewer. */
   onOpenInEditor: (path: string, line?: number) => void;
+  /** Open in tab (GH-399; hidden when unset): the file as a main-area tab. */
+  onOpenInTab?: (path: string) => void;
 }) {
   // Keep the last target while the close transition runs, so the content does not vanish first.
   const last = useRef(target);
@@ -87,7 +90,7 @@ export function ViewerDialog({
         >
           {shown && (
             <CwdContext value={cwd}>
-              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpenInEditor={onOpenInEditor} />
+              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />
             </CwdContext>
           )}
         </Dialog.Popup>
@@ -119,11 +122,11 @@ export function DialogClose() {
   );
 }
 
-function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void }) {
+function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
   const text = title(target, cwd);
   switch (target.kind) {
     case "diff":
-      return <DiffBody client={client} call={target.call} onOpenInEditor={onOpenInEditor} header={(extra) => <Header text={text}>{extra}</Header>} />;
+      return <DiffBody client={client} cwd={cwd} call={target.call} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} header={(extra) => <Header text={text}>{extra}</Header>} />;
     case "plan":
       return (
         <>
@@ -153,18 +156,25 @@ type Loaded = { kind: "text"; doc: string } | { kind: "media"; media: FsMediaRes
 
 type HeaderFn = (extra: React.ReactNode) => React.ReactNode;
 
-/** Header button: the file in the Files tab (editable, with the tree), at `line` when the viewer shows one. */
-function OpenInFiles({ path, line, onOpen }: { path: string; line?: number; onOpen?: (path: string, line?: number) => void }) {
+/** Header buttons: the file in the Files tab (editable, with the tree), at `line` when the viewer shows one; and as a main-area tab (GH-399). */
+function OpenInFiles({ path, line, onOpen, onTab, cwd }: { path: string; line?: number; onOpen?: (path: string, line?: number) => void; onTab?: (path: string) => void; cwd: string }) {
   if (!onOpen) return null;
   return (
-    <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onOpen(path, line)} title="Open in Files tab" aria-label="Open in Files tab" data-testid="viewer-open-editor">
-      <SquareArrowOutUpRightIcon />
-    </Button>
+    <>
+      {onTab && inDir(path, cwd) && (
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onTab(path)} title="Open in tab" aria-label="Open in tab" data-testid="viewer-open-tab">
+          <ExternalLinkIcon />
+        </Button>
+      )}
+      <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onOpen(path, line)} title="Open in Files tab" aria-label="Open in Files tab" data-testid="viewer-open-editor">
+        <SquareArrowOutUpRightIcon />
+      </Button>
+    </>
   );
 }
 
 /** The file read-only: CodeMirror, or the media viewer for images, SVG, video and audio. A snapshot at open; Reload re-reads it. */
-function FileBody({ client, path, line, header, controls, onOpenInEditor }: { client: Client; path: string; line?: number; header: HeaderFn; controls?: React.ReactNode; onOpenInEditor?: (path: string, line?: number) => void }) {
+function FileBody({ client, cwd, path, line, header, controls, onOpenInEditor, onOpenInTab }: { client: Client; cwd: string; path: string; line?: number; header: HeaderFn; controls?: React.ReactNode; onOpenInEditor?: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
   const [reload, setReload] = useState(0);
   const [loaded, setLoaded] = useState<Loaded>();
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -197,7 +207,7 @@ function FileBody({ client, path, line, header, controls, onOpenInEditor }: { cl
       {header(
         <>
           {controls}
-          <OpenInFiles path={path} line={line} onOpen={onOpenInEditor} />
+          <OpenInFiles path={path} line={line} onOpen={onOpenInEditor} onTab={onOpenInTab} cwd={cwd} />
           {reloadButton}
         </>,
       )}
@@ -219,7 +229,7 @@ function FileBody({ client, path, line, header, controls, onOpenInEditor }: { cl
 }
 
 /** The call's diff; a switch shows the current file instead. */
-function DiffBody({ client, call, header, onOpenInEditor }: { client: Client; call: Extract<ViewerTarget, { kind: "diff" }>["call"]; header: HeaderFn; onOpenInEditor?: (path: string, line?: number) => void }) {
+function DiffBody({ client, cwd, call, header, onOpenInEditor, onOpenInTab }: { client: Client; cwd: string; call: Extract<ViewerTarget, { kind: "diff" }>["call"]; header: HeaderFn; onOpenInEditor?: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
   const [show, setShow] = useState<"diff" | "file">("diff");
   const [chosen, setChosen] = useState<DiffStyle>(loadStyle);
   const narrow = useNarrow();
@@ -260,14 +270,14 @@ function DiffBody({ client, call, header, onOpenInEditor }: { client: Client; ca
       ))}
     </div>
   );
-  if (show === "file") return <FileBody client={client} path={callPath(call)} header={header} controls={switcher} onOpenInEditor={onOpenInEditor} />;
+  if (show === "file") return <FileBody client={client} cwd={cwd} path={callPath(call)} header={header} controls={switcher} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />;
   return (
     <>
       {header(
         <>
           {switcher}
           {styles}
-          <OpenInFiles path={callPath(call)} onOpen={onOpenInEditor} />
+          <OpenInFiles path={callPath(call)} onOpen={onOpenInEditor} onTab={onOpenInTab} cwd={cwd} />
         </>,
       )}
       <div tabIndex={0} aria-label="Diff" className="min-h-0 flex-1 overflow-auto p-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">

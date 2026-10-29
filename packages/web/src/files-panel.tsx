@@ -7,13 +7,16 @@ import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
 import type { FsMediaResult } from "@claude-ui/protocol";
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { useContainerWidth } from "@/lib/use-container-width.ts";
 import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
+import { ITEM, POPUP } from "./session-actions.tsx";
+import { openContextMenuFromKey } from "./tab-menu.ts";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
@@ -57,6 +60,7 @@ export function FilesPanel({
   onShowGraph,
   openPath,
   openLine,
+  openFocus,
   onOpened,
   watch = [],
   showTree,
@@ -68,6 +72,10 @@ export function FilesPanel({
   suspended,
   onPopOut,
   onOpenInFiles,
+  onOpenTab,
+  onItem,
+  revealPath,
+  onRevealed,
   headerEnd,
   sync = true,
 }: {
@@ -88,6 +96,8 @@ export function FilesPanel({
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
+  /** With `openPath`: the editor takes the focus (an explicit open, #301). */
+  openFocus?: boolean;
   onOpened?: () => void;
   watch?: string[];
   /** The file tree's open state is the app's (Toggle file tree, kept per browser). */
@@ -107,28 +117,34 @@ export function FilesPanel({
   onPopOut?: () => void;
   /** Open in editor (dialog only, for a file inside `cwd`): close the dialog and show the Files tab. */
   onOpenInFiles?: () => void;
+  /** Open in tab (GH-399): the file as a main-area tab; offered for a file inside `cwd`. */
+  onOpenTab?: (path: string) => void;
+  /** A Files open of a path that is a file tab already: App focuses that tab (one place per file). */
+  onItem?: (path: string) => void;
+  /** Reveal in Files: the tree shows this file (a new `seq` reveals again). */
+  revealPath?: { path: string; seq: number; /** A folder (a breadcrumb click in a file tab). */ dir?: boolean };
+  /** The reveal request was carried out: the app clears it, so a later mount does not reveal it again. */
+  onRevealed?: () => void;
   headerEnd?: ReactNode;
   /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
   sync?: boolean;
 }) {
   const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
   const store = (editors ?? own)!;
-  const { tabs, activePath, gitNudge, sourceOnly, error, loading, goto } = useEditorStore(store);
+  const { tabs, activePath, gitNudge, error, loading } = useEditorStore(store);
   const [treeKey, setTreeKey] = useState(0);
   const [filtering, setFiltering] = useState(false);
   const tree = useRef<FileTreeHandle>(undefined);
-  const [mdView, setMdView] = useState<MdView>(loadMdView);
-  const narrow = useNarrow();
   const editor = store.view;
   const dialog = surface === "dialog";
   const update = store.update;
   const save = store.save;
   const close = store.close;
-  const open = (path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) => store.open(path, { cwd, ...opts });
+  const open = (path: string, opts: { preview?: boolean; line?: number; focusEditor?: boolean } = {}) => (store.get().tabs[path]?.item ? onItem?.(path) : store.open(path, { cwd, ...opts }));
 
   useEffect(() => {
     if (!openPath) return;
-    void open(openPath, { line: openLine });
+    void open(openPath, { line: openLine, focusEditor: openFocus });
     onOpened?.();
   }, [openPath]);
 
@@ -138,8 +154,7 @@ export function FilesPanel({
   const openRef = useRef(open);
   openRef.current = open;
   const openLink = useCallback((path: string, line?: number) => void openRef.current(path, { line }), []);
-  const imageUrl = useCallback((path: string) => client.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), [client]);
-  const shown = paths.filter((p) => inDir(p, cwd) || (dialog && tabs[p]!.outside));
+  const shown = paths.filter((p) => !tabs[p]!.item && (inDir(p, cwd) || (dialog && tabs[p]!.outside)));
   // The store has one global activePath: a view whose folder does not own it keeps the file it showed last.
   const lastShown = useRef<string>(undefined);
   const active = activePath && shown.includes(activePath) ? tabs[activePath] : lastShown.current && shown.includes(lastShown.current) ? tabs[lastShown.current] : tabs[shown[0]!];
@@ -173,29 +188,33 @@ export function FilesPanel({
   useEffect(() => {
     if (wide) setDrawer(false);
   }, [wide]);
-  const md = !!active && !active.media && isMarkdown(active.path);
-  /** Split needs room: below md it shows Preview. */
-  const view: MdView = !md ? "source" : sourceOnly === active!.path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
-  const previewDoc = useDeferredValue(active?.draft ?? "");
-  const previewBase = useMemo(() => ({ base: active ? active.path.slice(0, Math.max(active.path.length - baseName(active.path).length - 1, 1)) : cwd, root: cwd }), [active?.path, cwd]);
-  useEffect(() => editor.current?.requestMeasure(), [view]);
   /** Pop out in the Files tab, Open in editor in the file dialog (for a file inside `cwd`): the file view's way to the other place. */
-  const placeButton = !active ? null : dialog ? (
-    inDir(active.path, cwd) && onOpenInFiles && (
-      <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
-        <SquareArrowOutUpRightIcon /> Open in editor
-      </Button>
-    )
-  ) : (
-    onPopOut && (
-      <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
-        <Maximize2Icon />
-      </Button>
-    )
+  const tabButton = active && onOpenTab && inDir(active.path, cwd) && (
+    <Button size="icon-sm" variant="ghost" onClick={() => onOpenTab(active.path)} title="Open in tab" aria-label="Open in tab" className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
+      <ExternalLinkIcon />
+    </Button>
   );
-  const refused = active?.notice ? { path: active.path, text: active.notice, hint: active.noticeHint } : undefined;
+  const placeButton = !active ? null : dialog ? (
+    <>
+      {tabButton}
+      {inDir(active.path, cwd) && onOpenInFiles && (
+        <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
+          <SquareArrowOutUpRightIcon /> Open in editor
+        </Button>
+      )}
+    </>
+  ) : (
+    <>
+      {tabButton}
+      {onPopOut && (
+        <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
+          <Maximize2Icon />
+        </Button>
+      )}
+    </>
+  );
   // No file open: the tree takes the whole panel (both layouts); with a file it is beside the editor, or a drawer over it when narrow.
-  const empty = !refused && !active;
+  const empty = !active;
   const treeShown = wide ? showTree : drawer || empty;
   const overlay = treeShown && !wide && !empty;
   const closeDrawer = (refocus?: boolean) => {
@@ -218,13 +237,19 @@ export function FilesPanel({
   const toggleTree = () => (wide ? onToggleTree() : setDrawer((d) => !d));
 
   /** Breadcrumb folder: show the tree, then reveal the folder in it. */
-  function revealFolder(dir: string) {
+  function revealFolder(dir: string, isDir = true) {
     if (!wide) {
       folderReveal.current = true;
       setDrawer(true);
     } else if (!showTree) onToggleTree();
-    requestAnimationFrame(() => void tree.current?.reveal(dir, true, true));
+    requestAnimationFrame(() => void tree.current?.reveal(dir, true, isDir));
   }
+  // Reveal in Files (GH-399): the tree shows the file of a tab.
+  useEffect(() => {
+    if (!revealPath) return;
+    revealFolder(revealPath.path, !!revealPath.dir);
+    onRevealed?.();
+  }, [revealPath?.seq]);
 
   const treeNav = (
     <nav
@@ -246,6 +271,7 @@ export function FilesPanel({
             onFilter={setFiltering}
             onCopy={onCopy}
             onViewer={dialog ? undefined : onViewer}
+            onOpenTab={onOpenTab && ((p) => (inDir(p, cwd) ? onOpenTab(p) : undefined))}
             onShowChanges={onShowChanges}
             repos={repos}
             onShowGraph={onShowGraph}
@@ -355,36 +381,66 @@ export function FilesPanel({
           {shown.map((p) => {
             const t = tabs[p]!;
             return (
-              <div
-                key={p}
-                role="tab"
-                aria-selected={t === active}
-                data-testid="editor-tab"
-                className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
-                title={p}
-              >
-                <button
-                  className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
-                  aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
-                  onClick={() => store.setActive(p)}
-                  onDoubleClick={() => update(p, pin)}
-                  onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+              <ContextMenu.Root key={p}>
+                <ContextMenu.Trigger
+                  render={
+                    <div
+                      role="tab"
+                      aria-selected={t === active}
+                      data-testid="editor-tab"
+                      className={cn("flex shrink-0 items-center gap-1.5 pl-2 text-muted-foreground hover:bg-accent hover:text-foreground", t === active && "bg-secondary text-foreground")}
+                      title={p}
+                      onKeyDown={(e) => openContextMenuFromKey(e, e.currentTarget)}
+                    />
+                  }
                 >
-                  <FileIcon path={p} className="size-4 shrink-0" />
-                  <span>
-                    {baseName(p)}
-                    {isDirty(t) && <span aria-label="unsaved"> ●</span>}
-                    {t.conflict && <span className="text-warning"> !</span>}
-                  </span>
-                </button>
-                <button
-                  className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
-                  onClick={() => close(p)}
-                  aria-label={`Close ${baseName(p)}`}
-                >
-                  ×
-                </button>
-              </div>
+                  <button
+                    className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
+                    aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
+                    onClick={() => store.setActive(p)}
+                    onDoubleClick={() => update(p, pin)}
+                    onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
+                  >
+                    <FileIcon path={p} className="size-4 shrink-0" />
+                    <span>
+                      {baseName(p)}
+                      {isDirty(t) && <span aria-label="unsaved"> ●</span>}
+                      {t.conflict && <span className="text-warning"> !</span>}
+                    </span>
+                  </button>
+                  <button
+                    className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
+                    onClick={() => close(p)}
+                    aria-label={`Close ${baseName(p)}`}
+                  >
+                    ×
+                  </button>
+                </ContextMenu.Trigger>
+                <ContextMenu.Portal>
+                  <ContextMenu.Positioner className="z-50">
+                    <ContextMenu.Popup className={POPUP} data-testid="editor-tab-menu">
+                      {onOpenTab && inDir(p, cwd) && (
+                        <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-openTab" onClick={() => onOpenTab(p)}>
+                          Open in tab
+                        </ContextMenu.Item>
+                      )}
+                      <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-close" onClick={() => close(p)}>
+                        Close
+                      </ContextMenu.Item>
+                      {onCopy && (
+                        <>
+                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyPath" onClick={() => onCopy(p, "path")}>
+                            Copy path
+                          </ContextMenu.Item>
+                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyRel" onClick={() => onCopy(relPath(p, cwd), "relative path")}>
+                            Copy relative path
+                          </ContextMenu.Item>
+                        </>
+                      )}
+                    </ContextMenu.Popup>
+                  </ContextMenu.Positioner>
+                </ContextMenu.Portal>
+              </ContextMenu.Root>
             );
           })}
         </div>
@@ -403,50 +459,98 @@ export function FilesPanel({
         <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
           Loading file…
         </p>
-      ) : refused ? (
-        <>
-        {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
-        <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
-          <FileIcon path={refused.path} className="mb-1 size-8" />
-          <div className="w-full max-w-full text-xs">
-            <Breadcrumb path={refused.path} cwd={cwd} onFolder={revealFolder} />
-          </div>
-          <span className="text-foreground text-sm">{refused.text}</span>
-          {refused.hint && <span className="text-muted-foreground text-xs">{refused.hint}</span>}
-        </div>
-        </>
       ) : active ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {active.conflict && (
-            <div
-              className="flex flex-wrap items-center gap-2 border-b bg-warning/10 px-2 py-1.5 text-xs"
-              role="alert"
-              data-testid="editor-conflict"
-            >
-              <span className="flex-1">Changed on disk while you have unsaved edits.</span>
-              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => store.reload(active.path)}>
-                Reload from disk
-              </Button>
-              <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => void save(active.path, true)}>
-                Overwrite with mine
-              </Button>
-            </div>
-          )}
-          {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
-          {active.media ? (
-            <>
-              {placeButton && <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">{placeButton}</div>}
-              <MediaView
-                key={active.media.url}
-                path={active.path}
-                media={active.media}
-                onShowSource={mediaKind(active.path) === "svg" ? () => void store.switchView(active.path, true) : undefined}
-              />
-            </>
-          ) : (
-            <>
+        <FileEditor store={store} path={active.path} cwd={cwd} client={client} viewRef={editor} onSend={onSend} onFolder={revealFolder} onLink={openLink} place={placeButton} />
+      ) : (
+        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
+      )}
+      </div>
+      </div>
+    </div>
+  );
+}
+
+/** The editor body of one file tab: conflict bar, error, notice, media, header (breadcrumb, markdown view, Send selection, Save, `place`), CodeEditor, markdown preview. Files panel, file dialog and the file tab show it. */
+export function FileEditor({
+  store,
+  path,
+  cwd,
+  client,
+  viewRef,
+  onSend,
+  onFolder,
+  onLink,
+  place,
+}: {
+  store: EditorStore;
+  path: string;
+  cwd: string;
+  client: Client;
+  /** The mounted CodeEditor's view (Send selection reads it); one ref per mounted editor. */
+  viewRef: RefObject<EditorView | undefined>;
+  onSend: (mention: string) => void;
+  /** A breadcrumb folder was clicked. */
+  onFolder: (dir: string) => void;
+  /** A link of the markdown preview to a file. */
+  onLink: (path: string, line?: number) => void;
+  /** The header's last button(s): Pop out, Open in editor, Move to Files. */
+  place?: ReactNode;
+}) {
+  const { tabs, sourceOnly, goto } = useEditorStore(store);
+  const active = tabs[path];
+  const [mdView, setMdView] = useState<MdView>(loadMdView);
+  const narrow = useNarrow();
+  const imageUrl = useCallback((p: string) => client.request<FsMediaResult>({ type: "fs.media", path: p }).then((m) => m.url), [client]);
+  const md = !!active && !active.media && isMarkdown(path);
+  /** Split needs room: below md it shows Preview. */
+  const view: MdView = !md ? "source" : sourceOnly === path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
+  const previewDoc = useDeferredValue(active?.draft ?? "");
+  const previewBase = useMemo(() => ({ base: path.slice(0, Math.max(path.length - baseName(path).length - 1, 1)), root: cwd }), [path, cwd]);
+  useEffect(() => viewRef.current?.requestMeasure(), [view]);
+  if (!active) return null;
+  const { save, update } = store;
+  const placeHeader = place && (
+    <div className="flex min-h-10 shrink-0 items-center justify-end border-b px-3 py-1" data-testid="file-path-header">
+      {place}
+    </div>
+  );
+  if (active.notice)
+    return (
+      <>
+        {placeHeader}
+        <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
+          <FileIcon path={path} className="mb-1 size-8" />
+          <div className="w-full max-w-full text-xs">
+            <Breadcrumb path={path} cwd={cwd} onFolder={onFolder} />
+          </div>
+          <span className="text-foreground text-sm">{active.notice}</span>
+          {active.noticeHint && <span className="text-muted-foreground text-xs">{active.noticeHint}</span>}
+        </div>
+      </>
+    );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {active.conflict && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-warning/10 px-2 py-1.5 text-xs" role="alert" data-testid="editor-conflict">
+          <span className="flex-1">Changed on disk while you have unsaved edits.</span>
+          <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => store.reload(path)}>
+            Reload from disk
+          </Button>
+          <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => void save(path, true)}>
+            Overwrite with mine
+          </Button>
+        </div>
+      )}
+      {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
+      {active.media ? (
+        <>
+          {placeHeader}
+          <MediaView key={active.media.url} path={path} media={active.media} onShowSource={mediaKind(path) === "svg" ? () => void store.switchView(path, true) : undefined} />
+        </>
+      ) : (
+        <>
           <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1 text-xs" data-testid="file-path-header">
-            <Breadcrumb path={active.path} cwd={cwd} onFolder={revealFolder} />
+            <Breadcrumb path={path} cwd={cwd} onFolder={onFolder} />
             {md && (
               <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
                 {(narrow ? (["source", "preview"] as const) : (["source", "preview", "split"] as const)).map((m) => (
@@ -464,8 +568,8 @@ export function FilesPanel({
                 ))}
               </div>
             )}
-            {mediaKind(active.path) === "svg" && (
-              <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void store.switchView(active.path, false)} className="max-md:h-11 pointer-coarse:h-11">
+            {mediaKind(path) === "svg" && (
+              <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void store.switchView(path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 Show preview
               </Button>
             )}
@@ -474,32 +578,32 @@ export function FilesPanel({
               size="xs"
               variant="outline"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => editor.current && onSend(selectionMention(editor.current.state, active.path, cwd))}
+              onClick={() => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd))}
               className="max-md:h-11 pointer-coarse:h-11"
               title="Insert the file and selected lines into the prompt box (Alt+K, Option+K on macOS)"
               data-testid="send-selection"
             >
               Send selection to Claude
             </Button>
-            <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(active.path)} data-testid="editor-save">
+            <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(path)} data-testid="editor-save">
               Save
             </Button>
-            {placeButton}
+            {place}
           </div>
           <div className="flex min-h-0 flex-1">
             <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
-          <CodeEditor
-            key={active.path}
-            store={store}
-            path={active.path}
-            doc={active.draft}
-            viewRef={editor}
-            onSend={(state) => onSend(selectionMention(state, active.path, cwd))}
-            onChange={(draft) => update(active.path, (t) => ({ ...pin(t), draft }))}
-            goto={goto?.path === active.path ? goto : undefined}
-            onGoto={store.clearGoto}
-            onSave={() => void save(active.path)}
-          />
+              <CodeEditor
+                key={path}
+                store={store}
+                path={path}
+                doc={active.draft}
+                viewRef={viewRef}
+                onSend={(state) => onSend(selectionMention(state, path, cwd))}
+                onChange={(draft) => update(path, (t) => ({ ...pin(t), draft }))}
+                goto={goto?.path === path ? goto : undefined}
+                onGoto={store.clearGoto}
+                onSave={() => void save(path)}
+              />
             </div>
             {md && view !== "source" && (
               <div
@@ -509,7 +613,7 @@ export function FilesPanel({
                 className={`min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === "split" ? "border-l" : ""}`}
               >
                 <FileBaseContext value={previewBase}>
-                  <FileLinkContext value={openLink}>
+                  <FileLinkContext value={onLink}>
                     <FileImageContext value={imageUrl}>
                       <MessageResponse mode="static" tableMaxHeight={0} {...FILE_LINK_PROPS}>
                         {previewDoc}
@@ -520,15 +624,77 @@ export function FilesPanel({
               </div>
             )}
           </div>
-            </>
-          )}
-        </div>
-      ) : (
-        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
+        </>
       )}
-      </div>
-      </div>
     </div>
+  );
+}
+
+/**
+ * One file as a main-area tab (GH-399): the editor of `path` on the shared store, the tab is an item (kept out of Files). On a reload the store has no tab yet: it reads the file.
+ * `focusKey`: a new value focuses the editor with a fine pointer, else calls `onFocusTab` (the strip tab: no keyboard on a touch screen).
+ */
+export function FileTab({
+  store,
+  path,
+  cwd,
+  client,
+  focusKey,
+  onSend,
+  onFolder,
+  onLink,
+  onMoveToFiles,
+  onFocusTab,
+}: {
+  store: EditorStore;
+  path: string;
+  cwd: string;
+  client: Client;
+  focusKey?: number;
+  onSend: (mention: string) => void;
+  onFolder: (dir: string) => void;
+  onLink: (path: string, line?: number) => void;
+  onMoveToFiles: (path: string) => void;
+  onFocusTab: () => void;
+}) {
+  const { tabs, error } = useEditorStore(store);
+  const viewRef = useRef<EditorView>(undefined);
+  const loaded = !!tabs[path];
+  useEffect(() => {
+    const t = store.get().tabs[path];
+    // Reopen closed tab after Move to Files: the store tab is a Files tab again and must leave Files.
+    if (!t) void store.open(path, { cwd, item: true });
+    else if (!t.item) store.toItem(path);
+  }, [path]);
+  useEffect(() => {
+    if (!focusKey || !loaded) return;
+    if (!window.matchMedia?.("(pointer: fine)").matches) return onFocusTab();
+    let frames = 30;
+    const focus = () => (viewRef.current ? viewRef.current.focus() : frames-- > 0 && requestAnimationFrame(focus));
+    requestAnimationFrame(focus);
+  }, [focusKey, loaded]);
+  if (!loaded)
+    return (
+      <p className={cn("m-auto p-4 text-sm", error ? "text-destructive" : "text-muted-foreground")} role="status" data-testid="file-tab-loading">
+        {error ?? "Loading file…"}
+      </p>
+    );
+  return (
+    <FileEditor
+      store={store}
+      path={path}
+      cwd={cwd}
+      client={client}
+      viewRef={viewRef}
+      onSend={onSend}
+      onFolder={onFolder}
+      onLink={onLink}
+      place={
+        <Button size="icon-sm" variant="ghost" onClick={() => onMoveToFiles(path)} title="Move to Files" aria-label="Move to Files" className="max-md:size-11 pointer-coarse:size-11" data-testid="file-tab-to-files">
+          <FolderInputIcon />
+        </Button>
+      }
+    />
   );
 }
 

@@ -86,3 +86,18 @@ it("GH-396 a Git graph tab menu says Move Git graph to side / bottom panel and h
   expect(note.label).toBe("Git graph needs the whole area");
   expect(note.testId).toBe("tab-menu-splitNote");
 });
+
+it("GH-399 an item tab: no move to a dock, Move to Files, copy paths and Reveal in Files, then Go to session and split", () => {
+  const sections = tabMenuSections({ ...all, pinned: undefined, pane: { label: "File", item: true }, split: { can: true } });
+  expect(sections.map((s) => s.map((x) => x.id))).toEqual([
+    ["moveLeft", "moveRight"],
+    ["close", "closeOthers", "closeRight", "closeAll", "reopen"],
+    ["moveToFiles", "copyPath", "copyRel", "revealInFiles"],
+    ["goToSession"],
+    ["splitRight", "splitDown"],
+  ]);
+  const flat = sections.flat();
+  expect(flat.find((e) => e.id === "moveToFiles")!.label).toBe("Move to Files");
+  expect(flat.map((e) => e.id)).not.toContain("moveSide");
+  expect(tabMenuSections({ ...all, pane: { label: "File", item: true }, split: { can: true } })[2]!.map((e) => e.id)).toEqual(["pin"]);
+});

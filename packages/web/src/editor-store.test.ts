@@ -131,3 +131,48 @@ it("save writes the draft, clears dirty and bumps the git nudge", async () => {
   expect(store.get().tabs["/p/a.ts"]!.disk).toBe("new");
   expect(store.get().gitNudge).toBe(nudge + 1);
 });
+
+it("GH-399 toItem pins, keeps the draft and the parked state, and Files' active moves to its next tab", async () => {
+  const { store } = setup();
+  await store.open("/p/a.ts", { cwd: "/p", preview: false });
+  await store.open("/p/b.ts", { cwd: "/p", preview: false });
+  store.update("/p/b.ts", (t) => ({ ...t, draft: "edited" }));
+  const st = EditorState.create({ doc: "edited" });
+  store.park("/p/b.ts", st);
+  store.toItem("/p/b.ts");
+  expect(store.get().tabs["/p/b.ts"]).toMatchObject({ item: true, draft: "edited" });
+  expect(store.get().tabs["/p/b.ts"]!.preview).toBeUndefined();
+  expect(store.get().activePath).toBe("/p/a.ts");
+  expect(store.takeParked("/p/b.ts")).toBe(st);
+});
+
+it("GH-399 toFiles clears item and makes the tab Files' active one", async () => {
+  const { store } = setup();
+  await store.open("/p/a.ts", { cwd: "/p", preview: false, item: true });
+  store.toFiles("/p/a.ts");
+  expect(store.get().tabs["/p/a.ts"]!.item).toBeUndefined();
+  expect(store.get().activePath).toBe("/p/a.ts");
+});
+
+it("GH-399 open({item}) creates a pinned item tab and never takes the preview slot", async () => {
+  const { store } = setup();
+  await store.open("/p/a.ts", { cwd: "/p" });
+  await store.open("/p/b.ts", { cwd: "/p", item: true });
+  expect(store.get().tabs["/p/b.ts"]).toMatchObject({ item: true });
+  expect(store.get().tabs["/p/b.ts"]!.preview).toBeUndefined();
+  expect(store.get().tabs["/p/a.ts"]!.preview).toBe(true);
+  await store.open("/p/c.md", { cwd: "/p" });
+  expect(Object.keys(store.get().tabs)).toEqual(["/p/c.md", "/p/b.ts"]);
+});
+
+it("GH-399 discard drops tabs without asking, also dirty ones", async () => {
+  const { store } = setup();
+  const ask = vi.spyOn(globalThis, "confirm").mockReturnValue(false);
+  await store.open("/p/a.ts", { cwd: "/p", preview: false });
+  await store.open("/p/b.ts", { cwd: "/p", preview: false });
+  store.update("/p/a.ts", (t) => ({ ...t, draft: "x" }));
+  store.discard(["/p/a.ts", "/p/b.ts"]);
+  expect(Object.keys(store.get().tabs)).toEqual([]);
+  expect(ask).not.toHaveBeenCalled();
+  ask.mockRestore();
+});

@@ -2,19 +2,19 @@
 import type { FsEntry, GitRepo } from "@claude-ui/protocol";
 
 export type TreeTarget = { kind: "file"; entry: FsEntry; changed: boolean } | { kind: "dir"; entry: FsEntry; expanded: boolean; /** A listed, readable repository whose folder this is. */ repo?: GitRepo } | { kind: "root" };
-export type TreeCommand = "open" | "viewer" | "changes" | "repoChanges" | "repoGraph" | "mention" | "copyPath" | "copyRel" | "rename" | "duplicate" | "delete" | "newFile" | "newFolder" | "collapse" | "refresh";
+export type TreeCommand = "open" | "openTab" | "viewer" | "changes" | "repoChanges" | "repoGraph" | "mention" | "copyPath" | "copyRel" | "rename" | "duplicate" | "delete" | "newFile" | "newFolder" | "collapse" | "refresh";
 export type TreeMenuEntry = { id: TreeCommand; label: string; disabled?: boolean; destructive?: boolean; /** Shown right-aligned. */ shortcut?: string; /** `aria-keyshortcuts`. */ keys?: string; testId: string };
 
 const item = (id: TreeCommand, label: string, extra: Partial<TreeMenuEntry> = {}): TreeMenuEntry => ({ id, label, testId: `tree-menu-${id}`, ...extra });
 
 /** Sections of the menu, a separator between sections (VS Code's explorer order). "Open to the side" slots in after Open once the split view (#356) exists. */
-export function treeMenuSections(t: TreeTarget, mac: boolean, viewer = true, graph = false): TreeMenuEntry[][] {
+export function treeMenuSections(t: TreeTarget, mac: boolean, viewer = true, graph = false, tab = true): TreeMenuEntry[][] {
   const rename = item("rename", "Rename…", { shortcut: "F2", keys: "F2" });
   const del = item("delete", "Delete…", { shortcut: mac ? "⌘⌫" : "Del", keys: mac ? "Meta+Backspace Delete" : "Delete", destructive: true });
   const copy = [item("copyPath", "Copy path"), item("copyRel", "Copy relative path")];
   if (t.kind === "file")
     return [
-      [item("open", "Open"), ...(viewer ? [item("viewer", "Open in file dialog")] : []), ...(t.changed ? [item("changes", "Show changes")] : [])],
+      [item("open", "Open"), ...(tab ? [item("openTab", "Open in tab")] : []), ...(viewer ? [item("viewer", "Open in file dialog")] : []), ...(t.changed ? [item("changes", "Show changes")] : [])],
       [item("mention", "Add to prompt"), ...copy],
       [rename, item("duplicate", "Duplicate"), del],
     ];

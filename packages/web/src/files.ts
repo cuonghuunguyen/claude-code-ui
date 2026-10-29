@@ -24,6 +24,8 @@ export type Tab = {
   media?: FsMediaResult;
   /** Opened from the timeline from outside the session folder: the file dialog lists it, the Files tab does not. */
   outside?: boolean;
+  /** GH-399: the file shows in its own main-area tab, not in Files; never a preview. */
+  item?: boolean;
 };
 
 export const openedMedia = (path: string, m: FsMediaResult): Tab => ({ path, disk: "", draft: "", mtime: m.mtime, media: m });

@@ -8,19 +8,22 @@ import { isImeKey } from "./ime.ts";
 const mod = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 export const quickOpenLabel = `Search files (${mod}P)`;
 
-/** Paths are relative to the session cwd, best first. Enter opens the active file; Ctrl/Cmd+Enter or a row's @ button inserts `@path`.
+/** Paths are relative to the session cwd, best first. Enter opens the active file (Alt+Enter or a middle click: as a tab); Ctrl/Cmd+Enter or a row's @ button inserts `@path`.
  * Not `connected`, it says so and searches once the daemon is back; a failed search offers Retry (button or Enter). */
 export function QuickOpen({
   connected,
   onSearch,
   onOpen,
   onMention,
+  onOpenTab,
   onClose,
 }: {
   connected: boolean;
   onSearch: (query: string) => Promise<string[]>;
   onOpen: (path: string) => void;
   onMention: (path: string) => void;
+  /** Alt+Enter or a middle click on a row (GH-399): the file as a main-area tab. */
+  onOpenTab?: (path: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -53,7 +56,7 @@ export function QuickOpen({
     const keys: Record<string, () => void> = {
       ArrowDown: () => n && setActive((i) => (i + 1) % n),
       ArrowUp: () => n && setActive((i) => (i - 1 + n) % n),
-      Enter: () => (pick ? (e.ctrlKey || e.metaKey ? onMention(pick) : onOpen(pick)) : canRetry && retry()),
+      Enter: () => (pick ? (e.ctrlKey || e.metaKey ? onMention(pick) : e.altKey && onOpenTab ? onOpenTab(pick) : onOpen(pick)) : canRetry && retry()),
       Escape: onClose,
       Tab: () => {}, // the search box is the only focus stop
     };
@@ -132,6 +135,8 @@ export function QuickOpen({
                   // Mouse movement, not a row scrolling under a still pointer, picks the active row.
                   onMouseMove={() => i !== active && setActive(i)}
                   onClick={() => onOpen(p)}
+                  onMouseDown={(e) => e.button === 1 && onOpenTab && e.preventDefault()}
+                  onAuxClick={(e) => e.button === 1 && onOpenTab && (e.preventDefault(), onOpenTab(p))}
                 >
                   <FileIcon path={p} className="size-4 shrink-0" />
                   <span className="flex min-w-0 flex-1 leading-4 font-normal">

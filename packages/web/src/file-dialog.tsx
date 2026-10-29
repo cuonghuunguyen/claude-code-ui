@@ -33,6 +33,8 @@ export function FileDialog({
   repos,
   onShowGraph,
   onOpenInFiles,
+  onOpenTab,
+  onItem,
 }: {
   open: boolean;
   /** The element focused when the dialog opened; focus returns to it on close, else to the prompt box. */
@@ -51,6 +53,10 @@ export function FileDialog({
   onShowGraph?: () => void;
   /** Open in editor: close the dialog and show the Files tab. */
   onOpenInFiles: () => void;
+  /** Open in tab (GH-399): the caller closes the dialog and opens the file as a main-area tab. */
+  onOpenTab?: (path: string) => void;
+  /** A path that is a file tab already: the caller closes the dialog and focuses that tab. */
+  onItem?: (path: string) => void;
 }) {
   // App clears the opener with the dialog, and Base UI asks finalFocus after that render.
   const lastOpener = useRef(opener);
@@ -93,6 +99,8 @@ export function FileDialog({
               repos={repos}
               onShowGraph={onShowGraph}
               onOpenInFiles={onOpenInFiles}
+              onOpenTab={onOpenTab}
+              onItem={onItem}
               showTree={showTree}
               onToggleTree={() => setShowTree((v) => !v)}
               gitStamp={gitStamp}

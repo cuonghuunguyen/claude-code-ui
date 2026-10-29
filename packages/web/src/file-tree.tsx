@@ -40,7 +40,7 @@ const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-inf
 
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
-const MOVES_FOCUS = new Set<TreeCommand>(["open", "viewer", "changes", "repoChanges", "repoGraph", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
+const MOVES_FOCUS = new Set<TreeCommand>(["open", "openTab", "viewer", "changes", "repoChanges", "repoGraph", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
 
 const parentOf = (p: string) => {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
@@ -174,6 +174,7 @@ export function FileTree({
   onOpen,
   onCopy,
   onViewer,
+  onOpenTab,
   onShowChanges,
   repos,
   onShowGraph,
@@ -202,6 +203,8 @@ export function FileTree({
   onCopy?: (text: string, what: string) => void;
   /** Open in file dialog (hidden when unset). */
   onViewer?: (path: string) => void;
+  /** Open in tab (GH-399; hidden when unset): the file as a main-area tab. Middle click on a file row does the same. */
+  onOpenTab?: (path: string) => void;
   /** Show changes (a file with a git mark). */
   onShowChanges?: (path: string) => void;
   /** The repositories of the cwd (`git.repos`): the marks are read per repository. Unset: one `git.diff` of the cwd. */
@@ -542,6 +545,8 @@ export function FileTree({
         return void startNew(path, true);
       case "open":
         return onOpen(path, { pinned: true, focusEditor: true });
+      case "openTab":
+        return onOpenTab?.(path);
       case "viewer":
         return onViewer?.(path);
       case "changes": {
@@ -710,6 +715,8 @@ export function FileTree({
               onFocus={() => setFocused(entry.path)}
               onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
               onDoubleClick={() => !entry.isDir && onOpen(entry.path, { pinned: true })}
+              onMouseDown={(e) => e.button === 1 && !entry.isDir && onOpenTab && e.preventDefault()}
+              onAuxClick={(e) => e.button === 1 && !entry.isDir && onOpenTab && (e.preventDefault(), onOpenTab(entry.path))}
                           >
               {entry.isDir ? (
                 <ChevronRightIcon className={`size-3.5 shrink-0 text-faint transition-transform motion-reduce:transition-none ${r.expanded ? "rotate-90" : ""}`} aria-hidden />
@@ -779,7 +786,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (

@@ -48,7 +48,7 @@ const click = (sel: string | HTMLElement) => act(async () => ((typeof sel === "s
 const dlg = () => q("[data-testid=file-dialog]");
 
 /** The Files tab and the file dialog on one store, as App wires them. */
-function Harness(p: { client: ReturnType<typeof fakeClient>; store: ReturnType<typeof createEditorStore>; onSend?: (m: string) => void; onOpenInFiles?: () => void; startOpen?: boolean }) {
+function Harness(p: { client: ReturnType<typeof fakeClient>; store: ReturnType<typeof createEditorStore>; onSend?: (m: string) => void; onOpenInFiles?: () => void; onOpenTab?: (path: string) => void; startOpen?: boolean }) {
   const [open, setOpen] = useState(!!p.startOpen);
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   return (
@@ -56,7 +56,7 @@ function Harness(p: { client: ReturnType<typeof fakeClient>; store: ReturnType<t
       <div data-testid="side">
         <FilesPanel client={p.client} status="connected" cwd="/p" onSend={p.onSend ?? (() => {})} showTree={false} onToggleTree={() => {}} editors={p.store} suspended={open} onPopOut={() => (setOpener(document.activeElement instanceof HTMLElement ? document.activeElement : null), setOpen(true))} />
       </div>
-      <FileDialog open={open} opener={opener} client={p.client} status="connected" cwd="/p" store={p.store} onClose={() => setOpen(false)} onSend={(m) => (setOpen(false), p.onSend?.(m))} onOpenInFiles={() => (setOpen(false), p.onOpenInFiles?.())} />
+      <FileDialog open={open} opener={opener} client={p.client} status="connected" cwd="/p" store={p.store} onClose={() => setOpen(false)} onSend={(m) => (setOpen(false), p.onSend?.(m))} onOpenInFiles={() => (setOpen(false), p.onOpenInFiles?.())} onOpenTab={p.onOpenTab && ((path) => (setOpen(false), p.onOpenTab!(path)))} />
     </>
   );
 }
@@ -288,4 +288,19 @@ it("the restored editor scrolls its cursor into view", async () => {
   const effects = spy.mock.calls.flatMap((c) => ((c[0] as { effects?: unknown })?.effects ? [(c[0] as { effects: unknown }).effects].flat() : [])) as { value?: { range?: { head: number } } }[];
   spy.mockRestore();
   expect(effects.some((e) => e.value?.range?.head === head)).toBe(true);
+});
+
+it("GH-399 the dialog's Open in tab shows for a file inside cwd, next to Open in editor, and calls onOpenTab", async () => {
+  const onOpenTab = vi.fn();
+  const { store } = await setup({ onOpenTab });
+  await openTab(store, "/p/a.ts");
+  await openTab(store, "/o/out.ts", { outside: true });
+  await click("[data-testid=files-popout]");
+  await flush();
+  await click(tabButton(dlg()!, 1));
+  expect(q("[data-testid=open-in-tab]", dlg()!)).toBeNull();
+  await click(tabButton(dlg()!, 0));
+  await click("[data-testid=open-in-tab]");
+  expect(onOpenTab).toHaveBeenCalledWith("/p/a.ts");
+  expect(dlg()).toBeNull();
 });

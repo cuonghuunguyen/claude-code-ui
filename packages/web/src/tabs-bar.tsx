@@ -20,6 +20,7 @@ import { ROW_SWIPE, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
+import { FileIcon } from "./file-icon.tsx";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -40,6 +41,8 @@ export type TabInfo = {
   titleLoading?: boolean;
   /** A pane tab (GH-395: `plan:<session>`): its kind's icon, no session state, a pane tab menu. */
   kind?: PaneKind;
+  /** A file tab (GH-399): its absolute path (icon by file type, tooltip). */
+  path?: string;
 };
 type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 
@@ -69,7 +72,8 @@ export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }
   );
 }
 
-function TabIcon({ s, cwd, kind }: { s: TabStatus; cwd?: string; kind?: PaneKind }) {
+function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; kind?: PaneKind; path?: string }) {
+  if (kind === "file" && path) return <FileIcon path={path} className="size-4 shrink-0" />;
   if (kind === "plan") return <ListTodoIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
@@ -438,7 +442,7 @@ export function TabsBar({
                 const label = stateNote(t) || STATUS_LABEL[status(id, t)];
                 return (
                   <SwipeRow key={id} id={id} swiped={swiped} onClose={onSwipeClose ?? onClose}>
-                    <TabIcon s={status(id, t)} cwd={t.cwd} kind={t.kind} />
+                    <TabIcon s={status(id, t)} cwd={t.cwd} kind={t.kind} path={t.path} />
                     <span className="flex min-w-0 flex-1 flex-col">
                       {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate">{t.title}</span>}
                       {place(t) && <span className="truncate text-muted-foreground text-xs leading-4">{place(t)}</span>}
@@ -872,7 +876,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
             rows.onClose(id);
           }}
         >
-          <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
+          <TabIcon s={s} cwd={t.cwd} kind={t.kind} path={t.path} />
           {t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className={cn("min-w-0 flex-1 truncate", id === rows.activeId && "font-medium")}>{t.title}</span>}
           {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
         </Menu.Item>
@@ -1148,11 +1152,11 @@ function Tab({
         data-testid="tab"
         data-tab-id={id}
         data-state={s}
-        title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.worktree, t.cwd].filter(Boolean).join("\n")}
+        title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.worktree, t.path ?? t.cwd].filter(Boolean).join("\n")}
       >
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} path={t.path} />
             <RenameInput title={t.title} onDone={onRenamed} fromMenu={menuRename} />
           </div>
         ) : (
@@ -1172,7 +1176,7 @@ function Tab({
             // OpenCode: double click on the title renames.
             onDoubleClick={() => session && t.transcript !== false && onAction("rename-inline")}
           >
-            <TabIcon s={s} cwd={t.cwd} kind={t.kind} />
+            <TabIcon s={s} cwd={t.cwd} kind={t.kind} path={t.path} />
             {splitDir && !pinned && (splitDir === "row" ? <Columns2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" /> : <Rows2Icon aria-hidden className="size-3 shrink-0 text-muted-foreground" data-testid="tab-split-mark" />)}
             {!pinned && (t.titleLoading ? <TitleSkeleton title={t.title} /> : <span className="truncate leading-4">{t.title}</span>)}
           </button>
@@ -1196,7 +1200,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind] } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

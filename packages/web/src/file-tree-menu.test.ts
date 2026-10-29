@@ -7,15 +7,15 @@ const ids = (s: ReturnType<typeof treeMenuSections>) => s.map((x) => x.map((e) =
 
 describe("treeMenuSections (GH-360)", () => {
   it("a file: open, prompt and copy, change", () => {
-    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "viewer"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
+    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "openTab", "viewer"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
   });
   it("the file dialog item is named so and left out where there is no dialog", () => {
     const t = { kind: "file", entry: file, changed: false } as const;
     expect(treeMenuSections(t, false)[0]!.find((e) => e.id === "viewer")!.label).toBe("Open in file dialog");
-    expect(ids(treeMenuSections(t, false, false))[0]).toEqual(["open"]);
+    expect(ids(treeMenuSections(t, false, false))[0]).toEqual(["open", "openTab"]);
   });
   it("Show changes only for a changed file", () => {
-    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: true }, false))[0]).toEqual(["open", "viewer", "changes"]);
+    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: true }, false))[0]).toEqual(["open", "openTab", "viewer", "changes"]);
   });
   it("a folder: new, copy, change, collapse (disabled when collapsed)", () => {
     const s = treeMenuSections({ kind: "dir", entry: dir, expanded: false }, false);
@@ -65,4 +65,11 @@ describe("GH-392 repository folder items", () => {
     expect(ids(treeMenuSections(t, false))[0]).toEqual(["repoChanges"]);
     expect(ids(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false, true, true)).flat()).not.toContain("repoChanges");
   });
+});
+
+it("GH-399 a file offers Open in tab after Open, left out where there is no tab", () => {
+  const t = { kind: "file", entry: { name: "a.ts", path: "/p/a.ts", type: "file" }, changed: false } as never;
+  expect(treeMenuSections(t, false)[0]!.map((e) => e.id)).toEqual(["open", "openTab", "viewer"]);
+  expect(treeMenuSections(t, false)[0]![1]!.label).toBe("Open in tab");
+  expect(treeMenuSections(t, false, true, false, false)[0]!.map((e) => e.id)).toEqual(["open", "viewer"]);
 });
