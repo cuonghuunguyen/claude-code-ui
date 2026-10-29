@@ -522,7 +522,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           effort: z.enum(EFFORTS as [string, ...string[]]).optional(),
         },
         async (a) => {
-          const coordinator = cur();
+          let coordinator = cur();
           const refusal = refused.get(`${coordinator}\0${a.name}`);
           refused.delete(`${coordinator}\0${a.name}`);
           if (refusal && Date.now() - refusal.at < REFUSAL_MS) throw new ToolError(refusal.message);
@@ -536,6 +536,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           checkLimits(coordinator);
           const t = await target(a);
           const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
+          coordinator = cur(); // a /clear during the awaits moved the tree: check and reserve under the current ID
           const key = `${coordinator}\0${a.name}`;
           if (reserved.has(key) || workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
           checkLimits(coordinator);
@@ -599,8 +600,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
         "Send text to a worker: injected into its running turn (Steering), or starts a new turn when it is idle.",
         { name, text: text("text") },
         async (a) => {
-          const coordinator = cur();
+          let coordinator = cur();
           const s = await worker(coordinator, a.name);
+          coordinator = cur(); // a /clear during the await moved the tree
           // No await from the cap check to the mark: parallel sends to closed workers see each other.
           const start = !s.liveQuery() && !starting.has(s.id);
           if (start) {

@@ -324,6 +324,50 @@ describe("worker tree: orchestration for workers", () => {
     expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
   });
 
+  it("a notice to a worker coordinator without a CLI is held at the total maximum", async () => {
+    const t = setup(undefined, { workerCap: 10, workerCapTotal: 2 });
+    const [, W1, W2] = tree(t);
+    W1.live = false;
+    for (const id of ["D", "Y"]) t.sessions.set(id, fakeSession(id));
+    t.links.set("Y", { coordinatorId: "D", name: "y", cwd: "/tmp", port: 1 }); // W2 and Y run: 2 of 2
+    t.o.observe(W2, turnEnd);
+    await tick();
+    expect(t.prompts).toEqual([]);
+    t.settings.workerCapTotal = 0;
+    t.o.observe(W2, turnEnd);
+    await tick();
+    expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
+  });
+
+  it("a /clear during worker_start's awaits: the second cap check counts the tree under the new ID", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    t.sessions.set("C", fakeSession("C"));
+    t.sessions.set("C2", fakeSession("C2"));
+    const b = { id: "C" };
+    const ws = t.o.tools(b).find((x) => x.name === "worker_start")!;
+    const p = ws.handler(start("a", { agent: "Explore" }) as never, {}) as Promise<any>; // passes the first check, then awaits the agent list
+    t.o.handOver("C", "C2");
+    b.id = "C2";
+    expect(await call(t.o, "C2", "worker_start", start("b"))).toMatchObject({ name: "b" });
+    expect((await p).isError).toBe(true);
+    expect(t.links.entries().filter(([, l]) => l.coordinatorId === "C2").length).toBe(1);
+  });
+
+  it("a /clear during worker_send's await: the cap check counts the tree under the new ID", async () => {
+    const t = setup(undefined, { workerCap: 1 });
+    for (const id of ["C", "C2", "A", "B"]) t.sessions.set(id, fakeSession(id, id !== "B"));
+    t.links.set("A", { coordinatorId: "C", name: "a", cwd: "/tmp", port: 1 });
+    t.links.set("B", { coordinatorId: "C", name: "b", cwd: "/tmp", port: 1 });
+    const b = { id: "C" };
+    const send = t.o.tools(b).find((x) => x.name === "worker_send")!;
+    const p = send.handler({ name: "b", text: "hi" } as never, {}) as Promise<any>;
+    t.o.handOver("C", "C2");
+    b.id = "C2";
+    const r = await p;
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/Maximum workers per tree/);
+  });
+
   it("/clear of a worker coordinator moves its workers and its own link", () => {
     const t = setup();
     tree(t);
