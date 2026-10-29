@@ -9,11 +9,13 @@ import { trapTab } from "./focus-trap.ts";
 // Split view (GH-356): the prompt box of the active split only, never the other split's (focusing it would make that split active). The split has none (permission panel, subagent view): null.
 export const shownPrompt = () => {
   const find = (root: ParentNode) => root.querySelectorAll<HTMLElement>('textarea[aria-label="Prompt"], textarea[aria-label="First prompt"]');
+  // GH-401: a docked session's prompt box is never the shown tab's.
+  const own = (root: ParentNode) => [...find(root)].filter((el) => !el.closest("[data-docked-session]"));
   if (document.querySelector('[data-testid="split"]')) {
     const active = document.querySelector('[data-testid="split"][data-active]');
-    return (active && find(active)[0]) || null;
+    return (active && own(active)[0]) || null;
   }
-  return [...find(document)].find((el) => el.offsetParent) ?? null;
+  return own(document).find((el) => el.offsetParent) ?? null;
 };
 
 /** `busy`: a write runs, Esc and Close do nothing (the extension's dialog stays open while adding or removing). */

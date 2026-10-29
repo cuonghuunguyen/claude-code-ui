@@ -16,6 +16,22 @@ it("GH-359 session tab sections: move, close block, pin, copy and reveal in orde
   expect(tabMenuSections(all)[1]![1]!.testId).toBe("tab-menu-closeOthers");
 });
 
+it("GH-401 a session tab with dock offers Move to side / bottom panel after the pin; without dock none; pane and file tabs are unchanged", () => {
+  const docked = tabMenuSections({ ...all, dock: true });
+  expect(docked.map((s) => s.map((x) => x.label))).toEqual([
+    ["Move left", "Move right"],
+    ["Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"],
+    ["Pin tab"],
+    ["Move to side panel", "Move to bottom panel"],
+    ["Copy session ID", "Copy cwd path", "Reveal in sidebar"],
+  ]);
+  expect(docked[3]!.map((x) => x.id)).toEqual(["moveSide", "moveBottom"]);
+  expect(tabMenuSections(all).flat().map((x) => x.id)).not.toContain("moveSide");
+  expect(tabMenuSections({ ...all, session: false, dock: true })).toHaveLength(2);
+  const pane = { ...all, pane: { label: "Plan" } };
+  expect(tabMenuSections({ ...pane, dock: true })).toEqual(tabMenuSections(pane));
+});
+
 it("GH-359 pinning is not offered without the pinned flag", () => {
   expect(tabMenuSections({ ...all, pinned: undefined }).flat().map((x) => x.id)).not.toContain("pin");
 });

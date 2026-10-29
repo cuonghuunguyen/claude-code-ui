@@ -4,6 +4,9 @@ import { useEffect, useRef } from "react";
 import { saveDraft } from "./drafts.ts";
 
 export const DRAFT_DEBOUNCE_MS = 400;
+const FLUSH_EVENT = "claude-ui:flush-drafts";
+/** Saves every open box's text now. A box that moves (a session docked or undocked) mounts anew before the old one unmounts and flushes. */
+export const flushDrafts = () => dispatchEvent(new Event(FLUSH_EVENT));
 
 /**
  * `text` is what the box holds; `initial` what it started with (the stored draft). Bash mode text (a half-typed command) is not saved.
@@ -42,9 +45,11 @@ export function useDraft(key: string | undefined, text: string, bash: boolean, i
     const hide = () => document.visibilityState === "hidden" && flush();
     document.addEventListener("visibilitychange", hide);
     addEventListener("pagehide", flush);
+    addEventListener(FLUSH_EVENT, flush);
     return () => {
       document.removeEventListener("visibilitychange", hide);
       removeEventListener("pagehide", flush);
+      removeEventListener(FLUSH_EVENT, flush);
       flush();
     };
   }, []);

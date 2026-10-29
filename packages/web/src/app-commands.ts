@@ -1,7 +1,7 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import type { PaletteItem } from "./palette.tsx";
-import { HOME_LABEL, PANE_LABEL, type Area } from "./layout.ts";
+import { HOME_LABEL, PANE_LABEL, type Area, type DockArea } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
@@ -46,6 +46,8 @@ export type CommandContext = {
   closeOthers?: () => void;
   closeRight?: () => void;
   closeAll?: () => void;
+  /** Shows the current session in the side or bottom panel (GH-401); absent on narrow screens and without a session. */
+  dockSession?: (area: DockArea) => void;
   /** Pins or unpins the active session tab (GH-359); none on the New session tab. */
   togglePin?: () => void;
   /** Clean up tabs (GH-378): counts per rule for the whole strip; absent: no cleanup commands. */
@@ -161,6 +163,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
       ),
     ...(c.tabCleanup && c.cleanUpTabs ? c.tabCleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUpTabs!(i.rule), true)) : []),
     c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
+    c.dockSession && cmd("session.dock.side", "Move session to side panel", () => c.dockSession!("side")),
+    c.dockSession && cmd("session.dock.bottom", "Move session to bottom panel", () => c.dockSession!("bottom")),
     c.splitRight && cmd("split.right", "Split right", c.splitRight),
     c.splitDown && cmd("split.down", "Split down", c.splitDown),
     c.splitNext && cmd("split.next", "Focus next split", c.splitNext),
