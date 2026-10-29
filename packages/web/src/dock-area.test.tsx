@@ -3,7 +3,7 @@ import { act, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { DockHeader, DropStrip, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { DOCKED_DRAG_TYPE, DockHeader, DropStrip, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { DockArea, PaneId } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -282,4 +282,50 @@ it("GH-401 the bottom panel's session menu offers the side panel; without sessio
   await h("bottom").render();
   expect(sessionTabs()).toHaveLength(0);
   expect([...el.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(["terminal"]);
+});
+
+const TAB = "application/x-claude-ui-tab";
+
+it("GH-402 a docked session tab is draggable, carries its id and reports the drag start and end", async () => {
+  const onDragDocked = vi.fn();
+  const { render } = h("side", { sessions: sess, activeSession: "s1", onDragDocked });
+  await render();
+  const data = new Map<string, string>();
+  expect(sessionTabs()[0]!.getAttribute("draggable")).toBe("true");
+  await act(async () => void fire(sessionTabs()[0]!, "dragstart", [], data));
+  expect(data.get(DOCKED_DRAG_TYPE)).toBe("s1");
+  expect(onDragDocked).toHaveBeenCalledWith("s1");
+  await act(async () => void fire(sessionTabs()[0]!, "dragend", []));
+  expect(onDragDocked).toHaveBeenLastCalledWith(undefined);
+});
+
+it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop calls onDropTab with the tab it is before", async () => {
+  const onDropTab = vi.fn();
+  const { fns, render } = h("side", { accepts: (e) => !!e.dataTransfer?.types.includes(TAB), onDropTab, dropAt: { area: "side", before: "graph" } });
+  await render();
+  expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
+  const over = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);
+  expect(over.defaultPrevented).toBe(true);
+  expect(fns.onDropAt).toHaveBeenCalledWith({ area: "side", before: "changes" });
+  await act(async () => void fire(el.querySelector('[data-pane-tab="changes"]')!, "drop", [TAB]));
+  expect(onDropTab).toHaveBeenCalledWith(expect.anything(), "changes");
+  expect(fns.onMove).not.toHaveBeenCalled();
+});
+
+it("GH-402 without `accepts` a strip tab drag stays ignored on pane tabs and on DropStrip", async () => {
+  const { render } = h("side");
+  await render();
+  expect(fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]).defaultPrevented).toBe(false);
+  await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={() => {}} onLeave={() => {}} onDrop={() => {}} />));
+  expect(fire(el.firstElementChild!, "dragover", [TAB]).defaultPrevented).toBe(false);
+});
+
+it("GH-402 DropStrip with `accepts` takes a strip tab drag", async () => {
+  const onDropTab = vi.fn();
+  const onOver = vi.fn();
+  await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={onOver} onLeave={() => {}} onDrop={() => {}} accepts={(e) => !!e.dataTransfer?.types.includes(TAB)} onDropTab={onDropTab} />));
+  expect(fire(el.firstElementChild!, "dragover", [TAB]).defaultPrevented).toBe(true);
+  expect(onOver).toHaveBeenCalled();
+  await act(async () => void fire(el.firstElementChild!, "drop", [TAB]));
+  expect(onDropTab).toHaveBeenCalled();
 });

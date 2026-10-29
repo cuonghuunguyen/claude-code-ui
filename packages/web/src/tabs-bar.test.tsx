@@ -1359,3 +1359,47 @@ it("GH-501 a drop anywhere in the window ends the drag", async () => {
   await act(async () => void window.dispatchEvent(new Event("drop")));
   expect(draggedTab()).toBeUndefined();
 });
+
+it("GH-402 a tab drag start and end are reported", async () => {
+  const onDragTab = vi.fn();
+  const { tab } = await render({ onDragTab });
+  const fire = (type: string) => act(async () => void tab("a").dispatchEvent(Object.assign(new Event(type, { bubbles: true }), { dataTransfer: { setData() {}, effectAllowed: "" } })));
+  await fire("dragstart");
+  expect(onDragTab).toHaveBeenCalledWith("a");
+  await fire("dragend");
+  expect(onDragTab).toHaveBeenLastCalledWith(undefined);
+});
+
+it("GH-402 the strip takes a dock pane drag when `drop` accepts it; a tab drag stays the tabs' reorder", async () => {
+  const drop = { active: true, over: false, accept: vi.fn(() => true), onOver: vi.fn(), onLeave: vi.fn(), onDrop: vi.fn() };
+  const { el, tab, onMove } = await render({ drop });
+  const fire = (target: Element, type: string, types: string[]) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(e, { dataTransfer: { types, getData: (k: string) => (k === "application/x-claude-ui-tab" ? "a" : ""), dropEffect: "" } });
+    target.dispatchEvent(e);
+    return e;
+  };
+  const area = el.querySelector<HTMLElement>('[data-testid="tab-strip-area"]')!;
+  expect(area.hasAttribute("data-drop-target")).toBe(false);
+  const over = fire(tab("b"), "dragover", ["application/x-claude-ui-pane"]);
+  expect(over.defaultPrevented).toBe(true);
+  expect(drop.onOver).toHaveBeenCalled();
+  await act(async () => void fire(tab("b"), "drop", ["application/x-claude-ui-pane"]));
+  expect(drop.onDrop).toHaveBeenCalledTimes(1);
+  // A strip tab dragged over the strip: reorder, never `drop`.
+  drop.onDrop.mockClear();
+  drop.onOver.mockClear();
+  await act(async () => void fire(tab("c"), "drop", ["application/x-claude-ui-tab"]));
+  expect(drop.onDrop).not.toHaveBeenCalled();
+  expect(drop.onOver).not.toHaveBeenCalled();
+  expect(onMove).toHaveBeenCalledWith("a", "c");
+});
+
+it("GH-402 the strip is outlined while `drop.active`, filled while `drop.over`; a refusing `accept` leaves the drag alone", async () => {
+  const { el, tab } = await render({ drop: { active: true, over: true, accept: () => false, onOver: vi.fn(), onLeave: vi.fn(), onDrop: vi.fn() } });
+  expect(el.querySelector('[data-testid="tab-strip-area"]')!.hasAttribute("data-drop-target")).toBe(true);
+  const e = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.assign(e, { dataTransfer: { types: ["application/x-claude-ui-pane"], dropEffect: "" } });
+  tab("b").dispatchEvent(e);
+  expect(e.defaultPrevented).toBe(false);
+});

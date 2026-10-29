@@ -141,7 +141,13 @@ export function TabsBar({
   grouping = "project",
   focus,
   compact = false,
+  onDragTab,
+  drop,
 }: {
+  /** GH-402: a strip tab starts (id) or ends (undefined) a drag; App shows what the tab can be dropped on. */
+  onDragTab?: (id?: string) => void;
+  /** GH-402: the whole strip takes drags that are no strip tab (a dock pane tab, a docked session tab): `active` outlines it while one that fits is dragged, `over` fills it. Native listeners (as `useAreaDrop`). */
+  drop?: { active: boolean; over: boolean; accept: (e: { dataTransfer: DataTransfer | null }) => boolean; onOver: () => void; onLeave: () => void; onDrop: (e: globalThis.DragEvent) => void };
   /** The pinned Focus tab (docs/spec.md "Focus"), first in the strip and never closable; `count`: sessions waiting for the user. Absent: no Focus tab. */
   focus?: { count: number };
   tabs: string[];
@@ -240,6 +246,35 @@ export function TabsBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, activeHidden]);
   const strip = useRef<HTMLDivElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const dropRef = useRef(drop);
+  dropRef.current = drop;
+  useEffect(() => {
+    const n = wrap.current;
+    if (!n) return;
+    // A strip tab's drag is the tabs' own (reorder); everything else asks `accept`.
+    const mine = (e: globalThis.DragEvent) => !!dropRef.current && !e.dataTransfer?.types.includes(TAB_DRAG_TYPE) && dropRef.current.accept(e);
+    const over = (e: globalThis.DragEvent) => {
+      if (!mine(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "move";
+      if (!dropRef.current!.over) dropRef.current!.onOver();
+    };
+    const leave = (e: globalThis.DragEvent) => dropRef.current && !n.contains(e.relatedTarget as Node | null) && dropRef.current.onLeave();
+    const drp = (e: globalThis.DragEvent) => {
+      if (!mine(e)) return;
+      e.preventDefault();
+      dropRef.current!.onDrop(e);
+    };
+    n.addEventListener("dragover", over);
+    n.addEventListener("dragleave", leave);
+    n.addEventListener("drop", drp);
+    return () => {
+      n.removeEventListener("dragover", over);
+      n.removeEventListener("dragleave", leave);
+      n.removeEventListener("drop", drp);
+    };
+  }, []);
   const newButton = useRef<HTMLButtonElement>(null);
   // Tab to focus once the parent applied a keyboard close or move; none left → the New session button.
   const refocus = useRef<{ id?: string; group?: string }>(undefined);
@@ -339,7 +374,12 @@ export function TabsBar({
 
   return (
     // Below md: 44px hit areas, 8px apart (touch-target-size, touch-spacing).
-    <div className="flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2">
+    <div
+      ref={wrap}
+      className={cn("flex min-w-0 flex-1 items-center gap-1.5 max-md:gap-2", drop?.active && "rounded-md -outline-offset-2", drop?.active && (drop.over ? "bg-primary/5 outline-2 outline-primary" : "outline-1 outline-primary/40 outline-dashed"))}
+      data-testid="tab-strip-area"
+      data-drop-target={drop?.active && drop.over ? "" : undefined}
+    >
       {onHome && (
         <IconButton className={`w-9! max-md:hidden ${QUIET_PRESSED}`} label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
           <PanelLeftIcon />
@@ -378,6 +418,7 @@ export function TabsBar({
                     onSelect={onSelect}
                     onClose={onClose}
                     onMove={onMove}
+                    onDragTab={onDragTab}
                     cleanup={cleanupMenu && onCleanup && (() => cleanupMenu())}
                     onCleanup={cleanupMenu && onCleanup && cleanUp}
                     onMenuMove={(by) => moveBy(id, by)}
@@ -595,7 +636,7 @@ const justSwiped = (at: RefObject<number>) => performance.now() - at.current < S
 /** A touch screen is the main input: a long press must open the context menu, not start a native drag (Chrome on Android drags a draggable element instead). Reorder there: Move left / right in the menu. */
 const touchPrimary = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 /** `touchPrimary` that follows the media query (a 2-in-1 switching between touch and mouse). */
-function useTouchPrimary() {
+export function useTouchPrimary() {
   return useSyncExternalStore(
     (on) => {
       const mq = window.matchMedia?.("(pointer: coarse)");
@@ -1050,6 +1091,7 @@ function Tab({
   onSelect,
   onClose,
   onMove,
+  onDragTab,
   cleanup,
   onCleanup,
   onMenuMove,
@@ -1102,6 +1144,7 @@ function Tab({
   menuRename: boolean;
   onAction: (a: SessionAction) => void;
   onRenamed: (title: string | undefined) => void;
+  onDragTab?: (id?: string) => void;
 }) {
   const s = status(id, t);
   const session = id !== NEW_TAB && !t.kind;
@@ -1137,11 +1180,12 @@ function Tab({
         data-pinned={pinned || undefined}
         data-first={first || undefined}
         draggable={!renaming && !coarse}
-        onDragEnd={() => (dragged = undefined)}
+        onDragEnd={() => ((dragged = undefined), onDragTab?.(undefined))}
         onDragStart={(e) => {
           dragged = id;
           e.dataTransfer.setData(DRAG_TYPE, id);
           e.dataTransfer.effectAllowed = "move";
+          onDragTab?.(id);
         }}
         onDragOver={dragOver}
         onDrop={(e) => {

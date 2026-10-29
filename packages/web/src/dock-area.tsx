@@ -6,9 +6,12 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
-import { STATUS_LABEL, TabIcon, type TabInfo, status } from "./tabs-bar.tsx";
+import { STATUS_LABEL, TabIcon, type TabInfo, status, useTouchPrimary } from "./tabs-bar.tsx";
 
 export const PANE_DRAG_TYPE = "application/x-claude-ui-pane";
+/** GH-402: a docked session tab being dragged (its data is the session id). */
+export const DOCKED_DRAG_TYPE = "application/x-claude-ui-docked";
+type DragEv = { dataTransfer: DataTransfer | null };
 /** Where a dragged pane would land: the end of `area`, or before the tab `before`. */
 export type DropAt = { area: DockArea; before?: PaneId };
 /** Only drags that carry a pane (a session tab's drag has another type). */
@@ -113,6 +116,9 @@ export function DockHeader({
   dropAt,
   onDrag,
   onDropAt,
+  accepts,
+  onDropTab,
+  onDragDocked,
   sessions,
   activeSession,
   onSelectSession,
@@ -133,6 +139,11 @@ export function DockHeader({
   dropAt?: DropAt;
   onDrag: (p?: PaneId) => void;
   onDropAt: (d?: DropAt) => void;
+  /** GH-402: drags other than a dock pane tab (a strip tab, a docked session tab) that a pane tab accepts, and what dropping one before pane tab `before` does. Absent: only dock pane tabs. */
+  accepts?: (e: DragEv) => boolean;
+  onDropTab?: (e: DragEv, before: PaneId) => void;
+  /** GH-402: a docked session tab starts (id) or ends (undefined) a drag. */
+  onDragDocked?: (id?: string) => void;
   /** GH-401: sessions docked here, in strip order: a tab each after the pane tabs; `activeSession` is the selected one (no pane tab is then). */
   sessions?: DockedSession[];
   activeSession?: string;
@@ -148,6 +159,7 @@ export function DockHeader({
   const finalFocus = () => !moved.current;
   const move = (p: PaneId) => ((moved.current = true), onMove(p, other));
   const moveTo = (p: PaneId, to: Area) => ((moved.current = true), onMove(p, to));
+  const coarse = useTouchPrimary();
   const ctxKb = useKeyboardOpen();
   const menuKb = useKeyboardOpen();
   // A menu that closes without a move returns the focus to its trigger: forget the previous move when one opens.
@@ -164,7 +176,7 @@ export function DockHeader({
                 className="pointer-coarse:h-11 relative data-drop-before:before:absolute data-drop-before:before:inset-y-1 data-drop-before:before:-left-1 data-drop-before:before:w-0.5 data-drop-before:before:rounded-full data-drop-before:before:bg-primary"
                 draggable
                 {...ctxKb.trigger}
-                data-drop-before={drag && dropAt?.area === area && dropAt.before === p ? "" : undefined}
+                data-drop-before={(drag || accepts) && dropAt?.area === area && dropAt.before === p ? "" : undefined}
                 // Dragging a tab onto another inserts before it; the area section ignores it (stopPropagation).
                 onDragStart={(e) => {
                   e.dataTransfer.setData(PANE_DRAG_TYPE, p);
@@ -173,7 +185,7 @@ export function DockHeader({
                 }}
                 onDragEnd={() => (onDrag(undefined), onDropAt(undefined))}
                 onDragOver={(e) => {
-                  if (!isPaneDrag(e)) return;
+                  if (!isPaneDrag(e) && !accepts?.(e)) return;
                   e.preventDefault();
                   e.stopPropagation();
                   e.dataTransfer.dropEffect = "move";
@@ -181,12 +193,14 @@ export function DockHeader({
                 }}
                 onDrop={(e) => {
                   const d = droppedPane(e);
-                  if (!d) return;
+                  const other = !d && onDropTab && accepts?.(e);
+                  if (!d && !other) return;
                   e.preventDefault();
                   e.stopPropagation();
                   onDrag(undefined);
                   onDropAt(undefined);
-                  onMove(d, area, p);
+                  if (d) onMove(d, area, p);
+                  else onDropTab!(e, p);
                 }}
                 role="tab"
                 aria-selected={p === active && !activeSession}
@@ -227,6 +241,13 @@ export function DockHeader({
                   size="sm"
                   variant={t.id === activeSession ? "secondary" : "ghost"}
                   className="pointer-coarse:h-11 max-w-48 shrink-0"
+                  draggable={!coarse}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(DOCKED_DRAG_TYPE, t.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    onDragDocked?.(t.id);
+                  }}
+                  onDragEnd={() => (onDragDocked?.(undefined), onDropAt(undefined))}
                   {...ctxKb.trigger}
                   role="tab"
                   aria-selected={t.id === activeSession}
@@ -296,13 +317,13 @@ export function DockHeader({
 }
 
 /** Shown while dragging in place of an area that is not visible (closed or empty): drop here to open it with the pane. */
-export function DropStrip({ area, over, onOver, onLeave, onDrop }: { area: DockArea; over: boolean; onOver: () => void; onLeave: () => void; onDrop: (p: PaneId) => void }) {
+export function DropStrip({ area, over, onOver, onLeave, onDrop, accepts, onDropTab }: { area: DockArea; over: boolean; onOver: () => void; onLeave: () => void; onDrop: (p: PaneId) => void; /** GH-402: other drags the strip takes (a strip tab, a docked session tab) and what dropping one does. */ accepts?: (e: DragEv) => boolean; onDropTab?: (e: DragEv) => void }) {
   return (
     <div
       data-testid={`drop-${area}`}
       className={`grid shrink-0 place-items-center rounded-xl border-2 border-dashed text-muted-foreground text-sm ${over ? "border-primary bg-primary/5" : "border-primary/50"} ${area === "bottom" ? "mt-2 h-16" : "w-40"}`}
       onDragOver={(e) => {
-        if (!isPaneDrag(e)) return;
+        if (!isPaneDrag(e) && !accepts?.(e)) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
         if (!over) onOver();
@@ -310,9 +331,10 @@ export function DropStrip({ area, over, onOver, onLeave, onDrop }: { area: DockA
       onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && onLeave()}
       onDrop={(e) => {
         const p = droppedPane(e);
-        if (!p) return;
+        if (!p && !(onDropTab && accepts?.(e))) return;
         e.preventDefault();
-        onDrop(p);
+        if (p) onDrop(p);
+        else onDropTab!(e);
       }}
     >
       {AREA_LABEL[area]}

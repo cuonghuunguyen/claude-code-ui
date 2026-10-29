@@ -77,8 +77,8 @@ export function splitTo(s: Split | undefined, tabs: readonly string[], activeId:
   return { split: { dir, ids: before ? [t, x] : [x, t], at: before ? 0 : 1, ratio: s?.ratio ?? 0.5, runs: s?.runs }, active: t };
 }
 
-export type SplitRefusal = "whole" | "session";
-export const REFUSAL_TEXT: Record<SplitRefusal, string> = { whole: "Git graph needs the whole area", session: "A split needs a session" };
+export type SplitRefusal = "whole" | "session" | "changes";
+export const REFUSAL_TEXT: Record<SplitRefusal, string> = { whole: "Git graph needs the whole area", session: "A split needs a session", changes: "Changes stays in a panel" };
 /** Why dropping `t` in `zone` (centre: over split `over` of the shown split `s`) cannot happen; undefined = it can. A centre drop outside a shown split just opens the tab. */
 export function dropRefusal(s: Split | undefined, shown: boolean, tabs: readonly string[], activeId: string | undefined, t: string, zone: DropZone, over: number): SplitRefusal | undefined {
   if (zone === "center" && !(shown && !!s && over >= 0)) return undefined;
