@@ -2,8 +2,8 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { makeRepoWithTwoCommits } from "../support/git-fixture.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
-const PREFIX: Record<string, string> = { Files: "files", "Git graph": "graph", Terminal: "terminal" };
-const PANE: Record<string, string> = { Files: "files", "Git graph": "graph", Changes: "changes", Terminal: "terminal" };
+const PREFIX: Record<string, string> = { Plan: "plan", Changes: "changes", Files: "files", "Git graph": "graph", Terminal: "terminal" };
+const PANE: Record<string, string> = { Plan: "plan", Files: "files", "Git graph": "graph", Changes: "changes", Terminal: "terminal" };
 const side = (page: Page) => page.getByTestId("side-panel");
 const kindTabs = (page: Page, kind: string) => page.locator(`[data-testid="tab"][data-tab-id^="${PREFIX[kind]}:"]`);
 const kindButton = (page: Page, kind: string) => kindTabs(page, kind).first().locator('[role="tab"]');
