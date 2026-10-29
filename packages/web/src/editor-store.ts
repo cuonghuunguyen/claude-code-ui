@@ -208,21 +208,22 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
     if (state.tabs[path]) setTabs((ts) => (ts[path] ? placeTab(o.outside ? { ...ts, [path]: { ...ts[path]!, outside: true } } : ts, o.outside ? { ...ts[path]!, outside: true } : ts[path]!, preview, scope) : ts));
     else {
       const timer = setTimeout(() => set((s) => ({ ...s, loading: path })), 150);
+      // Stays pending until the read returns: a write meanwhile keeps the draft.
       const saved = pending.get(path);
-      pending.delete(path);
       try {
         let tab: Tab;
         if (saved?.draft) {
           // Same reading as restore(): a gone file keeps its draft tab; a lost connection puts the entry back.
           const r = await readSaved(saved);
           if (r === "keep") throw new Error("disconnected");
-          tab = make(r as Tab);
+          tab = make(r ?? goneTab(path, saved.draft));
         } else tab = make(await readTab(path));
+        pending.delete(path);
         if (seq !== openSeq && preview) return;
         setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
+        if ((e as Error).message !== "disconnected") pending.delete(path);
         if ((e as Error).message === "disconnected") {
-          if (saved) pending.set(path, saved);
           return void set((s) => ({ ...s, error: "Not connected" }));
         }
         const f = readFailure(e as RequestError);

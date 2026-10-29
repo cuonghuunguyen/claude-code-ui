@@ -238,3 +238,25 @@ it("a draft of a path that is no longer allowed says so, not 'Deleted on disk'",
   await store.restore();
   expect(store.get().tabs["/p/a"]).toMatchObject({ gone: true, draft: "mine", error: "refused path: /p/a" });
 });
+
+it("a write during the pending read of open() keeps the saved draft", async () => {
+  const { store, write, request, disconnect, connect } = setup({ tabs: [{ path: "/p/a", item: true }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, { "/p/a": { content: "A", mtime: 1 }, "/p/c": { content: "C", mtime: 1 } });
+  disconnect();
+  await store.restore(); // restored, /p/a stays pending
+  connect();
+  await store.open("/p/c", { cwd: "/p", preview: false });
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const base = request.getMockImplementation()!;
+  request.mockImplementation(async (m: Msg) => {
+    if (m.type === "fs.read" && m.path === "/p/a") await gate;
+    return base(m);
+  });
+  const opening = store.open("/p/a", { cwd: "/p", item: true });
+  store.update("/p/c", (t) => ({ ...t, draft: "typed" }));
+  await vi.advanceTimersByTimeAsync(400);
+  expect(lastWrite(write).drafts["/p/a"]).toEqual({ draft: "mine", mtime: 1 });
+  release();
+  await opening;
+  expect(store.get().tabs["/p/a"]).toMatchObject({ draft: "mine" });
+});
