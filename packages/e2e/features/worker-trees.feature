@@ -14,6 +14,7 @@ Feature: Workers start workers of their own, within the tree limits
     And the Orchestration setting "Maximum workers per coordinator" is 4
     And the Orchestration setting "Maximum workers per tree" is 4
     And the Orchestration setting "Maximum workers in total" is 0
+    And the hint of the Orchestration setting "Maximum workers in total" mentions "this daemon"
     And I capture "tree limits desktop"
     When I set the Orchestration setting "Maximum tree depth" to 9
     Then the Settings error mentions "Maximum tree depth"
@@ -23,6 +24,31 @@ Feature: Workers start workers of their own, within the tree limits
     And the Orchestration setting "Maximum workers in total" is 0
     And the page has no horizontal scroll
     And I capture "tree limits phone"
+
+  Scenario: The worker tree limits persist and refuse invalid values
+    When I open Settings › Orchestration
+    Then the hint of the Orchestration setting "Maximum workers in total" mentions "this daemon"
+    When I set the Orchestration setting "Maximum workers per tree" to 7
+    And I set the Orchestration setting "Maximum workers in total" to 12
+    And I reload the page
+    And I open Settings › Orchestration
+    Then the Orchestration setting "Maximum workers per tree" is 7
+    And the Orchestration setting "Maximum workers in total" is 12
+    And I capture "tree limits persisted"
+    When I set the Orchestration setting "Maximum workers in total" to 101
+    Then the Settings error mentions "Maximum workers in total"
+    When I set the Orchestration setting "Maximum workers in total" to -1
+    Then the Settings error mentions "Maximum workers in total"
+    When I type "abc" into the Orchestration setting "Maximum workers per tree"
+    Then the Settings error mentions "Maximum workers per tree"
+    And I capture "tree limits invalid"
+    When I reload the page
+    And I open Settings › Orchestration
+    Then the Orchestration setting "Maximum workers per tree" is 7
+    And the Orchestration setting "Maximum workers in total" is 12
+    When I set the Orchestration setting "Maximum workers per tree" to 4
+    And I set the Orchestration setting "Maximum workers in total" to 0
+    Then the Orchestration setting "Maximum workers in total" is 0
 
   Scenario: A worker starts its own worker after the user's card, and the card names the tree
     When I open Settings › Orchestration
