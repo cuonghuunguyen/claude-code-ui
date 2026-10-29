@@ -132,3 +132,48 @@ Feature: Split view with a session and one of its panes
     When I click the Terminal tab of the second project
     Then the Terminal tab selects "Terminal 2"
     And I capture "split-terminal-selected-per-folder"
+
+  Scenario: Typing works right after splitting a Terminal tab
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And I open the terminal with the shortcut
+    And I click the first session tab
+    And I hide the side panel
+    And I choose "Split right" in the menu of the "Terminal" tab
+    Then the session area is split
+    And the shell has the focus within 5 seconds
+    When I type "echo split-focus-ok" on the keyboard and press Enter
+    Then the terminal shows "split-focus-ok" on a line of its own
+    And I capture "split-terminal-focus"
+
+  Scenario: The terminal fits its split
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And I open the terminal with the shortcut
+    And I click the first session tab
+    And I hide the side panel
+    And I choose "Split right" in the menu of the "Terminal" tab
+    Then the terminal of the split is ready
+    And the terminal columns fit its split
+    When I reload the page
+    Then the terminal of the split is ready
+    And the terminal columns fit its split
+    And I capture "split-terminal-cols"
+
+  Scenario: A cramped split with a pane active shows the pane alone
+    Given the viewport is 1440x900
+    And a Haiku session in Plan mode with a plan waiting for approval
+    When I move the Plan pane to the main area from its tab menu
+    And I open the menu of the plan tab
+    And I choose "Split right" in the plan tab menu
+    Then the active split shows the "Plan" tab
+    Given the viewport is 1024x800
+    Then the session area is not split
+    And the split hint is shown
+    And the plan tab is the selected tab
+    And I capture "split-cramped-pane-1100"
+    Given the viewport is 1440x900
+    Then the session area is split
+    And the active split shows the "Plan" tab

@@ -3187,6 +3187,76 @@ describe("GH-356 split view", () => {
     }
   });
 
+  it("GH-501 Split right on a Terminal tab focuses its shell", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    const g = globalThis as { __termFocused?: number };
+    await remount(ID, [ID, TERM]);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${TERM}"] [role="tab"]`)!.click());
+    const before = g.__termFocused ?? 0;
+    await (await menu(TERM))("Split right");
+    expect(labels()).toHaveLength(2);
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+    expect(document.activeElement).not.toBe(el.querySelector(`[data-pane-tab-body="${TERM}"]`));
+  });
+
+  it("GH-501 focus next split onto a Terminal split focuses its shell", async () => {
+    MAIN("plan", "files", "terminal", "graph");
+    const g = globalThis as { __termFocused?: number };
+    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
+    await remount(ID, [ID, TERM]);
+    const before = g.__termFocused ?? 0;
+    await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
+    expect(activeSplit()!.dataset.paneTabBody).toBe(TERM);
+    await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+  });
+
+  describe("GH-501 a cramped split with a pane as the active tab", () => {
+    const callbacks: { cb: ResizeObserverCallback; target?: Element }[] = [];
+    const RO = globalThis.ResizeObserver;
+    beforeEach(() => {
+      callbacks.length = 0;
+      globalThis.ResizeObserver = class {
+        rec: { cb: ResizeObserverCallback; target?: Element };
+        constructor(cb: ResizeObserverCallback) {
+          this.rec = { cb };
+          callbacks.push(this.rec);
+        }
+        observe(t: Element) {
+          this.rec.target = t;
+        }
+        unobserve() {}
+        disconnect() {}
+      } as never;
+    });
+    afterEach(() => {
+      globalThis.ResizeObserver = RO;
+    });
+    const size = (w: number, h = 800) =>
+      act(async () => callbacks.filter((c) => (c.target as HTMLElement | undefined)?.dataset?.testid === "session-area").forEach((c) => c.cb([{ contentRect: { width: w, height: h } } as ResizeObserverEntry], {} as ResizeObserver)));
+
+    it.each([
+      ["plan", PLAN],
+      ["terminal", TERM],
+    ])("%s: shows the pane alone with the hint; the split returns with the space", async (_k, ref) => {
+      MAIN("plan", "files", "terminal", "graph");
+      localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, ref], at: 1, ratio: 0.5 }));
+      await remount(ref, [ID, ref]);
+      await size(1000);
+      expect(splits()).toHaveLength(2);
+      expect(activeSplit()!.dataset.paneTabBody).toBe(ref);
+      await size(600);
+      expect(splits()).toHaveLength(0);
+      expect(el.querySelector('[data-testid="split-hint"]')).not.toBeNull();
+      expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
+      expect(el.querySelector(`[data-pane-tab-body="${ref}"]`)).not.toBeNull();
+      if (ref === TERM) expect(el.querySelector(`[data-pane-tab-body="${ref}"] [data-pane-host]`)).not.toBeNull();
+      await size(1000);
+      expect(splits()).toHaveLength(2);
+      expect(activeSplit()!.dataset.paneTabBody).toBe(ref);
+      expect(el.querySelector('[data-testid="split-hint"]')).toBeNull();
+    });
+  });
+
   it("a drag that is no tab, or on a narrow screen, shows no overlay", async () => {
     await remount(ID);
     const e = new Event("dragover", { bubbles: true, cancelable: true });
@@ -5435,6 +5505,23 @@ describe("GH-399 a file as a tab", () => {
       expect(tabIds()).toEqual([ID, A]);
       expect(location.hash).toBe(`#${encodeURIComponent(A)}`);
     } finally {
+      restore();
+    }
+  });
+
+  it("GH-501 Split right on a file tab focuses its editor", async () => {
+    const mm = window.matchMedia;
+    window.matchMedia = ((q: string) => (q.includes("pointer: fine") ? { ...mm(q), matches: true } : mm(q))) as never;
+    const restore = await mount({ tabs: [ID, A], hash: A });
+    try {
+      await settle();
+      await tabMenu(A);
+      await act(async () => menuItem("splitRight")!.click());
+      await settle();
+      expect(el.querySelectorAll('[data-testid="split"]')).toHaveLength(2);
+      await vi.waitFor(() => expect(bodyOf(A)!.querySelector(".cm-content")!.contains(document.activeElement)).toBe(true));
+    } finally {
+      window.matchMedia = mm;
       restore();
     }
   });

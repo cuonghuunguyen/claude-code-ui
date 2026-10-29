@@ -116,3 +116,35 @@ Then("the sidebar highlights the session of the session split", async ({ page })
   const id = (await sessionSplit(page).getAttribute("id"))!.replace(/^split-/, "");
   await expect(page.locator('[data-testid="session-item"][aria-current="page"]')).toHaveAttribute("data-session-id", id);
 });
+
+// No click first: the existing "I type {string} in the terminal" clicks the terminal and so hides a missing focus.
+When("I type {string} on the keyboard and press Enter", async ({ page }, text: string) => {
+  await page.keyboard.type(text);
+  await page.keyboard.press("Enter");
+});
+
+Then("the terminal columns fit its split", async ({ page }) => {
+  const term = paneSplit(page, "Terminal").locator(".xterm");
+  await expect(term).toBeVisible();
+  await term.click();
+  await page.keyboard.type("echo COLS=$(tput cols)");
+  await page.keyboard.press("Enter");
+  const rows = paneSplit(page, "Terminal").locator(".xterm-rows");
+  await expect(rows).toContainText(/COLS=\d+/, { timeout: 15_000 });
+  const cols = Number(/COLS=(\d+)/.exec(await rows.innerText())![1]);
+  const screen = (await paneSplit(page, "Terminal").locator(".xterm-screen").boundingBox())!;
+  const box = (await term.boundingBox())!;
+  const cell = screen.width / cols;
+  // The fit leaves room for the scrollbar: up to 2 columns of the box are not used.
+  expect(cols).toBeGreaterThanOrEqual(20);
+  expect(Math.floor(box.width / cell) - cols).toBeGreaterThanOrEqual(0);
+  expect(Math.floor(box.width / cell) - cols).toBeLessThanOrEqual(2);
+});
+
+Then("the split hint is shown", async ({ page }) => {
+  await expect(page.getByTestId("split-hint")).toBeVisible();
+});
+
+Then("the plan tab is the selected tab", async ({ page }) => {
+  await expect(page.locator('[data-testid="tab"][data-tab-id^="plan:"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+});
