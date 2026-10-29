@@ -1,5 +1,6 @@
 // Where one run keeps its files. Pure (no Playwright import) so vitest can test it.
 import { createHash } from "node:crypto";
+import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +8,10 @@ import { join } from "node:path";
 export function runDir(env: NodeJS.ProcessEnv = process.env, now = new Date(), pid = process.pid): string {
   if (env.E2E_RUN_DIR) return env.E2E_RUN_DIR;
   const stamp = now.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
-  const dir = join(env.E2E_SCRATCH || join(tmpdir(), "claude-ui-e2e"), `${stamp}-${pid}`);
+  const base = env.E2E_SCRATCH || join(tmpdir(), "claude-ui-e2e");
+  // Resolved symlinks (macOS /var -> /private/var): the daemon reports real paths, the steps must type the same ones.
+  mkdirSync(base, { recursive: true });
+  const dir = join(realpathSync(base), `${stamp}-${pid}`);
   env.E2E_RUN_DIR = dir;
   return dir;
 }

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
@@ -86,11 +86,19 @@ describe("TOKEN_RE", () => {
 });
 
 describe("paths", () => {
-  it("runDir is stable once computed", () => {
-    const env: NodeJS.ProcessEnv = { E2E_SCRATCH: "/s" };
-    const a = runDir(env, new Date("2026-10-17T10:20:30Z"), 7);
-    expect(a).toBe(join("/s", "20261017-102030-7"));
-    expect(runDir(env, new Date(), 99)).toBe(a);
+  it("runDir is stable once computed and resolves a symlinked scratch", () => {
+    const real = realpathSync(mkdtempSync(join(tmpdir(), "e2e-paths-")));
+    const link = `${real}-link`;
+    symlinkSync(real, link);
+    try {
+      const env: NodeJS.ProcessEnv = { E2E_SCRATCH: link };
+      const a = runDir(env, new Date("2026-10-17T10:20:30Z"), 7);
+      expect(a).toBe(join(real, "20261017-102030-7"));
+      expect(runDir(env, new Date(), 99)).toBe(a);
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
   });
   it("slug is folder-safe and short", () => {
     expect(slug("Send a prompt: The reply (390x844)")).toBe("send-a-prompt-the-reply-390x844");
