@@ -809,12 +809,39 @@ it("GH-367: Focus keeps the side and bottom panels and the titlebar toggles of t
   expect(q("terminal-toggle-titlebar")).not.toBeNull();
 });
 
-it("GH-367: Focus keeps a maximized bottom panel maximized", async () => {
+it("GH-499: opening Focus restores a maximized bottom panel and shows the Focus page", async () => {
   await clickId("terminal-toggle");
   await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
   await openFocus();
-  expect(q("bottom-panel")!.className).toContain("flex-1");
-  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("true");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
+  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-499: the sidebar Focus row restores a maximized bottom panel too", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-maximize");
+  expect(mainHidden()).toBe(true);
+  await clickId("focus-row-sidebar");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
+  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-499: a hidden bottom panel stays hidden on Focus", async () => {
+  await clickId("terminal-toggle");
+  await clickId("dock-hide");
+  await openFocus();
+  expect(q("focus-page")).not.toBeNull();
+  expect(q("bottom-panel")).toBeNull();
+  expect(q("terminal-toggle")!.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("GH-367: the Focus page comes before the side panel in the DOM (right side)", async () => {
+  await clickId("terminal-toggle");
+  await openFocus();
+  expect(q("focus-page")!.compareDocumentPosition(q("side-panel")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it("GH-367: narrow Focus still shows no docks", async () => {
@@ -823,6 +850,8 @@ it("GH-367: narrow Focus still shows no docks", async () => {
   const tab = q("focus-tab")?.querySelector("button");
   if (tab) await act(async () => tab.click());
   else await clickId("focus-row-sidebar");
+  expect(q("focus-page")).not.toBeNull();
+  expect(mainHidden()).toBe(false);
   expect(q("terminal-toggle-titlebar")).toBeNull();
   expect(q("bottom-panel")).toBeNull();
   width = 1440;

@@ -16,12 +16,6 @@ When("I open Focus", async ({ page }) => {
   await expect(page.getByTestId("focus-page")).toBeVisible();
 });
 
-// A maximized bottom panel stays maximized on Focus (GH-367): the page sits behind it.
-When("I switch to Focus", async ({ page }) => {
-  await clickFocus(page);
-  await expect(page.getByTestId("focus-tab")).toHaveAttribute("data-active", "true");
-});
-
 When("I select the {word} request in Focus", async ({ page }, kind: string) => {
   // The worker's daemon is shared by scenarios: an earlier scenario's session may still wait, so pick by kind.
   const row = page.locator(`[data-testid="focus-row"][data-kind="${kind}"]`).first();

@@ -55,6 +55,10 @@ Then("a terminal shows in the bottom panel", async ({ page }) => {
   await expect(shells(page)).toHaveCount(1);
 });
 
+Then("the bottom panel is not maximized", async ({ page }) => {
+  await expect(page.getByTestId("dock-maximize")).toHaveAttribute("aria-pressed", "false");
+});
+
 Then("the bottom panel is hidden", async ({ page }) => {
   await expect(bottom(page)).toBeHidden();
 });
