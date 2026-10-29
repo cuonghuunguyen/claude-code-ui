@@ -446,3 +446,15 @@ it("no chip without a suggestion", async () => {
   await render(s);
   expect(chip()).toBeNull();
 });
+
+// ---- GH-305: finished row of a closed session without a view (after a daemon restart) ----
+it("a closed unread session without a view shows a Finished row; its detail has the title, project and Open session", async () => {
+  open.mockClear();
+  await render({ list: [item("z", { state: "closed", lastActivity: NOW })], views: {}, unread: ["z"] });
+  expect(rows().map((r) => r.dataset.kind)).toEqual(["finished"]);
+  await act(async () => rows()[0]!.click());
+  expect(el.querySelector('[data-testid="focus-title"]')!.textContent).toBe("Session z");
+  expect(el.querySelector('[data-testid="focus-context"]')).toBeNull();
+  await act(async () => button("Open session").click());
+  expect(open).toHaveBeenCalledWith("z");
+});

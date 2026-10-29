@@ -326,7 +326,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
           )}
         </div>
         <div className={`flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 max-md:p-3 ${detail && current ? "" : "max-md:hidden"}`} data-testid="focus-detail">
-          {current && session && view ? (
+          {current && session ? (
             <>
               <Button type="button" variant="ghost" className="w-fit md:hidden max-md:h-11 pointer-coarse:h-11" onClick={() => setDetail(false)} data-testid="focus-back">
                 <ArrowLeftIcon />
@@ -355,10 +355,12 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                 </Button>
               )}
               {tasks.length > 0 && <TaskList items={tasks} />}
-              <section aria-label="Recent context, signal only">
-                <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Recent context · signal only</h3>
-                <RecentContext view={view} />
-              </section>
+              {view && (
+                <section aria-label="Recent context, signal only">
+                  <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Recent context · signal only</h3>
+                  <RecentContext view={view} />
+                </section>
+              )}
               {req && (
                 <section className="flex flex-col gap-1.5" aria-label="Request">
                   <p className="flex items-center gap-1.5 text-warning text-xs" data-testid="focus-waiting">

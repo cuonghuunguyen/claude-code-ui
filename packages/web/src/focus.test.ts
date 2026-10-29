@@ -142,6 +142,21 @@ it("finished row carries the Next for you suggestion of the view (GH-305)", () =
   expect(attentionRows(input(list, { a: view([state("running"), reply("done"), state("idle")]) }, { unread: ["a"] }))[0]).not.toHaveProperty("suggestion", expect.anything());
 });
 
+it("finished after a daemon restart (GH-305): a closed session with an unread record gets a finished row, with or without a view; not unread, none; older than 24 h, none", () => {
+  const closed = (over: Partial<SessionListItem> = {}) => item("a", { state: "closed", lastActivity: NOW - min, ...over });
+  const withText = view([user, state("running"), reply("All green."), state("idle")]);
+  expect(attentionRows(input([closed()], { a: withText }, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", reason: "Review: All green.", action: "open" });
+  expect(attentionRows(input([closed()], {}, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", reason: "Review the result", action: "open", id: "finished:a" });
+  expect(attentionRows(input([closed()], {}))).toEqual([]);
+  expect(attentionRows(input([closed()], { a: withText }))).toEqual([]);
+  expect(attentionRows(input([closed({ lastActivity: NOW - 25 * 60 * min })], {}, { unread: ["a"] }))).toEqual([]);
+  expect(attentionRows(input([closed({ archived: true })], {}, { unread: ["a"] }))).toEqual([]);
+});
+
+it("error, limit and quiet rows still need a view (a closed or unknown session without one gets none of them)", () => {
+  expect(attentionRows(input([item("a", { state: "error", lastActivity: NOW })], {}, { unread: ["a"] }))).toEqual([]);
+});
+
 it("stuck: running, nothing pending, no running call, quiet 5 min; quiet 4 min or a running call gives none", () => {
   const list = [item("a")];
   const v = view([user, call("c1", "Read", "done", { file_path: "/p/a.ts" }), state("running")]);

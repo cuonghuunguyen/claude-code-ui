@@ -2291,7 +2291,7 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
-  it("an unsubscribed error session is not followed again by the next list refresh", async () => {
+  it("a closed tab of an error session drops its view; the next list refresh follows it in the background again (GH-305)", async () => {
     const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error" }], projects: ["/p/demo"] } });
     try {
       await closeActive();
@@ -2299,8 +2299,19 @@ describe("idle close: holds and background follows", () => {
       sent.length = 0;
       await act(async () => sessionsChanged({ type: "sessions.changed" }));
       await act(async () => {});
-      expect(subscribes()).toEqual([]);
+      expect(subscribes()).toEqual([expect.objectContaining({ sessionId: ID, background: true })]);
     } finally {
+      restore();
+    }
+  });
+
+  it("an error session without a tab is followed in the background after a load, so its unread state and Focus row are known (GH-305)", async () => {
+    const errored = { ...other, state: "error" as const };
+    const restore = await remount({ "session.list": { sessions: [session, errored], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: errored.id, background: true }));
+    } finally {
+      sent.length = 0;
       restore();
     }
   });

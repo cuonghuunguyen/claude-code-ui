@@ -204,8 +204,13 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
   const waits = new Set(i.waiting.map((w) => w.sessionId));
   for (const s of i.list) {
     const view = i.views[s.id];
-    if (!view || s.archived || waits.has(s.id)) continue;
+    if (s.archived || waits.has(s.id)) continue;
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
+    // After a daemon restart the sessions are closed and mostly without a view: `unread` (the browser's seen mark or shown record) alone says it finished unseen.
+    if (!view) {
+      if (s.state === "closed" && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, "Review the result", "open"));
+      continue;
+    }
     if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, `Check the error: ${errorText(view)}`, "open"));
     else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset: continues at ${clock(view.continueAt)}`, "cancel_continue"));
     else if (view.limitStop) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset${view.limitStop.resetsAt ? `: resets at ${clock(view.limitStop.resetsAt)}` : ""}`, "open"));
@@ -213,7 +218,7 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
       const at = i.activity(s.id);
       const lastCall = lastOf(topLevel(view), (p) => p.type === "tool_call");
       rows.push(row("stuck", at, `Check it: ${quietLabel(i.now - at)}${lastCall?.type === "tool_call" ? ` since ${callSummary(lastCall.tool, lastCall.input, s.cwd)}` : ""}`, "open"));
-    } else if (view.state === "idle" && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
+    } else if ((view.state === "idle" || s.state === "closed") && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
       const text = lastOf(topLevel(view), (p) => p.type === "assistant_text");
       const line = text?.type === "assistant_text" ? lastLine(text.text) : undefined;
       rows.push({ ...row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)), ...(view.suggestion && { suggestion: view.suggestion }) });

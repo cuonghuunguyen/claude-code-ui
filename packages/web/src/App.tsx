@@ -644,7 +644,7 @@ export function App() {
       // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.state !== "error" || isShown(s.id)) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (s.state !== "closed" && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
