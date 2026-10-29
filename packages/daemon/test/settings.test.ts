@@ -8,13 +8,13 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
   const f = file();
   createSettings({ file: f }).set({ orchestration: { enabled: true, workerCap: 7 } });
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("a patch keeps another daemon's change to a different field", () => {
@@ -40,7 +40,7 @@ it("a corrupt file gives the defaults and is logged once", () => {
 it("an invalid hand-edited field falls back to its default, the valid ones stay", () => {
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("a stored coordinatorPermissions keeps its value over the default", () => {
@@ -49,10 +49,21 @@ it("a stored coordinatorPermissions keeps its value over the default", () => {
   expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
 });
 
+it("workerCapTotal defaults to 0 and takes 0 to 100; a stored workerCap keeps its value", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().orchestration.workerCapTotal).toBe(0);
+  expect(s.set({ orchestration: { workerCapTotal: 100 } }).orchestration.workerCapTotal).toBe(100);
+  for (const workerCapTotal of [-1, 101, 2.5, "3"]) expect(() => s.set({ orchestration: { workerCapTotal } as never })).toThrow("Maximum workers in total must be a whole number from 0 to 100");
+  const g = file();
+  writeFileSync(g, JSON.stringify({ orchestration: { workerCap: 7 } }));
+  expect(createSettings({ file: g }).get().orchestration).toMatchObject({ workerCap: 7, workerCapTotal: 0 });
+});
+
 it("refuses a cap outside 1-20, a non-integer, an unknown field; nothing is written", () => {
   const f = file();
   const s = createSettings({ file: f });
-  for (const workerCap of [0, 21, 2.5, "3"]) expect(() => s.set({ orchestration: { workerCap } as never })).toThrow("Maximum workers must be a whole number from 1 to 20");
+  for (const workerCap of [0, 21, 2.5, "3"]) expect(() => s.set({ orchestration: { workerCap } as never })).toThrow("Maximum workers per tree must be a whole number from 1 to 20");
   expect(() => s.set({ orchestration: { nope: 1 } } as never)).toThrow(/orchestration.nope/);
   expect(() => s.set({ other: {} } as never)).toThrow(/unknown setting/);
   expect(() => readFileSync(f)).toThrow();
@@ -75,7 +86,7 @@ it("an old file with coordinatorAnswersPermissions: true (saved before the field
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 4, coordinatorAnswersPermissions: true } }));
   const s = createSettings({ file: f });
-  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
+  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
   // The stored default workerCap goes too: it follows a later default change.
   s.set({ orchestration: { enabled: true } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true } });
@@ -95,7 +106,7 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
 it("a stored invalid workerMode falls back to coordinator", () => {
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true });
 });
 
 it("the file keeps only fields that differ from their default", () => {

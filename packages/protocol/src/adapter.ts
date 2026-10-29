@@ -22,6 +22,7 @@ const IGNORED = new Set([
   "rate_limit_event",
   "command_lifecycle",
   "system:status",
+  "system:session_title_changed",
   "system:thinking_tokens",
   "system:task_progress",
   "system:background_tasks_changed",

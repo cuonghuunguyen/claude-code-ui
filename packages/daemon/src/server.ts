@@ -7,10 +7,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { createAdapter, EFFORTS, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
-import { deleteSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
+import { asideDisallowed, asideForkPoint } from "./aside.ts";
 import { searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
@@ -118,6 +119,8 @@ type History = {
   renameSession?: typeof renameSession;
   tagSession?: typeof tagSession;
   deleteSession?: typeof deleteSession;
+  /** Aside (docs/spec.md "Aside"): copies the owner transcript up to a message into a new session. */
+  forkSession?: typeof forkSession;
 };
 
 /** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
@@ -380,6 +383,7 @@ export function createDaemon(opts: {
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
     mcpServers: (id: string) => orchestration.mcpServers(id),
     agent: (id: string) => settings.get(id)?.agent,
+    disallowedTools: (id: string) => asideDisallowed(settings.get(id)),
     toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer),
     preflight: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.preflight(id, tool, input, mcp),
     permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp),
@@ -387,7 +391,7 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, ...opts.history };
+  const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, forkSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
@@ -961,7 +965,8 @@ export function createDaemon(opts: {
     const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
     const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
     for (const t of all) {
-      if (!t.cwd || !allowedCwd(t.cwd)) continue;
+      // An Aside is not a session of the list until Keep as session.
+      if (!t.cwd || !allowedCwd(t.cwd) || linked.get(t.sessionId)?.ownerId) continue;
       const loaded = sessions.get(t.sessionId);
       const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
@@ -969,7 +974,7 @@ export function createDaemon(opts: {
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id)) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
+      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -1064,13 +1069,14 @@ export function createDaemon(opts: {
   const folderInUse = (id: string) => [...sessions.values()].some((s) => s.uploadOwner === id);
 
   /** session.delete, also the web app's Remove and worker_remove: the error to report, or undefined once the session is gone. */
-  async function deleteSessionById(id: string): Promise<{ code: string; message: string } | undefined> {
+  async function deleteSessionById(id: string, force = false): Promise<{ code: string; message: string } | undefined> {
     // A restore already in flight would put the session back after the delete; let it finish, then close it below.
     await restoring.get(id);
     const at = await locate(id);
     if (!at) return { code: "unknown_session", message: `no session ${id}` };
     const state = at.live?.info().state;
-    if (state === "running" || state === "needs_input") return { code: "session_running", message: "stop the session before deleting it" };
+    // `force` (an Aside popup closing): Session.close() ends the CLI and abandons its pending requests.
+    if (!force && (state === "running" || state === "needs_input")) return { code: "session_running", message: "stop the session before deleting it" };
     // The CLI exits first: it writes session metadata on exit, which would recreate the transcript. A failed delete keeps the transcript.
     autoContinue.cancel(id);
     queue.drop(id);
@@ -1092,6 +1098,24 @@ export function createDaemon(opts: {
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
+  }
+
+  /** An Aside's owner (link not dropped by Keep as session). */
+  const asideOf = (id: string) => settings.get(id)?.ownerId;
+
+  /** Asides never kept, left by a closed browser or a restart of this daemon (same port): thrown away (docs/spec.md "Aside"). */
+  async function cleanupAsides() {
+    const port = (http.address() as AddressInfo | null)?.port;
+    for (const [id, l] of settings.entries()) {
+      if (!l.ownerId || (l.port !== undefined && l.port !== port) || sessions.has(id)) continue;
+      try {
+        const err = await deleteSessionById(id, true);
+        if (err?.code === "unknown_session") saveSettings(() => settings.delete([id]));
+        else if (err) console.error(`aside ${id}: cleanup failed: ${err.message}`);
+      } catch (e) {
+        console.error(`aside ${id}: cleanup failed:`, e);
+      }
+    }
   }
 
   const digest = (t: string) => createHash("sha256").update(t).digest();
@@ -1341,6 +1365,7 @@ export function createDaemon(opts: {
 
   // A side's start, failure or stop changes the side list every client shows.
   opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  http.once("listening", () => void cleanupAsides());
   if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
   const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
@@ -1576,7 +1601,8 @@ export function createDaemon(opts: {
             if (msg.addProject === true) addProject(s.cwd);
             unsubscribes.get(s.id)?.();
             // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
-            const hold = msg.background !== true;
+            // An Aside is held by any subscriber: its popup is open (a reconnect resubscribes in the background otherwise).
+            const hold = msg.background !== true || !!asideOf(s.id);
             const keep = (stop: () => void, release: () => void) => {
               if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
               unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
@@ -1728,6 +1754,12 @@ export function createDaemon(opts: {
             await (msg.type === "session.setPermissionMode" ? s.setPermissionMode(msg.mode) : s.setEffort(msg.effort));
           } catch (e) {
             return fail("set_failed", (e as Error).message);
+          }
+          // An Aside stops being read-only with a mode change; the next CLI start has the editing tools.
+          if (msg.type === "session.setPermissionMode" && settings.get(s.id)?.readOnly) {
+            saveSettings(() => settings.set(s.id, { readOnly: undefined }, ["readOnly"]));
+            // shortcut: while a turn runs the edits stay off until its CLI ends (idle close, restart); restart at turn end if users ask.
+            if (s.info().state === "idle" && s.liveQuery()) s.restartQuery();
           }
           return reply({ session: s.info() });
         }
@@ -1924,6 +1956,52 @@ export function createDaemon(opts: {
           const err = await deleteSessionById(msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
+        case "aside.open": {
+          if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "text must be a non-empty string");
+          const owner = await find(msg.sessionId);
+          if (!owner) return;
+          const text = msg.text.trim();
+          const title = text.split("\n")[0]!.trim().slice(0, 80);
+          let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
+          try {
+            if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
+          } catch (e) {
+            return fail("aside_failed", `Could not read the session: ${(e as Error).message}`);
+          }
+          const at = asideForkPoint(main);
+          if (!at) return fail("aside_unavailable", "An aside needs a reply in this session first");
+          const dir = transcriptCwd(owner.id, owner.cwd);
+          let id: string | undefined;
+          try {
+            // The owner's transcript is only read: a running owner turn and an external turn are not touched.
+            id = (await history.forkSession!(owner.id, { dir, upToMessageId: at, title })).sessionId;
+            const oi = owner.info();
+            // Right after the fork, no await between: a list scan reads the link after its transcript scan.
+            saveSettings(() => settings.set(id!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
+            const s = await findSession(id);
+            if (!s) throw new Error("the fork could not be restored");
+            const from = s.prompt(text);
+            return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
+          } catch (e) {
+            if (id) {
+              const err = await deleteSessionById(id, true).catch(() => undefined);
+              if (err?.code === "unknown_session" || !(await locate(id))) saveSettings(() => settings.delete([id!]));
+            }
+            return fail("aside_failed", (e as Error).message);
+          }
+        }
+        case "aside.close": {
+          if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return fail("not_an_aside", "this session is not an aside");
+          const err = await deleteSessionById(msg.sessionId, true);
+          if (err?.code === "unknown_session") return saveSettings(() => settings.delete([msg.sessionId])), reply({});
+          return err ? fail(err.code, err.message) : reply({});
+        }
+        case "aside.keep": {
+          if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return fail("not_an_aside", "this session is not an aside");
+          saveSettings(() => settings.set(msg.sessionId, { ownerId: undefined }, ["ownerId"]));
+          broadcast({ type: "sessions.changed" });
+          return reply({});
+        }
         case "worker.close":
         case "worker.remove": {
           if (typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
@@ -1977,8 +2055,10 @@ export function createDaemon(opts: {
           // Only transcripts whose cwd is inside the roots (as session.list); newest first. Many transcripts share a cwd: allowed() once each.
           const ok = new Map<string, string | undefined>();
           const inside = (c: string) => (ok.has(c) ? ok.get(c) : (ok.set(c, allowed(c)), ok.get(c)));
+          // An Aside's transcript copies its owner's: its hits would duplicate the owner's.
+          const linked = new Map(settings.entries());
           const files = (await transcripts())
-            .filter((t) => t.cwd && inside(t.cwd) && !deleting.has(t.sessionId) && (!cwd || trim(inside(t.cwd)!) === trim(cwd)))
+            .filter((t) => t.cwd && inside(t.cwd) && !deleting.has(t.sessionId) && !linked.get(t.sessionId)?.ownerId && (!cwd || trim(inside(t.cwd)!) === trim(cwd)))
             .sort((a, b) => b.lastModified - a.lastModified)
             .map((t) => ({ sessionId: t.sessionId, cwd: sessionCwd(t.cwd!), title: redact(t.summary), file: transcriptFile(projectsDir, transcriptCwd(t.sessionId, t.cwd!), t.sessionId) }));
           const done = await searchTranscripts(files, query, (r) => out({ type: "sessions.search.result", reqId: msg.reqId, ...r }), { signal: ctl.signal });
@@ -2378,9 +2458,19 @@ export function createDaemon(opts: {
     idleCloseMs > 0
       ? setInterval(() => {
           const now = Date.now();
-          for (const s of sessions.values())
+          for (const s of sessions.values()) {
+            // An Aside whose popup is gone (browser closed, reload): thrown away, not only its CLI closed.
+            if (asideOf(s.id) && !holds.get(s.id) && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !["running", "needs_input"].includes(s.info().state)) {
+              console.log(`session ${s.id}: aside without a popup for ${Math.round(idleCloseMs / 60_000)} min, deleted`);
+              void deleteSessionById(s.id, true).then(
+                (err) => console.log(`session ${s.id}: aside delete ${err ? `failed: ${err.message}` : "done"}`),
+                (e) => console.error(`session ${s.id}: aside delete failed:`, e),
+              );
+              continue;
+            }
             if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery())
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
+          }
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
   const sweepMs = opts.uploadSweepMs ?? UPLOAD_SWEEP_MS;

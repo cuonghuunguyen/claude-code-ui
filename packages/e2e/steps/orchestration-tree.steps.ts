@@ -3,7 +3,7 @@ import { TURN_MS, toolCard as anyToolCard } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 const input = (page: Page, label: string): Locator => {
-  const key = label === "Maximum tree depth" ? "maxDepth" : label === "Maximum workers per coordinator" ? "maxChildren" : label === "Maximum workers" ? "workerCap" : "";
+  const key = label === "Maximum tree depth" ? "maxDepth" : label === "Maximum workers per coordinator" ? "maxChildren" : label === "Maximum workers per tree" ? "workerCap" : label === "Maximum workers in total" ? "workerCapTotal" : "";
   if (!key) throw new Error(`unknown Orchestration setting "${label}"`);
   return page.getByTestId(`settings-orchestration-${key}`);
 };
@@ -31,15 +31,28 @@ async function revealWorkers(page: Page, project: string, name: string): Promise
 }
 
 When("I open Settings › Orchestration", async ({ page }) => {
-  await page.keyboard.press("Control+,");
+  await page.locator('[data-testid="open-settings"]:visible').first().click();
   await page.getByTestId("settings-group-orchestration").click();
   await expect(page.getByTestId("settings-orchestration")).toBeVisible();
+});
+
+When("I type {string} into the Orchestration setting {string}", async ({ page }, text: string, label: string) => {
+  const box = input(page, label);
+  await box.fill("");
+  await box.pressSequentially(text);
+  await box.blur();
+});
+
+Then("the hint of the Orchestration setting {string} mentions {string}", async ({ page }, label: string, text: string) => {
+  await expect(page.locator(`#${await input(page, label).getAttribute("id")}-hint`)).toContainText(text);
 });
 
 When("I set the Orchestration setting {string} to {int}", async ({ page }, label: string, value: number) => {
   const box = input(page, label);
   await box.fill(String(value));
   await box.blur();
+  // A person needs longer than a millisecond for the next field; a refetch after the save clears a draft typed meanwhile.
+  await page.waitForTimeout(400);
 });
 
 Then("the Orchestration setting {string} is {int}", async ({ page }, label: string, value: number) => {

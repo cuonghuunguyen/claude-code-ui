@@ -149,8 +149,12 @@ A named role (system prompt, model, tool limits) a session runs as: a project, u
 _Avoid_: persona, role session. Not a Subagent run.
 
 **Worker tree**:
-A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth and Maximum workers per coordinator.
+A root coordinator, its workers, their workers, linked by `coordinatorId`; depth = hops to the root coordinator. Limited by Settings Maximum tree depth, Maximum workers per coordinator and Maximum workers per tree (the live workers of the whole tree).
 _Avoid_: hierarchy, manager chain
+
+**Aside**:
+A Session forked from an owner session with `/btw` (or palette Ask aside), shown in a floating popup over the owner. Read-only by default (no Edit, Write, NotebookEdit until the user changes its permission mode) and without the orchestration tools. Linked to its owner by `ownerId` in `sessions.json`; never listed; thrown away when the popup closes, unless kept with Keep as session (then an ordinary Session). Forked at the owner's last complete main-thread message, so it works while the owner's turn runs.
+_Avoid_: side question (Claude Code's tool-less `/btw`), side chat, branch, fork session. Not a Subagent run, not a Worker.
 
 **Escalation**:
 A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
@@ -164,17 +168,17 @@ The dock area on the right or left of the session view; its tabs are panes (Chan
 _Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
 
 **Pane**:
-Something of one session that the user can show and place: a kind, an owner session. Plan, Files and Git graph can also be main-area tabs (`plan:<session>`, `files:<session>`, `graph:<session>`).
+Something of one session that the user can show and place: a kind, an owner session. Plan, Files, Git graph and Terminal can also be main-area tabs (`plan:<session>`, `files:<session>`, `graph:<session>`, `terminal:<session>`).
 _Avoid_: view, panel (a panel is a dock area), widget, document
 
 **Owner session**:
 The session a pane belongs to; a session pane owns itself. It is fixed. Closing the owner's tab does not close its other panes.
 
 **Kind home**:
-Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph and Plan can be main; Changes never.
+Where a pane kind shows in this browser: side panel, bottom panel or main area (`claude-ui.layout`). Files, Git graph, Plan and Terminal can be main; Changes never.
 
 **Pane identity**:
-What "already open" compares: the owner's folder for Files and Git graph (one tab per project folder), the owner session for Plan.
+What "already open" compares: the owner's folder for Files, Git graph and Terminal (one tab per project folder), the owner session for Plan.
 _Avoid_: instance
 
 **Main area**:

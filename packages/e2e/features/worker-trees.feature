@@ -12,18 +12,47 @@ Feature: Workers start workers of their own, within the tree limits
     When I open Settings › Orchestration
     Then the Orchestration setting "Maximum tree depth" is 2
     And the Orchestration setting "Maximum workers per coordinator" is 4
+    And the Orchestration setting "Maximum workers per tree" is 4
+    And the Orchestration setting "Maximum workers in total" is 0
+    And the hint of the Orchestration setting "Maximum workers in total" mentions "this daemon"
     And I capture "tree limits desktop"
     When I set the Orchestration setting "Maximum tree depth" to 9
     Then the Settings error mentions "Maximum tree depth"
     And I capture "tree depth out of range"
     When the viewport is 390x844
     Then the Orchestration setting "Maximum workers per coordinator" is 4
+    And the Orchestration setting "Maximum workers in total" is 0
     And the page has no horizontal scroll
     And I capture "tree limits phone"
 
+  Scenario: The worker tree limits persist and refuse invalid values
+    When I open Settings › Orchestration
+    Then the hint of the Orchestration setting "Maximum workers in total" mentions "this daemon"
+    When I set the Orchestration setting "Maximum workers per tree" to 7
+    And I set the Orchestration setting "Maximum workers in total" to 12
+    And I reload the page
+    And I open Settings › Orchestration
+    Then the Orchestration setting "Maximum workers per tree" is 7
+    And the Orchestration setting "Maximum workers in total" is 12
+    And I capture "tree limits persisted"
+    When I set the Orchestration setting "Maximum workers in total" to 101
+    Then the Settings error mentions "Maximum workers in total"
+    When I set the Orchestration setting "Maximum workers in total" to -1
+    Then the Settings error mentions "Maximum workers in total"
+    When I type "abc" into the Orchestration setting "Maximum workers per tree"
+    Then the Settings error mentions "Maximum workers per tree"
+    And I capture "tree limits invalid"
+    When I reload the page
+    And I open Settings › Orchestration
+    Then the Orchestration setting "Maximum workers per tree" is 7
+    And the Orchestration setting "Maximum workers in total" is 12
+    When I set the Orchestration setting "Maximum workers per tree" to 4
+    And I set the Orchestration setting "Maximum workers in total" to 0
+    Then the Orchestration setting "Maximum workers in total" is 0
+
   Scenario: A worker starts its own worker after the user's card, and the card names the tree
     When I open Settings › Orchestration
-    And I set the Orchestration setting "Maximum workers" to 20
+    And I set the Orchestration setting "Maximum workers per tree" to 20
     And I close Settings
     And I send "Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start). Then call worker_start exactly once with name parent, project <project>, and as its prompt exactly the text between BEGIN and END. BEGIN Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start), then call worker_start exactly once with name child, project <project>, and prompt: Reply with exactly: OK. Do nothing else. END. Do nothing else." with the scratch project and worktree names filled in
     Then I see a permission request
@@ -37,7 +66,7 @@ Feature: Workers start workers of their own, within the tree limits
 
   Scenario: The worker's worker lists under the root coordinator
     When I open Settings › Orchestration
-    And I set the Orchestration setting "Maximum workers" to 20
+    And I set the Orchestration setting "Maximum workers per tree" to 20
     And I close Settings
     And I send "Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start). Then call worker_start exactly once with name parent, project <project>, and as its prompt exactly the text between BEGIN and END. BEGIN Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start), then call worker_start exactly once with name child, project <project>, and prompt: Reply with exactly: OK. Do nothing else. END. Do nothing else." with the scratch project and worktree names filled in
     Then I see a permission request
@@ -57,7 +86,7 @@ Feature: Workers start workers of their own, within the tree limits
 
   Scenario: A worker at the depth limit cannot start a worker
     When I open Settings › Orchestration
-    And I set the Orchestration setting "Maximum workers" to 20
+    And I set the Orchestration setting "Maximum workers per tree" to 20
     And I set the Orchestration setting "Maximum tree depth" to 1
     And I close Settings
     And I send "Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start). Then call worker_start exactly once with name parent, project <project>, and as its prompt exactly the text between BEGIN and END. BEGIN Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start), then call worker_start exactly once with name child, project <project>, and prompt: Reply with exactly: OK. Do nothing else. END. Do nothing else." with the scratch project and worktree names filled in

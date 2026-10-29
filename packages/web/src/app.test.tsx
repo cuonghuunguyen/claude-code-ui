@@ -47,6 +47,9 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     loadAddon() {}
     open() {}
+    constructor() {
+      (globalThis as { __termMade?: number }).__termMade = ((globalThis as { __termMade?: number }).__termMade ?? 0) + 1;
+    }
     focus() {
       (globalThis as { __termFocused?: number }).__termFocused = ((globalThis as { __termFocused?: number }).__termFocused ?? 0) + 1;
     }
@@ -55,7 +58,9 @@ vi.mock("@xterm/xterm", () => ({
     onData() {}
     onResize() {}
     attachCustomKeyEventHandler() {}
-    dispose() {}
+    dispose() {
+      (globalThis as { __termDisposed?: number }).__termDisposed = ((globalThis as { __termDisposed?: number }).__termDisposed ?? 0) + 1;
+    }
   },
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
@@ -4691,6 +4696,253 @@ describe("GH-396 Files and Git graph in the main area", () => {
       const watches = (sent as unknown as { type: string; paths: string[] }[]).filter((m) => m.type === "fs.watch");
       // Every watch carries the one list of the store; no per-view lists alternate.
       expect(new Set(watches.map((w) => JSON.stringify(w.paths))).size).toBeLessThanOrEqual(1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("Aside popup (GH-465)", () => {
+  const AS = "99999999-2222-3333-4444-555555555555";
+  const asInfo = { ...session, id: AS, title: "which file?" };
+  const typeInto = async (text: string) => {
+    const box = el.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+    await act(async () => {});
+  };
+  const popup = () => el.querySelector<HTMLElement>("[data-aside-popup]");
+  beforeEach(() => {
+    sent.length = 0;
+    replies["aside.open"] = { session: asInfo, title: "which file?", from: "q1" };
+    replies["aside.close"] = {};
+    replies["aside.keep"] = {};
+    replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === AS ? asInfo : session });
+  });
+  afterEach(() => (delete replies["aside.open"], delete replies["aside.close"], delete replies["aside.keep"], (replies["session.subscribe"] = { logEpoch: "e1", session })));
+
+  it("/btw <question> forks the shown session into a popup that subscribes from the question; nothing is sent as a prompt", async () => {
+    await typeInto("/btw which file?");
+    expect(sent.find((m) => m.type === "aside.open")).toMatchObject({ sessionId: ID, text: "which file?" });
+    expect(sent.some((m) => m.type === "session.prompt")).toBe(false);
+    expect(sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS)).toMatchObject({ from: "q1" });
+    expect(popup()?.getAttribute("aria-label")).toBe("Aside: which file?");
+  });
+
+  it("Close sends aside.close and removes the popup", async () => {
+    await typeInto("/btw which file?");
+    await act(async () => void el.querySelector<HTMLElement>("[aria-label='Close aside']")!.click());
+    expect(sent.some((m) => m.type === "aside.close")).toBe(true);
+    expect(popup()).toBeNull();
+  });
+
+  it("Keep as session sends aside.keep, removes the popup and opens the session as a tab", async () => {
+    await typeInto("/btw which file?");
+    await act(async () => void [...el.querySelectorAll<HTMLElement>("[data-aside-popup] button")].find((b) => b.textContent === "Keep as session")!.click());
+    await act(async () => {});
+    expect(sent.some((m) => m.type === "aside.keep")).toBe(true);
+    expect(popup()).toBeNull();
+    expect(location.hash).toBe(`#${AS}`);
+  });
+
+  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it)", async () => {
+    await typeInto("/btw which file?");
+    sent.length = 0;
+    await act(async () => reconnect());
+    await act(async () => {});
+    const sub = sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS);
+    expect(sub).toBeDefined();
+    expect(sub).not.toHaveProperty("background");
+  });
+
+  it("the popup is hidden while another tab is shown and is back with its owner", async () => {
+    await typeInto("/btw which file?");
+    await press({ key: "s", code: "KeyS", ctrlKey: true, shiftKey: true });
+    expect(popup()).toBeNull();
+    await press({ key: "1", code: "Digit1", altKey: true });
+    expect(popup()).not.toBeNull();
+  });
+});
+
+describe("GH-397 Terminal in the main area", () => {
+  const SAME = "99999999-8888-7777-6666-555555555555";
+  const OTHERP = "aaaaaaaa-8888-7777-6666-555555555555";
+  const same: SessionListItem = { ...session, id: SAME, cwd: "/p/demo", title: "Same" };
+  const elsewhere: SessionListItem = { ...session, id: OTHERP, cwd: "/p/other", title: "Elsewhere" };
+  const TERM = `terminal:${ID}`;
+  const TERM_O = `terminal:${OTHERP}`;
+  const HOME_MAIN = JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: [], main: ["terminal"] } });
+  const g = globalThis as { __termFocused?: number; __termMade?: number; __termDisposed?: number };
+  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
+  const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
+  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+  const views = () => [...el.querySelectorAll<HTMLElement>('[data-testid="terminal-view"]')];
+  const reqs = (type: string) => (sent as unknown as { type: string }[]).filter((m) => m.type === type);
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
+  const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
+  const hashTo = async (id: string) =>
+    act(async () => {
+      location.hash = `#${id}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+  let n = 0;
+  const create = { "terminal.create": () => ({ terminal: { id: `n${++n}`, title: `Terminal ${n}` } }) };
+  const BT = { key: "`", code: "Backquote", ctrlKey: true };
+  async function mount(o: { tabs: string[]; hash?: string; layout?: string; extra?: Record<string, unknown> }) {
+    if (o.layout) localStorage.setItem("claude-ui.layout", o.layout);
+    localStorage.setItem("claude-ui.tabs", JSON.stringify(o.tabs));
+    location.hash = `#${encodeURIComponent(o.hash ?? o.tabs[0]!)}`;
+    sent.length = 0;
+    return remount({ "session.list": { sessions: [session, same, elsewhere], projects: ["/p/demo", "/p/other"] }, "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: [session, same, elsewhere].find((x) => x.id === m.sessionId) ?? session }), ...o.extra });
+  }
+
+  it("Move to main area on the Terminal tab opens \"Terminal · demo\" right of its session, keeps the same xterm (no new view, no detach), and moving back keeps it again", async () => {
+    const restore = await mount({ tabs: [ID, SAME] });
+    const spy = visible();
+    try {
+      await press(BT);
+      await vi.waitFor(() => expect(views()).toHaveLength(1));
+      await settle();
+      const view = views()[0]!;
+      const made = g.__termMade ?? 0;
+      const disposed = g.__termDisposed ?? 0;
+      const focused = g.__termFocused ?? 0;
+      const attaches = reqs("terminal.attach").length;
+      await ctx(el.querySelector('[data-pane-tab="terminal"]')!);
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="pane-move-main"]')!.click());
+      await settle();
+      expect(tabIds()).toEqual([ID, TERM, SAME]);
+      expect(stripTab(TERM).textContent).toContain("Terminal · demo");
+      expect(document.activeElement).toBe(stripTab(TERM).querySelector('[role="tab"]'));
+      expect(el.querySelector('[data-testid="bottom-panel"] [data-pane-tab="terminal"]')).toBeNull();
+      expect(views()).toEqual([view]);
+      expect(el.querySelector(`[data-pane-tab-body="${TERM}"]`)!.contains(view)).toBe(true);
+      expect(g.__termMade ?? 0).toBe(made);
+      expect(g.__termDisposed ?? 0).toBe(disposed);
+      expect(g.__termFocused ?? 0).toBe(focused);
+      expect(reqs("terminal.detach")).toHaveLength(0);
+      expect(reqs("terminal.attach")).toHaveLength(attaches);
+      // Back to the bottom panel: the tab closes with Undo, the same view returns to the dock.
+      await ctx(stripTab(TERM).querySelector('[role="tab"]')!);
+      await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Move Terminal to bottom panel")!.click());
+      await settle();
+      expect(toastEl()!.textContent).toContain("Closed 1 Terminal tab");
+      expect(tabIds()).toEqual([ID, SAME]);
+      expect(views()).toEqual([view]);
+      expect(g.__termMade ?? 0).toBe(made);
+      expect(g.__termDisposed ?? 0).toBe(disposed);
+      expect(reqs("terminal.detach")).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+      restore();
+    }
+  });
+
+  it("Ctrl+` with home main opens the project's terminal tab and focuses the shell; again keeps it; one tab per folder", async () => {
+    const restore = await mount({ tabs: [ID, SAME, OTHERP], layout: HOME_MAIN });
+    try {
+      const before = g.__termFocused ?? 0;
+      await press(BT);
+      expect(tabIds()).toEqual([ID, TERM, SAME, OTHERP]);
+      expect(location.hash).toBe(`#terminal%3A${ID}`);
+      await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+      await press(BT);
+      expect(tabIds().filter((t) => t === TERM)).toHaveLength(1);
+      expect(location.hash).toBe(`#terminal%3A${ID}`);
+      await hashTo(SAME);
+      await press(BT);
+      expect(tabIds().filter((t) => t?.startsWith("terminal:"))).toEqual([TERM]);
+      await hashTo(OTHERP);
+      await press(BT);
+      expect(tabIds().filter((t) => t?.startsWith("terminal:"))).toEqual([TERM, TERM_O]);
+      await hashTo(ID);
+      await hashTo(`terminal:${ID}`);
+      expect(reqs("terminal.detach")).toHaveLength(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("New terminal with home main: a shown tab adds a shell", async () => {
+    const restore = await mount({ tabs: [ID], layout: HOME_MAIN, extra: { "terminal.list": { terminals: [] }, ...create } });
+    try {
+      await press(BT);
+      await settle();
+      expect(reqs("terminal.create")).toHaveLength(1);
+      await press({ ...BT, shiftKey: true });
+      await settle();
+      expect(reqs("terminal.create")).toHaveLength(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it("a pointer click on the terminal strip tab focuses the shell; keyboard selection does not", async () => {
+    const restore = await mount({ tabs: [ID, TERM], layout: HOME_MAIN, hash: ID });
+    try {
+      await settle();
+      const tab = stripTab(TERM).querySelector<HTMLElement>('[role="tab"]')!;
+      const before = g.__termFocused ?? 0;
+      await act(async () => tab.focus());
+      await act(async () => tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
+      await settle();
+      expect(location.hash).toBe(`#terminal%3A${ID}`);
+      expect(g.__termFocused ?? 0).toBe(before);
+      await hashTo(ID);
+      await act(async () => tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+      await vi.waitFor(() => expect(g.__termFocused ?? 0).toBeGreaterThan(before));
+    } finally {
+      restore();
+    }
+  });
+
+  it("a restored terminal tab is quiet and starts no shell (daemon restart: no shells)", async () => {
+    const restore = await mount({ tabs: [ID, TERM], layout: HOME_MAIN, hash: TERM, extra: { "terminal.list": { terminals: [] }, ...create } });
+    try {
+      await settle();
+      const before = g.__termFocused ?? 0;
+      expect(el.querySelector('[data-testid="terminal-new"]')).not.toBeNull();
+      expect(g.__termFocused ?? 0).toBe(before);
+      expect(reqs("terminal.create")).toHaveLength(0);
+      await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-new"]')!.click());
+      await settle();
+      expect(reqs("terminal.create")).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("closing the last shell closes the terminal tab", async () => {
+    const restore = await mount({ tabs: [ID, TERM], layout: HOME_MAIN, hash: TERM });
+    try {
+      await settle();
+      await act(async () => el.querySelector<HTMLElement>('[aria-label="Close Terminal 1"]')!.click());
+      await settle();
+      expect(tabIds()).not.toContain(TERM);
+    } finally {
+      restore();
+    }
+  });
+
+  it("Settings Terminal position: Main area sets the home only; Bottom closes the tabs with Undo", async () => {
+    const restore = await mount({ tabs: [ID, TERM], layout: HOME_MAIN, hash: TERM });
+    try {
+      await settle();
+      await press({ key: "k", code: "KeyK", ctrlKey: true });
+      await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-terminal"]')!.click());
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
+      await settle();
+      expect(tabIds()).not.toContain(TERM);
+      expect(toastEl()!.textContent).toContain("Closed 1 Terminal tab");
+      await act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
+      await settle();
+      expect(tabIds()).toContain(TERM);
     } finally {
       restore();
     }

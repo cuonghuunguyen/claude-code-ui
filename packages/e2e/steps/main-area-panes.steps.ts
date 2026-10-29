@@ -2,14 +2,14 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { makeRepoWithTwoCommits } from "../support/git-fixture.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
-const PREFIX: Record<string, string> = { Files: "files", "Git graph": "graph" };
-const PANE: Record<string, string> = { Files: "files", "Git graph": "graph", Changes: "changes" };
+const PREFIX: Record<string, string> = { Files: "files", "Git graph": "graph", Terminal: "terminal" };
+const PANE: Record<string, string> = { Files: "files", "Git graph": "graph", Changes: "changes", Terminal: "terminal" };
 const side = (page: Page) => page.getByTestId("side-panel");
 const kindTabs = (page: Page, kind: string) => page.locator(`[data-testid="tab"][data-tab-id^="${PREFIX[kind]}:"]`);
 const kindButton = (page: Page, kind: string) => kindTabs(page, kind).first().locator('[role="tab"]');
 const body = (page: Page, kind: string) => page.locator(`[data-pane-tab-body^="${PREFIX[kind]}:"]`);
 const sessionTabs = (page: Page) =>
-  page.locator('[data-testid="tab"]:not([data-tab-id^="files:"]):not([data-tab-id^="graph:"]):not([data-tab-id^="plan:"]):not([data-tab-id=""])').filter({ has: page.locator('[role="tab"]') });
+  page.locator('[data-testid="tab"]:not([data-tab-id^="files:"]):not([data-tab-id^="graph:"]):not([data-tab-id^="plan:"]):not([data-tab-id^="terminal:"]):not([data-tab-id=""])').filter({ has: page.locator('[role="tab"]') });
 let remembered = "";
 
 async function stripIds(page: Page): Promise<string[]> {
@@ -23,7 +23,8 @@ Given("the scratch project is a git repository with two commits", async ({ proje
 });
 
 When("I move the {string} pane to the main area from its tab menu", async ({ page }, kind: string) => {
-  await menuOf(side(page).getByTestId(`pane-${PANE[kind]}`));
+  const dock = page.locator(`[data-testid="side-panel"] [data-testid="pane-${PANE[kind]}"], [data-testid="bottom-panel"] [data-testid="pane-${PANE[kind]}"]`);
+  await menuOf(dock.first());
   await page.getByTestId("pane-move-main").click();
   await expect(kindTabs(page, kind)).toHaveCount(1);
 });

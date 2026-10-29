@@ -360,6 +360,10 @@ describe("adapter on unknown messages", () => {
     ]);
   });
 
+  it("system/session_title_changed is known and shows nothing (the title comes from the list)", () => {
+    expect(run([{ type: "system", subtype: "session_title_changed", uuid: "t1", title: "x" }])).toEqual([]);
+  });
+
   it("retracts the parts of the messages a refusal fallback names in retracted_message_uuids; unknown uuids are ignored", () => {
     const parts = run([
       { type: "assistant", uuid: "a1", message: { id: "m1", content: [{ type: "text", text: "partial" }] } },

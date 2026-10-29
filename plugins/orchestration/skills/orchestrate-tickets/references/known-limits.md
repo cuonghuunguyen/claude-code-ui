@@ -36,7 +36,7 @@ State these when they bite.
     `worker_send` the task again (not an attempt).
 
 16. **Tree limits are tool errors, not queues.** A worker at Maximum tree depth cannot start
-    workers; a coordinator at Maximum workers per coordinator, or the daemon at Maximum workers,
+    workers; a coordinator at Maximum workers per coordinator, the tree at Maximum workers per tree, or the daemon at Maximum workers in total,
     cannot start another. Close a finished worker first, or ask the user to raise the limit.
 17. **`worker_close` refuses a worker with running or waiting workers, `worker_remove` refuses a
     worker with any worker below it** (`has_workers`): wait for the busy ones before a close;
