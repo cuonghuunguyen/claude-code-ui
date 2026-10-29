@@ -1,7 +1,7 @@
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
@@ -227,6 +227,23 @@ describe.skipIf(process.platform === "win32")("fake docker", () => {
     expect(run(["exec", "dev", "sh", "-c", "emit installed none"]).stdout).toBe(cfg.check.stdout);
     const setup = run(["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
     expect([setup.status, setup.stdout]).toEqual([1, cfg.setup.stdout]);
+  });
+  it("GH-458: log lines per call and per setup exec; side makes the setup exec run a real side under its home (not run here)", () => {
+    const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
+    try {
+      const log = join(d, "docker.log");
+      const withLog = { ...cfg, log };
+      const sh = (c: typeof withLog & { side?: { home: string; repo: string; projects: string } }, args: string[]) => spawnSync("sh", ["-c", fakeDockerScript(c), "docker", ...args], { encoding: "utf8" });
+      sh(withLog, ["cp", "a", "dev:/tmp/a"]);
+      sh(withLog, ["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
+      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["cp", "setup", "exec"]);
+      // The side script is built, never started here: only its text is checked.
+      const text = fakeDockerScript({ ...withLog, side: { home: join(d, "h"), repo: "/repo", projects: join(d, "p") } });
+      expect(text).toContain("side.pid");
+      expect(text).toContain("--side --roots");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
   it("writeFakeDocker writes an executable <run>/bin/docker and returns the folder to put on PATH", () => {
     const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
