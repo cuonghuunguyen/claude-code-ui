@@ -1,6 +1,6 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SideInfo } from "@claude-ui/protocol";
-import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName } from "./sides.tsx";
+import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName, sideStatus } from "./sides.tsx";
 
 it("reads a WSL path written the Windows way as its distro's POSIX path", () => {
   expect(fromWslUnc("\\\\wsl.localhost\\Ubuntu\\home\\me")).toEqual({ side: "wsl:Ubuntu", path: "/home/me" });
@@ -60,4 +60,17 @@ it("picks the side a kind opens on: remembered, else a ready distro; never an un
   expect(defaultTarget("docker", sides)).toBeUndefined();
   expect(defaultTarget("docker", sides, "docker:y")?.id).toBe("docker:y");
   expect(defaultTarget("docker", sides, "docker:gone")).toBeUndefined();
+});
+
+describe("sideStatus", () => {
+  const side = (o: object): SideInfo => ({ id: "wsl:U", label: "WSL: U", state: "off", ...o }) as SideInfo;
+  it("says what a side that is not ready does, with its action", () => {
+    expect(sideStatus(undefined)).toBeUndefined();
+    expect(sideStatus(side({ state: "ready" }))).toBeUndefined();
+    expect(sideStatus({ id: "local", label: "Windows", state: "ready" })).toBeUndefined();
+    expect(sideStatus(side({ state: "starting" }))).toEqual({ text: "Starting…" });
+    expect(sideStatus(side({ state: "error", message: "WSL: U stopped (exit code 1). Retry to start it again." }))).toEqual({ text: "WSL: U stopped (exit code 1). Retry to start it again.", action: "retry" });
+    expect(sideStatus(side({ state: "off", update: true }))).toEqual({ text: "Needs an update", action: "update" });
+    expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });
+  });
 });

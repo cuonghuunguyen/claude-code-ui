@@ -37,6 +37,36 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
   );
 }
 
+/** What the sidebar says under a project of a side that is not ready; `action`: Retry (side.start) or Update (side.start with setup needed). */
+export type SideStatus = { text: string; action?: "retry" | "update" };
+export function sideStatus(side: SideInfo | undefined): SideStatus | undefined {
+  if (!side || side.id === LOCAL_SIDE || side.state === "ready") return undefined;
+  if (side.state === "starting") return { text: "Starting…" };
+  if (side.state === "error") return { text: side.message ?? "Could not start", action: "retry" };
+  return side.update ? { text: "Needs an update", action: "update" } : { text: "Not running" };
+}
+
+/** The side of a cwd (as SideInfo) and the start action of its status line. */
+export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefined; act: (side: string, setup?: "needed") => void }>({ of: () => undefined, act: () => {} });
+
+/** Status line under a project of a side that is not ready (Starting…, the error with Retry, Needs an update with Update). */
+export function SideStatusLine({ cwd }: { cwd: string }) {
+  const { of, act } = use(SideState);
+  const side = of(cwd);
+  const st = sideStatus(side);
+  if (!side || !st) return null;
+  return (
+    <p role="status" className="flex items-center gap-2 py-1 pl-7 text-muted-foreground text-xs max-md:min-h-11" data-testid="sidebar-side-status">
+      <span className="min-w-0 break-words">{st.text}</span>
+      {st.action && (
+        <button type="button" onClick={() => act(side.id, st.action === "update" ? "needed" : undefined)} className="h-6 shrink-0 rounded-md border px-2 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="sidebar-side-action">
+          {st.action === "update" ? "Update" : "Retry"}
+        </button>
+      )}
+    </p>
+  );
+}
+
 /** The daemon's own side is Windows: drive-letter paths are local, POSIX paths belong to another side. */
 export const localIsWindows = (sides: SideInfo[]) => sides.find((s) => s.id === LOCAL_SIDE)?.label === "Windows";
 

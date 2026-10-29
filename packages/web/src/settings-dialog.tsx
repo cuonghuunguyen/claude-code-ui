@@ -3,7 +3,8 @@
 // SECTIONS, per-browser choices (Notifications, Timeline, Sending, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
 // A later setting is one more row in SECTIONS; a later group is one more entry in `groups`.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { Settings, SettingsPatch, SettingsResult } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
+import { sideStatus } from "./sides.tsx";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -185,6 +186,39 @@ function AppearanceSection() {
   );
 }
 
+/** The Sides group (GH-458): per WSL distro and container, "Start with Claude UI" and "Update automatically" (daemon side.prefs). */
+function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request: <T>(msg: Request) => Promise<T>; onError: (m: string) => void }) {
+  const rows = sides.filter((x) => x.id !== LOCAL_SIDE);
+  const set = (side: string, patch: { start?: boolean; update?: boolean }) => void request({ type: "side.prefs", side, ...patch }).catch((e: Error) => onError(e.message));
+  return (
+    <section aria-labelledby="settings-sides" className="flex flex-col" data-testid="settings-sides">
+      <h3 id="settings-sides" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Sides
+      </h3>
+      {!rows.length && <p className="border-t py-2 text-muted-foreground text-sm">No WSL distro or container is listed. A running container shows up here.</p>}
+      {rows.map((r) => (
+        <div key={r.id} className="flex flex-col gap-1 border-t py-2" data-testid={`settings-side-${r.id}`}>
+          <div className="flex items-center gap-3 max-md:min-h-11">
+            <div className="min-w-0 flex-1">
+              <span className="block truncate text-sm">{r.label}</span>
+              <span className="block break-words text-muted-foreground text-xs">{r.state === "ready" ? "Running" : (sideStatus(r)?.text ?? "")}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 max-md:min-h-11">
+            <span className="min-w-0 flex-1 text-sm">Start with Claude UI</span>
+            <Switch on={!!r.autoStart} label={`Start ${r.label} with Claude UI`} held={false} onToggle={(on) => set(r.id, { start: on })} title="Start with Claude UI" testId={`settings-side-start-${r.id}`} />
+          </div>
+          <div className="flex items-center gap-3 max-md:min-h-11">
+            <span className="min-w-0 flex-1 text-sm">Update automatically</span>
+            <Switch on={r.autoUpdate !== false} label={`Update ${r.label} automatically`} held={!r.autoStart} onToggle={(on) => set(r.id, { update: on })} title={r.autoStart ? "Update automatically" : "Needs Start with Claude UI"} testId={`settings-side-update-${r.id}`} />
+          </div>
+        </div>
+      ))}
+      <p className="pt-1 text-muted-foreground text-xs">Start with Claude UI takes effect at the next start of Claude UI. Off also removes the projects of the side from the sidebar. Update automatically installs a new Claude UI build from the bundle only; npm is never run inside a side.</p>
+    </section>
+  );
+}
+
 /** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
 function ScreenSection() {
   const s = useKeepAwakeSetting();
@@ -288,7 +322,7 @@ const SECTIONS: { id: keyof Settings; title: string; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push }: { tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push, sides, docker }: { sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
@@ -676,6 +710,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
+    ...(sides?.some((x) => x.id !== LOCAL_SIDE) || docker ? [{ id: "sides", title: "Sides", body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
     { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;

@@ -153,7 +153,7 @@ import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
-import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
+import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
@@ -260,6 +260,11 @@ export function App() {
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const sideOf = useMemo(() => sideLookup(sides, cwdSides), [sides, cwdSides]);
+  // GH-458: the status line of a project whose side is not ready; Retry / Update start it again (the state comes back as sessions.changed).
+  const sideState = useMemo(
+    () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed") => void client.current?.request({ type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
+    [sides, sideOf],
+  );
   // Project the new-session tab starts in.
   const [draftCwd, setDraftCwd] = useState<string>();
   // The new-session tab's model, mode and effort: here, not in the tab, so the palette can change them too.
@@ -3212,6 +3217,7 @@ export function App() {
   return (
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
+    <SideState value={sideState}>
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar">
         <IconButton className="md:hidden" label="Sessions" onClick={() => setDrawer(true)} testId="open-drawer">
@@ -3980,7 +3986,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
+      <SettingsDialog sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
       {shown && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4064,6 +4070,7 @@ export function App() {
         />
       </ToastRegion>
     </div>
+    </SideState>
     </SideLabel>
     </AvatarColors>
   );

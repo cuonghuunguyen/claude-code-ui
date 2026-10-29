@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, act as reactAct, type ContextType } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { SessionList } from "./sidebar.tsx";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
-import { SideLabel } from "./sides.tsx";
+import { SideLabel, SideState } from "./sides.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One actions menu per rendered row: counts the rows' renders by title.
@@ -45,7 +45,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
+async function render(props: { sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -63,6 +63,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
   const onCleanUp = vi.fn();
   const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
+      <SideState value={props.sideState ?? { of: () => undefined, act: () => {} }}>
       <SessionList
         list={props.list ?? LIST}
         projects={props.projects ?? ["/home/u/web", "/home/u/api"]}
@@ -87,6 +88,7 @@ async function render(props: { reveal?: number; activeId?: string | null; list?:
         onRenamed={onRenamed}
         reveal={reveal}
       />
+      </SideState>
       </SideLabel>
   );
   await act(async () => root!.render(ui()));
@@ -1292,4 +1294,38 @@ it("GH-358 Shift+F10 on a worker row focuses the menu's first enabled item", asy
   await vi.waitFor(() => expect(document.activeElement).toBe(menuItems().find((i) => !i.hasAttribute("data-disabled") && i.getAttribute("aria-disabled") !== "true")));
   expect(document.activeElement?.textContent).toBe("Rename");
   await closeMenu();
+});
+
+describe("status of a project's side (GH-458)", () => {
+  const web = "/home/u/web";
+  const side = (o: object) => ({ id: "wsl:U", label: "WSL: U", state: "off", ...o }) as never;
+  const state = (s: object, act = vi.fn()) => ({ of: (cwd: string) => (cwd === web ? side(s) : undefined), act });
+
+  it("a side that is starting shows Starting… under its project, no action; other projects show nothing", async () => {
+    const { groups } = await render({ sideState: state({ state: "starting" }) });
+    const g = groups().find((x) => x.dataset.cwd === web)!;
+    expect(g.querySelector('[data-testid="sidebar-side-status"]')?.textContent).toBe("Starting…");
+    expect(g.querySelector('[data-testid="sidebar-side-action"]')).toBeNull();
+    expect(groups().find((x) => x.dataset.cwd === "/home/u/api")!.querySelector('[data-testid="sidebar-side-status"]')).toBeNull();
+  });
+
+  it("an error shows its message and Retry (side.start without setup); needs an update shows Update (setup needed)", async () => {
+    const act = vi.fn();
+    const a = await render({ sideState: state({ state: "error", message: "WSL: U stopped (exit code 1). Retry to start it again." }, act) });
+    const g = a.groups().find((x) => x.dataset.cwd === web)!;
+    expect(g.querySelector('[data-testid="sidebar-side-status"]')?.textContent).toContain("stopped (exit code 1)");
+    await reactAct(async () => g.querySelector<HTMLElement>('[data-testid="sidebar-side-action"]')!.click());
+    expect(act).toHaveBeenLastCalledWith("wsl:U", undefined);
+    root?.unmount();
+    const b = await render({ sideState: state({ state: "off", update: true }, act) });
+    const h = b.groups().find((x) => x.dataset.cwd === web)!;
+    expect(h.querySelector('[data-testid="sidebar-side-status"]')?.textContent).toContain("Needs an update");
+    await reactAct(async () => h.querySelector<HTMLElement>('[data-testid="sidebar-side-action"]')!.click());
+    expect(act).toHaveBeenLastCalledWith("wsl:U", "needed");
+  });
+
+  it("a ready side shows no status", async () => {
+    const { groups } = await render({ sideState: state({ state: "ready" }) });
+    expect(groups().find((x) => x.dataset.cwd === web)!.querySelector('[data-testid="sidebar-side-status"]')).toBeNull();
+  });
 });
