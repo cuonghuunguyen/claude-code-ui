@@ -17,19 +17,22 @@ import { useDark } from "./theme.ts";
 
 type Client = ReturnType<typeof connect>;
 
-/** The selected terminal's ID (IDs are unique across projects), so a reload selects it again. */
+/** The selected terminal's ID per project folder (`{ [cwd]: id }`), so a reload selects it again. */
 const ACTIVE_KEY = "claude-ui.terminalActive";
+const readMap = (): Record<string, string> => {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(ACTIVE_KEY) ?? "");
+    return v && typeof v === "object" ? (v as Record<string, string>) : {};
+  } catch {
+    return {}; // Blocked, absent or the legacy plain id: the first terminal is selected.
+  }
+};
 const storage = {
-  get: () => {
+  get: (cwd: string) => readMap()[cwd],
+  set: (cwd: string, id: string) => {
     try {
-      return localStorage.getItem(ACTIVE_KEY) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  },
-  set: (id: string) => {
-    try {
-      localStorage.setItem(ACTIVE_KEY, id);
+      // shortcut: one entry per folder ever opened, never pruned; prune to listed folders if the key grows large.
+      localStorage.setItem(ACTIVE_KEY, JSON.stringify({ ...readMap(), [cwd]: id }));
     } catch {
       // Storage blocked: a reload selects the first terminal.
     }
@@ -151,7 +154,7 @@ export function TerminalPanel({
         if (stale) return;
         setTerminals(r.terminals);
         const has = (id?: string) => r.terminals.some((t) => t.id === id);
-        setActiveId((a) => (has(a) ? a : has(storage.get()) ? storage.get() : r.terminals[0]?.id));
+        setActiveId((a) => (has(a) ? a : has(storage.get(cwd)) ? storage.get(cwd) : r.terminals[0]?.id));
         setLoaded(true);
       },
       (e: Error) => !stale && e.message !== "disconnected" && setError(e.message),
@@ -167,7 +170,8 @@ export function TerminalPanel({
   }, [ensure, loaded]);
   useEffect(() => void (loaded && onTerminals?.(terminals.length)), [loaded, terminals.length]);
 
-  useEffect(() => void (activeId && storage.set(activeId)), [activeId]);
+  // Only an id of the shown folder's list: after a folder switch `activeId` is still the old folder's until the new list loads.
+  useEffect(() => void (activeId && terminals.some((t) => t.id === activeId) && storage.set(shownCwd, activeId)), [activeId, terminals, shownCwd]);
 
   useEffect(() => client.onTerminal((m) => m.type === "terminal.exit" && remove(m.terminalId)), [client]);
 

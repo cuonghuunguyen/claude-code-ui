@@ -107,9 +107,9 @@ afterEach(async () => {
 
 /** Fake daemon: `terminals` per cwd, `buffers` replayed on attach. */
 /** `createError`: terminal.create fails with it, like the daemon's too_many_terminals. */
-function fakeClient(running: { id: string; title: string }[] = [], createError?: string) {
+function fakeClient(running: { id: string; title: string; cwd?: string }[] = [], createError?: string) {
   let n = running.length;
-  const terminals = running.map((t) => ({ ...t, cwd: "/p" }));
+  const terminals = running.map((t) => ({ cwd: "/p", ...t }));
   const buffers: Record<string, string> = {};
   /** Set: terminal.input fails with it, like the daemon's input_backlog. */
   const inputError: { message?: string } = {};
@@ -345,6 +345,59 @@ it("after a reload, every terminal streams and the selected one is selected agai
   expect(xterm.all.map((t) => !!t.parent)).toEqual([false, true]);
   await act(async () => el.querySelectorAll<HTMLButtonElement>("[role=tab]")[0]!.click());
   expect(xterm.all.map((t) => !!t.parent)).toEqual([true, true]);
+});
+
+const KEY = "claude-ui.terminalActive";
+const selected = (panel: Element) => [...panel.querySelectorAll("[role=tab]")].filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.textContent);
+const twoFolders = [
+  { id: "a1", title: "A1", cwd: "/p/a" },
+  { id: "a2", title: "A2", cwd: "/p/a" },
+  { id: "b1", title: "B1", cwd: "/p/b" },
+  { id: "b2", title: "B2", cwd: "/p/b" },
+];
+const renderBoth = (client: ReturnType<typeof fakeClient>) =>
+  act(async () =>
+    root.render(
+      <>
+        <section id="a"><TerminalPanel client={client} status="connected" cwd="/p/a" onEmpty={() => {}} /></section>
+        <section id="b"><TerminalPanel client={client} status="connected" cwd="/p/b" onEmpty={() => {}} /></section>
+      </>,
+    ),
+  );
+
+it("after a reload, each project folder selects its own terminal again", async () => {
+  localStorage.clear();
+  await renderBoth(fakeClient(twoFolders));
+  await flush();
+  for (const id of ["a", "b"]) await act(async () => el.querySelectorAll<HTMLButtonElement>(`#${id} [role=tab]`)[1]!.click());
+  await act(async () => root.render(null));
+  await renderBoth(fakeClient(twoFolders));
+  await flush();
+  expect(selected(el.querySelector("#a")!)).toEqual(["A2"]);
+  expect(selected(el.querySelector("#b")!)).toEqual(["B2"]);
+});
+
+it("a project switch does not store the previous folder's terminal for the new folder", async () => {
+  localStorage.clear();
+  const client = fakeClient(twoFolders);
+  const at = (cwd: string) => act(async () => root.render(<TerminalPanel client={client} status="connected" cwd={cwd} onEmpty={() => {}} />));
+  await at("/p/a");
+  await flush();
+  await act(async () => el.querySelectorAll<HTMLButtonElement>("[role=tab]")[1]!.click());
+  await at("/p/b");
+  await flush();
+  await act(async () => root.render(null));
+  await at("/p/b");
+  await flush();
+  expect(selected(el)).toEqual(["B1"]);
+  expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ "/p/a": "a2", "/p/b": "b1" });
+});
+
+it("a legacy plain-id value selects the first terminal", async () => {
+  localStorage.setItem(KEY, "t2");
+  await render(fakeClient([{ id: "t1", title: "Terminal 1" }, { id: "t2", title: "Terminal 2" }]));
+  await flush();
+  expect(selected(el)).toEqual(["Terminal 1"]);
 });
 
 it("creates the terminal with the Nerd Font stack", async () => {

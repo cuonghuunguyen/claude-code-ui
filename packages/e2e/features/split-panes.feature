@@ -111,3 +111,24 @@ Feature: Split view with a session and one of its panes
     Then the session area is not split
     And the scrollWidth of the page is 390
     And I capture "split-phone-390"
+
+  Scenario: A split with a Terminal tab keeps each folder's selected terminal across a reload
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    When I open Settings and choose the terminal position "Main area"
+    And I open the terminal with the shortcut
+    And I click the Terminal tab New terminal button
+    And I select "Terminal 1" in the Terminal tab
+    And I open a session in a second project folder with a finished reply
+    And I open the terminal with the shortcut
+    And I click the Terminal tab New terminal button
+    And I click the Terminal tab of the first project
+    And I choose "Split right" in the menu of the "Terminal" tab
+    Then the session area is split
+    When I reload the page
+    Then the session area is split
+    And the terminal of the split is ready
+    And the Terminal tab selects "Terminal 1"
+    When I click the Terminal tab of the second project
+    Then the Terminal tab selects "Terminal 2"
+    And I capture "split-terminal-selected-per-folder"
