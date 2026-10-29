@@ -138,7 +138,7 @@ Then("the owner runs the {string} tool call", async ({ page }, text: string) => 
 });
 
 Then("the owner turn has finished", async ({ page }) => {
-  await expect(owner(page).locator('[data-testid="send"][data-state="idle"]')).toBeVisible({ timeout: TURN_MS });
+  await expect(owner(page).locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
 });
 
 Then("Focus lists a request of an aside", async ({ page }) => {
@@ -238,3 +238,38 @@ Then("the session list lists the aside", async ({ page, memo }) => {
 Then("the permission mode is {string}", async ({ page }, label: string) => {
   await expect(page.getByTestId("mode-select")).toHaveAttribute("aria-label", new RegExp(`^${label}`));
 });
+
+Given("a new Haiku session", async ({ page, daemon, project }) => {
+  await openApp(page, daemon);
+  await openProject(page, project.path);
+  await prepareHaikuSession(page, project.name);
+});
+
+When("I ask the aside {string} above the permission card", async ({ page, memo }, question: string) => {
+  await owner(page).getByTestId("aside-ask-open").click();
+  const input = owner(page).getByRole("textbox", { name: "Aside question" });
+  await input.fill(question);
+  await input.press("Enter");
+  memo.envValue = question;
+});
+
+When("I ask the aside {string} in the card question input", async ({ page }, question: string) => {
+  const input = owner(page).getByRole("textbox", { name: "Aside question" });
+  await expect(input).toBeVisible();
+  await input.fill(question);
+  await input.press("Enter");
+});
+
+Then("the aside question input shows an error", async ({ page }) => {
+  await expect(owner(page).getByTestId("aside-ask").getByRole("alert")).toBeVisible({ timeout: TURN_MS });
+});
+
+Then("{int} aside popups show", async ({ page }, n: number) => {
+  await expect(popup(page)).toHaveCount(n, { timeout: TURN_MS });
+});
+
+When("I open the first session tab", async ({ page }) => {
+  await page.getByTestId("tab-strip").getByRole("tab").filter({ hasNotText: /Focus|New session/ }).first().click();
+});
+
+When("I send the first prompt {string}", async ({ page }, text: string) => sendPrompt(page, text));

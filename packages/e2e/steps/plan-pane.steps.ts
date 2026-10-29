@@ -349,7 +349,7 @@ Then("the Plan tab shows the revised step", async ({ page }) => {
 });
 
 When("I run {string} from the command palette", async ({ page }, title: string) => {
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByTestId("palette");
   await expect(palette).toBeVisible();
   await palette.getByRole("combobox").or(palette.locator("input")).first().fill(title);

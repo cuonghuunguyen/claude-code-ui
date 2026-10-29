@@ -123,3 +123,51 @@ Feature: Aside (/btw)
     And the aside transcript file does not exist
     And the session list shows no aside
     And I capture "leftover"
+
+  Scenario: Ask aside works behind the owner's permission card, from its button and from the command palette
+    Given a Haiku session that has read "notes-465.txt"
+    When I send "Use the Bash tool to run exactly this command and nothing else: echo e2e > card-note.txt" in the owner
+    Then the owner shows a permission request
+    When I ask the aside "Which file did we read? Answer with the file name only." above the permission card
+    Then an aside popup shows
+    And the aside shows a reply
+    And the owner shows a permission request
+    And I capture "card-button"
+    When I run "Ask aside" from the command palette
+    And I ask the aside "What is the first word of this session? One word." in the card question input
+    Then 2 aside popups show
+    And the owner shows a permission request
+    And I capture "card-palette"
+    When I allow the owner permission request
+    Then the owner turn has finished
+    And the file "card-note.txt" exists in the project
+
+  Scenario: A second /btw opens a second popup
+    Given a Haiku session that has read "notes-465.txt"
+    When I ask the aside "Which file did we read? Answer with the file name only."
+    And I ask the aside "Reply with the word two."
+    Then 2 aside popups show
+    And the owner timeline shows 1 prompt
+    And I capture "two-popups"
+
+  Scenario: Popups hide with their owner tab and come back with it
+    Given a Haiku session that has read "notes-465.txt"
+    When I ask the aside "Which file did we read? Answer with the file name only."
+    Then the aside shows a reply
+    When I open the New session tab
+    Then no aside popup shows
+    And I capture "other-tab"
+    When I open the first session tab
+    Then an aside popup shows
+    And the aside shows a reply
+    And I capture "back"
+
+  Scenario: /btw before the first Claude reply is refused
+    Given the viewport is 1440x900
+    And a new Haiku session
+    When I send the first prompt "Use the Bash tool to run exactly this command and nothing else: echo x > refuse-note.txt. Write no text before the tool call."
+    Then the owner shows a permission request
+    When I ask the aside "Anything?" above the permission card
+    Then the aside question input shows an error
+    And no aside popup shows
+    And I capture "refused"
