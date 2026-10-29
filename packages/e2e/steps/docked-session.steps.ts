@@ -115,7 +115,8 @@ Then("the tab bar lists {int} sessions", async ({ page }, n: number) => {
 
 // --- GH-503: the docked pane has the strip tab's features ---
 Then("the docked panel shows {string}", async ({ page }, name: string) => {
-  await expect(dockBody(page).getByRole("button", { name })).toBeVisible({ timeout: TURN_MS });
+  // first(): the plan viewer head and the approval panel both have an "Open plan in popup" button.
+  await expect(dockBody(page).getByRole("button", { name }).first()).toBeVisible({ timeout: TURN_MS });
 });
 
 When("I click {string} in the docked panel", async ({ page }, name: string) => {
@@ -166,6 +167,8 @@ Then("no plan tab is active", async ({ page }) => {
 });
 
 When("I attach an image in the main prompt box", async ({ page }) => {
+  // The main prompt box of the session in the first tab, so docking that session carries the image.
+  await stripSessions(page).first().click();
   // 1x1 PNG.
   const buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
   await page.getByTestId("session-area").locator('input[type="file"]').first().setInputFiles({ name: "dot.png", mimeType: "image/png", buffer });
@@ -183,7 +186,11 @@ Then("the main prompt box shows {int} image(s)", async ({ page }, n: number) => 
 When("I open the command palette and search the docked session", async ({ page }) => {
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByTestId("palette")).toBeVisible();
-  const title = (await dockTabs(page).first().innerText()).trim().split("\n")[0]!;
+  // First line of the tab text is the project letter avatar; the title is the last.
+  // The title is "New session" until the generated one arrives; wait for it.
+  const titleOf = async () => (await dockTabs(page).first().innerText()).trim().split("\n").pop()!.trim();
+  await expect.poll(titleOf, { timeout: TURN_MS }).not.toMatch(/^new session$/i);
+  const title = await titleOf();
   await page.getByTestId("palette").locator("input").first().fill(title);
 });
 

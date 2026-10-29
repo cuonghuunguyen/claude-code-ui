@@ -114,7 +114,7 @@ Feature: A session shown in the side or bottom panel
 
   Scenario: Docking a session never shows its own plan tab
     Given the viewport is 1440x900
-    And a Haiku session with one finished reply
+    And a Haiku session in Plan mode with a plan waiting for approval
     And I move the Plan pane to the main area from its tab menu
     And I open a second session with a finished reply
     And I select the first session tab
