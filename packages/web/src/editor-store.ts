@@ -8,7 +8,7 @@ import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/prot
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { baseName, inDir } from "./paths.ts";
 import { diskChanged, dropTabs, goneTab, isDirty, isMarkdown, mediaKind, movedPath, moveTabs, opened, openedMedia, pin, placeTab, readFailure, reload, restoredTab, saveBase, saved, type Tab } from "./files.ts";
-import { loadSaved, toSaved, writeSaved, type EditorStorage, type SavedTab } from "./editor-persist.ts";
+import { loadSaved, toSaved, writeSaved, type EditorStorage, type SavedDrafts, type SavedTab } from "./editor-persist.ts";
 
 type Client = ReturnType<typeof connect>;
 
@@ -26,6 +26,8 @@ export type EditorSnapshot = {
   loading?: string;
   /** A failed open that is not a notice. */
   error?: string;
+  /** The last write could not keep the unsaved edits (full storage): a reload would lose them. */
+  draftsNotKept?: boolean;
   /** Bumped after a save or an fs.changed: the file tree reads git marks again. */
   gitNudge: number;
 };
@@ -42,13 +44,15 @@ export type OpenOptions = {
 };
 
 const WRITE_DELAY_MS = 300;
-type Pending = { tab: SavedTab; draft?: { draft: string; mtime: number } };
+type Pending = { tab: SavedTab; draft?: SavedDrafts[string] };
 
 export function createEditorStore(getClient: () => Client | undefined, storage: EditorStorage = { load: loadSaved, write: writeSaved }) {
   const loaded = storage.load();
   /** Saved tabs not read yet. Until restore() has run, nothing is written; entries still pending are merged into every write, so a draft is never erased. */
   const pending = new Map<string, Pending>(loaded.tabs.map((t) => [t.path, { tab: t, draft: loaded.drafts[t.path] }]));
   let restored = false;
+  /** Changes not written yet: pagehide writes only then. */
+  let unwritten = false;
   let restoring: Promise<void> | undefined;
   let writeTimer: ReturnType<typeof setTimeout> | undefined;
   let state: EditorSnapshot = { tabs: {}, recent: loaded.recent, gitNudge: 0 };
@@ -61,7 +65,8 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
   const flush = () => {
     clearTimeout(writeTimer);
     writeTimer = undefined;
-    if (!restored) return;
+    if (!restored || !unwritten) return;
+    unwritten = false;
     const w = toSaved(state);
     for (const [path, p] of pending) {
       if (state.tabs[path]) continue;
@@ -70,10 +75,15 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
     }
     w.active ??= pending.size ? loaded.active : undefined;
     w.recent = state.recent.filter((p) => state.tabs[p] || pending.has(p));
-    storage.write(w);
+    const kept = storage.write(w) !== false;
+    if (kept === !!state.draftsNotKept) {
+      state = { ...state, draftsNotKept: !kept };
+      listeners.forEach((l) => l());
+    }
   };
   const schedule = () => {
     if (!restored) return;
+    unwritten = true;
     clearTimeout(writeTimer);
     writeTimer = setTimeout(flush, WRITE_DELAY_MS);
   };
@@ -114,11 +124,20 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
       if ((e as Error).message === "disconnected") return "keep";
       const f = readFailure(e as RequestError);
       const code = (e as RequestError).code;
-      if (p.draft) return flags(goneTab(path, p.draft, code === "not_found" || code === "path_not_allowed" ? undefined : f.text));
+      if (p.draft) return flags(goneTab(path, p.draft, code === "not_found" ? undefined : f.text));
       // A file tab left to its own read (it shows the failure); a Files tab of a gone file is dropped silently.
       if (p.tab.item || !f.notice) return undefined;
       return flags({ path, disk: "", draft: "", mtime: 0, notice: f.text, noticeHint: f.hint });
     }
+  }
+
+  /** Unpaired: stop writing and forget what was saved (App clears the keys; a new pairing starts again with restore()). */
+  function forget() {
+    clearTimeout(writeTimer);
+    writeTimer = undefined;
+    restored = false;
+    unwritten = false;
+    pending.clear();
   }
 
   /** Once per page load, when connected: reads the saved tabs back (GH-366). Entries that could not be read for lack of a connection stay pending for the next call. */
@@ -192,11 +211,20 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
       const saved = pending.get(path);
       pending.delete(path);
       try {
-        const tab = make(await readTab(path, saved?.draft));
+        let tab: Tab;
+        if (saved?.draft) {
+          // Same reading as restore(): a gone file keeps its draft tab; a lost connection puts the entry back.
+          const r = await readSaved(saved);
+          if (r === "keep") throw new Error("disconnected");
+          tab = make(r as Tab);
+        } else tab = make(await readTab(path));
         if (seq !== openSeq && preview) return;
         setTabs((ts) => placeTab(ts, ts[path] ?? tab, preview, scope));
       } catch (e) {
-        if ((e as Error).message === "disconnected") return void set((s) => ({ ...s, error: "Not connected" }));
+        if ((e as Error).message === "disconnected") {
+          if (saved) pending.set(path, saved);
+          return void set((s) => ({ ...s, error: "Not connected" }));
+        }
         const f = readFailure(e as RequestError);
         if (seq !== openSeq && preview) return;
         if (!f.notice) return set((s) => ({ ...s, error: f.text }));
@@ -219,7 +247,8 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
 
   async function save(path: string, overwrite = false) {
     const t = state.tabs[path];
-    if (!t) return;
+    // A draft in conflict is never written plainly: its base mtime may equal the newer disk version.
+    if (!t || (t.conflict && !overwrite)) return;
     const content = t.draft;
     try {
       // A deleted file (restored draft): create it, then write without a base version. If it came back meanwhile, its content meets the draft as a conflict.
@@ -286,6 +315,7 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
     },
     refresh,
     restore,
+    forget,
     switchView,
     update,
     /** "Reload from disk" of a conflict. */

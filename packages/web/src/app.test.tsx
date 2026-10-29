@@ -2376,6 +2376,10 @@ it("unpairing clears the saved editor tabs and drafts of this browser (GH-366)",
   await act(async () => setStatus("unauthorized"));
   expect(localStorage.getItem("claude-ui.editorTabs")).toBeNull();
   expect(sessionStorage.getItem("claude-ui.editorDrafts")).toBeNull();
+  // A later pagehide must not write the cleared keys back.
+  window.dispatchEvent(new Event("pagehide"));
+  expect(localStorage.getItem("claude-ui.editorTabs")).toBeNull();
+  expect(sessionStorage.getItem("claude-ui.editorDrafts")).toBeNull();
 });
 
 describe("key promoter (GH-234)", () => {
@@ -5597,6 +5601,24 @@ describe("GH-399 a file as a tab", () => {
       expect(tabIds()).toEqual([ID, B, A]); // a new file tab opens right of the session
     } finally {
       ask.mockRestore();
+      restore();
+    }
+  });
+
+  it("a reload restores Files editor tabs with their draft from the real storages (GH-366)", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts");
+      const { EditorView } = await import("@codemirror/view");
+      const files = () => el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
+      await act(async () => EditorView.findFromDOM(files().querySelector<HTMLElement>(".cm-editor")!)!.dispatch({ changes: { from: 0, insert: "X" } }));
+      window.dispatchEvent(new Event("pagehide"));
+      await mount();
+      await settle();
+      expect(files().querySelector('[data-testid="editor-tab"]')!.textContent).toContain("a.ts");
+      expect(files().querySelector('[data-testid="editor-tab"]')!.textContent).toContain("●");
+      expect(files().querySelector(".cm-content")!.textContent).toBe("Xalpha");
+    } finally {
       restore();
     }
   });

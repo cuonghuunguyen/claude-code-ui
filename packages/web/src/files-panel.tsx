@@ -496,7 +496,7 @@ export function FileEditor({
   /** The header's last button(s): Pop out, Open in editor, Move to Files. */
   place?: ReactNode;
 }) {
-  const { tabs, sourceOnly, goto } = useEditorStore(store);
+  const { tabs, sourceOnly, goto, draftsNotKept } = useEditorStore(store);
   const active = tabs[path];
   const [mdView, setMdView] = useState<MdView>(loadMdView);
   const narrow = useNarrow();
@@ -542,6 +542,7 @@ export function FileEditor({
         </div>
       )}
       {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
+      {draftsNotKept && <p className="border-b px-2 py-1 text-destructive text-xs">Unsaved edits are too large to keep across a reload.</p>}
       {active.media ? (
         <>
           {placeHeader}

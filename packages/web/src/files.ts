@@ -96,10 +96,10 @@ export function placeTab(tabs: Record<string, Tab>, tab: Tab, preview: boolean, 
  * A tab restored after a reload (GH-366) from the current disk version `r` and the saved draft `d` (`mtime`: the disk version it was based on).
  * A draft on a changed file keeps the conflict: `mtime = r.mtime`, so the next `diskChanged(t, r)` keeps it and a plain Save stays refused.
  */
-export function restoredTab(path: string, r: FsReadResult, d?: { draft: string; mtime: number }): Tab {
+export function restoredTab(path: string, r: FsReadResult, d?: { draft: string; mtime: number; conflict?: boolean }): Tab {
   const t = opened(path, r);
   if (!d || d.draft === r.content) return t;
-  return r.mtime === d.mtime ? { ...t, draft: d.draft } : { ...t, draft: d.draft, conflict: r };
+  return r.mtime === d.mtime && !d.conflict ? { ...t, draft: d.draft } : { ...t, draft: d.draft, conflict: r };
 }
 
 /** A saved draft whose file is gone (or cannot be read: `error`): kept dirty; Save creates the file again. */

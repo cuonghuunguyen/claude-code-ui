@@ -169,3 +169,72 @@ it("save of a gone tab whose file came back shows a conflict and does not write"
   expect(request.mock.calls.some(([m]) => m.type === "fs.write")).toBe(false);
   expect(store.get().tabs["/p/a"]).toMatchObject({ draft: "mine", conflict: { content: "back", mtime: 4 } });
 });
+
+it("two reloads keep a conflict; save never writes while in conflict (a plain save would send the newer mtime as base)", async () => {
+  const disk = { "/p/a": { content: "theirs", mtime: 2 } };
+  let written: Saved | undefined;
+  const first = setup({ tabs: [{ path: "/p/a" }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, disk);
+  await first.store.restore();
+  first.store.update("/p/a", (t) => ({ ...t }));
+  await vi.advanceTimersByTimeAsync(400);
+  written = lastWrite(first.write);
+  expect(written.drafts["/p/a"]).toEqual({ draft: "mine", mtime: 2, conflict: true });
+  const second = setup(written, disk);
+  await second.store.restore();
+  expect(second.store.get().tabs["/p/a"]).toMatchObject({ draft: "mine", conflict: { content: "theirs", mtime: 2 } });
+  await second.store.save("/p/a");
+  expect(second.request.mock.calls.some(([m]) => m.type === "fs.write")).toBe(false);
+});
+
+it("open() of a pending draft whose file is gone keeps a gone tab with the draft, and the next write keeps the draft", async () => {
+  const { store, write } = setup({ tabs: [{ path: "/p/a", item: true }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, {});
+  await store.open("/p/a", { cwd: "/p", item: true });
+  expect(store.get().tabs["/p/a"]).toMatchObject({ gone: true, draft: "mine", item: true });
+  await store.restore();
+  await vi.advanceTimersByTimeAsync(400);
+  expect(lastWrite(write).drafts["/p/a"]!.draft).toBe("mine");
+});
+
+it("open() of a pending draft during a disconnect puts the entry back; the next open or restore still has the draft", async () => {
+  const { store, write, disconnect, connect } = setup({ tabs: [{ path: "/p/a", item: true }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, { "/p/a": { content: "A", mtime: 1 } });
+  disconnect();
+  await store.open("/p/a", { cwd: "/p", item: true });
+  expect(store.get().tabs["/p/a"]).toBeUndefined();
+  connect();
+  await store.restore();
+  expect(store.get().tabs["/p/a"]).toMatchObject({ draft: "mine", disk: "A" });
+  await vi.advanceTimersByTimeAsync(400);
+  expect(lastWrite(write).drafts["/p/a"]!.draft).toBe("mine");
+});
+
+it("after forget() (unpair) pagehide and timers write nothing", async () => {
+  const { store, write } = setup({ tabs: [{ path: "/p/a" }] }, { "/p/a": { content: "A", mtime: 1 } });
+  await store.restore();
+  store.update("/p/a", (t) => ({ ...t, draft: "x" }));
+  store.forget();
+  window.dispatchEvent(new Event("pagehide"));
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("a drafts write that fails sets draftsNotKept; a later good write clears it", async () => {
+  const { store, write } = setup({ tabs: [{ path: "/p/a" }] }, { "/p/a": { content: "A", mtime: 1 } });
+  await store.restore();
+  write.mockReturnValue(false);
+  store.update("/p/a", (t) => ({ ...t, draft: "x" }));
+  await vi.advanceTimersByTimeAsync(400);
+  expect(store.get().draftsNotKept).toBe(true);
+  write.mockReturnValue(true);
+  store.update("/p/a", (t) => ({ ...t, draft: "xy" }));
+  await vi.advanceTimersByTimeAsync(400);
+  expect(store.get().draftsNotKept).toBeFalsy();
+});
+
+it("a draft of a path that is no longer allowed says so, not 'Deleted on disk'", async () => {
+  const { store, request } = setup({ tabs: [{ path: "/p/a" }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, {});
+  request.mockImplementation(async () => {
+    throw err("path_not_allowed", "refused path: /p/a");
+  });
+  await store.restore();
+  expect(store.get().tabs["/p/a"]).toMatchObject({ gone: true, draft: "mine", error: "refused path: /p/a" });
+});

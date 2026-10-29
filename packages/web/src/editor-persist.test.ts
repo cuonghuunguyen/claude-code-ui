@@ -19,10 +19,10 @@ it("toSaved keeps order, active, recent and the preview/item/outside flags; clos
   expect(s.recent).toEqual(["/p/a", "/p/b"]);
 });
 
-it("toSaved stores drafts of dirty text tabs only, with the base mtime (the conflict's when in conflict)", () => {
+it("toSaved stores drafts of dirty text tabs only, with the real base mtime and a conflict flag", () => {
   const media = { ...openedMedia("/p/i.png", { url: "u", mtime: 1 } as never), draft: "zzz" };
   const tabs = { "/p/c": clean("/p/c"), "/p/d": dirty("/p/d"), "/p/m": media, "/p/k": { ...dirty("/p/k"), conflict: { content: "n", mtime: 7 } } };
-  expect(toSaved({ tabs, recent: [] }).drafts).toEqual({ "/p/d": { draft: "mine", mtime: 1 }, "/p/k": { draft: "mine", mtime: 7 } });
+  expect(toSaved({ tabs, recent: [] }).drafts).toEqual({ "/p/d": { draft: "mine", mtime: 1 }, "/p/k": { draft: "mine", mtime: 1, conflict: true } });
 });
 
 it("parseSaved: junk, wrong version and non-arrays give nothing; bad entries are skipped", () => {
@@ -50,6 +50,22 @@ it("write then load round-trips; clearSaved removes both keys", () => {
   expect(loadSaved()).toEqual(s);
   clearSaved();
   expect(loadSaved()).toEqual({ tabs: [], recent: [], drafts: {} });
+});
+
+it("parseSaved keeps the conflict flag of a draft", () => {
+  expect(parseSaved(null, '{"/a":{"draft":"d","mtime":1,"conflict":true},"/b":{"draft":"d","mtime":1,"conflict":"x"}}').drafts).toEqual({ "/a": { draft: "d", mtime: 1, conflict: true }, "/b": { draft: "d", mtime: 1 } });
+});
+
+it("a failed drafts write removes the stale drafts key and reports false; a good write reports true", () => {
+  sessionStorage.setItem("claude-ui.editorDrafts", '{"/p/d":{"draft":"old","mtime":1}}');
+  const s = toSaved({ tabs: { "/p/d": dirty("/p/d") }, recent: [] });
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation((k) => {
+    if (k === "claude-ui.editorDrafts") throw new DOMException("full", "QuotaExceededError");
+  });
+  expect(writeSaved(s)).toBe(false);
+  expect(sessionStorage.getItem("claude-ui.editorDrafts")).toBeNull();
+  set.mockRestore();
+  expect(writeSaved(s)).toBe(true);
 });
 
 it("a full or blocked storage never throws: load is empty, write and clear are skipped", () => {

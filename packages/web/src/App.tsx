@@ -372,6 +372,7 @@ export function App() {
   useEffect(() => {
     if (status !== "unauthorized") return;
     clearDrafts();
+    editors.forget();
     clearSaved();
   }, [status]);
   const [drawer, setDrawer] = useState(false);

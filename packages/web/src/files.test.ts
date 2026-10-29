@@ -218,6 +218,11 @@ describe("restoredTab (GH-366)", () => {
     expect(saveBase(t, true)).toBe(5);
   });
 
+  it("a draft saved in conflict stays a conflict when the disk mtime equals its base (second reload)", () => {
+    const t = restoredTab("/p/a.ts", r, { draft: "mine", mtime: 5, conflict: true });
+    expect(t).toMatchObject({ draft: "mine", mtime: 5, conflict: r });
+  });
+
   it("goneTab is dirty with the line; a file that comes back becomes a conflict", () => {
     const t = goneTab("/p/a.ts", { draft: "mine" });
     expect(isDirty(t)).toBe(true);
