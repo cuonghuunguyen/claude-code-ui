@@ -93,7 +93,7 @@ import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { clearSaved } from "./editor-persist.ts";
-import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, loadDraftImages, NEW_TAB_DRAFT, saveDraftImages } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
@@ -110,7 +110,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
-import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type ViewerState } from "./viewer.ts";
+import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -490,6 +490,12 @@ export function App() {
   // GH-401: sessions shown in a dock. Their ids stay in `tabs`; every action on the tabs bar reads `strip` (wide: `tabs` without them), never `tabs`.
   const docked = useDocked();
   const strip = stripTabs(tabs, docked, lg);
+  /** GH-503: a group move computed on the visible strip, written back into the strip's slots: docked ids keep their positions and never join a group. */
+  const onStrip = (t: string[], f: (s: string[]) => string[]) => {
+    const m = f(stripTabs(t, dockedRef.current, lg));
+    let i = 0;
+    return t.map((x) => (lg && dockedRef.current[x] ? x : m[i++]!));
+  };
   const stripRef = useRef(strip);
   stripRef.current = strip;
   const dockedRef = useRef(docked);
@@ -519,6 +525,8 @@ export function App() {
   const visibleIds = [...(splitOn ? split.ids : [activeId]), ...dockedVisible];
   // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
+  // GH-503: a quote waiting for the prompt box of a docked session.
+  const [dockInsert, setDockInsert] = useState<Record<string, string>>({});
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [openFile, setOpenFile] = useState<{ path: string; line?: number; /** The editor takes the focus (an explicit "open in Files tab", #301). */ focus?: boolean }>();
@@ -538,7 +546,7 @@ export function App() {
   const [reposFresh, setReposFresh] = useState(0);
   const editorTabs = useEditorStore(editors).tabs;
   const openFiles = useMemo(() => Object.keys(editorTabs), [editorTabs]);
-  const [fileDialog, setFileDialog] = useState<{ opener: HTMLElement | null }>();
+  const [fileDialog, setFileDialog] = useState<{ opener: HTMLElement | null; owner?: { id: string; cwd: string } }>();
   useEffect(() => (setViewer(undefined), setFileDialog(undefined)), [activeId]);
   const quickOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
@@ -1040,6 +1048,7 @@ export function App() {
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
   // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string): boolean | void {
+    dockCtls.current.delete(id);
     if (kindOf(id) === "file") {
       if (!askDirtyFiles([id]).length) return false;
       if (editors.get().tabs[pathOf(id)!]?.item) editors.discard([pathOf(id)!]);
@@ -2308,6 +2317,8 @@ export function App() {
   function undockSession(id: string) {
     flushDrafts();
     setDockRun((r) => without(r, id));
+    setDockInsert((i) => without(i, id));
+    dockCtls.current.delete(id);
     saveDocked(undock(dockedRef.current, id));
     dockedRef.current = undock(dockedRef.current, id);
     open(id);
@@ -2331,16 +2342,53 @@ export function App() {
     onSessionCommand: (id: string, c: DockedCommand) => (c === "close" ? close(id) : c === "main" ? undockSession(id) : dockSession(id, c === "moveSide" ? "side" : "bottom")),
   });
   /** The docked sessions of an area, mounted for as long as the area is: each has its own timeline, prompt box and request panels (the Aside popup's path). */
+  const cwdOfRef = useRef(cwdOfOwner);
+  cwdOfRef.current = cwdOfOwner;
+  const dockCtls = useRef(new Map<string, { viewer: OpenViewer; plan: () => void; link: (path: string, line?: number) => void; quote: (q: string) => void }>());
+  /** GH-503: the contexts of a docked session's pane, stable per id (they are context values: a new one per render re-renders every card). They act for the docked session, not the shown one. */
+  const dockCtl = (id: string) => {
+    let c = dockCtls.current.get(id);
+    if (!c) {
+      const here = () => ({ id, cwd: cwdOfRef.current(id) });
+      c = {
+        viewer: (target, opener) => {
+          const o = here();
+          const from = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+          if (!o.cwd) return;
+          if (isFileTarget(target)) popFile(target.path, target.line, from, { id, cwd: o.cwd });
+          else setViewer({ target, sessionId: id, cwd: o.cwd, opener: from });
+        },
+        plan: () => showPlanRef.current(id),
+        link: (path, line) => {
+          const o = here();
+          if (o.cwd) popFile(path, line, undefined, { id, cwd: o.cwd });
+        },
+        quote: (q) => setDockInsert((i) => ({ ...i, [id]: q })),
+      };
+      dockCtls.current.set(id, c);
+    }
+    return c;
+  };
   const dockedBodies = (a: DockArea) =>
     dockedHere(a).map((id) => {
       const s = sessionOf(id);
       const v = viewOf(id);
       if (!s || !v) return null;
       const sel = dockSelOf(a) === id;
+      const ctl = dockCtl(id);
       return (
         <Activity key={tabKeys[id] ?? id} mode={sel ? "visible" : "hidden"}>
           <div className={sel ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-docked-session={id}>
-            {renderTab(id, s, v, optimistic[id], { active: true, docked: true, insert: undefined, rewindTo: undefined, run: dockRun[id] })}
+            <ViewerContext value={ctl.viewer}>
+              {/* Plan "Open in tab" only when Plan's tab lives in the main area: a dock Plan pane shows the main session's plan. */}
+              <PlanTabContext value={areaOf(layout, "plan") === "main" ? ctl.plan : undefined}>
+                <FileLinkContext value={ctl.link}>
+                  <QuoteContext value={ctl.quote}>
+                    {renderTab(id, s, v, optimistic[id], { active: true, docked: true, insert: dockInsert[id], onInserted: () => setDockInsert((i) => without(i, id)), rewindTo: undefined, run: dockRun[id] })}
+                  </QuoteContext>
+                </FileLinkContext>
+              </PlanTabContext>
+            </ViewerContext>
           </div>
         </Activity>
       );
@@ -2444,10 +2492,11 @@ export function App() {
     setOpenFile({ path: joinPath(shown!.cwd, p), line, focus: true });
     reveal("files");
   };
-  const popFile = useCallback((path?: string, line?: number, opener?: HTMLElement | null) => {
-    const cwd = panelTargetRef.current?.cwd;
+  /** `owner`: a docked session's id and folder (GH-503); the dialog then reads that folder, not the shown session's. */
+  const popFile = useCallback((path?: string, line?: number, opener?: HTMLElement | null, owner?: { id: string; cwd: string }) => {
+    const cwd = owner?.cwd ?? panelTargetRef.current?.cwd;
     if (path && cwd) void editors.open(path, { cwd, line, outside: !inDir(path, cwd) });
-    setFileDialog({ opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
+    setFileDialog({ opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), owner });
   }, []);
   const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
   /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
@@ -2810,6 +2859,7 @@ export function App() {
     askAside: shown && !paneRef && !draftShown ? () => setInsert("/btw ") : undefined,
     cleanUp: Object.values(worktrees).some((l) => l.some((w) => !w.main)) || list.some((x) => x.coordinatorId) ? () => setCleanup({ kind: "all" }) : undefined,
     tabs: strip,
+    openIds: tabs,
     activeId,
     panels: panelHost,
     dockSession: lg && shown && !paneRef && !draftShown ? (a) => dockSession(shown.id, a) : undefined,
@@ -3266,8 +3316,8 @@ export function App() {
             grouping={grouping}
             compact={compact && grouping !== "none"}
             onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to, pinnedSet))}
-            onMoveGroup={(cwd, by) => setTabs((t) => moveGroup(t, groupOfTab, cwd, by))}
-            onMoveGroupTo={(from, to) => setTabs((t) => moveGroupTo(t, groupOfTab, from, to))}
+            onMoveGroup={(cwd, by) => setTabs((t) => onStrip(t, (s) => moveGroup(s, groupOfTab, cwd, by)))}
+            onMoveGroupTo={(from, to) => setTabs((t) => onStrip(t, (s) => moveGroupTo(s, groupOfTab, from, to)))}
             onCloseGroup={requestCloseGroup}
             onCloseOtherGroups={(key) => closeSeveral(otherGroupTargets(strip, pinnedSet, groupOfTab, key))}
             onTabCommand={tabCommand}
@@ -3865,7 +3915,15 @@ export function App() {
       <div role="status" aria-live="polite" className="sr-only" data-testid="attention-status">
         {noteText !== undefined ? noteText + (waitingN ? ` ${waitingStatus(waitingN)}.` : "") : announcement(waitingN, everWaiting.current)}
       </div>
-      <QuoteButton onQuote={(q) => (setInsert(q), setPane("session"))} />
+      <QuoteButton
+        onQuote={(q) => {
+          // GH-503: a selection inside a docked timeline quotes into that session's prompt box.
+          const node = window.getSelection()?.anchorNode;
+          const dockedId = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-docked-session]")?.dataset.dockedSession;
+          if (dockedId) dockCtl(dockedId).quote(q);
+          else (setInsert(q), setPane("session"));
+        }}
+      />
       {guideRun && (
         <GuideTour
           key={guideRun.n}
@@ -3981,38 +4039,39 @@ export function App() {
         />
       )}
       <SettingsDialog push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} />
-      {shown && client.current && (
+      {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
           opener={viewer?.opener}
           client={client.current}
-          cwd={viewer?.cwd ?? shown.cwd}
+          cwd={viewer?.cwd ?? shown!.cwd}
           view={viewer ? views[viewer.sessionId] : undefined}
           sessionId={viewer?.sessionId}
-          repos={(viewer?.cwd ?? shown.cwd) === panelCwd ? repoList : undefined}
+          repos={(viewer?.cwd ?? shown!.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
           onOpenInTab={(p) => (setViewer(undefined), openFileTab(p, viewer?.sessionId))}
         />
       )}
-      {panelTarget && client.current && (
+      {(fileDialog?.owner || panelTarget) && client.current && (
         <FileDialog
           open={!!fileDialog}
           opener={fileDialog?.opener}
           client={client.current}
           status={status}
-          cwd={panelTarget.cwd}
+          cwd={fileDialog?.owner?.cwd ?? panelTarget!.cwd}
           store={editors}
-          gitStamp={treeStamp}
-          repos={repoList}
-          onShowGraph={() => (setFileDialog(undefined), reveal("graph"))}
+          // GH-503: opened from a docked session, the panels (Files, Changes, graph) are the shown session's: those actions are hidden, and Send goes to the docked prompt box.
+          gitStamp={fileDialog?.owner ? undefined : treeStamp}
+          repos={fileDialog?.owner && fileDialog.owner.cwd !== panelCwd ? undefined : repoList}
+          onShowGraph={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("graph"))}
           onClose={() => setFileDialog(undefined)}
-          onSend={(m) => (setFileDialog(undefined), setInsert(m), setPane("session"))}
+          onSend={(m) => (setFileDialog(undefined), fileDialog?.owner ? dockCtl(fileDialog.owner.id).quote(m) : (setInsert(m), setPane("session")))}
           onCopy={copyText}
-          onShowChanges={(path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
-          onOpenInFiles={() => (setFileDialog(undefined), reveal("files"))}
-          onOpenTab={(p) => openFileTab(p)}
+          onShowChanges={fileDialog?.owner ? undefined : (path) => (setFileDialog(undefined), setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+          onOpenInFiles={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("files"))}
+          onOpenTab={(p) => openFileTab(p, fileDialog?.owner?.id)}
           onItem={focusFileTab}
         />
       )}
@@ -5109,7 +5168,15 @@ function PromptBox({
   const [pastes, setPastes] = useState<Pastes>(initialPaste.pastes);
   const latest = useRef({ text, pastes });
   latest.current = { text, pastes };
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<string[]>(() => (draftKey ? loadDraftImages(draftKey) : []));
+  // GH-503: kept in memory per draft key, so docking (a remount) keeps the attachments.
+  // A new key (the /clear handover) moves the images: the old key is dropped, like useDraft does for the text.
+  const imagesKey = useRef(draftKey);
+  useEffect(() => {
+    if (imagesKey.current && imagesKey.current !== draftKey) saveDraftImages(imagesKey.current, []);
+    imagesKey.current = draftKey;
+    if (draftKey) saveDraftImages(draftKey, images);
+  }, [draftKey, images]);
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [caret, setCaret] = useState(0);

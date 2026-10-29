@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearDrafts, loadDraftImages } from "./drafts.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
 
@@ -88,6 +89,7 @@ const { App } = await import("./App.tsx");
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(async () => {
+  clearDrafts();
   width = 1440;
   location.hash = `#${ID}`;
   el = document.createElement("div");
@@ -398,6 +400,25 @@ it("/clear: an attached image and the focus stay in the same prompt box", async 
     expect(promptBox()).toBe(box);
     expect(thumbs()).toBe(1);
     expect(document.activeElement).toBe(box);
+  } finally {
+    restoreSubscribe();
+  }
+});
+
+it("/clear: the attached images move to the new draft key and the old key is dropped (GH-503)", async () => {
+  holdNext();
+  try {
+    const box = promptBox();
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+    await act(async () => {
+      box.dispatchEvent(paste);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(loadDraftImages(ID)).toHaveLength(1);
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
+    expect(loadDraftImages(NEXT)).toHaveLength(1);
+    expect(loadDraftImages(ID)).toEqual([]);
   } finally {
     restoreSubscribe();
   }
@@ -6137,6 +6158,157 @@ describe("GH-401 docked session", () => {
     await (await tabMenu(S3))("Move to side panel");
     expect(el.querySelector(`[data-docked-session="${S3}"]`)).not.toBeNull();
     expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).toBeNull();
+  });
+
+  // GH-503: the docked pane has the contexts of the strip tabs.
+  const OTHERCWD = "/p/other";
+  const withOtherCwd = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third", cwd: OTHERCWD }, { ...session, id: S4, title: "Fourth" }];
+  const dockedCall = (id: string, tool: string, input: unknown) => act(async () => emit({ type: "event", sessionId: id, seq: 1, part: { type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" } }));
+  const inDock = (sel: string) => el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] ${sel}`);
+  const fileDlg = () => document.querySelector("[data-testid=file-dialog]");
+  const fsPaths = () => sent.filter((m) => m.type.startsWith("fs.")).flatMap((m) => { const x = m as unknown as { path?: string; paths?: string[] }; return x.paths ?? (x.path ? [x.path] : []); });
+
+  it("a docked session's tool card has the viewer button and opens the viewer for the docked session", async () => {
+    await remount({ list: withOtherCwd });
+    await dockedCall(S3, "Edit", { file_path: "/p/other/a.ts", old_string: "a", new_string: "b" });
+    const open = inDock("[data-testid=viewer-open]");
+    expect(open).not.toBeNull();
+    await act(async () => open!.click());
+    await act(async () => {});
+    expect(document.querySelector("[data-testid=viewer-dialog]")).not.toBeNull();
+    expect(document.querySelector("[data-testid=viewer-dialog]")!.textContent).toContain("a.ts");
+  });
+
+  it("a file path in docked assistant text is a link that opens the file dialog with the docked session's folder", async () => {
+    await remount({ list: withOtherCwd });
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/other/a.ts:3` now.", streaming: false } }));
+    const ref = inDock("button[title='Open in file dialog']");
+    expect(ref).not.toBeNull();
+    sent.length = 0;
+    await act(async () => ref!.click());
+    await act(async () => {});
+    expect(fileDlg()).not.toBeNull();
+    const paths = fsPaths();
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.filter((p) => !p.startsWith(OTHERCWD))).toEqual([]);
+  });
+
+  it("a Read card in a docked session with another folder opens the file dialog on that folder", async () => {
+    await remount({ list: withOtherCwd });
+    await dockedCall(S3, "Read", { file_path: "/p/other/a.ts" });
+    sent.length = 0;
+    await act(async () => inDock("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(fileDlg()).not.toBeNull();
+    const paths = fsPaths();
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.filter((p) => !p.startsWith(OTHERCWD))).toEqual([]);
+  });
+
+  it("Quote in a docked timeline inserts into the docked prompt box, not the main one", async () => {
+    Range.prototype.getBoundingClientRect = () => new DOMRect(100, 200, 80, 20);
+    await remount();
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "Alpha beta", streaming: false } }));
+    document.getSelection()!.selectAllChildren(inDock('[data-testid="assistant-text"] p')!);
+    await act(async () => {
+      document.dispatchEvent(new Event("selectionchange"));
+      await new Promise((r) => setTimeout(r, 160));
+    });
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="quote-button"]')!.click());
+    expect((prompt(S3) as HTMLTextAreaElement).value).toBe("> Alpha beta\n\n");
+    const main = el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!;
+    expect(main.value).toBe("");
+  });
+
+  const planPart = { type: "tool_call", id: "plan1", toolUseId: "plan1", tool: "ExitPlanMode", input: { plan: "# Plan\n\n1. do it" }, status: "done" };
+  const MAIN_PLAN = JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph"], bottom: ["terminal"], main: ["plan"] } });
+
+  it("plan approval in a docked session: Open in tab opens the docked owner's plan tab when Plan is in the main area", async () => {
+    localStorage.setItem("claude-ui.layout", MAIN_PLAN);
+    await remount();
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: planPart }));
+    const btn = inDock("[data-testid=plan-open-tab]");
+    expect(btn).not.toBeNull();
+    await act(async () => btn!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(tabIds()).toContain(`plan:${S3}`);
+    localStorage.removeItem("claude-ui.layout");
+  });
+
+  it("plan approval in a docked session: no Open in tab when Plan is docked", async () => {
+    await remount();
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: planPart }));
+    expect(inDock("[data-testid=plan-card], [data-testid=tool-card]")).not.toBeNull();
+    expect(inDock("[data-testid=plan-open-tab]")).toBeNull();
+  });
+
+  it("docking the active session whose plan tab is its right neighbour shows the next session tab, not its plan tab; the current session stays", async () => {
+    localStorage.setItem("claude-ui.layout", MAIN_PLAN);
+    await remount({ docked: {}, tabs: [ID, S2, `plan:${S2}`, S4], active: S2 });
+    await (await tabMenu(S2))("Move to side panel");
+    expect(location.hash).toBe(`#${S4}`);
+    expect(tabIds()).toEqual([ID, `plan:${S2}`, S4]);
+    localStorage.removeItem("claude-ui.layout");
+  });
+
+  it("attached images survive dock and undock", async () => {
+    await remount({ docked: {}, active: S2 });
+    const mainBox = () => [...el.querySelectorAll<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')].find((b) => !b.closest('[style*="display: none"], .hidden'))!;
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+    await act(async () => {
+      mainBox().dispatchEvent(paste);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(el.querySelectorAll('[data-testid="image-strip"] img')).toHaveLength(1);
+    await (await tabMenu(S2))("Move to side panel");
+    expect(el.querySelectorAll(`[data-docked-session="${S2}"] [data-testid="image-strip"] img`)).toHaveLength(1);
+    await act(async () => void el.querySelector(`[data-docked-tab="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => menuItem("docked-move-main").click());
+    expect(el.querySelectorAll('[data-testid="session-area"] [data-testid="image-strip"] img')).toHaveLength(1);
+  });
+
+  it("Move group right moves the visible group past a group that holds only docked sessions", async () => {
+    const at = (id: string, title: string, cwd: string) => ({ ...session, id, title, cwd });
+    await remount({ tabs: [ID, S3, S2], docked: { [S3]: "side" }, list: [session, at(S3, "Third", "/p/other"), at(S2, "Second", "/p/third")] });
+    expect(tabIds()).toEqual([ID, S2]);
+    await act(async () => void el.querySelector('[data-group-chip="/p/demo"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === "Move group right")!.click());
+    expect(tabIds()).toEqual([S2, ID]);
+    expect(dockIds("side")).toEqual([S3]);
+    expect(stored()).toContain(S3);
+  });
+
+  it("the viewer opens when every session is docked (no shown session)", async () => {
+    await remount({ tabs: [S3], docked: { [S3]: "side" }, active: S3 });
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await dockedCall(S3, "Edit", { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" });
+    await act(async () => inDock("[data-testid=viewer-open]")!.click());
+    await act(async () => {});
+    expect(document.querySelector("[data-testid=viewer-dialog]")).not.toBeNull();
+  });
+
+  const openDockedFile = async () => {
+    await remount({ list: withOtherCwd });
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/other/a.ts:1` now.", streaming: false } }));
+    await act(async () => inDock("button[title='Open in file dialog']")!.click());
+    await act(async () => {});
+    expect(fileDlg()).not.toBeNull();
+  };
+
+  it("Send selection to Claude in a docked session's file dialog goes to the docked prompt box", async () => {
+    await openDockedFile();
+    await act(async () => document.querySelector<HTMLElement>("[data-testid=send-selection]")!.click());
+    expect((prompt(S3) as HTMLTextAreaElement).value).toContain("@a.ts");
+    expect(el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!.value).toBe("");
+    expect(fileDlg()).toBeNull();
+  });
+
+  it("a docked session's file dialog hides the panel actions that would target the shown session", async () => {
+    await openDockedFile();
+    expect(document.querySelector("[data-testid=open-in-editor]")).toBeNull();
   });
 
   it("typed draft text survives docking and undocking", async () => {

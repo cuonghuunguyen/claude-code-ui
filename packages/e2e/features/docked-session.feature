@@ -78,6 +78,71 @@ Feature: A session shown in the side or bottom panel
     And no panel has a docked session tab
     And I capture "docked-reset"
 
+  Scenario: A docked session keeps its plan approval actions
+    Given the viewport is 1440x900
+    And a Haiku session in Plan mode with a plan waiting for approval
+    And I open a second session with a finished reply
+    When I move the first session to the "side" panel from its tab menu
+    Then the docked panel shows "Open plan in popup"
+    When I click "Open plan in popup" in the docked panel
+    Then the plan popup shows the docked session's plan
+    And I capture "docked-plan-popup"
+
+  Scenario: Quote from a docked timeline goes to the docked prompt box
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I open a second session with a finished reply
+    When I move the first session to the "side" panel from its tab menu
+    And I select the docked reply text and click Quote
+    Then the docked prompt box starts with ">"
+    And the main prompt box is empty
+    And I capture "docked-quote"
+
+  Scenario: A file path in a docked reply is a link
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I open a second session with a finished reply
+    When I move the first session to the "side" panel from its tab menu
+    And I send "Use the Bash tool to run exactly this command and nothing else: echo e2e > probe.txt" in the docked prompt box
+    And I allow the permission request in the docked panel
+    And the docked turn has finished
+    And I send "Reply with exactly the absolute path of the file probe.txt in the current folder, in backticks" in the docked prompt box
+    Then the docked reply has a file link
+    When I click the file link in the docked reply
+    Then the file dialog shows "probe.txt"
+    And I capture "docked-file-link"
+
+  Scenario: Docking a session never shows its own plan tab
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I move the Plan pane to the main area from its tab menu
+    And I open a second session with a finished reply
+    And I select the first session tab
+    When I move the first session to the "side" panel from its tab menu
+    Then the active session tab is not the docked session
+    And no plan tab is active
+    And I capture "docked-owner-plan"
+
+  Scenario: An attached image survives docking
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I open a second session with a finished reply
+    When I attach an image in the main prompt box
+    And I move the first session to the "side" panel from its tab menu
+    Then the docked prompt box shows 1 image
+    When I choose "Move to main area" in the docked tab menu
+    Then the main prompt box shows 1 image
+    And I capture "docked-image"
+
+  Scenario: The palette marks a docked session open
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I open a second session with a finished reply
+    When I move the first session to the "side" panel from its tab menu
+    And I open the command palette and search the docked session
+    Then its palette row has the open mark
+    And I capture "docked-palette"
+
   Scenario Outline: Below the side panel's width the docked session is a normal tab at <width>x<height>
     Given the viewport is 1440x900
     And a Haiku session with one finished reply

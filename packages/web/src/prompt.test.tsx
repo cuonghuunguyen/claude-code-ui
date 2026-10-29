@@ -8,7 +8,7 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
 import { loadSendMode, saveSendMode } from "./send-mode.ts";
 import { QuestionPanel } from "./question.tsx";
-import { saveDraft } from "./drafts.ts";
+import { clearDrafts, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
@@ -28,7 +28,7 @@ const models: ModelInfo[] = [
 const noop = () => {};
 let unmount = noop;
 let activity: "visible" | "hidden" = "visible";
-afterEach(() => (unmount(), localStorage.clear(), (activity = "visible")));
+afterEach(() => (unmount(), localStorage.clear(), clearDrafts(), (activity = "visible")));
 
 async function render(over: Partial<ComponentProps<typeof SessionPane>> = {}, view: SessionView = emptySession()) {
   const el = document.createElement("div");
