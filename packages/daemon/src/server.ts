@@ -12,7 +12,7 @@ import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSuba
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
-import { searchFiles } from "./search.ts";
+import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
@@ -423,13 +423,15 @@ export function createDaemon(opts: {
   /** `git.repos` replies: dropped whenever the session list or the settings change (docs/spec.md "git.repos"). */
   const reposCache = createReposCache();
   /** git.repos of `cwd`, cached 10 s; fs.search uses it too (an error there: no nested repositories). */
+  /** Open files of each cwd's last git.repos: fs.search reuses them so both share one cache key (one scan per 10 s). */
+  const lastOpen = new Map<string, string[]>();
   const reposOf = (cwd: string, open: string[], fresh = false) => {
     const settings = appSettings.get().git;
     const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
     return reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), fresh);
   };
   const broadcast = (m: ServerMessage) => {
-    if (m.type === "sessions.changed" || m.type === "settings_changed") reposCache.clear();
+    if (m.type === "sessions.changed" || m.type === "settings_changed") (reposCache.clear(), clearSearchCache());
     connections.forEach((ws) => send(ws, m));
   };
   // ponytail: side sessions are not counted; a restart ends their running turns too.
@@ -1817,7 +1819,9 @@ export function createDaemon(opts: {
           const buf = Buffer.from(msg.data, "base64");
           if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);
           try {
-            return reply({ path: uploads.store(owner, msg.name, buf) });
+            const path = uploads.store(owner, msg.name, buf);
+            clearSearchCache();
+            return reply({ path });
           } catch (err) {
             return fail("fs_error", String(err));
           }
@@ -2082,7 +2086,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, []).then((r) => r.repos, () => [])))).filter((p) => allowed(join(cwd, p))) });
+          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])))).filter((p) => allowed(join(cwd, p))) });
         }
         case "sessions.search": {
           // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.
@@ -2128,6 +2132,8 @@ export function createDaemon(opts: {
           const files = msg.openFiles;
           if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) return fail("bad_request", "openFiles must be at most 50 paths");
           const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
+          if (lastOpen.size > 64) lastOpen.clear();
+          lastOpen.set(cwd, open);
           return reply(await reposOf(cwd, open, msg.fresh === true));
         }
         case "git.log":
@@ -2353,6 +2359,7 @@ export function createDaemon(opts: {
             // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
             closeSync(fd);
             fd = undefined;
+            clearSearchCache();
             return reply({ mtime: statSync(file).mtimeMs });
           } catch (err) {
             return fsFail(err, msg.path);
@@ -2362,18 +2369,22 @@ export function createDaemon(opts: {
         }
         case "fs.create": {
           const r = createEntry(fsOps, msg.path, msg.dir === true);
+          if (!("code" in r)) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.rename": {
           const r = await renameEntry(fsOps, msg.path, msg.name);
+          if (!("code" in r)) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.delete": {
           const r = await deleteEntry(fsOps, msg.path, msg.dryRun === true);
+          if (!("code" in r)) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.duplicate": {
           const r = await duplicateFile(fsOps, msg.path);
+          if (!("code" in r)) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.watch": {

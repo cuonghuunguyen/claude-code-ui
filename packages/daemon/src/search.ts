@@ -7,8 +7,7 @@ import { limiter, pinEnv } from "./git.ts";
 import { runGit } from "./git-runner.ts";
 
 const SKIP = new Set([".git", "node_modules"]);
-// shortcut: lists every repo per request (reposCache 10 s, ls-files not cached); cache per repo top if large workspaces feel slow.
-export const searchLimits = { entries: 20_000 };
+export const searchLimits = { entries: 20_000, ttl: 10_000, cached: 64 };
 const gitSlot = limiter(4);
 
 /** Paths under `dir`, relative, folders with a trailing slash, breadth-first. Symlinked folders are listed, not entered; neither are the `stop` folders (repositories, listed by git). */
@@ -42,16 +41,30 @@ const git = async (dir: string, args: string[]) => {
   return r.stdout.toString("utf8").split("\0").filter(Boolean);
 };
 
-/** In a git work tree: tracked and untracked files minus gitignored and deleted ones; empty outside one or in an ignored folder. An embedded repository or submodule shows as one entry. */
-async function gitFiles(dir: string): Promise<string[]> {
-  let files: string[];
-  let deleted: Set<string>;
-  try {
-    files = await git(dir, ["--cached", "--others", "--exclude-standard"]);
-    deleted = new Set(await git(dir, ["--deleted"]));
-  } catch {
+const listings = new Map<string, { at: number; files: Promise<string[]> }>();
+/** Drops every cached repository listing (the daemon wrote a file, or sessions/settings changed). */
+export const clearSearchCache = () => listings.clear();
+
+/** Cached listing per repository: `ttl` ms, the in-flight load is shared, a failed load is not kept, at most `cached` repositories. */
+function gitFiles(dir: string): Promise<string[]> {
+  const hit = listings.get(dir);
+  if (hit && Date.now() - hit.at < searchLimits.ttl) return hit.files;
+  const files = loadGitFiles(dir).catch(() => {
+    if (listings.get(dir) === entry) listings.delete(dir);
     return [];
-  }
+  });
+  const entry = { at: Date.now(), files };
+  listings.delete(dir);
+  listings.set(dir, entry);
+  for (const k of listings.keys()) if (listings.size > searchLimits.cached) listings.delete(k);
+  return files;
+}
+
+/** In a git work tree: tracked and untracked files minus gitignored and deleted ones; empty outside one or in an ignored folder. An embedded repository or submodule shows as one entry. */
+async function loadGitFiles(dir: string): Promise<string[]> {
+  // Two calls: `-t` (the only one-call way to see deleted files) is semi-deprecated in git.
+  const [files, del] = await Promise.all([git(dir, ["--cached", "--others", "--exclude-standard"]), git(dir, ["--deleted"])]);
+  const deleted = new Set(del);
   return files.filter((f) => !deleted.has(f) && !f.split("/").some((s) => SKIP.has(s))).slice(0, searchLimits.entries);
 }
 
@@ -94,11 +107,21 @@ export async function searchFiles(dir: string, query: string, limit = 50, repos:
     top.length ? Promise.resolve(top.filter((p) => !ownerOf(p))) : walk(dir, new Set(inner.map((r) => r.rel))),
     ...inner.map(async (r) => (await gitSlot(() => gitFiles(r.path))).map((f) => `${r.rel}/${f}`).filter((p) => ownerOf(p) === r)),
   ]);
-  const out = new Set<string>();
-  for (const f of [rootFiles!, ...nested].flat()) {
+  // Fair share: a huge parent must not starve the nested repositories of the cap.
+  const lists = [rootFiles!, ...nested];
+  const share = Math.ceil(searchLimits.entries / lists.length);
+  const taken = lists.map((l) => l.slice(0, share));
+  let room = searchLimits.entries - taken.reduce((n, l) => n + l.length, 0);
+  const files = taken.map((t, i) => {
+    const extra = lists[i]!.slice(t.length, t.length + Math.max(room, 0));
+    room -= extra.length;
+    return [...t, ...extra];
+  });
+  const out = new Set<string>(inner.map((r) => `${r.rel}/`));
+  for (const f of files.flat()) {
     for (let i = f.indexOf("/"); i > 0; i = f.indexOf("/", i + 1)) out.add(f.slice(0, i + 1));
     out.add(f);
-    if (out.size >= searchLimits.entries) break;
   }
+  for (const r of inner) for (let i = r.rel.indexOf("/"); i > 0; i = r.rel.indexOf("/", i + 1)) out.add(r.rel.slice(0, i + 1));
   return fuzzyRank([...out].slice(0, searchLimits.entries), query, dir).slice(0, limit);
 }
