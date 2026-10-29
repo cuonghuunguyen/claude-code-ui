@@ -1,6 +1,7 @@
+import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { asideDisallowed, asideForkPoint } from "../src/aside.ts";
+import { asideDisallowed, asideForkPoint, portListening } from "../src/aside.ts";
 
 const m = (uuid: string, type: "user" | "assistant", content: unknown): SessionMessage => ({ type, uuid, session_id: "s", parent_tool_use_id: null, message: { role: type, content } }) as SessionMessage;
 const text = (t = "x") => [{ type: "text", text: t }];
@@ -38,5 +39,21 @@ describe("asideDisallowed", () => {
     expect(asideDisallowed({ readOnly: true })).toEqual(["Edit", "Write", "NotebookEdit"]);
     expect(asideDisallowed({})).toBeUndefined();
     expect(asideDisallowed(undefined)).toBeUndefined();
+  });
+});
+
+describe("portListening", () => {
+  const listen = () => new Promise<ReturnType<typeof createServer>>((r) => { const s = createServer(); s.listen(0, "127.0.0.1", () => r(s)); });
+  const portOf = (s: ReturnType<typeof createServer>) => (s.address() as { port: number }).port;
+  it("true for a port with a listening server", async () => {
+    const s = await listen();
+    expect(await portListening(portOf(s))).toBe(true);
+    s.close();
+  });
+  it("false for a closed port", async () => {
+    const s = await listen();
+    const port = portOf(s);
+    await new Promise((r) => s.close(r));
+    expect(await portListening(port)).toBe(false);
   });
 });

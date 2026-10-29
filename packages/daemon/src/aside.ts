@@ -1,4 +1,5 @@
 // Aside (docs/spec.md "Aside"): fork point of a session's transcript for /btw.
+import { connect } from "node:net";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 
 /** Tools removed while an Aside is read-only (until its permission mode changes; stays after Keep as session). */
@@ -31,3 +32,13 @@ export function asideForkPoint(chain: SessionMessage[]): string | undefined {
   }
   return at;
 }
+
+/** Whether something listens on a local port. Only ECONNREFUSED means no: a timeout or another error counts as listening (the safe side, nothing is deleted). */
+export const portListening = (port: number, host = "127.0.0.1", timeoutMs = 1000) =>
+  new Promise<boolean>((resolve) => {
+    const sock = connect({ port, host });
+    const done = (v: boolean) => (sock.destroy(), resolve(v));
+    sock.setTimeout(timeoutMs, () => done(true));
+    sock.once("connect", () => done(true));
+    sock.once("error", (e: NodeJS.ErrnoException) => done(e.code !== "ECONNREFUSED"));
+  });

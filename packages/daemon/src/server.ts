@@ -11,7 +11,7 @@ import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, M
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
-import { asideDisallowed, asideForkPoint } from "./aside.ts";
+import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
@@ -1113,18 +1113,35 @@ export function createDaemon(opts: {
   /** An Aside's owner (link not dropped by Keep as session). */
   const asideOf = (id: string) => settings.get(id)?.ownerId;
 
-  /** Asides never kept, left by a closed browser or a restart of this daemon (same port): thrown away (docs/spec.md "Aside"). */
-  async function cleanupAsides() {
-    const port = (http.address() as AddressInfo | null)?.port;
-    for (const [id, l] of settings.entries()) {
-      if (!l.ownerId || (l.port !== undefined && l.port !== port) || sessions.has(id)) continue;
-      try {
-        const err = await deleteSessionById(id, true);
-        if (err?.code === "unknown_session") saveSettings(() => settings.delete([id]));
-        else if (err) console.error(`aside ${id}: cleanup failed: ${err.message}`);
-      } catch (e) {
-        console.error(`aside ${id}: cleanup failed:`, e);
+  /**
+   * Asides never kept, left by a closed browser or a restart of this daemon (same port) or by a daemon of another port that no
+   * longer listens: thrown away (docs/spec.md "Aside"). foreignOnly: only links of other ports (own-port links race with aside.open).
+   */
+  let cleaningAsides = false;
+  async function cleanupAsides({ foreignOnly = false } = {}) {
+    if (cleaningAsides) return;
+    cleaningAsides = true;
+    try {
+      const port = (http.address() as AddressInfo | null)?.port;
+      const dead = new Map<number, boolean>();
+      for (const [id, l] of settings.entries()) {
+        if (!l.ownerId || sessions.has(id)) continue;
+        const foreign = l.port !== undefined && l.port !== port;
+        if (foreignOnly && !foreign) continue;
+        if (foreign) {
+          if (!dead.has(l.port!)) dead.set(l.port!, !(await portListening(l.port!)));
+          if (!dead.get(l.port!)) continue;
+        }
+        try {
+          const err = await deleteSessionById(id, true);
+          if (err?.code === "unknown_session") saveSettings(() => settings.delete([id]));
+          else if (err) console.error(`aside ${id}: cleanup failed: ${err.message}`);
+        } catch (e) {
+          console.error(`aside ${id}: cleanup failed:`, e);
+        }
       }
+    } finally {
+      cleaningAsides = false;
     }
   }
 
@@ -2513,6 +2530,7 @@ export function createDaemon(opts: {
     idleCloseMs > 0
       ? setInterval(() => {
           const now = Date.now();
+          void cleanupAsides({ foreignOnly: true });
           for (const s of sessions.values()) {
             // An Aside whose popup is gone (browser closed, reload): thrown away, not only its CLI closed.
             if (asideOf(s.id) && !holds.get(s.id) && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !["running", "needs_input"].includes(s.info().state)) {
