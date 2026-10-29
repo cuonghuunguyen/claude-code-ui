@@ -161,11 +161,12 @@ import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGr
 import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, withPane } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
 import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, partIdOf, pathOf, refOf } from "./pane-ref.ts";
-import { type DockedCommand, type DockedSession, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
+import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
-import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type Split, type SplitDir, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
-import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
+import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
@@ -989,7 +990,8 @@ export function App() {
 
   /** Split right / Split down: `t` goes to a new split in the direction, focus moves there. */
   function splitTab(t: string, dir: SplitDir, before = false) {
-    const r = splitTo(splitRef.current, stripRef.current, activeRef.current, t, dir, before);
+    // A tab that a drop just opened (a moved pane, an undocked session) is in the strip only after the next render.
+    const r = splitTo(splitRef.current, stripRef.current.includes(t) ? stripRef.current : [...stripRef.current, t], activeRef.current, t, dir, before);
     if (!r) return;
     setDrawer(false);
     enter(r.split, t);
@@ -1874,8 +1876,11 @@ export function App() {
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
     enabled: () => lg && splitContent(activeRef.current),
-    refuse: (id, t) => dropRefusal(splitRef.current, splitOnRef.current, stripRef.current, activeRef.current, id, t.zone, t.over),
-    onDrop: (id, t) => {
+    dragged: () => (drag ? { pane: drag } : stripDrag && "docked" in stripDrag ? stripDrag : undefined),
+    refuse: (d, t) => ("tab" in d ? dropRefusal(splitRef.current, splitOnRef.current, stripRef.current, activeRef.current, d.tab, t.zone, t.over) : mainRefusal(d, t.zone, t.over)),
+    onDrop: (d, t) => {
+      if (!("tab" in d)) return runMain(mainDrop(d, t.zone, dropCtx, t.over));
+      const id = d.tab;
       if (!stripRef.current.includes(id)) return;
       if (t.zone !== "center") return splitTab(id, t.zone === "left" || t.zone === "right" ? "row" : "col", t.zone === "left" || t.zone === "top");
       if (splitRef.current && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
@@ -2228,6 +2233,22 @@ export function App() {
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   const [dropAt, setDropAt] = useState<DropAt>();
+  // GH-402: a strip tab or a docked session tab being dragged (never set together with `drag`), and whether the tab strip is the drop target. The source can unmount mid-drag (no dragend): a drop or dragend anywhere ends the drag.
+  const [stripDrag, setStripDrag] = useState<Drag>();
+  const [stripOver, setStripOver] = useState(false);
+  useEffect(() => {
+    const end = () => (setDrag(undefined), setDropAt(undefined), setStripDrag(undefined), setStripOver(false));
+    window.addEventListener("dragend", end);
+    window.addEventListener("drop", end);
+    return () => (window.removeEventListener("dragend", end), window.removeEventListener("drop", end));
+  }, []);
+  const NO_MAIN_TAB = {
+    files: "Files moved to the main area. Its tab opens when a session shows.",
+    graph: "Git graph moved to the main area. Its tab opens for a git project.",
+    terminal: "Terminal moved to the main area. Its tab opens when a session shows.",
+    artifacts: "Artifacts moved to the main area. Its tab opens when the session has artifacts.",
+    plan: "Plan moved to the main area. Its tab opens when the session has a plan.",
+  };
   const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
   /** Back to a dock: the pane's main tabs close, one toast with Undo (the layout comes back first). */
   const leaveMain = (p: PaneId) => {
@@ -2235,24 +2256,21 @@ export function App() {
     const prev = loadLayout();
     closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
   };
-  const move = (p: PaneId, to: Area, before?: PaneId) => {
+  /** Moves `p` to `to`. Into the main area it returns the tab it opened (undefined: none could open, a toast says why). `focus` false: the caller focuses the tab's content. */
+  const move = (p: PaneId, to: Area, before?: PaneId, focus = true): string | undefined => {
     if (to === "main") {
       // The main area: a tab of the current session (Changes never lives there).
       if (!canMain(p)) return;
       saveLayout(movePane(layout, p, "main"));
-      if (p === "files") return paneOwner ? showKind("files") : (focusShownPrompt(), setToast("Files moved to the main area. Its tab opens when a session shows."));
-      if (p === "graph") return paneOwner && isGit ? showKind("graph") : (focusShownPrompt(), setToast("Git graph moved to the main area. Its tab opens for a git project."));
-      if (p === "terminal") {
-        if (!paneOwner) return (focusShownPrompt(), setToast("Terminal moved to the main area. Its tab opens when a session shows."));
-        // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder.
-        setTermCarry(termMounted && panelCwd === cwdOfOwner(paneOwner) ? panelCwd : undefined);
-        return openPaneTab(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner)); // the instance is quiet: no termLoud
+      const ref = mainTab(p);
+      if (!ref) {
+        focusShownPrompt();
+        setToast(NO_MAIN_TAB[p as keyof typeof NO_MAIN_TAB]);
+        return;
       }
-      const owner = currentId && isSession(currentId) ? currentId : undefined;
-      if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? openPaneTab(refOf({ kind: "artifacts", owner })) : (focusShownPrompt(), setToast("Artifacts moved to the main area. Its tab opens when the session has artifacts."));
-      if (owner && views[owner] && latestPlan(views[owner]!)) openPaneTab(refOf({ kind: "plan", owner }));
-      else (focusShownPrompt(), setToast("Plan moved to the main area. Its tab opens when the session has a plan."));
-      return;
+      // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder; the instance is quiet: no termLoud.
+      if (p === "terminal") setTermCarry(termMounted && panelCwd === cwdOfOwner(paneOwner!) ? panelCwd : undefined);
+      return openPaneTab(ref, focus);
     }
     leaveMain(p);
     const n = movePane(layout, p, to, before);
@@ -2516,10 +2534,11 @@ export function App() {
     requestAnimationFrame(() => focus(60));
   };
   /** Opens (or focuses) a pane tab right of its owner's tab. */
-  const openPaneTab = (ref: string) => {
+  const openPaneTab = (ref: string, focus = true) => {
     setTabs((t) => insertPaneTab(t, ref, groupOfTab));
     open(ref);
-    focusTabOf(ref);
+    if (focus) focusTabOf(ref);
+    return ref;
   };
   /** Open in tab of an Artifact card (GH-400): the page of `partId` as a main-area tab right of its session's tab, one tab per part. */
   const openArtifactTab = (owner: string, partId: string) => openPaneTab(artifactRef(owner, partId));
@@ -3073,10 +3092,66 @@ export function App() {
     );
   };
   const dragProps = { drag, dropAt, onDrag: setDrag, onDropAt: setDropAt };
+  /** GH-402: the tab `p` shows as in the main area once moved there, when it can open now (an owner shows, the plan exists); the conditions of `move`. */
+  const mainTab = (p: PaneId): string | undefined => {
+    const owner = currentId && isSession(currentId) ? currentId : undefined;
+    if (p === "files" || p === "graph" || p === "terminal") return paneOwner && (p !== "graph" || isGit) ? paneTabFor(tabsRef.current, p, paneOwner, cwdOfOwner) : undefined;
+    if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? refOf({ kind: "artifacts", owner }) : undefined;
+    return owner && views[owner] && latestPlan(views[owner]!) ? refOf({ kind: "plan", owner }) : undefined;
+  };
+  const dropCtx: DropCtx = { layout, docked, canOpen: (p) => !!mainTab(p) };
+  /** What the pointer's drag is, when it is not a strip tab (those keep the tabs' own rules). */
+  const dragged: Drag | undefined = drag ? { pane: drag } : stripDrag;
+  /** A strip tab or docked session tab can be dropped on dock area `a`. */
+  const stripOk = (a: DockArea) => !!stripDrag && !!dockDrop(stripDrag, a, dropCtx);
+  const dragging = (a: DockArea) => !!drag || stripOk(a);
+  const takes = (a: DockArea) => (e: { dataTransfer: DataTransfer | null }) => stripOk(a) && !!(e.dataTransfer?.types.includes(TAB_DRAG_TYPE) || e.dataTransfer?.types.includes(DOCKED_DRAG_TYPE));
+  const dropTab = (a: DockArea, before?: PaneId) => {
+    const d = stripDrag;
+    setStripDrag(undefined);
+    setDropAt(undefined);
+    const r = d && dockDrop(d, a, dropCtx, before);
+    if (!r) return;
+    if (r.do === "movePane") move(r.p, a, r.before);
+    else if (r.do === "toFiles") moveToFiles(r.ref);
+    else if (r.do === "toArtifacts") moveToArtifacts(r.ref);
+    else dockSession(r.id, a);
+  };
+  // "before": only a pane move honours the tab it is dropped on; everything else lands in the area.
+  const tabDrop = (a: DockArea) => ({ accepts: (e: { dataTransfer: DataTransfer | null }) => takes(a)(e) && (dockDrop(stripDrag!, a, dropCtx)?.do === "movePane" ? ("before" as const) : true), onDropTab: (_e: unknown, before?: PaneId) => dropTab(a, before), onDragDocked: (id?: string) => setStripDrag(id ? { docked: id } : undefined) });
+  /** Executes a drop on the tab strip or the session area: only existing commands (Move to main area, Split right / down, Show in split). */
+  function runMain(r: MainDrop | undefined) {
+    if (!r || "refused" in r) return;
+    const shownSplit = (o?: number) => o !== undefined && !!splitRef.current && splitOnRef.current;
+    if (r.do === "move" || r.do === "moveSplit") {
+      // The split's content takes the focus, not the strip tab `move` would focus.
+      const split = r.do === "moveSplit" || shownSplit(r.over);
+      const ref = move(r.p, "main", undefined, !split);
+      if (!ref || !split) return;
+      if (r.do === "moveSplit") splitTab(ref, r.dir, r.before);
+      else showInSplit(ref, r.over!);
+      return;
+    }
+    undockSession(r.id);
+    if (r.do === "undockSplit") splitTab(r.id, r.dir, r.before);
+    else if (shownSplit(r.over)) showInSplit(r.id, r.over!);
+  }
+  /** Why a dock or docked tab dropped on the session area does nothing (the overlay says it): Changes, Git graph at an edge, or a split left without a session. */
+  function mainRefusal(d: Drag, zone: DropZone, over: number): SplitRefusal | undefined {
+    const r = mainDrop(d, zone, dropCtx, over);
+    if (!r) return undefined;
+    if ("refused" in r) return r.refused;
+    const ref = r.do === "move" || r.do === "moveSplit" ? mainTab(r.p) : undefined;
+    if (!ref) return undefined;
+    if (r.do === "moveSplit") return splitTo(splitRef.current, [...stripRef.current, ref], activeRef.current, ref, r.dir, r.before) ? undefined : "session";
+    return r.do === "move" && r.over !== undefined && splitRef.current && splitOnRef.current && !placeIn(splitRef.current, ref, r.over).ids.some(isSession) ? "session" : undefined;
+  }
+  /** The tab strip takes dock tabs and docked session tabs that mean "main area". */
+  const stripDropOf = () => (dragged && !("tab" in dragged) ? mainDrop(dragged, "strip", dropCtx) : undefined);
   /** Drop on an area (header or body): append at its end. */
   const dropHandlers = (a: DockArea) => ({
     over: (e: globalThis.DragEvent) => {
-      if (!isPaneDrag(e)) return;
+      if (!isPaneDrag(e) && !takes(a)(e)) return;
       e.preventDefault();
       e.dataTransfer!.dropEffect = "move";
       if (dropAt?.area !== a || dropAt.before) setDropAt({ area: a });
@@ -3084,7 +3159,7 @@ export function App() {
     leave: (e: globalThis.DragEvent) => !(e.currentTarget as Node).contains(e.relatedTarget as Node | null) && setDropAt(undefined),
     drop: (e: globalThis.DragEvent) => {
       const p = droppedPane(e);
-      if (!p) return;
+      if (!p) return takes(a)(e) ? (e.preventDefault(), dropTab(a)) : undefined;
       e.preventDefault();
       setDrag(undefined);
       setDropAt(undefined);
@@ -3092,7 +3167,7 @@ export function App() {
     },
   });
   /** While dragging every area is outlined; the one under the pointer is filled. */
-  const dropCls = (a: DockArea) => (drag ? (dropAt?.area === a && !dropAt.before ? "outline-2 outline-primary -outline-offset-2 bg-primary/5" : "outline-1 outline-dashed outline-primary/40 -outline-offset-2") : "");
+  const dropCls = (a: DockArea) => (dragging(a) ? (dropAt?.area === a && !dropAt.before ? "outline-2 outline-primary -outline-offset-2 bg-primary/5" : "outline-1 outline-dashed outline-primary/40 -outline-offset-2") : "");
   const sideDropRef = useAreaDrop(dropHandlers("side"));
   const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
   const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
@@ -3102,8 +3177,8 @@ export function App() {
     </IconButton>
   );
   const resizer = panelHost && sideShown && <PanelResizer width={panelWidth} onResize={setPanelWidth} side={layout.side} />;
-  const sideStrip = panelTarget && lg && drag && panelHost && !sideShown && (
-    <DropStrip area="side" over={dropAt?.area === "side"} onOver={() => setDropAt({ area: "side" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("side")} />
+  const sideStrip = panelTarget && lg && dragging("side") && panelHost && !sideShown && (
+    <DropStrip area="side" over={dropAt?.area === "side"} onOver={() => setDropAt({ area: "side" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("side")} accepts={takes("side")} onDropTab={() => dropTab("side")} />
   );
   // The side panel (GH-355): its tabs, then the pane hosts it holds; the hosts move between areas without remounting.
   const sideCol = panelTarget && (
@@ -3111,7 +3186,7 @@ export function App() {
       className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!panelHost ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
-      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={drag && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={dragging("side") && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
         <DockHeader
           area="side"
           panes={areaPanes("side")}
@@ -3122,6 +3197,7 @@ export function App() {
           onMove={move}
           onFlipSide={() => saveLayout(flipSide(layout))}
           onReset={resetPanes}
+          {...tabDrop("side")}
           extra={terminalToggle}
           {...dragProps}
           {...dockedProps("side")}
@@ -3143,6 +3219,25 @@ export function App() {
         </IconButton>
         {status !== "unauthorized" && (
           <TabsBar
+            onDragTab={lg ? (id) => setStripDrag(id ? { tab: id } : undefined) : undefined}
+            drop={
+              lg
+                ? {
+                    active: !!stripDropOf() && !("refused" in stripDropOf()!),
+                    over: stripOver,
+                    accept: (e) => !!(e.dataTransfer?.types.includes(PANE_DRAG_TYPE) || e.dataTransfer?.types.includes(DOCKED_DRAG_TYPE)) && !!stripDropOf() && !("refused" in stripDropOf()!),
+                    onOver: () => setStripOver(true),
+                    onLeave: () => setStripOver(false),
+                    onDrop: () => {
+                      const r = stripDropOf();
+                      setDrag(undefined);
+                      setStripDrag(undefined);
+                      setStripOver(false);
+                      runMain(r);
+                    },
+                  }
+                : undefined
+            }
             tabs={strip}
             activeId={activeId}
             info={(id) => {
@@ -3730,7 +3825,7 @@ export function App() {
               className={`${card} ${!panelHost ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
               data-testid="bottom-panel"
               data-dock="bottom"
-              data-drop-target={drag && dropAt?.area === "bottom" ? "" : undefined}
+              data-drop-target={dragging("bottom") && dropAt?.area === "bottom" ? "" : undefined}
               ref={bottomDropRef}
             >
               <DockHeader
@@ -3742,6 +3837,7 @@ export function App() {
                 onMove={move}
                 onReset={resetPanes}
                 {...dragProps}
+                {...tabDrop("bottom")}
                 {...dockedProps("bottom")}
                 extra={
                   <>
@@ -3761,8 +3857,8 @@ export function App() {
             </section>
           </>
         )}
-        {status !== "unauthorized" && panelTarget && lg && drag && panelHost && !bottomShown && (
-          <DropStrip area="bottom" over={dropAt?.area === "bottom"} onOver={() => setDropAt({ area: "bottom" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("bottom")} />
+        {status !== "unauthorized" && panelTarget && lg && dragging("bottom") && panelHost && !bottomShown && (
+          <DropStrip area="bottom" over={dropAt?.area === "bottom"} onOver={() => setDropAt({ area: "bottom" })} onLeave={() => setDropAt(undefined)} onDrop={dropPane("bottom")} accepts={takes("bottom")} onDropTab={() => dropTab("bottom")} />
         )}
         </div>
       </div>

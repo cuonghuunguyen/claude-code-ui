@@ -165,3 +165,8 @@ it("GH-398 dropRefusal: Git graph is refused at an edge and over a split; a drop
   expect(dropRefusal(undefined, false, tabs, "a", files, "center", -1)).toBeUndefined();
   expect(REFUSAL_TEXT.whole).toBe("Git graph needs the whole area");
 });
+
+it("GH-402 REFUSAL_TEXT names every refusal, Changes included", () => {
+  expect(REFUSAL_TEXT.changes).toBe("Changes stays in a panel");
+  expect(REFUSAL_TEXT.whole).toBe("Git graph needs the whole area");
+});
