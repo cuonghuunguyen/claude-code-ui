@@ -89,6 +89,7 @@ import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
+import { clearSaved } from "./editor-persist.ts";
 import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
@@ -368,7 +369,12 @@ export function App() {
   const staleDismissed = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   // Unpaired: the drafts of this browser go with its token (drafts.ts).
-  useEffect(() => void (status === "unauthorized" && clearDrafts()), [status]);
+  useEffect(() => {
+    if (status !== "unauthorized") return;
+    clearDrafts();
+    editors.forget();
+    clearSaved();
+  }, [status]);
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
   const [revealSeq, setRevealSeq] = useState(0);

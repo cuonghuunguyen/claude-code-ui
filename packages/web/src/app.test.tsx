@@ -95,7 +95,7 @@ beforeEach(async () => {
   await act(async () => root.render(<App />));
   await act(async () => {});
 });
-afterEach(() => (act(() => root.unmount()), el.remove(), localStorage.clear())); // unmount flushes a draft: drop it before the next test
+afterEach(() => (act(() => root.unmount()), el.remove(), window.dispatchEvent(new Event("pagehide")), localStorage.clear(), sessionStorage.clear())); // unmount flushes a draft, pagehide flushes the editor store timers: drop both before the next test
 
 const press = (init: KeyboardEventInit, target: EventTarget = document.body) =>
   act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
@@ -2368,6 +2368,18 @@ it("unpairing clears the prompt drafts of this browser", async () => {
   localStorage.setItem("claude-ui.drafts", JSON.stringify({ [ID]: 1 }));
   await act(async () => setStatus("unauthorized"));
   expect(localStorage.getItem("claude-ui.draft." + ID)).toBeNull();
+});
+
+it("unpairing clears the saved editor tabs and drafts of this browser (GH-366)", async () => {
+  localStorage.setItem("claude-ui.editorTabs", JSON.stringify({ v: 1, tabs: [{ path: "/p/a.ts" }], recent: [] }));
+  sessionStorage.setItem("claude-ui.editorDrafts", JSON.stringify({ "/p/a.ts": { draft: "d", mtime: 1 } }));
+  await act(async () => setStatus("unauthorized"));
+  expect(localStorage.getItem("claude-ui.editorTabs")).toBeNull();
+  expect(sessionStorage.getItem("claude-ui.editorDrafts")).toBeNull();
+  // A later pagehide must not write the cleared keys back.
+  window.dispatchEvent(new Event("pagehide"));
+  expect(localStorage.getItem("claude-ui.editorTabs")).toBeNull();
+  expect(sessionStorage.getItem("claude-ui.editorDrafts")).toBeNull();
 });
 
 describe("key promoter (GH-234)", () => {
@@ -5589,6 +5601,24 @@ describe("GH-399 a file as a tab", () => {
       expect(tabIds()).toEqual([ID, B, A]); // a new file tab opens right of the session
     } finally {
       ask.mockRestore();
+      restore();
+    }
+  });
+
+  it("a reload restores Files editor tabs with their draft from the real storages (GH-366)", async () => {
+    const restore = await mount();
+    try {
+      await quickOpen("a.ts");
+      const { EditorView } = await import("@codemirror/view");
+      const files = () => el.querySelector<HTMLElement>('[data-testid="files-panel"]')!;
+      await act(async () => EditorView.findFromDOM(files().querySelector<HTMLElement>(".cm-editor")!)!.dispatch({ changes: { from: 0, insert: "X" } }));
+      window.dispatchEvent(new Event("pagehide"));
+      await mount();
+      await settle();
+      expect(files().querySelector('[data-testid="editor-tab"]')!.textContent).toContain("a.ts");
+      expect(files().querySelector('[data-testid="editor-tab"]')!.textContent).toContain("●");
+      expect(files().querySelector(".cm-content")!.textContent).toBe("Xalpha");
+    } finally {
       restore();
     }
   });
