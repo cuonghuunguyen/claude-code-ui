@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect, createServer as createNetServer, type AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { createRequire, syncBuiltinESMExports } from "node:module";
@@ -4449,7 +4449,10 @@ describe("sessions.search", () => {
   it("skips the transcript of an Aside (a copy of its owner's) until it is kept", async () => {
     const { d } = setup();
     const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
-    writeFileSync(settingsFile, JSON.stringify({ a1: { ownerId: "owner", readOnly: true, port: 1 } }));
+    // A link of another port is deleted at startup when nothing listens there: a server stands for that daemon.
+    const other = createNetServer();
+    await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+    writeFileSync(settingsFile, JSON.stringify({ a1: { ownerId: "owner", readOnly: true, port: (other.address() as AddressInfo).port } }));
     d.close();
     const { d: d2 } = setup(0, settingsFile);
     await new Promise<void>((r) => d2.listen(0, "127.0.0.1", r));
@@ -4459,6 +4462,7 @@ describe("sessions.search", () => {
       expect(results(c).map((r) => r.sessionId)).toEqual(["a2"]);
     } finally {
       d2.close();
+      other.close();
     }
   });
 

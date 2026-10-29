@@ -157,6 +157,7 @@ if (side) {
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
   const server = createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+  // The Aside leftover probe of other daemons connects to 127.0.0.1: keep binding 127.0.0.1 or 0.0.0.0, never another address.
   server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     // Where this daemon listens, for the client commands (no token in it); gone with the process.
     const dir = configDir();

@@ -1,7 +1,7 @@
 // Aside (docs/spec.md "Aside"): daemon side of /btw, Keep as session and the cleanup of leftovers.
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,7 +34,7 @@ let open: { close(): void }[] = [];
 afterEach(() => (open.forEach((o) => o.close()), (open = [])));
 
 /** A daemon over a fake SDK history: `owner` has a transcript (`messages`); forkSession adds a transcript copy. */
-async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tmpdir(), "as-cfg-")), "sessions.json"), idleCloseMs = 0, seed = {} as Record<string, object> } = {}) {
+async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tmpdir(), "as-cfg-")), "sessions.json"), idleCloseMs = 0, asideSweepMs = undefined as number | undefined, listen = true, seed = {} as Record<string, object> } = {}) {
   const forks: Fork[] = [];
   const deleted: string[] = [];
   const transcripts = new Map<string, { messages: unknown[]; summary: string }>([[OWNER, { messages: messages as never[], summary: "owner" }]]);
@@ -48,6 +48,7 @@ async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tm
     settingsFile,
     projectsDir: mkdtempSync(join(tmpdir(), "as-proj-")),
     idleCloseMs,
+    asideSweepMs,
     listCache: false,
     modelListWaitMs: 0,
     history: {
@@ -64,6 +65,8 @@ async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tm
     },
   });
   open.push(d);
+  // listen: false stands for a --side daemon, which has no port of its own.
+  if (!listen) return { d, settingsFile, deleted } as unknown as Awaited<ReturnType<typeof start>>;
   await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
   const port = (d.address() as AddressInfo).port;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`], { origin: `http://127.0.0.1:${port}` });
@@ -177,15 +180,61 @@ describe("listing, close and keep", () => {
 });
 
 describe("leftovers", () => {
-  it("startup removes leftover Asides of this port and of no port, not of another port", async () => {
-    const a = "00000000-0000-4000-8000-0000000000b1";
+  /** A server on a free port: stands for a daemon of another port. */
+  const foreign = async () => {
+    const s = createServer();
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    open.push({ close: () => void s.close() });
+    return { port: (s.address() as AddressInfo).port, close: () => new Promise((r) => s.close(r)) };
+  };
+  const deadPort = async () => {
+    const f = await foreign();
+    await f.close();
+    return f.port;
+  };
+
+  it("startup removes leftover Asides of this port, of no port and of a port where nothing listens, not of a live port", async () => {
     const b = "00000000-0000-4000-8000-0000000000b2";
     const c = "00000000-0000-4000-8000-0000000000b3";
-    const t = await start({ seed: { [a]: { ownerId: OWNER, readOnly: true, port: 1 }, [b]: { ownerId: OWNER, readOnly: true }, [c]: { ownerId: OWNER, readOnly: true, port: 2 } } });
-    // Own port is random: the port-less entry (deleted) and foreign ports (kept) are enough.
-    await until(() => t.deleted.includes(b));
-    expect(t.deleted).not.toContain(a);
-    expect(t.deleted).not.toContain(c);
+    const e = "00000000-0000-4000-8000-0000000000b5";
+    const live = await foreign();
+    const t = await start({ seed: { [b]: { ownerId: OWNER, readOnly: true }, [c]: { ownerId: OWNER, readOnly: true, port: await deadPort() }, [e]: { ownerId: OWNER, readOnly: true, port: live.port } } });
+    await until(() => t.deleted.includes(b) && t.deleted.includes(c));
+    expect(t.deleted).not.toContain(e);
+  });
+
+  it("a kept Session (no owner) of a dead port is not deleted", async () => {
+    const k = "00000000-0000-4000-8000-0000000000b4";
+    const t = await start({ seed: { [k]: { port: await deadPort() } } });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(t.deleted).not.toContain(k);
+  });
+
+  it("the periodic pass deletes the Aside of a daemon that stopped while this one runs, also with idle close off", async () => {
+    const e = "00000000-0000-4000-8000-0000000000b6";
+    const live = await foreign();
+    const t = await start({ asideSweepMs: 50, seed: { [e]: { ownerId: OWNER, readOnly: true, port: live.port } } });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(t.deleted).not.toContain(e);
+    await live.close();
+    await until(() => t.deleted.includes(e));
+    await until(() => linkOf(t.settingsFile, e) === undefined);
+  });
+
+  it("the periodic pass leaves a link of its own port", async () => {
+    const own = "00000000-0000-4000-8000-0000000000b7";
+    const t = await start({ asideSweepMs: 50 });
+    writeFileSync(t.settingsFile, JSON.stringify({ [own]: { ownerId: OWNER, readOnly: true, port: t.port } }));
+    t.transcripts.set(own, { messages: chain as never[], summary: "own" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(t.deleted).not.toContain(own);
+  });
+
+  it("a daemon without a port of its own (--side) deletes no link of another port", async () => {
+    const e = "00000000-0000-4000-8000-0000000000b8";
+    const t = await start({ listen: false, asideSweepMs: 50, seed: { [e]: { ownerId: OWNER, readOnly: true, port: await deadPort() } } });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(t.deleted).not.toContain(e);
   });
 
   it("idle close deletes an Aside without a popup", async () => {
