@@ -6039,6 +6039,36 @@ describe("GH-401 docked session", () => {
     expect(interrupted()).toEqual([S3]);
   });
 
+  it("Esc after a click on text in the docked timeline (focus falls to the body) stops only the docked session", async () => {
+    await remount();
+    for (const [i, id] of [ID, S3].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    const interrupted = () => (sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[]).map((m) => m.sessionId);
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => void el.querySelector(`[data-docked-session="${S3}"]`)!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    sent.length = 0;
+    await press({ key: "Escape" });
+    expect(interrupted()).toEqual([S3]);
+    // A press in the main area moves the Esc back to the main session.
+    await act(async () => void el.querySelector('[data-testid="session-area"]')!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    sent.length = 0;
+    await press({ key: "Escape" });
+    expect(interrupted()).toEqual([ID]);
+  });
+
+  it("a docked session's subagent view ends when it moves to the main area: docked again, it shows the session view", async () => {
+    await remount();
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "subagent", id: "t1", toolUseId: "t1", description: "look around", status: "running", startedAt: 1 } }));
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] [data-testid="subagent-open"]`)!.click());
+    expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).not.toBeNull();
+    await act(async () => void el.querySelector(`[data-docked-tab="${S3}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => menuItem("docked-move-main").click());
+    await (await tabMenu(S3))("Move to side panel");
+    expect(el.querySelector(`[data-docked-session="${S3}"]`)).not.toBeNull();
+    expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).toBeNull();
+  });
+
   it("typed draft text survives docking and undocking", async () => {
     await remount({ docked: {}, active: S2 });
     const type = async (box: HTMLTextAreaElement, text: string) => {

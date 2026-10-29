@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from "vitest";
-import { dock, dockedIn, neighbourAfterDock, loadDocked, parseDocked, pruneDocked, saveDocked, stripTabs, undock } from "./docked-sessions.ts";
+import { dock, dockedIn, neighbourAfterDock, loadDocked, parseDocked, saveDocked, stripTabs, undock } from "./docked-sessions.ts";
 
 const A = "aaaaaaaa-2222-3333-4444-555555555555";
 const B = "bbbbbbbb-2222-3333-4444-555555555555";
@@ -33,12 +33,6 @@ it("dockedIn: strip order, per area", () => {
   expect(dockedIn([A, B, C], d, "side")).toEqual([A, C]);
   expect(dockedIn([A, B, C], d, "bottom")).toEqual([B]);
   expect(dockedIn([A], { [B]: "side" }, "side")).toEqual([]);
-});
-
-it("pruneDocked: drops entries without a tab, the same object when nothing drops", () => {
-  const d = { [A]: "side", [B]: "bottom" } as const;
-  expect(pruneDocked(d, [A])).toEqual({ [A]: "side" });
-  expect(pruneDocked(d, [A, B])).toBe(d);
 });
 
 it("saveDocked / loadDocked: stored per browser, the same object while the stored string is equal; empty removes the key", () => {

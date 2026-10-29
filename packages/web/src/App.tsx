@@ -2255,6 +2255,7 @@ export function App() {
   /** Back in the main area: a normal strip tab, shown. */
   function undockSession(id: string) {
     flushDrafts();
+    setDockRun((r) => without(r, id));
     saveDocked(undock(dockedRef.current, id));
     dockedRef.current = undock(dockedRef.current, id);
     open(id);
@@ -4353,6 +4354,10 @@ function SessionTab(props: ComponentProps<typeof SessionPane>) {
   return <MemoSessionPane {...useStableProps(props)} />;
 }
 
+const ZONE = "[data-aside-popup],[data-docked-session],[data-docked-tab]";
+let pointerZone: Element | null = null;
+if (typeof window !== "undefined") window.addEventListener("pointerdown", (e) => (pointerZone = (e.target as Element | null)?.closest?.(ZONE) ?? null), true);
+
 export function SessionPane({
   active = true,
   place,
@@ -4517,7 +4522,8 @@ export function SessionPane({
     const onEsc = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape" || isImeKey(e) || e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
       // A dock tab button counts as inside its docked session.
-      const zone = (e.target as Element | null)?.closest?.("[data-aside-popup],[data-docked-session],[data-docked-tab]");
+      // Focus on the body (a click on timeline text): the last pointer press says where the user is.
+      const zone = (e.target === document.body ? pointerZone : (e.target as Element | null)?.closest?.(ZONE))?.closest?.(ZONE);
       if (aside ? zone?.hasAttribute("data-aside-popup") : docked ? (zone?.getAttribute("data-docked-session") ?? zone?.getAttribute("data-docked-tab")) === session.id : !zone) onEscape();
     };
     window.addEventListener("keydown", onEsc);

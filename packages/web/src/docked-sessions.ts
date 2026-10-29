@@ -29,8 +29,6 @@ export const undock = (d: Docked, id: string): Docked => {
   const { [id]: _, ...rest } = d;
   return Object.keys(rest).length ? rest : NONE;
 };
-/** Entries whose session has no tab any more drop. */
-export const pruneDocked = (d: Docked, tabs: readonly string[]): Docked => (Object.keys(d).every((k) => tabs.includes(k)) ? d : Object.fromEntries(Object.entries(d).filter(([k]) => tabs.includes(k))));
 
 /** What the tabs bar shows: wide without the docked ids, narrow the whole list. Every strip action (close, move, split, cleanup, next tab) reads this list. */
 export const stripTabs = (tabs: string[], d: Docked, lg: boolean): string[] => (lg && tabs.some((t) => t in d) ? tabs.filter((t) => !(t in d)) : tabs);
