@@ -93,7 +93,7 @@ import { clearDrafts, draftKeys, loadDraft, NEW_TAB_DRAFT } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
-import { useDraft } from "./use-draft.ts";
+import { flushDrafts, useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -150,7 +150,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { SideBadge, SideLabel, sideLookup } from "./sides.tsx";
-import { dock, dockedIn, loadDocked, neighbourAfterDock, pruneDocked, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
+import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
@@ -486,6 +486,8 @@ export function App() {
   dockedRef.current = docked;
   /** The docked session each dock area has selected (not stored: a reload shows the remembered pane again). */
   const [dockSel, setDockSel] = useState<Partial<Record<DockArea, string>>>({});
+  /** The subagent run a docked session shows (the URL hash only follows the main area's session). */
+  const [dockRun, setDockRun] = useState<Record<string, string | undefined>>({});
   // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
   const [splitRaw, setSplitRaw] = useState(loadSplit);
   const split = followSplit(splitRaw, activeId, strip);
@@ -796,7 +798,11 @@ export function App() {
     setPinnedState((p) => (p.includes(from) && !p.includes(to) ? p.map((x) => (x === from ? to : x)) : p));
     setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
     // A docked session goes on docked.
-    if (dockedRef.current[from]) saveDocked(dock(undock(dockedRef.current, from), to, dockedRef.current[from]!));
+    if (dockedRef.current[from]) {
+      saveDocked(dock(undock(dockedRef.current, from), to, dockedRef.current[from]!));
+      setDockSel((s) => Object.fromEntries(Object.entries(s).map(([a, v]) => [a, v === from ? to : v])));
+      setDockRun((r) => (from in r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k === from ? to : k, v])) : r));
+    }
     if (hashId() !== from) return;
     if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
     open(to);
@@ -997,6 +1003,7 @@ export function App() {
     // A run that is only known from the agent map (its turn is not loaded): load back to its turn first, so its children are there.
     const v = viewsRef.current[sessionId];
     if (id && v && !v.parts.has(id) && partOf(v, id)) await loadOlder(sessionId, { until: id });
+    if (lg && dockedRef.current[sessionId]) return setDockRun((r) => ({ ...r, [sessionId]: id }));
     history.pushState(null, "", runHash(sessionId, id));
     setRun(id);
   }
@@ -1374,8 +1381,12 @@ export function App() {
 
   useEffect(() => saveTabs(tabs), [tabs]);
   // GH-401: a docked entry whose tab is gone (closed, deleted, removed project) is forgotten.
+  // Only the sessions this window closed: the map is shared, another window's entry has no tab here.
+  const prevTabs = useRef(tabs);
   useEffect(() => {
-    const n = pruneDocked(loadDocked(), tabs);
+    const gone = prevTabs.current.filter((t) => !tabs.includes(t));
+    prevTabs.current = tabs;
+    const n = gone.reduce(undock, loadDocked());
     if (n !== loadDocked()) saveDocked(n);
   }, [tabs]);
   // GH-401: a docked session is never the active tab: one that is (a link to it on page load, a narrow window widened) shows in its dock and the main area takes its strip neighbour.
@@ -2234,6 +2245,7 @@ export function App() {
     const inSplit = !!splitRef.current?.ids.includes(id);
     const next = id === activeRef.current || inSplit ? neighbourAfterDock(tabsRef.current, dockedRef.current, id) : undefined;
     if (inSplit) joinSplits();
+    flushDrafts();
     saveDocked(dock(dockedRef.current, id, area));
     dockedRef.current = dock(dockedRef.current, id, area);
     selectDocked(id);
@@ -2242,6 +2254,7 @@ export function App() {
   }
   /** Back in the main area: a normal strip tab, shown. */
   function undockSession(id: string) {
+    flushDrafts();
     saveDocked(undock(dockedRef.current, id));
     dockedRef.current = undock(dockedRef.current, id);
     open(id);
@@ -2274,7 +2287,7 @@ export function App() {
       return (
         <Activity key={tabKeys[id] ?? id} mode={sel ? "visible" : "hidden"}>
           <div className={sel ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"} data-docked-session={id}>
-            {renderTab(id, s, v, optimistic[id], { active: true, docked: true, insert: undefined, rewindTo: undefined, run: undefined })}
+            {renderTab(id, s, v, optimistic[id], { active: true, docked: true, insert: undefined, rewindTo: undefined, run: dockRun[id] })}
           </div>
         </Activity>
       );
@@ -4503,8 +4516,9 @@ export function SessionPane({
     // An Aside popup's pane answers Esc from inside the popup, a docked pane from inside its dock, an owner pane from outside both: one Esc stops one turn.
     const onEsc = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape" || isImeKey(e) || e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
-      const zone = (e.target as Element | null)?.closest?.("[data-aside-popup],[data-docked-session]");
-      if (aside ? zone?.hasAttribute("data-aside-popup") : docked ? zone?.getAttribute("data-docked-session") === session.id : !zone) onEscape();
+      // A dock tab button counts as inside its docked session.
+      const zone = (e.target as Element | null)?.closest?.("[data-aside-popup],[data-docked-session],[data-docked-tab]");
+      if (aside ? zone?.hasAttribute("data-aside-popup") : docked ? (zone?.getAttribute("data-docked-session") ?? zone?.getAttribute("data-docked-tab")) === session.id : !zone) onEscape();
     };
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);

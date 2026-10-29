@@ -5992,6 +5992,72 @@ describe("GH-401 docked session", () => {
     expect(tabIds()).toEqual([ID, S2, S4]);
     expect(location.hash).toBe(`#${ID}`);
   });
+
+  // Review round 1.
+  const selectedDock = () => q("side-panel")!.querySelector<HTMLElement>('[data-docked-tab][aria-selected="true"]')?.dataset.dockedTab;
+
+  it("/clear in a docked session moves the dock tab and its selection to the new session", async () => {
+    const NEXT = "55555555-2222-3333-4444-555555555555";
+    await remount();
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    expect(selectedDock()).toBe(S3);
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "session_cleared", id: "c0", sessionId: NEXT } }));
+    expect(dockIds("side")).toEqual([NEXT]);
+    expect(selectedDock()).toBe(NEXT);
+    expect(JSON.parse(localStorage.getItem("claude-ui.dockedSessions")!)).toEqual({ [NEXT]: "side" });
+    expect(tabIds()).toEqual([ID, S2, S4]);
+  });
+
+  it("opening a subagent run from a docked session shows it in the dock and leaves the hash alone", async () => {
+    await remount();
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "subagent", id: "t1", toolUseId: "t1", description: "look around", status: "running", startedAt: 1 } }));
+    const before = location.hash;
+    const open = el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] [data-testid="subagent-open"]`)!;
+    await act(async () => open.click());
+    expect(location.hash).toBe(before);
+    expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).not.toBeNull();
+    expect(el.querySelector('[data-testid="session-area"] [data-testid="subagent-bar"]')).toBeNull();
+  });
+
+  it("a window whose tab list lacks a docked session does not delete its entry from the shared map", async () => {
+    await remount({ tabs: [ID, S2, S4] });
+    await act(async () => {});
+    expect(JSON.parse(localStorage.getItem("claude-ui.dockedSessions")!)).toEqual({ [S3]: "side" });
+  });
+
+  it("Esc on a dock tab button or inside the docked timeline stops only the docked session", async () => {
+    await remount();
+    for (const [i, id] of [ID, S3].entries()) await act(async () => emit({ type: "event", sessionId: id, seq: 1 + i, part: { type: "session_state", id: "session_state", state: "running" } }));
+    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
+    const interrupted = () => (sent.filter((m) => m.type === "session.interrupt") as unknown as { sessionId: string }[]).map((m) => m.sessionId);
+    sent.length = 0;
+    await press({ key: "Escape" }, el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!);
+    expect(interrupted()).toEqual([S3]);
+    sent.length = 0;
+    await press({ key: "Escape" }, el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] [data-testid="user-message"], [data-docked-session="${S3}"]`)!);
+    expect(interrupted()).toEqual([S3]);
+  });
+
+  it("typed draft text survives docking and undocking", async () => {
+    await remount({ docked: {}, active: S2 });
+    const type = async (box: HTMLTextAreaElement, text: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    const mainBox = () => [...el.querySelectorAll<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')].find((b) => !b.closest('[style*="display: none"], .hidden'))!;
+    await type(mainBox(), "half typed");
+    expect(mainBox().value).toBe("half typed");
+    await (await tabMenu(S2))("Move to side panel");
+    expect(prompt(S2)).not.toBeNull();
+    expect((prompt(S2) as HTMLTextAreaElement).value).toBe("half typed");
+    await act(async () => void el.querySelector(`[data-docked-tab="${S2}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => menuItem("docked-move-main").click());
+    expect(tabIds()).toContain(S2);
+    expect(mainBox().value).toBe("half typed");
+  });
 });
 
 describe("GH-400 an artifact as a tab", () => {
