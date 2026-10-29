@@ -59,7 +59,16 @@ export function saveDraft(key: string, text: string, store = defaultStore(), now
   }
 }
 
+// shortcut: memory only, a reload drops the images; upgrade to IndexedDB if users ask (GH-503).
+const images = new Map<string, string[]>();
+export const loadDraftImages = (key: string): string[] => images.get(key) ?? [];
+export function saveDraftImages(key: string, imgs: string[]): void {
+  if (imgs.length) images.set(key, imgs);
+  else images.delete(key);
+}
+
 export function clearDrafts(store = defaultStore()): void {
+  images.clear();
   if (!store) return;
   try {
     for (const k of Object.keys(readIndex(store))) store.removeItem(PREFIX + k);

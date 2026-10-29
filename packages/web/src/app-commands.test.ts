@@ -8,6 +8,7 @@ import { bind, resetAll } from "./keymap.ts";
 
 const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   tabs: ["a", "b", "new"],
+  openIds: over.tabs ?? ["a", "b", "new"],
   activeId: "a",
   sessions: [{ id: "a", cwd: "/w/api", title: "Fix login", lastActivity: 0 } as SessionListItem],
   session: { model: "opus", effort: "default", mode: "default", modes: ["default", "acceptEdits", "plan"], running: false, prompts: [{ id: "u1", text: "first\nmore" }, { id: "u2", text: "second" }] },
@@ -552,4 +553,10 @@ it("GH-401 Move session to side / bottom panel are listed only with dockSession,
   expect(ids.map((id) => items.find((i) => i.id === id)?.keys)).toEqual([undefined, undefined]);
   ids.forEach((id) => run(ctx({ dockSession }), id));
   expect(dockSession.mock.calls).toEqual([["side"], ["bottom"]]);
+});
+
+it("GH-503 a docked session's palette row is marked open: it is no strip tab but it is open", () => {
+  const sessions = [{ id: "a", cwd: "/w/api", title: "A", lastActivity: 2 }, { id: "d", cwd: "/w/api", title: "D", lastActivity: 1 }] as SessionListItem[];
+  const rows = appCommands(ctx({ sessions, tabs: ["a"], openIds: ["a", "d"], activeId: "a" })).filter((i) => i.group === "Sessions");
+  expect(rows.map((r) => [r.id, !!r.open])).toEqual([["session:a", true], ["session:d", true]]);
 });

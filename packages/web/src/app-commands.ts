@@ -11,6 +11,8 @@ import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
 
 export type CommandContext = {
   tabs: string[];
+  /** Every open session tab, docked ones included (`tabs` is the strip: next/previous/goto). */
+  openIds: string[];
   activeId?: string;
   sessions: SessionListItem[];
   /** The shown session's settings; undefined on the new-session tab or with no tab. */
@@ -255,7 +257,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         title: x.title || "Untitled",
         description: projectName(x.cwd),
         cwd: x.cwd,
-        open: c.tabs.includes(x.id),
+        open: c.openIds.includes(x.id),
         // OpenCode's palette: "Just now", "2m ago".
         meta: ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(x.lastActivity)),
         searchOnly: i >= RECENT_SESSIONS,

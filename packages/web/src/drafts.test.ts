@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearDrafts, draftKeys, loadDraft, MAX_DRAFTS, saveDraft } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, loadDraftImages, MAX_DRAFTS, saveDraft, saveDraftImages } from "./drafts.ts";
 
 const memory = () => {
   const m = new Map<string, string>();
@@ -59,4 +59,15 @@ describe("drafts", () => {
     expect(loadDraft("a", bad)).toBe("");
     expect(() => clearDrafts(bad)).not.toThrow();
   });
+});
+
+it("GH-503 draft images: kept per key in memory, an empty save deletes, clearDrafts clears", () => {
+  expect(loadDraftImages("k")).toEqual([]);
+  saveDraftImages("k", ["data:a"]);
+  expect(loadDraftImages("k")).toEqual(["data:a"]);
+  saveDraftImages("k", []);
+  expect(loadDraftImages("k")).toEqual([]);
+  saveDraftImages("k", ["data:b"]);
+  clearDrafts(memory());
+  expect(loadDraftImages("k")).toEqual([]);
 });
