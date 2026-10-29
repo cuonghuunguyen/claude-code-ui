@@ -66,7 +66,7 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
       style={phone ? undefined : { left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
     >
       <header
-        className={`flex shrink-0 items-center gap-2 border-b px-3 py-1.5 ${phone ? "" : "cursor-move touch-none select-none"}`}
+        className={`flex shrink-0 items-center gap-2 border-b px-3 py-1.5 max-md:flex-wrap ${phone ? "" : "cursor-move touch-none select-none"}`}
         data-aside-handle
         onPointerDown={(e) => {
           if (phone || (e.target as Element).closest("button")) return;
@@ -80,9 +80,9 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
         onPointerUp={() => (drag.current = undefined)}
         onPointerCancel={() => (drag.current = undefined)}
       >
-        <span className="min-w-0 flex-1 truncate font-medium text-sm">Aside: {title}</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-sm max-md:basis-full">Aside: {title}</span>
         {readOnly && <Badge variant="secondary">Read-only</Badge>}
-        <Button type="button" variant="secondary" size="sm" className="max-md:h-11" onClick={onKeep}>
+        <Button type="button" variant="secondary" size="sm" className="max-md:ml-auto max-md:h-11" onClick={onKeep}>
           Keep as session
         </Button>
         <Button type="button" variant="ghost" size="icon-sm" className={btn} aria-label="Minimize aside" title="Minimize" onClick={onMinimize}>
@@ -92,7 +92,7 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
           <XIcon />
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
     </section>
   );
 }

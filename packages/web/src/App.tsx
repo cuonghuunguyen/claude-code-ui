@@ -113,7 +113,7 @@ import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
 import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
-import { asideItem, cascade, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
+import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
 import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { announcement, faviconHref, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
@@ -2982,7 +2982,7 @@ export function App() {
                 if (!visibleIds.includes(a.ownerId)) return null;
                 const s = sessionOf(a.id);
                 const v = views[a.id];
-                const rect = a.rect ?? { ...cascade(i, { w: window.innerWidth }), w: 480, h: 420 };
+                const rect = a.rect ?? { ...cascade(i, { w: window.innerWidth }), ...DEFAULT_SIZE };
                 const notHere = () => Promise.reject(new Error("Not available inside an aside"));
                 return (
                   <AsidePopup
@@ -4268,7 +4268,7 @@ export function SessionPane({
             onEmpty={() => prompt.current?.focus()}
           />
         )}
-        {(permission || question) && onAside && <AsideAsk onAside={onAside} insert={insert} onInserted={onInserted} />}
+        {(permission || question) && onAside && !aside && <AsideAsk onAside={onAside} insert={insert} onInserted={onInserted} />}
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (

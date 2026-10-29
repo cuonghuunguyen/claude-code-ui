@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "@claude-ui/protocol";
-import { asideItem, cascade, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
+import { asideItem, cascade, DEFAULT_SIZE, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
 
 const a = (id: string, o: Partial<AsideState> = {}): AsideState => ({ id, ownerId: "o", title: id, from: "p", minimized: false, readOnly: true, ...o });
 
@@ -15,9 +15,11 @@ describe("aside popups", () => {
     const l = setMinimized([a("1"), a("2")], "2", true);
     expect(l.map((x) => x.minimized)).toEqual([false, true]);
   });
-  it("cascade steps 24 px from the top right", () => {
+  it("cascade steps down by more than a header, so no popup covers the header buttons of the one below it", () => {
     expect(cascade(0, { w: 1000 })).toEqual({ x: 496, y: 24 });
-    expect(cascade(2, { w: 1000 })).toEqual({ x: 448, y: 72 });
+    expect(cascade(1, { w: 1000 }).y - cascade(0, { w: 1000 }).y).toBeGreaterThanOrEqual(56);
+    expect(cascade(2, { w: 1000 })).toEqual({ x: 448, y: 136 });
+    expect(DEFAULT_SIZE.h).toBeGreaterThanOrEqual(520);
   });
   it("clampRect keeps the header in the viewport and the minimum size", () => {
     const v = { w: 1000, h: 800 };

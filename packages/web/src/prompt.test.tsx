@@ -1490,6 +1490,13 @@ it("a rejected Aside puts the text back and shows the reason", async () => {
   expect(d.el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("needs a reply");
 });
 
+it("an Aside pane shows no Ask aside input behind its own permission card (no nested aside)", async () => {
+  const perm = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "permission_request", id: "p1", requestId: "p1", toolUseId: "t1", tool: "Bash", input: { command: "rm x" }, suggestions: [], settled: false } as never });
+  const d = await render({ onAside: async () => {}, aside: true }, perm);
+  expect(d.$("aside-ask-open")).toBeNull();
+  expect(d.$("permission-panel")).not.toBeNull();
+});
+
 it("Esc stops the turn of an Aside pane only from inside its popup, and of an owner pane only from outside", async () => {
   const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "session_state", state: "running" } as never });
   const run = { id: "s1", cwd: "/tmp", state: "running" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default" as const] };

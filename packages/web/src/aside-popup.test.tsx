@@ -74,6 +74,20 @@ it("Keep as session and Close call their handlers; pointer down raises", async (
   expect(h.calls).toEqual(expect.arrayContaining(["keep", "close", "focus"]));
 });
 
+it("on a phone the title has a row of its own, so the question is truncated only at its end", async () => {
+  phoneQuery(true);
+  await act(async () => root.render(<Host />));
+  const title = [...el.querySelectorAll("header span")].find((s) => s.textContent === "Aside: why?")!;
+  expect(title.className).toContain("max-md:basis-full");
+  expect(el.querySelector("header")!.className).toContain("max-md:flex-wrap");
+});
+
+it("the body scrolls instead of clipping what does not fit (a permission panel)", async () => {
+  phoneQuery(false);
+  await act(async () => root.render(<Host />));
+  expect(el.querySelector("[role=dialog] > div")!.className).toContain("overflow-y-auto");
+});
+
 it("on a phone it fills the viewport and cannot be dragged", async () => {
   phoneQuery(true);
   await act(async () => root.render(<Host />));
