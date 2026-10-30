@@ -20,7 +20,7 @@ Một phiên (**coordinator**) có thể khởi động và điều khiển các
 | **Độ sâu cây tối đa** | Worker được khởi động worker riêng sâu đến đâu (1 đến 5). 1: chỉ bạn khởi động worker. 2 (mặc định): một worker được khởi động worker riêng, ví dụ một tester và một reviewer. |
 | **Số worker tối đa mỗi coordinator** | Số worker mà một phiên (bạn hoặc một worker) được chạy cùng lúc (1 đến 20, mặc định 4). |
 | **Chế độ worker** | [Chế độ quyền](/vi/features/permissions) của worker mới khi coordinator không chọn. Mặc định: chế độ của chính coordinator (bypass thành auto). |
-| **Thông báo từ worker** | Tắt thì worker hoàn tất, cần nhập liệu hoặc lỗi sẽ không gửi thông báo push, desktop hay trong ứng dụng. Coordinator của nó vẫn nhận được tin. Yêu cầu mà coordinator chuyển tiếp cho bạn vẫn thông báo cho bạn. |
+| **Thông báo từ worker** | Tắt thì worker hoàn tất, cần phản hồi hoặc lỗi sẽ không gửi thông báo push, desktop hay trong ứng dụng. Coordinator của nó vẫn nhận được tin. Yêu cầu mà coordinator chuyển tiếp cho bạn vẫn thông báo cho bạn. |
 | **Coordinator được trả lời yêu cầu quyền** | Cho phép coordinator cho phép hoặc từ chối, một lần, các yêu cầu rủi ro thấp của worker: đọc và sửa trong thư mục của worker, đọc tài liệu agent của kho mã, git chỉ đọc. Mọi thứ khác chờ bạn. |
 
 ## Cây worker và plugin orchestration {#worker-trees-and-the-orchestration-plugin}

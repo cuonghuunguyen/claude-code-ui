@@ -671,4 +671,5 @@ export default {
   "app.split.changes": "Changes stays in a panel",
   "app.copy.failed": "Copy failed: the browser allows the clipboard only on HTTPS or localhost",
   "app.copy.byHand": "{why}. Copy it by hand: {text}",
+  "app.changes.empty": "No changes yet. Claude's edits appear here.",
 } as const;

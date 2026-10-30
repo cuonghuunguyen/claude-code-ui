@@ -11,9 +11,9 @@ Các nhóm nằm dưới bốn đề mục:
 | Ứng dụng | Giao diện, Chung, Bố cục, Thông báo, Bàn phím |
 | Phiên | Điều phối, Focus, Giới hạn mức dùng |
 | Tích hợp | Git, Jira |
-| Hệ thống | Sides, Hiệu năng, Trợ giúp & giới thiệu ||
+| Hệ thống | Môi trường, Hiệu năng, Trợ giúp & giới thiệu ||
 
-Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Giới hạn mức dùng (trừ vòng mức dùng), Git, Jira, Sides, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
+Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Giới hạn mức dùng (trừ vòng mức dùng), Git, Jira, Môi trường, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
 
 ## Giao diện {#appearance}
 
@@ -50,7 +50,7 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Chỉ hiện phiên đang hoạt động | Chỉ liệt kê phiên đang chạy hoặc cần nhập liệu. Tìm kiếm vẫn tìm thấy tất cả. |
+| Chỉ hiện phiên đang hoạt động | Chỉ liệt kê phiên đang chạy hoặc cần phản hồi. Tìm kiếm vẫn tìm thấy tất cả. |
 | Nhóm theo | **Worktree** nhóm các phiên của một dự án theo worktree. **Dự án** liệt kê chúng ngay dưới dự án, với trạng thái dạng văn bản. |
 
 ### Tab {#tabs}
@@ -59,7 +59,7 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 | --- | --- |
 | Nhóm tab | Theo dự án, Theo worktree, hoặc Không |
 | Tab gọn || Hiện mỗi nhóm thành một chip. Mở các tab của nhóm từ chip. Cần có nhóm tab. |
-| Tự đóng tab nhàn rỗi sau || Tắt, 1 giờ hoặc 1 ngày. Không bao giờ đóng tab đã ghim, đang chạy hoặc chưa đọc, hay tab có bản nháp. Các phiên vẫn chạy. |
+| Tự đóng tab rảnh sau || Tắt, 1 giờ hoặc 1 ngày. Không bao giờ đóng tab đã ghim, đang chạy hoặc chưa đọc, hay tab có bản nháp. Các phiên vẫn chạy. |
 
 ### Thay đổi {#changes}
 
@@ -77,7 +77,7 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Thông báo trong ứng dụng | Một thẻ trong trang này khi phiên khác cần nhập liệu hoặc hoàn tất. Bật mặc định. |
+| Thông báo trong ứng dụng | Một thẻ trong trang này khi phiên khác cần phản hồi hoặc hoàn tất. Bật mặc định. |
 | Thông báo đẩy | Thông báo từ trình duyệt này, kể cả khi đã đóng trang. Cần HTTPS hoặc localhost. |
 | Thông báo máy tính trên *máy của daemon* || Máy tính chạy daemon hiện thông báo hệ thống khi không có trình duyệt nào bật thông báo đẩy. Áp dụng cho mọi trình duyệt. |
 
@@ -132,13 +132,13 @@ Một kết nối Jira cho tab **Ticket** của [Tạo worktree](../features/pro
 | Bộ lọc ticket (JQL) || Các ticket mà tab Ticket liệt kê, ví dụ `project = ABC AND statusCategory != Done`. Văn bản nhập vào tìm bên trong bộ lọc; mã ticket hoặc URL ticket bỏ qua bộ lọc. Để trống: các ticket đang mở của bạn. |
 | Kiểm tra kết nối | Hiện “Đã kết nối với tư cách *tên của bạn*” hoặc lỗi. |
 
-## Side {#sides}
+## Môi trường {#sides}
 
-Hiện khi có một bản phân phối WSL hoặc container trong danh sách. Với mỗi side:
+Hiện khi có một bản phân phối WSL hoặc container trong danh sách. Với mỗi môi trường:
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Khởi động cùng Claude UI | Khởi động side cùng Claude UI, từ lần khởi động sau. Tắt cũng gỡ các dự án của side khỏi thanh bên. |
+| Khởi động cùng Claude UI | Khởi động môi trường cùng Claude UI, từ lần khởi động sau. Tắt cũng gỡ các dự án của môi trường khỏi thanh bên. |
 | Tự động cập nhật | Cài bản dựng Claude UI mới từ bundle. Cần bật Khởi động cùng Claude UI. |
 
 Xem [WSL và Docker](../features/wsl-docker).

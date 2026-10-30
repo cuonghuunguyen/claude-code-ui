@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { browserLocale, getLocale, LOCALES, setLocalePref, translate, type Key } from "./i18n.ts";
+import { resolveLocale, browserLocale, getLocale, LOCALES, setLocalePref, translate, type Key } from "./i18n.ts";
 
 const en = LOCALES.en.messages;
 const placeholders = (m: unknown) => [...new Set(JSON.stringify(m).match(/\{\w+\}/g) ?? [])].sort();
@@ -65,5 +65,13 @@ describe("language choice", () => {
     setLocalePref("system");
     expect(getLocale()).toBe("en");
     expect(document.documentElement.lang).toBe("en");
+  });
+});
+
+describe("prototype keys are no locale", () => {
+  it("translate and resolveLocale ignore a locale name like Object.prototype members", () => {
+    expect(translate("constructor", "language.label")).toBe(en["language.label"]);
+    expect(translate("__proto__", "language.label")).toBe(en["language.label"]);
+    expect(resolveLocale("constructor")).toBe(browserLocale());
   });
 });

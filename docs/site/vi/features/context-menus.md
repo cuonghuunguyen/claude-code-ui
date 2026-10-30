@@ -8,7 +8,7 @@ Nhấp chuột phải (hoặc nhấn giữ, hoặc <kbd>Shift</kbd>+<kbd>F10</kb
 
 | Hàng | Mục |
 | --- | --- |
-| Dự án | Phiên mới, Worktree mới (tạo ngay, tên tự sinh), Tạo worktree…, Ẩn các phiên không hoạt động, Lưu trữ các phiên nhàn rỗi quá 1, 7 hoặc 30 ngày, Dọn dẹp…, Gỡ khỏi danh sách (tệp vẫn còn) |
+| Dự án | Phiên mới, Worktree mới (tạo ngay, tên tự sinh), Tạo worktree…, Ẩn các phiên không hoạt động, Lưu trữ các phiên rảnh quá 1, 7 hoặc 30 ngày, Dọn dẹp…, Gỡ khỏi danh sách (tệp vẫn còn) |
 | Worktree | Phiên mới, Ẩn các phiên không hoạt động, các mục lưu trữ tương tự, Xóa worktree… |
 | Phiên | Đổi tên, Lưu trữ, Sao chép ID phiên, Đóng tab, Xóa… |
 | Worker | Đóng worker, Gỡ worker… (có tùy chọn gỡ luôn worktree của nó) |
@@ -32,7 +32,7 @@ Các lệnh đóng và ghim cũng có trong [bảng lệnh](palette) và có th�
 Nhấp chuột phải vào nhãn nhóm (tên dự án đứng trước các tab của nó):
 
 - **Chuyển nhóm sang trái** và **Chuyển nhóm sang phải**.
-- **Dọn dẹp nhóm** đóng các tab nhàn rỗi của nhóm đó.
+- **Dọn dẹp nhóm** đóng các tab rảnh của nhóm đó.
 - **Đóng các nhóm khác** và **Đóng nhóm**.
 
 ![Menu chuột phải của một nhãn nhóm](/screenshots/group-menu.png)
@@ -45,5 +45,5 @@ Cây tệp có menu riêng, xem [Tệp](files#file-tree-menu).
 
 ## Cần biết {#good-to-know}
 
-- Lưu trữ các phiên nhàn rỗi sẽ hỏi trước và nêu số lượng. Một coordinator chỉ được lưu trữ khi nó và mọi worker của nó đều nhàn rỗi.
+- Lưu trữ các phiên rảnh sẽ hỏi trước và nêu số lượng. Một coordinator chỉ được lưu trữ khi nó và mọi worker của nó đều rảnh.
 - **Đóng worker đã xong** không hỏi. **Gỡ worker đã đóng…** và **Gỡ worker…** thì có hỏi.

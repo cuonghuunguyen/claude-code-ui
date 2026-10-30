@@ -1,5 +1,5 @@
 ---
-description: Cách khắc phục các sự cố thường gặp của claude-code-ui (lỗi cài node-pty, ghép nối, cổng, side WSL và Docker, thông báo đẩy, cập nhật) và câu trả lời cho các câu hỏi thường gặp.
+description: Cách khắc phục các sự cố thường gặp của claude-code-ui (lỗi cài node-pty, ghép nối, cổng, môi trường WSL và Docker, thông báo đẩy, cập nhật) và câu trả lời cho các câu hỏi thường gặp.
 ---
 
 # Xử lý sự cố và hỏi đáp
@@ -26,11 +26,11 @@ Token đã đổi (tệp `token` bị xóa, hoặc bạn dùng thư mục cấu 
 
 Khởi động trên cổng khác: `claude-ui --port 4281`.
 
-### Side WSL hoặc Docker "stopped (exit code 1)" {#wsl-or-docker-side-stopped-exit-code-1}
+### Môi trường WSL hoặc Docker "stopped (exit code 1)" {#wsl-or-docker-side-stopped-exit-code-1}
 
-Ở bản 0.5.0, mọi side WSL và Docker dừng khoảng 15 giây sau khi khởi động. Đây là lỗi đã biết: [#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263). **Thử lại** khởi động lại side nhưng nó lại dừng. Windows và các dự án cục bộ không bị ảnh hưởng.
+Ở bản 0.5.0, mọi môi trường WSL và Docker dừng khoảng 15 giây sau khi khởi động. Đây là lỗi đã biết: [#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263). **Thử lại** khởi động lại môi trường nhưng nó lại dừng. Windows và các dự án cục bộ không bị ảnh hưởng.
 
-### Side cần Node.js hoặc công cụ build {#the-side-needs-nodejs-or-build-tools}
+### Môi trường cần Node.js hoặc công cụ build {#the-side-needs-nodejs-or-build-tools}
 
 Hộp thoại Mở dự án cho biết thiếu gì. Một bản phân phối WSL hoặc container Docker dùng glibc (Debian, Ubuntu, ...) chỉ cần `sh`, `tar` và `gzip` (bản phân phối WSL cần thêm `bash`): claude-code-ui dùng Node.js 22+ tìm thấy ở đó, nếu không thì tự mang theo bản riêng. Bản phân phối WSL cài bằng npm (musl, xem bên dưới) cần Node.js 22+, make, python3 và g++. Mở **Container này cần gì** trong hộp thoại để xem danh sách với dấu ✓ hoặc ✗ cho từng mục. Hộp thoại không kiểm tra đăng nhập Claude: phiên bắt đầu mà chưa đăng nhập sẽ báo như vậy. Xem [WSL và Docker](../features/wsl-docker).
 

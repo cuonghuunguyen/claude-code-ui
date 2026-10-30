@@ -12,7 +12,7 @@ import { QuestionPanel } from "./question.tsx";
 import { foldLabel, signalItems } from "./signal.ts";
 import { keyLabels } from "./shortcuts.ts";
 import { useKeymap } from "./keymap.ts";
-import { timeAgo, worktreeName } from "./sessions.ts";
+import { displayTitle, timeAgo, worktreeName } from "./sessions.ts";
 import { summarizePasted } from "./pasted-text.ts";
 import { awaitingPermission, timeline, type SessionView } from "./store.ts";
 import { Mark, statusText } from "./todo-dock.tsx";
@@ -133,7 +133,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const t = useT();
   const now = useNow(1000);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ needs: false, working: false, finished: false });
-  const titleOf = (id: string) => list.find((s) => s.id === id)?.title || t("app.focusPage.untitled");
+  const titleOf = (id: string) => displayTitle(list.find((s) => s.id === id)?.title || "") || t("app.focusPage.untitled");
   // Rows answered while this page is shown, anywhere (here or in the session): one line each until the page is left.
   const [answered, setAnswered] = useState<Answered[]>([]);
   const previous = useRef(waiting);
@@ -312,7 +312,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
                     <button type="button" className="flex w-full cursor-pointer flex-col rounded-lg px-2.5 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" onClick={() => onOpenSession(s.id)} data-testid="focus-running-row">
                       <span className="flex items-center gap-2">
                         <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />
-                        <span className="min-w-0 flex-1 truncate">{s.title || t("app.focusPage.untitled")}</span>
+                        <span className="min-w-0 flex-1 truncate">{displayTitle(s.title) || t("app.focusPage.untitled")}</span>
                         <span className="shrink-0 text-muted-foreground text-xs">{quietMs > QUIET_SHOWN_MS ? quietLabel(quietMs) : timeAgo(s.lastActivity, now)}</span>
                       </span>
                       <span className="truncate pl-6 text-muted-foreground text-xs" data-testid="focus-now">{nowText}</span>
@@ -342,7 +342,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
               <div className="flex flex-wrap items-center gap-2">
                 <ProjectAvatar cwd={session.cwd} />
                 <div className="min-w-0 flex-1">
-                  <h2 className="truncate font-medium" data-testid="focus-title">{session.title || t("app.focusPage.untitled")}</h2>
+                  <h2 className="truncate font-medium" data-testid="focus-title">{displayTitle(session.title) || t("app.focusPage.untitled")}</h2>
                   <p className="truncate text-muted-foreground text-xs" title={session.cwd}>{worktreeName(session.cwd, worktrees) ?? projectName(session.cwd)}</p>
                 </div>
                 <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onOpenSession(session.id)} data-testid="focus-open-session">

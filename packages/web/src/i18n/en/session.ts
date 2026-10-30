@@ -386,4 +386,5 @@ export default {
   // mcp-dialog.tsx (placeholders)
   "session.mcpDialog.commandPlaceholder": "npx",
   "session.mcpDialog.urlPlaceholder": "https://example.com/mcp",
+  "session.mcp.loadFailed": "Failed to load MCP servers",
 } as const;

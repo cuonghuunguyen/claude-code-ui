@@ -2,14 +2,19 @@
 import { useEffect, useRef, useState } from "react";
 import { MIN_SEARCH_CHARS, type SearchHit, type SessionSearchHits, type SessionsSearchResult } from "@claude-ui/protocol";
 import { CheckIcon, ChevronRightIcon, FileIcon, SearchIcon } from "lucide-react";
-import { t, useT } from "./i18n.ts";
+import { t, useT, type Key } from "./i18n.ts";
 import { keyLabels } from "./shortcuts.ts";
 import { isImeKey } from "./ime.ts";
 import { ProjectAvatar } from "./tabs-bar.tsx";
 import { cleanSnippet } from "./pasted-text.ts";
 
+/** The `groupId` and translated `group` of a catalog-named group. */
+export const grp = (key: Key) => ({ groupId: key, group: t(key) });
+
 export type PaletteItem = {
   id: string;
+  /** Stable id of the group (a catalog key): groups, orders and limits rows; `group` is only its translated label. */
+  groupId: string;
   group: string;
   title: string;
   description?: string;
@@ -39,7 +44,7 @@ export const matchItems = (items: PaletteItem[], query: string) => {
   const q = query.trim().toLowerCase();
   const count: Record<string, number> = {};
   return items.filter(
-    (i) => (q || !i.searchOnly) && `${i.title} ${i.description ?? ""}`.toLowerCase().includes(q) && (count[i.group] = (count[i.group] ?? 0) + 1) <= GROUP_LIMIT,
+    (i) => (q || !i.searchOnly) && `${i.title} ${i.description ?? ""}`.toLowerCase().includes(q) && (count[i.groupId] = (count[i.groupId] ?? 0) + 1) <= GROUP_LIMIT,
   );
 };
 
@@ -50,7 +55,7 @@ const startRow = (items: PaletteItem[]) => Math.max(0, items.findIndex((i) => i.
 const fileItems = (paths: string[], open: (path: string) => void): PaletteItem[] =>
   paths
     .filter((p) => !p.endsWith("/"))
-    .map((p) => ({ id: `file:${p}`, group: t("app.palette.groupFiles"), title: p, path: p, run: () => open(p) }));
+    .map((p) => ({ id: `file:${p}`, ...grp("app.palette.groupFiles"), title: p, path: p, run: () => open(p) }));
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -58,11 +63,11 @@ type MessageSearch = { query: string; all: boolean; results: SessionSearchHits[]
 
 /** Message hits as rows; below them (project scope) the row that searches all projects. */
 const messageItems = (m: MessageSearch, messages: Messages, setAll: (all: boolean) => void): PaletteItem[] => {
-  const group = t(m.error ? "app.palette.groupMessagesFailed" : !m.done ? "app.palette.groupMessagesSearching" : m.done.stopped === "time" || m.done.stopped === "bytes" ? "app.palette.groupMessagesStopped" : "app.palette.groupMessages");
+  const group = grp(m.error ? "app.palette.groupMessagesFailed" : !m.done ? "app.palette.groupMessagesSearching" : m.done.stopped === "time" || m.done.stopped === "bytes" ? "app.palette.groupMessagesStopped" : "app.palette.groupMessages");
   const rows = m.results.flatMap((r) =>
-    r.hits.map((h) => ({ id: `msg:${r.sessionId}:${h.messageId}`, group, title: r.title || t("app.palette.untitled"), cwd: r.cwd, snippet: { text: cleanSnippet(h.snippet), query: m.query }, run: () => messages.open(r.sessionId, h, m.query) })),
+    r.hits.map((h) => ({ id: `msg:${r.sessionId}:${h.messageId}`, ...group, title: r.title || t("app.palette.untitled"), cwd: r.cwd, snippet: { text: cleanSnippet(h.snippet), query: m.query }, run: () => messages.open(r.sessionId, h, m.query) })),
   );
-  return !m.all && messages.cwd ? [...rows, { id: "msg:all", group, title: t("app.palette.searchAllProjects"), keep: true, run: () => setAll(true) }] : rows;
+  return !m.all && messages.cwd ? [...rows, { id: "msg:all", ...group, title: t("app.palette.searchAllProjects"), keep: true, run: () => setAll(true) }] : rows;
 };
 
 /** `text` with the first case-insensitive match of `query` marked. */
@@ -111,7 +116,7 @@ export function CommandPalette({
   const [opened] = useState(openedWith);
   const [fetched, setFetched] = useState<PaletteItem[]>([]);
   // Before the sessions, which a broad query fills up.
-  const at = opened.findIndex((i) => i.group === t("app.palette.groupSessions"));
+  const at = opened.findIndex((i) => i.groupId === "app.palette.groupSessions");
   const items = fetched.length ? (at < 0 ? [...opened, ...fetched] : [...opened.slice(0, at), ...fetched, ...opened.slice(at)]) : opened;
   const initial = items.find((i) => i.id === start);
   const [page, setPage] = useState(initial && "page" in initial ? initial.page : undefined);
@@ -204,7 +209,7 @@ export function CommandPalette({
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
-  const groups = [...new Set(shown.map((i) => i.group))];
+  const groups = [...new Map(shown.map((i) => [i.groupId, i.group])).entries()];
   return (
     <div className="fixed inset-0 z-50 flex justify-center px-3 pt-[max(48px,calc((100dvh-480px)/2))]">
       <div className="absolute inset-0 bg-overlay" onClick={onClose} aria-hidden data-testid="palette-backdrop" />
@@ -242,13 +247,13 @@ export function CommandPalette({
           </p>
         ) : (
           <div ref={listRef} id="palette-list" role="listbox" aria-label={page?.placeholder ?? t("app.palette.groupCommands")} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1.5 pt-1.5 pb-2 leading-4 [scrollbar-width:none]">
-            {groups.map((g) => (
-              <div key={g} role="group" aria-label={g} className="flex flex-col gap-px">
+            {groups.map(([gid, g]) => (
+              <div key={gid} role="group" aria-label={g} className="flex flex-col gap-px">
                 <div role="presentation" className="my-1.5 px-3 text-muted-foreground">
                   {g}
                 </div>
                 {shown.map((item, i) =>
-                  item.group !== g ? null : (
+                  item.groupId !== gid ? null : (
                     <div
                       key={item.id}
                       id={`palette-${i}`}

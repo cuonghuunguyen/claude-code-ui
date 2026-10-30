@@ -112,12 +112,12 @@ export default {
   "session.queue.delete": "Xóa",
   "session.queue.notRun": "Chưa chạy: {error}",
   // todo-dock.tsx
-  "session.todo.completed": "Đã xong",
+  "session.todo.completed": "Hoàn tất",
   "session.todo.inProgress": "Đang làm",
   "session.todo.pending": "Chờ làm",
   "session.todo.title": "Việc cần làm",
   // tools.ts
-  "session.tools.todoSummary": "{done} trên {total} việc đã xong",
+  "session.tools.todoSummary": "{done} trên {total} việc hoàn tất",
   "session.tools.lines": "dòng {from}–{to}",
   "session.tools.fromLine": "từ dòng {line}",
   "session.tools.artifactUpload": "Tải lên Artifact ({count} tệp)",
@@ -366,13 +366,13 @@ export default {
   "session.skills.noticeUnconfirmed": "Đã lưu. Phiên này vẫn giữ trạng thái cũ và có thể chưa tải lại; hãy mở lại hộp thoại để kiểm tra.",
   "session.skills.meta": "{source} · {tokens} token",
   // skills-dialog.tsx
-  "session.skillsDialog.title": "Lệnh gạch chéo",
+  "session.skillsDialog.title": "Lệnh slash",
   "session.skillsDialog.filter": "Lọc lệnh…",
   "session.skillsDialog.loadFailed": "Không tải được skill: {error}",
   "session.skillsDialog.loadFailedShort": "Không tải được skill",
   "session.skillsDialog.loadingSkills": "Đang tải skill…",
   "session.skillsDialog.loadingCommands": "Đang tải lệnh…",
-  "session.skillsDialog.none": "Không có lệnh gạch chéo nào.",
+  "session.skillsDialog.none": "Không có lệnh slash nào.",
   "session.skillsDialog.noMatch": "Không có lệnh phù hợp.",
   "session.skillsDialog.changeFailed": "Không đổi được trạng thái skill",
   "session.skillsDialog.lockedLabel": "{label}: {state}, đã khóa. {reason}",
@@ -388,4 +388,5 @@ export default {
   // mcp-dialog.tsx (placeholders)
   "session.mcpDialog.commandPlaceholder": "npx",
   "session.mcpDialog.urlPlaceholder": "https://example.com/mcp",
+  "session.mcp.loadFailed": "Không tải được danh sách máy chủ MCP",
 } satisfies Partial<Messages>;

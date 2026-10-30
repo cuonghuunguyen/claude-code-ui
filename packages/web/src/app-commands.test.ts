@@ -560,3 +560,17 @@ it("GH-503 a docked session's palette row is marked open: it is no strip tab but
   const rows = appCommands(ctx({ sessions, tabs: ["a"], openIds: ["a", "d"], activeId: "a" })).filter((i) => i.group === "Sessions");
   expect(rows.map((r) => [r.id, !!r.open])).toEqual([["session:a", true], ["session:d", true]]);
 });
+
+it("in Vietnamese the Background shells command and the session rows are different groups", async () => {
+  const { setLocalePref } = await import("./i18n.ts");
+  setLocalePref("vi");
+  try {
+    const items = appCommands(ctx({ openShells: vi.fn() }));
+    const shells = items.find((i) => i.id === "shells.open")!;
+    const row = items.find((i) => i.id === "session:a")!;
+    expect(shells.groupId).not.toBe(row.groupId);
+    expect(shells.group).not.toBe(row.group);
+  } finally {
+    setLocalePref("system");
+  }
+});

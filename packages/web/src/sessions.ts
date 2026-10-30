@@ -359,3 +359,6 @@ export function saveSidebarView(view: SidebarView) {
     // Storage blocked: the settings still apply to this page.
   }
 }
+
+/** The daemon's placeholder titles ("New session", "Untitled") in the app language; any other title as is. */
+export const displayTitle = (raw: string) => (raw === "Untitled" ? t("app.palette.untitled") : raw === "New session" ? t("app.main.newSession") : raw);

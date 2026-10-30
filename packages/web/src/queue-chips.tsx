@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpIcon, PencilIcon, XIcon } from "lucide-react";
 import type { QueuedPrompt } from "@claude-ui/protocol";
-import { t as tr, useT } from "./i18n.ts";
+import { dateFormat, t as tr, useT } from "./i18n.ts";
 import { summarizePasted } from "./pasted-text.ts";
 
 type Held = { reason: "usage_limit" | "not_live"; until?: number };
@@ -14,7 +14,7 @@ const BTN =
 export function heldText(held: Held): string {
   if (held.reason === "not_live") return tr("session.queue.notLive");
   if (held.until === undefined) return tr("session.queue.pausedUntilSend");
-  return tr("session.queue.pausedUntil", { time: new Date(held.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) });
+  return tr("session.queue.pausedUntil", { time: dateFormat({ hour: "2-digit", minute: "2-digit" }).format(new Date(held.until)) });
 }
 
 export function QueueChips({

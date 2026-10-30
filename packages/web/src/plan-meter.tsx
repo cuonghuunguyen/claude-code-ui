@@ -4,7 +4,7 @@ import { Popover } from "@base-ui/react/popover";
 import { TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
 import { Ring } from "./context-meter.tsx";
-import { t, useT } from "./i18n.ts";
+import { dateFormat, t, useT } from "./i18n.ts";
 import { ringWindow, useUsageRing } from "./usage-ring.ts";
 
 /** A window at or past this percent shows the warning state, also when the server still grades it normal. */
@@ -34,9 +34,9 @@ function duration(ms: number) {
   return `${Math.floor(m / 1440)}d ${Math.floor(m / 60) % 24}h`;
 }
 
-// Made once: toLocaleTimeString with options builds a formatter on every call (~1 ms each), and every render of a meter formats.
-const TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-const DAY = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
+// numberFormat/dateFormat build a formatter once per language: with options it costs ~1 ms, and every render of a meter formats.
+const TIME = { format: (d: Date) => dateFormat({ hour: "numeric", minute: "2-digit" }).format(d) };
+const DAY = { format: (d: Date) => dateFormat({ weekday: "short", month: "short", day: "numeric" }).format(d) };
 
 /** "13:40", with weekday and date unless it is today. */
 export function clockText(at: number, now = Date.now()) {

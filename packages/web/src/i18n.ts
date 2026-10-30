@@ -25,17 +25,17 @@ const KEY = "claude-ui.locale";
 export function browserLocale(langs: readonly string[] = typeof navigator === "undefined" ? [] : navigator.languages ?? [navigator.language]): string {
   for (const l of langs) {
     const code = l.toLowerCase().split("-")[0];
-    if (LOCALES[code]) return code;
+    if (Object.hasOwn(LOCALES, code)) return code;
   }
   return "en";
 }
 
-export const resolveLocale = (pref: LocalePref) => (pref !== "system" && LOCALES[pref] ? pref : browserLocale());
+export const resolveLocale = (pref: LocalePref) => (pref !== "system" && Object.hasOwn(LOCALES, pref) ? pref : browserLocale());
 
 function loadPref(): LocalePref {
   try {
     const v = localStorage.getItem(KEY);
-    return v && LOCALES[v] ? v : "system";
+    return v && Object.hasOwn(LOCALES, v) ? v : "system";
   } catch {
     return "system";
   }
@@ -43,7 +43,7 @@ function loadPref(): LocalePref {
 
 /** The text of `key` in `locale`: plural form by `vars.count`, `{name}` placeholders filled from `vars`. */
 export function translate(locale: string, key: Key, vars?: Vars): string {
-  const m: Message | undefined = LOCALES[locale]?.messages[key] ?? en.messages[key];
+  const m: Message | undefined = (Object.hasOwn(LOCALES, locale) ? LOCALES[locale].messages[key] : undefined) ?? en.messages[key];
   // Unreachable through the Key type; a stale key from outside the type shows nothing rather than the raw key.
   if (m === undefined) return "";
   const text = typeof m === "string" ? m : (m[new Intl.PluralRules(locale).select(Number(vars?.count ?? 0))] ?? m.other);
@@ -79,6 +79,17 @@ export const getLocalePref = () => pref;
 
 /** Text in the current language, for code outside render (toasts, notifications, titles). In a component use `useT`. */
 export const t = (key: Key, vars?: Vars) => translate(locale, key, vars);
+
+const formats = new Map<string, Intl.NumberFormat | Intl.DateTimeFormat>();
+/** Number / date formatter for the current language, built once per language and options (a build costs ~1 ms). */
+export function numberFormat(o?: Intl.NumberFormatOptions) {
+  const k = `n${locale}${JSON.stringify(o)}`;
+  return (formats.get(k) ?? formats.set(k, new Intl.NumberFormat(locale, o)).get(k)) as Intl.NumberFormat;
+}
+export function dateFormat(o?: Intl.DateTimeFormatOptions) {
+  const k = `d${locale}${JSON.stringify(o)}`;
+  return (formats.get(k) ?? formats.set(k, new Intl.DateTimeFormat(locale, o)).get(k)) as Intl.DateTimeFormat;
+}
 
 const subscribe = (cb: () => void) => {
   listeners.add(cb);

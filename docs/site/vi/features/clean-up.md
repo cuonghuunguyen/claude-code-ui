@@ -14,10 +14,10 @@
 ## Dọn dẹp tab {#clean-up-tabs}
 
 1. Mở menu tab và chọn **Dọn dẹp tab…**, hoặc chạy từ bảng lệnh.
-2. Chọn một quy tắc: tab nhàn rỗi, tab đã xong, tab của phiên đã lưu trữ hoặc đã xóa, tab worker, hoặc tab không dùng trong 1 giờ, 1 ngày hoặc 7 ngày. Mỗi quy tắc hiển thị số tab nó đóng.
+2. Chọn một quy tắc: tab rảnh, tab đã xong, tab của phiên đã lưu trữ hoặc đã xóa, tab worker, hoặc tab không dùng trong 1 giờ, 1 ngày hoặc 7 ngày. Mỗi quy tắc hiển thị số tab nó đóng.
 3. Thông báo **Đã đóng N tab** xuất hiện. Bấm **Hoàn tác** để đưa chúng trở lại.
 
-Để đóng các tab nhàn rỗi của một nhóm, nhấp chuột phải vào nhãn nhóm và chọn **Dọn dẹp nhóm** (xem [Menu ngữ cảnh](context-menus#group-chips)). Trên điện thoại, nhấn giữ nút đóng.
+Để đóng các tab rảnh của một nhóm, nhấp chuột phải vào nhãn nhóm và chọn **Dọn dẹp nhóm** (xem [Menu ngữ cảnh](context-menus#group-chips)). Trên điện thoại, nhấn giữ nút đóng.
 
 ## Cần biết {#good-to-know}
 

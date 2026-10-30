@@ -9,7 +9,7 @@ import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protoco
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -429,7 +429,7 @@ export function SessionList({
                       <button
                         className={cn("flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground text-xs outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 pointer-coarse:h-11", PAD[depth + 1])}
                         aria-expanded={isOpen(k)}
-                        aria-label={`${t("sidebar.workersOf", { count: ws.length, title: s.title })}${needs ? `, ${t("sidebar.state.needs_input")}` : ""}`}
+                        aria-label={`${t("sidebar.workersOf", { count: ws.length, title: displayTitle(s.title) })}${needs ? `, ${t("sidebar.state.needs_input")}` : ""}`}
                         onClick={() => toggle(k)}
                         data-testid="worker-group-toggle"
                         data-needs-input={needs || undefined}
@@ -767,9 +767,9 @@ const SessionRow = memo(function SessionRow({
           )}
           aria-current={active ? "page" : undefined}
           data-worker={workerName}
-          aria-label={(workerName ? [workerName, t("sidebar.worker"), stateName(st), place, unread && t("sidebar.unread")] : [s.title, stateText ?? label, branch && t("sidebar.branchNamed", { branch }), unread && t("sidebar.unread")]).filter(Boolean).join(", ")}
+          aria-label={(workerName ? [workerName, t("sidebar.worker"), stateName(st), place, unread && t("sidebar.unread")] : [displayTitle(s.title), stateText ?? label, branch && t("sidebar.branchNamed", { branch }), unread && t("sidebar.unread")]).filter(Boolean).join(", ")}
           onClick={() => onOpen(s.id)}
-          title={workerName ? `${s.title}\n${s.cwd}` : stateText ? `${s.title} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${s.title} (${label})` : s.title}
+          title={workerName ? `${displayTitle(s.title)}\n${s.cwd}` : stateText ? `${displayTitle(s.title)} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${displayTitle(s.title)} (${label})` : displayTitle(s.title)}
         >
           {workerName ? (
             <span className="flex min-w-0 flex-1 flex-col">
@@ -779,7 +779,7 @@ const SessionRow = memo(function SessionRow({
           ) : stateText ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="flex min-w-0 items-baseline gap-1.5">
-                {loading ? <TitleSkeleton title={s.title} className="h-3.5 w-28" /> : <span className="min-w-0 truncate font-medium text-foreground">{s.title}</span>}
+                {loading ? <TitleSkeleton title={s.title} className="h-3.5 w-28" /> : <span className="min-w-0 truncate font-medium text-foreground">{displayTitle(s.title)}</span>}
                 {branch && <span className="min-w-0 shrink-[2] truncate text-muted-foreground text-xs" data-testid="session-branch">{branch}</span>}
               </span>
               <span className="truncate text-muted-foreground text-xs" data-testid="session-state">{stateText}</span>
@@ -787,7 +787,7 @@ const SessionRow = memo(function SessionRow({
           ) : loading ? (
             <TitleSkeleton title={s.title} className="h-3.5 w-28" />
           ) : (
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{s.title}</span>
+            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{displayTitle(s.title)}</span>
           )}
           {unread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
           <StateIcon state={st} />

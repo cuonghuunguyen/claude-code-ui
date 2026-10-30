@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
+import { setLocalePref } from "./i18n.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName } from "./sessions.ts";
+import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName, displayTitle } from "./sessions.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -416,4 +417,14 @@ it("keepsBranch: a detached row and a worktree-* branch with createdBranch false
   expect(keepsBranch(l, "/d", {})).toBe(false);
   expect(keepsBranch(l, "/w", {})).toBe(true);
   expect(keepsBranch(l, "/w")).toBe(false);
+});
+
+describe("displayTitle", () => {
+  afterEach(() => setLocalePref("system"));
+  it("shows the daemon placeholder titles in the app language, any other title as is", () => {
+    setLocalePref("en");
+    expect([displayTitle("New session"), displayTitle("Untitled"), displayTitle("Fix login"), displayTitle("")]).toEqual(["New session", "Untitled", "Fix login", ""]);
+    setLocalePref("vi");
+    expect([displayTitle("New session"), displayTitle("Untitled"), displayTitle("Fix login")]).toEqual(["Phiên mới", "Chưa đặt tên", "Fix login"]);
+  });
 });

@@ -1,6 +1,6 @@
 # Thông báo {#notifications}
 
-claude-code-ui báo cho bạn khi một phiên cần nhập liệu hoặc đã xong. Có ba loại.
+claude-code-ui báo cho bạn khi một phiên cần phản hồi hoặc đã xong. Có ba loại.
 
 | Loại | Hiển thị ở đâu | Cần |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ claude-code-ui báo cho bạn khi một phiên cần nhập liệu hoặc đã x
 
 ## Thẻ trong ứng dụng {#in-app-cards}
 
-- Một thẻ hiện khi phiên bạn không đang xem cần nhập liệu, đã xong hoặc bị lỗi.
+- Một thẻ hiện khi phiên bạn không đang xem cần phản hồi, đã xong hoặc bị lỗi.
 - Với yêu cầu đọc đơn giản, trả lời ngay trên thẻ: **Cho phép một lần** hoặc **Từ chối**.
 - Với mọi việc khác: bấm **Mở trong Focus** để trả lời trên [trang Focus](focus).
 - <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>N</kbd> chuyển tiêu điểm bàn phím đến thẻ mới nhất.

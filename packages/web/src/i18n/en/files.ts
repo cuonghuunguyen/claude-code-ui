@@ -248,4 +248,5 @@ export default {
   "files.terminal.list": "Terminals",
   "files.terminal.close": "Close {title}",
   "files.terminal.new": "New terminal",
+  "files.image.unavailable": "Image not available",
 } as const;

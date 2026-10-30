@@ -77,7 +77,7 @@ Chỉ có dưới dạng biến môi trường:
 | `sessions.json` | Model, chế độ, effort và liên kết worker của mỗi phiên |
 | `settings.json` | Cài đặt toàn ứng dụng (xem [Cài đặt](settings)) |
 | `vapid.json`, `push-subscriptions.json` | Khóa thông báo đẩy và các trình duyệt đã đăng ký |
-| `sides.json`, `side-pack/` | Các side WSL và Docker |
+| `sides.json`, `side-pack/` | Các môi trường WSL và Docker |
 | `versions/` | Các bản cập nhật đã cài |
 
 Bản thân lịch sử phiên không nằm ở đây. Nó nằm trong transcript của chính Claude Code tại `~/.claude/projects/`.

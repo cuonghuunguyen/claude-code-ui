@@ -2,12 +2,12 @@
 import { useId } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { ContextUsage } from "@claude-ui/protocol";
-import { useT } from "./i18n.ts";
+import { numberFormat, useT } from "./i18n.ts";
 import type { Totals } from "./status-bar.tsx";
 
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const full = new Intl.NumberFormat("en");
-const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" });
+const compact = { format: (n: number) => numberFormat({ notation: "compact", maximumFractionDigits: 1 }).format(n) };
+const full = { format: (n: number) => numberFormat().format(n) };
+const usd = { format: (n: number) => numberFormat({ style: "currency", currency: "USD" }).format(n) };
 const share = (tokens: number, max: number) => `${((tokens / max) * 100).toFixed(1)}%`;
 
 const COLORS = [1, 2, 3, 4, 5, 6].map((i) => `var(--context-${i})`);

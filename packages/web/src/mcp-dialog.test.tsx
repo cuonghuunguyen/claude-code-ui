@@ -38,6 +38,7 @@ async function render(handlers: Record<string, Handler> = {}, props: { server?: 
   document.body.append(el);
   const prompt = document.createElement("textarea");
   prompt.setAttribute("aria-label", "Prompt");
+  prompt.setAttribute("data-prompt", "");
   // jsdom has no layout: offsetParent is null for every element; the shown prompt box needs one.
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   document.body.append(prompt);

@@ -12,7 +12,7 @@ import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { pathKey } from "./file-tree-model.ts";
 import { readFailure } from "./files.ts";
-import { useT } from "./i18n.ts";
+import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { runRemoteOp, dismissRemoteResult, useRemoteOp } from "./git-remote-ops.ts";
@@ -31,7 +31,8 @@ const LANE_W = 14;
 const ALL = "all";
 const HEAD = "HEAD";
 const short = (ref: string) => ref.replace(/^refs\/(heads|remotes|tags)\//, "");
-const when = (c: { time: number }) => (Date.now() / 1000 - c.time < 7 * 86400 ? timeAgo(c.time * 1000) : new Date(c.time * 1000).toLocaleDateString());
+const DATETIME: Intl.DateTimeFormatOptions = { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" };
+const when = (c: { time: number }) => (Date.now() / 1000 - c.time < 7 * 86400 ? timeAgo(c.time * 1000) : dateFormat().format(new Date(c.time * 1000)));
 // Same as the changes pane's diff style choice (no toggle here).
 const storedStyle = (): "unified" | "split" => {
   try {
@@ -110,7 +111,7 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       <RefChips refs={c.refs} />
       <span className="min-w-0 flex-1 truncate">{c.subject}</span>
       <span className="hidden max-w-32 shrink-0 truncate text-muted-foreground @md:inline">{c.author}</span>
-      <span className="shrink-0 text-muted-foreground text-xs" title={new Date(c.time * 1000).toLocaleString()}>
+      <span className="shrink-0 text-muted-foreground text-xs" title={dateFormat(DATETIME).format(new Date(c.time * 1000))}>
         {when(c)}
       </span>
       <span className="shrink-0 font-mono text-muted-foreground text-xs">{c.hash.slice(0, 7)}</span>
@@ -431,7 +432,7 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
       <p>
         {d.author} <span className="text-muted-foreground">{"<"}{d.email}{">"}</span>
       </p>
-      <p className="text-muted-foreground text-xs">{new Date(d.time * 1000).toLocaleString()}</p>
+      <p className="text-muted-foreground text-xs">{dateFormat(DATETIME).format(new Date(d.time * 1000))}</p>
       <p className="select-all break-all font-mono text-xs">{d.hash}</p>
       {d.parents.length > 0 && (
         <p className="flex flex-wrap items-center gap-1 text-muted-foreground text-xs">

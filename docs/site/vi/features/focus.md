@@ -1,13 +1,13 @@
 # Trang Focus
 
-Một trang cho thấy, theo từng phiên, phiên nào cần bạn, phiên nào đang làm việc và phiên nào đã xong khi bạn vắng mặt. Yêu cầu được trả lời ngay tại đó.
+Một trang cho thấy, theo từng phiên, phiên nào cần phản hồi, phiên nào đang làm việc và phiên nào đã xong khi bạn vắng mặt. Yêu cầu được trả lời ngay tại đó.
 
 ![Trang Focus với hai phiên đang chờ, một phiên đang làm việc và hai phiên đã xong](/screenshots/focus.png)
 
 ## Cách dùng {#how-to-use}
 
 1. Mở **Focus**: dòng ở đầu thanh bên, hoặc tab **Focus** được ghim. Con số cho biết có bao nhiêu phiên đang chờ câu trả lời.
-2. **Cần bạn** liệt kê các yêu cầu, rồi đến các phiên cần xem qua. Chọn một dòng (bấm hoặc dùng phím mũi tên).
+2. **Cần phản hồi** liệt kê các yêu cầu, rồi đến các phiên cần xem qua. Chọn một dòng (bấm hoặc dùng phím mũi tên).
 3. Trả lời yêu cầu ngay tại chỗ, giống như trong phiên: **Cho phép một lần**, **Luôn cho phép**, **Từ chối**, hoặc trả lời câu hỏi.
 4. Bấm **Yêu cầu chờ kế tiếp** (hoặc <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>↓</kbd> từ mọi nơi) để nhảy đến yêu cầu kế tiếp.
 5. **Đang chạy** cho thấy mỗi phiên đang chạy làm gì và, nếu có danh sách tác vụ, tiến độ của nó ("2 trên 5"). Bấm một dòng để mở phiên.
@@ -16,7 +16,7 @@ Một trang cho thấy, theo từng phiên, phiên nào cần bạn, phiên nào
 
 ## Cần biết {#good-to-know}
 
-- Các dòng theo thứ tự cố định: đã chuyển lên, quyền, câu hỏi, lỗi, giới hạn mức dùng, im lặng. Phần đầu trang cho biết bao nhiêu phiên cần bạn, bao nhiêu phiên cần xem lại và bao nhiêu phiên đang làm việc.
+- Các dòng theo thứ tự cố định: đã chuyển lên, quyền, câu hỏi, lỗi, giới hạn mức dùng, im lặng. Phần đầu trang cho biết bao nhiêu phiên cần phản hồi, bao nhiêu phiên cần xem lại và bao nhiêu phiên đang làm việc.
 - **Im lặng** là thông tin, không phải báo động: phiên đang chạy không có sự kiện nào trong 5 phút và không có công cụ nào đang chạy. Hãy kiểm tra, có thể vẫn bình thường.
 - Mỗi danh sách hiện 5 dòng và **+N nữa**.
 - Dòng lỗi và dòng đã xong biến mất khi bạn mở phiên. Dòng đã xong cũng biến mất sau 24 giờ.

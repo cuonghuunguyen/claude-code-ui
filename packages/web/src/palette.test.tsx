@@ -18,21 +18,21 @@ const setModel = vi.fn();
 const openTab = vi.fn();
 const noop = () => {};
 const ITEMS: PaletteItem[] = [
-  { id: "new", group: "Commands", title: "New session", keys: "mod+shift+s", run: newSession },
+  { id: "new", groupId: "Commands", group: "Commands", title: "New session", keys: "mod+shift+s", run: newSession },
   {
     id: "model",
-    group: "Commands",
+    groupId: "Commands", group: "Commands",
     title: "Change model",
     keys: "mod+'",
     page: {
       placeholder: "Choose model",
       items: [
-        { id: "opus", group: "Models", title: "Opus", checked: true, run: () => setModel("opus") },
-        { id: "sonnet", group: "Models", title: "Sonnet", run: () => setModel("sonnet") },
+        { id: "opus", groupId: "Models", group: "Models", title: "Opus", checked: true, run: () => setModel("opus") },
+        { id: "sonnet", groupId: "Models", group: "Models", title: "Sonnet", run: () => setModel("sonnet") },
       ],
     },
   },
-  { id: "s1", group: "Sessions", title: "Fix login", description: "api", run: openTab },
+  { id: "s1", groupId: "app.palette.groupSessions", group: "Sessions", title: "Fix login", description: "api", run: openTab },
 ];
 
 async function render(start?: string, items = ITEMS, files?: ComponentProps<typeof CommandPalette>["files"], messages?: ComponentProps<typeof CommandPalette>["messages"]) {
@@ -115,14 +115,14 @@ it("no match shows No results", async () => {
 
 it("an option page starts on the current value, so Enter keeps it", async () => {
   const items: PaletteItem[] = [
-    { id: "m", group: "Commands", title: "Change model", page: { placeholder: "Choose model", items: [{ id: "a", group: "Models", title: "A", run: noop }, { id: "b", group: "Models", title: "B", checked: true, run: () => setModel("b") }] } },
+    { id: "m", groupId: "Commands", group: "Commands", title: "Change model", page: { placeholder: "Choose model", items: [{ id: "a", groupId: "Models", group: "Models", title: "A", run: noop }, { id: "b", groupId: "Models", group: "Models", title: "B", checked: true, run: () => setModel("b") }] } },
   ];
   const { rows } = await render("m", items);
   expect(rows().map((r) => r.getAttribute("aria-selected"))).toEqual(["false", "true"]);
 });
 
 it("empty query lists commands and recent sessions only; a query also finds the older ones, at most 50 per group", async () => {
-  const sessions: PaletteItem[] = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, group: "Sessions", title: `Task ${i}`, searchOnly: i >= 5, run: noop }));
+  const sessions: PaletteItem[] = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, groupId: "app.palette.groupSessions", group: "Sessions", title: `Task ${i}`, searchOnly: i >= 5, run: noop }));
   const { rows, type } = await render(undefined, [ITEMS[0]!, ...sessions]);
   expect(rows().map((r) => r.dataset.id)).toEqual(["new", "s0", "s1", "s2", "s3", "s4"]);
   await type("task 7");
@@ -133,7 +133,7 @@ it("empty query lists commands and recent sessions only; a query also finds the 
 
 it("a session row shows the project avatar, the open-tab marker and the relative time; a long title truncates with a tooltip", async () => {
   const title = "A very long session title that does not fit into one palette row at all";
-  const { rows } = await render(undefined, [{ id: "s", group: "Sessions", title, description: "api", cwd: "/w/api", open: true, meta: "2m", run: noop }]);
+  const { rows } = await render(undefined, [{ id: "s", groupId: "app.palette.groupSessions", group: "Sessions", title, description: "api", cwd: "/w/api", open: true, meta: "2m", run: noop }]);
   const row = rows()[0]!;
   expect(row.title).toBe(title);
   expect(row.querySelector('[data-testid="open-marker"]')).not.toBeNull();
@@ -171,7 +171,7 @@ it("closes cleanly where scrollIntoView returns a Promise (current Chromium): no
 
 it("keeps the list it opened with: Stop stays when the turn ends while the palette is open", async () => {
   const stop = vi.fn();
-  const items: PaletteItem[] = [ITEMS[0]!, { id: "stop", group: "Commands", title: "Stop", keys: "escape", run: stop }];
+  const items: PaletteItem[] = [ITEMS[0]!, { id: "stop", groupId: "Commands", group: "Commands", title: "Stop", keys: "escape", run: stop }];
   const { rows, type, key, onClose } = await render(undefined, items);
   await type("Stop");
   await act(async () => root!.render(<CommandPalette items={[ITEMS[0]!]} onClose={onClose} />));
@@ -185,7 +185,7 @@ it("fetches the extra rows once the first query is typed and lists them before t
   document.body.append(el);
   root = createRoot(el);
   const open = vi.fn();
-  const more = vi.fn(async (): Promise<PaletteItem[]> => [{ id: "mcp:ctx", group: "MCP servers", title: "ctx", description: "Open MCP server details", meta: "⚠ Needs Auth", searchOnly: true, run: open }]);
+  const more = vi.fn(async (): Promise<PaletteItem[]> => [{ id: "mcp:ctx", groupId: "MCP servers", group: "MCP servers", title: "ctx", description: "Open MCP server details", meta: "⚠ Needs Auth", searchOnly: true, run: open }]);
   await act(async () => root!.render(<CommandPalette items={ITEMS} more={more} onClose={noop} />));
   expect(more).not.toHaveBeenCalled();
   const input = el.querySelector<HTMLInputElement>('[data-testid="palette-input"]')!;

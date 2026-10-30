@@ -53,7 +53,7 @@ Phím tắt hoạt động ở mọi nơi trong ứng dụng, kể cả ô promp
 | Bật/tắt cây tệp | <kbd>Ctrl</kbd>+<kbd>\\</kbd> | <kbd>⌘</kbd> <kbd>\\</kbd> |
 | Hiện tệp | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> |
 | Hiện thay đổi | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>G</kbd> |
-| Hiện git graph | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> |
+| Hiện đồ thị git | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> |
 | Bật/tắt chỉ tín hiệu | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>S</kbd> |
 | Bật/tắt terminal | <kbd>Ctrl</kbd>+<kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | Terminal mới | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>\`</kbd> |

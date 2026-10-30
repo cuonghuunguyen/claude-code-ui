@@ -12,7 +12,7 @@ Hiển thị hai phiên cạnh nhau, hoặc phiên này phía trên phiên kia, 
 4. Kéo thanh giữa các phần chia để đổi kích thước, hoặc chọn thanh rồi nhấn các phím mũi tên. Nhấp đúp vào thanh để quay về 50/50.
 5. Để kết thúc chia, chạy **Gộp các khung** trong [bảng lệnh](palette). Phiên đang hoạt động được giữ lại.
 
-Bạn cũng có thể kéo một tab vào vùng phiên và thả ở một cạnh để chia tại đó. **Chia sang phải**, **Chia xuống dưới** và thao tác kéo cũng dùng được với các tab Kế hoạch, Tệp, Terminal, tệp và artifact. Một phần chia luôn chứa ít nhất một phiên. Biểu đồ Git luôn chiếm toàn bộ vùng, và Thay đổi luôn nằm trong bảng của nó.
+Bạn cũng có thể kéo một tab vào vùng phiên và thả ở một cạnh để chia tại đó. **Chia sang phải**, **Chia xuống dưới** và thao tác kéo cũng dùng được với các tab Kế hoạch, Tệp, Terminal, tệp và artifact. Một phần chia luôn chứa ít nhất một phiên. Đồ thị Git luôn chiếm toàn bộ vùng, và Thay đổi luôn nằm trong bảng của nó.
 
 ## Cần biết {#good-to-know}
 

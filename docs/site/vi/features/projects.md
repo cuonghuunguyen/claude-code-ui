@@ -12,7 +12,7 @@
 
 ## Cách gỡ dự án {#how-to-remove-a-project}
 
-- Mở menu của dự án trong thanh bên và chọn **Xóa khỏi danh sách (giữ tệp)**.
+- Mở menu của dự án trong thanh bên và chọn **Gỡ khỏi danh sách (giữ tệp)**.
 - Thao tác này chỉ ẩn dự án. Tệp và lịch sử phiên vẫn còn.
 
 ## Worktree {#worktrees}
@@ -56,4 +56,4 @@ Menu của dòng dự án và của dòng worktree có **Sao chép đường d�
 - Thư mục chỉ có phiên từ CLI `claude` hiện là **dự án gần đây** cho đến khi bạn mở chúng.
 - Worktree dưới `.claude/worktrees/` có thể được gỡ từ đây, và mọi worktree liên kết nằm trong roots cũng vậy (trừ worktree bị khóa hoặc là symlink), kể cả worktree tạo thủ công. Trước khi gỡ, ứng dụng cho bạn biết sẽ mất bao nhiêu thay đổi chưa commit và bao nhiêu commit.
 - Gỡ worktree sẽ xóa nhánh mà claude-code-ui đã tạo cho nó (từ **Ticket**, **Tên**, tên tự tạo hoặc một worker). Nhánh bạn checkout bằng **Nhánh**, hoặc tự tạo, vẫn còn; [Dọn dẹp](/vi/features/clean-up) đề nghị xóa nó khi đã được merge.
-- Với WSL hoặc Docker, **Mở dự án** cũng cho phép bạn chọn một side. Xem [WSL & Docker](/vi/features/wsl-docker).
+- Với WSL hoặc Docker, **Mở dự án** cũng cho phép bạn chọn một môi trường. Xem [WSL & Docker](/vi/features/wsl-docker).

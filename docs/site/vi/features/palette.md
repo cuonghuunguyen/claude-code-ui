@@ -14,8 +14,8 @@ Một ô tìm kiếm cho lệnh, phiên, tệp và nội dung tin nhắn.
 
 | Nhóm | Ví dụ |
 | --- | --- |
-| **Lệnh** | Phiên mới, Worktree mới…, Bật/tắt terminal, Hiện biểu đồ git, Bật/tắt chỉ tín hiệu, Mở cài đặt, Hiện hướng dẫn, Mở Focus, Dừng, Đổi model, Đổi mức suy nghĩ, Đổi chế độ quyền, Tua lại |
-| **Tùy chỉnh** | Máy chủ MCP, Lệnh gạch chéo, Quản lý plugin |
+| **Lệnh** | Phiên mới, Worktree mới…, Bật/tắt terminal, Hiện đồ thị git, Bật/tắt chỉ tín hiệu, Mở cài đặt, Hiện hướng dẫn, Mở Focus, Dừng, Đổi model, Đổi mức suy nghĩ, Đổi chế độ quyền, Tua lại |
+| **Tùy chỉnh** | Máy chủ MCP, Lệnh slash, Quản lý plugin |
 | **Phiên** | Các phiên của bạn, mới nhất trước |
 | **Tệp** | Các tệp của dự án hiện tại |
 | **Tin nhắn** | Văn bản bên trong các phiên của bạn, mới nhất trước |

@@ -7,7 +7,7 @@ Ba hộp thoại quản lý máy chủ MCP, skill và plugin của Claude Code, 
 | Hộp thoại | Nhập trong ô prompt | Hoặc trong [bảng lệnh](palette) |
 | --- | --- | --- |
 | **Máy chủ MCP** | `/mcp` | Máy chủ MCP |
-| **Lệnh gạch chéo** (skill) | `/skills` hoặc `/help` | Lệnh gạch chéo |
+| **Lệnh slash** (skill) | `/skills` hoặc `/help` | Lệnh slash |
 | **Quản lý plugin** | `/plugins`, `/plugin` hoặc `/marketplace` | Quản lý plugin |
 
 ## Máy chủ MCP {#mcp-servers}
@@ -17,7 +17,7 @@ Ba hộp thoại quản lý máy chủ MCP, skill và plugin của Claude Code, 
 - **Thêm máy chủ MCP:** đặt tên, chọn **Giao thức** (stdio, SSE hoặc HTTP) và **Phạm vi**, rồi bấm **Thêm máy chủ**.
 - Nếu máy chủ cần đăng nhập qua trình duyệt, hãy hoàn tất rồi dán **URL callback** vào hộp thoại khi được yêu cầu.
 
-## Lệnh gạch chéo {#slash-commands}
+## Lệnh slash {#slash-commands}
 
 Liệt kê mọi lệnh và skill. Mỗi skill có một **trạng thái**:
 

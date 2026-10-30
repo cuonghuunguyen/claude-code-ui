@@ -98,7 +98,7 @@ export function McpDialog({
     } catch (e) {
       if (n < shown.current) return;
       shown.current = n;
-      setLoadError((e as Error).message || "Failed to load MCP servers");
+      setLoadError((e as Error).message || t("session.mcp.loadFailed"));
     } finally {
       if (n === shown.current) setLoading(false), setRetrying(false);
     }

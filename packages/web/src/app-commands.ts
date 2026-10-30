@@ -1,11 +1,11 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
-import type { PaletteItem } from "./palette.tsx";
+import { grp, type PaletteItem } from "./palette.tsx";
 import { type Area, type DockArea } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
-import { timeAgo } from "./sessions.ts";
+import { displayTitle, timeAgo } from "./sessions.ts";
 import { t } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
@@ -144,8 +144,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const go = (id: string) => (c.selectTab(id), c.focusPrompt(id));
   const efforts = s ? effortOptions(c.models, s.model) : [];
   // The shortcut's title and its current binding come from the registry (shortcuts.ts, keymap.ts).
-  const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, group: t("app.palette.groupCommands"), title, keys: specOf(id), run, searchOnly });
-  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, group: t("app.palette.groupCommands"), title, keys, page: { placeholder, items } });
+  const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys: specOf(id), run, searchOnly });
+  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys, page: { placeholder, items } });
   const items: (PaletteItem | false | undefined)[] = [
     cmd("session.new", t("app.cmd.sessionNew"), c.newSession),
     c.newWorktree && cmd("worktree.new", t("app.cmd.worktreeNew"), c.newWorktree),
@@ -164,7 +164,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "tab.cleanup",
         t("app.cmd.tabCleanup"),
         t("app.cmd.closeWhich"),
-        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, group: c.tabCleanup!.kept.text || t("app.cmd.rules"), title: i.label, meta: t("app.cmd.tabCount", { count: i.count }), disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
+        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, groupId: "cleanup", group: c.tabCleanup!.kept.text || t("app.cmd.rules"), title: i.label, meta: t("app.cmd.tabCount", { count: i.count }), disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
       ),
     ...(c.tabCleanup && c.cleanUpTabs ? c.tabCleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUpTabs!(i.rule), true)) : []),
     c.togglePin && cmd("tab.pin", t(c.pinned ? "app.cmd.unpin" : "app.cmd.pin"), c.togglePin),
@@ -212,7 +212,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "model.choose",
         t("app.cmd.changeModel"),
         t("app.cmd.chooseModel"),
-        c.models.map((m) => ({ id: `model:${m.value}`, group: t("app.cmd.groupModels"), title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
+        c.models.map((m) => ({ id: `model:${m.value}`, ...grp("app.cmd.groupModels"), title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
       ),
     s &&
       efforts.length > 0 &&
@@ -220,7 +220,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "effort.choose",
         t("app.cmd.changeEffort"),
         t("app.cmd.chooseEffort"),
-        efforts.map((e) => ({ id: `effort:${e}`, group: t("app.cmd.groupEffort"), title: t(EFFORT_LABEL[e]), checked: e === s.effort, run: () => c.setEffort(e) })),
+        efforts.map((e) => ({ id: `effort:${e}`, ...grp("app.cmd.groupEffort"), title: t(EFFORT_LABEL[e]), checked: e === s.effort, run: () => c.setEffort(e) })),
       ),
     s &&
       s.modes.length > 0 &&
@@ -228,7 +228,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "mode.choose",
         t("app.cmd.changeMode"),
         t("app.cmd.chooseMode"),
-        s.modes.map((m) => ({ id: `mode:${m}`, group: t("app.cmd.groupMode"), title: t(MODE_LABEL[m].label), checked: m === s.mode, run: () => c.setMode(m) })),
+        s.modes.map((m) => ({ id: `mode:${m}`, ...grp("app.cmd.groupMode"), title: t(MODE_LABEL[m].label), checked: m === s.mode, run: () => c.setMode(m) })),
         // Shown only: Shift+Tab in the prompt box cycles the mode (SessionPane).
         "shift+tab",
       ),
@@ -240,22 +240,22 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         "rewind",
         t("app.cmd.rewind"),
         t("app.cmd.rewindWhich"),
-        [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: t("app.cmd.groupNewest"), title: firstLine(p.text), run: () => c.rewind(p.id) })),
+        [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, ...grp("app.cmd.groupNewest"), title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
     s?.running && { ...cmd("session.stop", t("app.cmd.sessionStop"), c.stop), keys: "escape" },
     c.runInBackground && cmd("shell.background", t("app.cmd.shellBackground"), c.runInBackground),
-    c.openShells && { id: "shells.open", group: t("app.cmd.groupSession"), keys: specOf("shells.open"), title: t("app.cmd.shells"), description: t("app.cmd.shellsDesc"), run: c.openShells },
+    c.openShells && { id: "shells.open", ...grp("app.cmd.groupSession"), keys: specOf("shells.open"), title: t("app.cmd.shells"), description: t("app.cmd.shellsDesc"), run: c.openShells },
     // The extension's command menu section "Customize".
-    c.openMcp && { id: "mcp.open", group: t("app.cmd.groupCustomize"), keys: specOf("mcp.open"), title: t("app.cmd.mcp"), description: t("app.cmd.mcpDesc"), run: c.openMcp },
-    c.openSkills && { id: "skills.open", group: t("app.cmd.groupCustomize"), keys: specOf("skills.open"), title: t("app.cmd.skills"), description: t("app.cmd.skillsDesc"), run: c.openSkills },
-    c.openPlugins && { id: "plugins.open", group: t("app.cmd.groupCustomize"), keys: specOf("plugins.open"), title: t("app.cmd.plugins"), description: t("app.cmd.pluginsDesc"), run: c.openPlugins },
+    c.openMcp && { id: "mcp.open", ...grp("app.cmd.groupCustomize"), keys: specOf("mcp.open"), title: t("app.cmd.mcp"), description: t("app.cmd.mcpDesc"), run: c.openMcp },
+    c.openSkills && { id: "skills.open", ...grp("app.cmd.groupCustomize"), keys: specOf("skills.open"), title: t("app.cmd.skills"), description: t("app.cmd.skillsDesc"), run: c.openSkills },
+    c.openPlugins && { id: "plugins.open", ...grp("app.cmd.groupCustomize"), keys: specOf("plugins.open"), title: t("app.cmd.plugins"), description: t("app.cmd.pluginsDesc"), run: c.openPlugins },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]
       .sort((a, b) => b.lastActivity - a.lastActivity)
       .map((x, i) => ({
         id: `session:${x.id}`,
-        group: t("app.palette.groupSessions"),
-        title: x.title || t("app.palette.untitled"),
+        ...grp("app.palette.groupSessions"),
+        title: displayTitle(x.title) || t("app.palette.untitled"),
         description: projectName(x.cwd),
         cwd: x.cwd,
         open: c.openIds.includes(x.id),

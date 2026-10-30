@@ -1,6 +1,6 @@
 # Khung & bố cục
 
-Thay đổi, Tệp, Biểu đồ Git, Terminal, Kế hoạch và Artifact là các **khung**. Mỗi khung là một tab của bảng bên, của bảng dưới hoặc (trừ Thay đổi) của vùng chính, và bạn chọn nơi đặt nó.
+Thay đổi, Tệp, Đồ thị Git, Terminal, Kế hoạch và Artifact là các **khung**. Mỗi khung là một tab của bảng bên, của bảng dưới hoặc (trừ Thay đổi) của vùng chính, và bạn chọn nơi đặt nó.
 
 ![Không gian làm việc với terminal gắn ở phía dưới](/screenshots/panes.png)
 
@@ -14,7 +14,7 @@ Thay đổi, Tệp, Biểu đồ Git, Terminal, Kế hoạch và Artifact là c�
 
 ## Vùng chính {#the-main-area}
 
-Kế hoạch, Tệp, Biểu đồ Git và Terminal cũng có thể là tab nằm cạnh các phiên của bạn. Bấm chuột phải vào tab khung và chọn **Chuyển sang vùng chính**, hoặc kéo tab thả lên thanh tab hoặc vùng phiên. Khi đó khung mở thành một tab trong nhóm của dự án trên thanh tab ("Kế hoạch · *phiên*", "Terminal · *dự án*"), và luôn hiển thị dự án hoặc phiên đó trong khi bạn làm việc ở phiên khác. **Chuyển sang bảng bên** hoặc **Chuyển sang bảng dưới** đưa nó về, và tab đóng lại (một thông báo nhanh có **Hoàn tác**). Menu của chính tab có các mục tương tự. Git graph luôn chiếm toàn bộ vùng.
+Kế hoạch, Tệp, Đồ thị Git và Terminal cũng có thể là tab nằm cạnh các phiên của bạn. Bấm chuột phải vào tab khung và chọn **Chuyển sang vùng chính**, hoặc kéo tab thả lên thanh tab hoặc vùng phiên. Khi đó khung mở thành một tab trong nhóm của dự án trên thanh tab ("Kế hoạch · *phiên*", "Terminal · *dự án*"), và luôn hiển thị dự án hoặc phiên đó trong khi bạn làm việc ở phiên khác. **Chuyển sang bảng bên** hoặc **Chuyển sang bảng dưới** đưa nó về, và tab đóng lại (một thông báo nhanh có **Hoàn tác**). Menu của chính tab có các mục tương tự. Git graph luôn chiếm toàn bộ vùng.
 
 Kéo tab khung thả lên bảng bên hoặc bảng dưới để chuyển nó đến đó.
 
@@ -22,7 +22,7 @@ Kéo tab khung thả lên bảng bên hoặc bảng dưới để chuyển nó �
 
 | Khung | Hiển thị |
 | --- | --- |
-| [Thay đổi](/vi/features/changes), [Tệp](/vi/features/files), [Biểu đồ Git](/vi/features/git-graph), [Terminal](/vi/features/terminal) | Xem trang riêng của từng khung. |
+| [Thay đổi](/vi/features/changes), [Tệp](/vi/features/files), [Đồ thị Git](/vi/features/git-graph), [Terminal](/vi/features/terminal) | Xem trang riêng của từng khung. |
 | **Kế hoạch** | Kế hoạch mới nhất của phiên, với cùng nội dung như thẻ kế hoạch. Chỉ được liệt kê khi phiên có kế hoạch. Khi kế hoạch đang chờ bạn trả lời, khung ghi rõ điều đó, kèm **Đến yêu cầu**. **Mở trong tab** trên thẻ kế hoạch hoặc trên màn hình duyệt kế hoạch sẽ hiện khung ở bất kỳ nơi nào nó đang đặt. |
 | **Artifact** || Các artifact mà phiên đã xuất bản (công cụ Artifact của Claude). Chọn một artifact để xem trước, hoặc bấm **Mở trong tab**. Chỉ được liệt kê khi phiên đã xuất bản artifact. |
 
@@ -45,7 +45,7 @@ Bấm chuột phải vào tab phiên và chọn **Chuyển sang bảng bên** ho
 ## Cần biết {#good-to-know}
 
 - Khung đã chuyển giữ nguyên trạng thái: tệp đang mở, terminal đang chạy, đồ thị đã tải. Tab của nó giữ tiêu điểm bàn phím. Terminal không bao giờ nhận bàn phím cho đến khi bạn bấm vào nó.
-- Bảng không có khung nào sẽ bị ẩn. Biểu đồ Git, Kế hoạch và Artifact chỉ hiện khi có nội dung để hiển thị. Biểu đồ Git cần thư mục git.
+- Bảng không có khung nào sẽ bị ẩn. Đồ thị Git, Kế hoạch và Artifact chỉ hiện khi có nội dung để hiển thị. Đồ thị Git cần thư mục git.
 - Bố cục được lưu theo từng trình duyệt. Bảng bên và bảng dưới mở lại ở tab bạn chọn lần trước, kể cả sau khi tải lại trang.
 - **Đặt lại bố cục** khôi phục bố cục mặc định và quên các tab đã ghi nhớ. Nó không đổi kích thước.
 - Trên điện thoại không có gắn bảng: bộ chuyển khung mở ở khung bạn dùng lần trước.

@@ -9,7 +9,7 @@ Màn hình có bốn phần. Mỗi phần liên kết tới trang riêng.
 | **Thanh bên** | Trái | [Dự án](../features/projects) và các [phiên](../features/sessions) của chúng. Tìm kiếm, Focus và Cài đặt cũng nằm ở đây. |
 | **Thanh tab** | Trên | Các phiên đang mở dưới dạng [tab](../features/sessions#tabs), nhóm theo dự án. |
 | **Phiên** | Giữa | Cuộc trò chuyện với Claude: [dòng thời gian](../features/timeline) và [hộp prompt](../features/prompt-box) ở dưới cùng. |
-| **Bảng bên** | Phải | [Tệp](../features/files), [Thay đổi](../features/changes), [Biểu đồ](../features/git-graph) và [terminal](../features/terminal). |
+| **Bảng bên** | Phải | [Tệp](../features/files), [Thay đổi](../features/changes), [Đồ thị](../features/git-graph) và [terminal](../features/terminal). |
 
 ## Các từ bạn sẽ gặp {#words-you-will-see}
 

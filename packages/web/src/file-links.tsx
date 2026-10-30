@@ -95,6 +95,7 @@ function fileLinks() {
 }
 
 function LoadedImage({ path, alt }: { path: string; alt?: string }) {
+  const t = useT();
   const load = use(FileImageContext);
   const [url, setUrl] = useState<string>();
   const [failed, setFailed] = useState(false);
@@ -103,7 +104,7 @@ function LoadedImage({ path, alt }: { path: string; alt?: string }) {
     load?.(path).then((u) => live && setUrl(u), () => live && setFailed(true));
     return () => void (live = false);
   }, [path, load]);
-  if (!url || failed) return <span className="text-muted-foreground">{alt || (failed ? "Image not available" : "")}</span>;
+  if (!url || failed) return <span className="text-muted-foreground">{alt || (failed ? t("files.image.unavailable") : "")}</span>;
   return <img src={url} alt={alt} loading="lazy" className="h-auto max-w-full rounded" onError={() => setFailed(true)} />;
 }
 

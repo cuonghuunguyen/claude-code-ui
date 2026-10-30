@@ -51,6 +51,7 @@ async function render({ sides, docker, failGet = false, tokenReset = false, grou
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
   prompt.setAttribute("aria-label", "Prompt");
+  prompt.setAttribute("data-prompt", "");
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   document.body.append(el, prompt);
   let bump = () => {};

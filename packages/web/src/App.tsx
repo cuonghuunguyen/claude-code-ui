@@ -87,7 +87,7 @@ import { t as tt, useT } from "./i18n.ts";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
-import { resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, timeAgo, worktreeName } from "./sessions.ts";
+import { displayTitle, resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, timeAgo, worktreeName } from "./sessions.ts";
 import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
@@ -1845,7 +1845,7 @@ export function App() {
     });
     if (stray.length) closeGroup(stray);
   }, [layout, tabs, list]);
-  const ownerTitle = (o: string) => list.find((s) => s.id === o)?.title || titles[o] || tr("app.palette.untitled");
+  const ownerTitle = (o: string) => displayTitle(list.find((s) => s.id === o)?.title || titles[o] || "Untitled");
   /** A pane tab's title: Files and Git graph name the owner's folder ("demo", "demo · feature"), Plan the owner's title. */
   const paneTitle = (ref: string) => {
     const k = kindOf(ref)!;
@@ -2342,7 +2342,7 @@ export function App() {
   const dockedProps = (a: DockArea) => ({
     sessions: dockedHere(a).map((id): DockedSession => {
       const item = list.find((l) => l.id === id);
-      return { id, title: item?.title || titles[id] || "Untitled", cwd: sessionOf(id)?.cwd, state: shownState(views[id]) ?? sessionOf(id)?.state, unread: unread.has(id) };
+      return { id, title: displayTitle(item?.title || titles[id] || "Untitled"), cwd: sessionOf(id)?.cwd, state: shownState(views[id]) ?? sessionOf(id)?.state, unread: unread.has(id) };
     }),
     activeSession: dockSelOf(a),
     onSelectSession: (id: string) => (setDockSel((s) => ({ ...s, [a]: id })), focusDockedPrompt(id)),
@@ -2803,7 +2803,7 @@ export function App() {
     project
       ? paletteOrder((await client.current!.request<McpListResult>({ type: "mcp.list", cwd: project, ...(projectSession && { sessionId: projectSession }) })).servers).map((x) => ({
           id: `mcp:${x.name}`,
-          group: tr("app.cmd.mcp"),
+          groupId: "mcp", group: tr("app.cmd.mcp"),
           title: x.name,
           description: tr("app.main.mcpDetails"),
           meta: `${statusIcon(x.status)} ${statusLabel(x.status)}`,
@@ -3312,8 +3312,7 @@ export function App() {
               if (pk) return { title: paneTitle(id), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
               const item = list.find((l) => l.id === id);
               const raw = item?.title || titles[id] || "Untitled";
-              const title = raw === "Untitled" ? tr("app.palette.untitled") : raw === "New session" ? tr("app.main.newSession") : raw;
-              return { title, titleLoading: titleLoading(raw, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
+              return { title: displayTitle(raw), titleLoading: titleLoading(raw, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
             renamingFromMenu={renaming?.menu}
@@ -3838,7 +3837,7 @@ export function App() {
                         repos={repoList}
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
-                        emptyText="No changes yet. Claude's edits appear here."
+                        emptyText={tr("app.changes.empty")}
                       />
                     ),
                     hosts.changes,

@@ -1,6 +1,7 @@
 // Every user-visible string of a component comes from the catalog (i18n.ts). Fails on English written straight into JSX:
 // text children, string literals rendered as children (also inside `a ? "x" : "y"` and `a && "x"`), and literal
-// values of the attributes a person reads or hears (aria-label, title, placeholder, alt, label).
+// values of any attribute that is not on the DENY list of identifiers, styling and protocol attributes (a custom prop such
+// as emptyText="..." counts as text).
 // shortcut: strings built in a helper and passed down are not seen here; the review catches those.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -9,7 +10,16 @@ import { parseSync } from "vite";
 import { expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
-const ATTRS = new Set(["aria-label", "aria-description", "aria-valuetext", "aria-roledescription", "title", "placeholder", "alt", "label"]);
+const READABLE_ARIA = new Set(["aria-label", "aria-description", "aria-valuetext", "aria-roledescription"]);
+/** Attributes whose string value is an identifier, a style, a variant or a protocol value, never text a person reads. */
+const DENY = new Set([
+  "className", "class", "id", "key", "type", "role", "href", "src", "rel", "target", "name", "value", "method", "htmlFor", "autoComplete", "inputMode", "enterKeyHint", "lang", "dir", "form", "accept", "pattern",
+  "d", "viewBox", "fill", "stroke", "xmlns", "variant", "size", "side", "align", "kind", "mode", "testId",
+  // Component props that take an id, a command name, a state or an HTML/SVG enum.
+  "area", "as", "command", "controls", "describedBy", "field", "from", "grouping", "ids", "initial", "language", "path", "resize", "scope", "sendMode", "state", "surface", "tier", "toolName",
+  "loading", "preload", "referrerPolicy", "sandbox", "orientation", "autoCapitalize", "autoCorrect", "preserveAspectRatio", "vectorEffect", "strokeWidth", "cx", "cy",
+]);
+const readable = (name: string) => !DENY.has(name) && !name.startsWith("data-") && (!name.startsWith("aria-") || READABLE_ARIA.has(name));
 /** Not words of a language: product and protocol names, units, key names, symbols. */
 const ALLOWED = new Set<string>(["claude-code-ui", "Claude", "Claude Code", "Git", "MCP", "Jira", "URL", "ID", "PID", "WSL", "Docker", "OK", "Esc", "Enter", "Tab", "Shift", "Ctrl", "Alt", "Cmd"]);
 const word = /\p{L}{2,}/u;
@@ -27,6 +37,7 @@ function components(dir: string): string[] {
 /** String literals a JSX child or attribute expression renders as is. */
 function rendered(e: Node | undefined): Node[] {
   if (!e) return [];
+  if (e.type === "ParenthesizedExpression" || e.type === "TSAsExpression" || e.type === "TSSatisfiesExpression") return rendered(e.expression as Node);
   if (e.type === "Literal" && typeof e.value === "string") return [e];
   if (e.type === "TemplateLiteral") return [e];
   if (e.type === "ConditionalExpression") return [...rendered(e.consequent as Node), ...rendered(e.alternate as Node)];
@@ -47,7 +58,7 @@ function hardcoded(file: string, source: string): string[] {
     if (node.type === "JSXExpressionContainer" && (node as { parentIsChild?: boolean }).parentIsChild) for (const l of rendered(node.expression as Node)) flag(l, text(l));
     if (node.type === "JSXElement" || node.type === "JSXFragment")
       for (const c of node.children as Node[]) if (c.type === "JSXExpressionContainer") (c as { parentIsChild?: boolean }).parentIsChild = true;
-    if (node.type === "JSXAttribute" && ATTRS.has(String((node.name as { name: unknown }).name))) {
+    if (node.type === "JSXAttribute" && readable(String((node.name as { name: unknown }).name))) {
       const v = node.value as Node | null;
       for (const l of v?.type === "JSXExpressionContainer" ? rendered(v.expression as Node) : v ? rendered(v) : []) flag(l, text(l));
     }
@@ -58,8 +69,8 @@ function hardcoded(file: string, source: string): string[] {
 }
 
 it("finds hard-coded text in JSX", () => {
-  const src = `const a = <div title="Close" aria-label={x ? "Open it" : t("k")}>Hello {busy ? "Saving…" : t("k")} {n && "items"} {"→"}</div>;`;
-  expect(hardcoded("a.tsx", src).map((s) => s.split(": ")[1])).toEqual(["Close", "Open it", "Hello", "Saving…", "items"]);
+  const src = `const a = <div title="Close" aria-label={x ? "Open it" : t("k")}>Hello {busy ? "Saving…" : t("k")} {n && "items"} {"→"}{("Wrapped")} {"Cast" as string}<Box emptyText="Hello there" variant="ghost" data-x="Skip me" aria-hidden="true" id="my-id" /></div>;`;
+  expect(hardcoded("a.tsx", src).map((s) => s.split(": ")[1])).toEqual(["Close", "Open it", "Hello", "Saving…", "items", "Wrapped", "Cast", "Hello there"]);
 });
 
 it("no component writes user-visible English straight into JSX", () => {
