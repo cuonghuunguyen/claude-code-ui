@@ -1,6 +1,6 @@
 # Terminal
 
-A real terminal in the session's folder, docked at the bottom of the window by default. It runs on the daemon's computer.
+A real terminal in the session's folder, docked at the bottom of the window by default. It can also sit in the side panel or as a tab in the main area. It runs on the daemon's computer.
 
 ![Two terminals in the bottom panel, the second one showing test output](/screenshots/terminal.png)
 
@@ -22,7 +22,8 @@ For Git Bash on Windows, set `SHELL` to `C:\Program Files\Git\bin\bash.exe` befo
 
 ## Good to know
 
-- The terminal is a [pane](panes): it sits in the bottom panel, under the session and the side panel. The bottom panel resizes and maximizes. **Terminal position** in [Settings › Layout › Terminal](../reference/settings#terminal), or a move of its tab, puts it in the side panel.
+- The terminal is a [pane](panes): it sits in the bottom panel, under the session and the side panel. The bottom panel resizes and maximizes. **Terminal position** in [Settings › Layout › Terminal](../reference/settings#terminal), or a move of its tab, puts it in the side panel or the main area.
+- In the main area the terminals of a project are one tab ("Terminal · *project*") that stays while you work in another project. After a reload each folder shows the terminal you selected in it.
 
 - Terminals live in the daemon. They survive a page reload or a lost connection, and the last output is replayed.
 - A shell starts only when you open the terminal (Toggle terminal, New terminal, or a click on its tab), never on a reload, a session or project switch, or a reconnect. A terminal you left open shows again only while its folder has running shells, and then it does not take the focus.

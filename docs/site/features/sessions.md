@@ -54,7 +54,7 @@ With **Compact tabs** on, each group shows only its chip: hover or click it to p
 
 More tab keys (reopen a closed tab, close a group): [Keyboard shortcuts](../reference/shortcuts).
 
-On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. Swipe up or down on the switcher to go to the previous or next tab.
+On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. Swipe up or down on the switcher to go to the previous or next tab: the tab name follows your finger and settles on the next tab, or springs back.
 
 ## Good to know
 
