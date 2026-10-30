@@ -29,7 +29,7 @@ A **worktree** is an extra git checkout of the same repository, on its own branc
 3. For a new branch, **Base** picks the start point (default: the remote default branch, e.g. `origin/main`).
 4. The modal shows the branch and its folder (`.claude/worktrees/<branch with / replaced by ->`). Click **Create**. A new session tab opens in the worktree.
 
-A new worktree also gets the gitignored files that the `.worktreeinclude` file at the root of the main checkout lists (`.gitignore` syntax), for example `.env`. A file is copied only when a pattern matches it and git ignores it. Large files and large totals are skipped with a warning in the daemon log.
+A new worktree also gets the gitignored files that the `.worktreeinclude` file at the root of the main checkout lists (`.gitignore` syntax), for example `.env`. A file is copied only when a pattern matches it and git ignores it. Copying stops at 2 GiB or 50,000 files per worktree, with a warning in the daemon log. Links are never copied.
 
 A long ticket summary is shortened, so a generated name is always valid. An error shows only for a name you typed or edited. A folder name is at most 64 characters, also when you check out an existing branch with the **Branch** tab.
 
