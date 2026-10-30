@@ -211,7 +211,7 @@ it("an out-of-range cap shows the daemon's error in a Banner", async () => {
 
 it("Compact tabs is a switch that applies at once, and is disabled with a hint while grouping is None", async () => {
   const { q, calls, onTabCompact, pick } = await render();
-  await pick("tabs");
+  await pick("layout");
   const sw = q("settings-tabs-compact")!;
   expect(sw.getAttribute("role")).toBe("switch");
   expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -231,7 +231,7 @@ it("Compact tabs is a switch that applies at once, and is disabled with a hint w
 
 it("Tab grouping shows By project by default and picking By worktree applies at once without a daemon request", async () => {
   const { q, calls, onTabGrouping, pick } = await render();
-  await pick("tabs");
+  await pick("layout");
   expect(q("settings-tabs-grouping")?.textContent).toContain("By project");
   await act(async () => q("settings-tabs-grouping")!.click());
   expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["By project", "By worktree", "None"]);
@@ -256,7 +256,7 @@ it("Worker mode shows the daemon's value and picking Auto sends a patch of that 
 it("the Tabs section shows while daemon settings load or fail", async () => {
   const { q, pick } = await render({ failGet: true });
   expect(q("banner-error")?.textContent).toContain("daemon unreachable");
-  await pick("tabs");
+  await pick("layout");
   expect(q("settings-tabs")).not.toBeNull();
 });
 
@@ -293,7 +293,7 @@ it("shows Usage limits: the continue switch is off by default and sends its patc
 it("Default diff view is a per-browser choice: picking Uncommitted saves it and sends no settings.set", async () => {
   localStorage.removeItem("claude-ui.diffMode");
   const { q, calls, pick } = await render();
-  await pick("changes");
+  await pick("layout");
   expect(q("settings-diff-mode")?.textContent).toContain("Session changes");
   await act(async () => q("settings-diff-mode")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-diff-mode-uncommitted]")!.click());
@@ -305,14 +305,14 @@ it("Default diff view is a per-browser choice: picking Uncommitted saves it and 
 
 it("Terminal position hint names the narrow Terminal tab of the Main area", async () => {
   const { q, pick } = await render();
-  await pick("terminal");
+  await pick("layout");
   expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
 });
 
 it("Terminal position: Bottom by default, Side panel saved per browser", async () => {
   localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
-  await pick("terminal");
+  await pick("layout");
   expect(q("settings-terminal-position")?.textContent).toContain("Bottom");
   await act(async () => q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
@@ -324,7 +324,7 @@ it("Terminal position: Bottom by default, Side panel saved per browser", async (
 it("Terminal position offers Main area (GH-397)", async () => {
   localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
-  await pick("terminal");
+  await pick("layout");
   await act(async () => q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
@@ -335,7 +335,7 @@ it("Terminal position offers Main area (GH-397)", async () => {
 it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
   localStorage.clear();
   const { q, pick } = await render();
-  await pick("sidebar");
+  await pick("layout");
   const sw = q("settings-sidebar-active-only")!;
   expect(q("settings-sidebar")!.textContent).toContain("Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed.");
   expect(sw.getAttribute("aria-checked")).toBe("false");
@@ -349,7 +349,7 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
 it("Sidebar section: Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
   localStorage.clear();
   const { q, pick } = await render();
-  await pick("sidebar");
+  await pick("layout");
   expect(document.getElementById("settings-sidebar-layout-label")!.textContent).toBe("Group by");
   expect(q("settings-sidebar-layout")!.textContent).toContain("Worktree");
   await act(async () => q("settings-sidebar-layout")!.click());
@@ -365,7 +365,7 @@ it("Sidebar section: Group by is Worktree or Project, stored in the sidebarView 
 
 it("shows a Guide section whose Restart guide button calls onRestartGuide", async () => {
   const { q, onRestartGuide, pick } = await render();
-  await pick("guide");
+  await pick("about");
   expect(q("settings-guide")!.textContent).toContain("Guided tour");
   expect(document.getElementById("settings-guide-tour-hint")!.textContent).toMatch(/Kept in this browser\.$/);
   const button = q("settings-guide-restart") as HTMLButtonElement;
@@ -375,11 +375,36 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
   expect(onRestartGuide).toHaveBeenCalledTimes(1);
 });
 
-it("lists the groups: Appearance first, Timeline next, Guide after Tabs, the daemon's groups last", async () => {
+it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "Timeline", "Sending", "Notifications", "Screen", "Changes", "Sidebar", "Terminal", "Tabs", "Keyboard", "Guide", "Orchestration", "Focus", "Usage limits", "Performance", "Git", "Jira", "About"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
+  const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
+  expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
+  expect(heads.every((h) => h.getAttribute("aria-hidden") === "true")).toBe(true);
+  // Each heading sits right before the first group of its category.
+  expect(q("settings-category-sessions")!.nextElementSibling).toBe(q("settings-group-orchestration"));
+});
+
+it("General holds Timeline, Sending and Screen; Layout holds Sidebar, Tabs, Changes and Terminal; Help & about holds Guide and About", async () => {
+  const { q, pick } = await render();
+  const order = () => [...q("settings-panel")!.querySelectorAll(":scope > section")].map((s) => s.getAttribute("data-testid"));
+  await pick("general");
+  expect(order()).toEqual(["settings-timeline", "settings-sending", "settings-screen"]);
+  await pick("layout");
+  expect(order()).toEqual(["settings-sidebar", "settings-tabs", "settings-changes", "settings-terminal"]);
+  await pick("about");
+  expect(order()).toEqual(["settings-guide", "settings-about"]);
+});
+
+it("a remembered group id from before the merge opens the group that holds its section now", async () => {
+  for (const [old, now] of [["timeline", "General"], ["sending", "General"], ["screen", "General"], ["sidebar", "Layout"], ["tabs", "Layout"], ["changes", "Layout"], ["terminal", "Layout"], ["guide", "Help & about"]]) {
+    await render({ group: old });
+    expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe(now);
+    act(() => root?.unmount());
+    document.body.innerHTML = "";
+  }
 });
 
 it("lists Performance after Usage limits and before About: a switch sends its patch, and the results load from perf.report", async () => {
@@ -483,15 +508,15 @@ it("shows one group at a time: the first by default, picking another swaps the p
   expect(q("settings-appearance")).not.toBeNull();
   expect(q("settings-tabs")).toBeNull();
   expect(q("settings-panel")?.getAttribute("aria-labelledby")).toBe("settings-tab-appearance");
-  await pick("tabs");
+  await pick("layout");
   expect(q("settings-tabs")).not.toBeNull();
   expect(q("settings-appearance")).toBeNull();
-  expect(localStorage.getItem("claude-ui.settingsGroup")).toBe("tabs");
+  expect(localStorage.getItem("claude-ui.settingsGroup")).toBe("layout");
   act(() => root?.unmount());
   document.body.innerHTML = "";
-  const again = await render({ group: "tabs" });
+  const again = await render({ group: "layout" });
   expect(again.q("settings-tabs")).not.toBeNull();
-  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Tabs");
+  expect(document.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe("Layout");
 });
 
 it("an unknown remembered group falls back to the first", async () => {
@@ -504,7 +529,7 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   const key = (k: string) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
   await act(async () => q("settings-group-appearance")!.focus());
   await key("ArrowDown");
-  expect(document.activeElement).toBe(q("settings-group-timeline"));
+  expect(document.activeElement).toBe(q("settings-group-general"));
   await key("ArrowDown");
   await key("ArrowDown");
   expect(document.activeElement).toBe(q("settings-group-notifications"));
@@ -512,6 +537,10 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   expect(q("settings-group-appearance")!.getAttribute("tabindex")).toBe("-1");
   expect(q("settings-group-notifications")!.getAttribute("tabindex")).toBe("0");
   expect(q("settings-notifications")).not.toBeNull();
+  await key("ArrowDown");
+  await key("ArrowDown");
+  // The category heading between Keyboard and Orchestration is skipped.
+  expect(document.activeElement).toBe(q("settings-group-orchestration"));
   await key("End");
   expect(document.activeElement).toBe(q("settings-group-about"));
   await key("ArrowDown");
@@ -524,14 +553,14 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
 
 it("tapping a group moves the focus to the Back button of the drilled-in panel", async () => {
   const { q, pick } = await render();
-  await pick("sidebar");
+  await pick("layout");
   await act(async () => void new Promise((r) => setTimeout(r, 50)));
   expect(document.activeElement).toBe(q("settings-back"));
 });
 
 it("the Back button shows on the drill-in panel and returns the focus to the group in the list", async () => {
   const { q, pick } = await render();
-  await pick("sidebar");
+  await pick("layout");
   expect(q("settings-back")?.textContent).toBe("Settings");
   expect(q("settings-groups")!.className).toContain("max-md:hidden");
   expect(q("settings-panel")!.className).not.toContain("max-md:hidden");
@@ -539,7 +568,7 @@ it("the Back button shows on the drill-in panel and returns the focus to the gro
   await act(async () => void new Promise((r) => setTimeout(r, 50)));
   expect(q("settings-groups")!.className).not.toContain("max-md:hidden");
   expect(q("settings-panel")!.className).toContain("max-md:hidden");
-  expect(document.activeElement).toBe(q("settings-group-sidebar"));
+  expect(document.activeElement).toBe(q("settings-group-layout"));
 });
 
 it("Signal only is a per-browser switch in the Timeline group, off by default, that saves at once and sends no settings.set (GH-205)", async () => {
@@ -576,7 +605,7 @@ it("Tab from the group list reaches the first visible control of the panel, not 
   const { q } = await render({ group: "timeline" });
   // jsdom has no Tailwind: hide the Back button the way `md:hidden` does from md up.
   q("settings-back")!.style.display = "none";
-  await act(async () => q("settings-group-timeline")!.focus());
+  await act(async () => q("settings-group-general")!.focus());
   await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
   expect(document.activeElement).toBe(q("settings-signal-only"));
 });
@@ -648,7 +677,7 @@ it("the In-app switch is on by default, writes the per-browser choice and tells 
   window.removeEventListener("claude-ui:in-app", on);
 });
 
-it("About, the last group, shows the web version and the daemon's as selectable text, with no extra request", async () => {
+it("Help & about, the last group, shows the web version and the daemon's as selectable text, with no extra request", async () => {
   const { q, pick, calls } = await render({ daemon: { host: "box", version: "1.2.3" } });
   const before = calls.length;
   await pick("about");
@@ -667,12 +696,11 @@ it("About omits the daemon version when an older daemon does not send it", async
   expect(q("settings-about-daemon")).toBeNull();
 });
 
-it("Sending group follows Timeline and holds the per-browser send mode, steer by default, sending no settings.set", async () => {
+it("the Sending section follows Timeline in General and holds the per-browser send mode, steer by default, sending no settings.set", async () => {
   localStorage.removeItem("claude-ui.sendMode");
   const { q, calls, pick } = await render();
-  const ids = [...q("settings-groups")!.querySelectorAll("button")].map((b) => b.getAttribute("data-testid"));
-  expect(ids.indexOf("settings-group-sending")).toBe(ids.indexOf("settings-group-timeline") + 1);
-  await pick("sending");
+  await pick("general");
+  expect(q("settings-timeline")!.nextElementSibling).toBe(q("settings-sending"));
   expect(q("settings-sending")!.textContent).toContain("While Claude works, Enter");
   expect(q("settings-sending")!.textContent).toContain("Kept in this browser.");
   expect(q("settings-send-mode")?.textContent).toContain("Steers the turn");
@@ -697,9 +725,9 @@ it("Usage limits: Usage ring shows is a per-browser choice, Highest usage by def
   localStorage.removeItem("claude-ui.usageRing");
 });
 
-it("GH-378 Settings > Tabs has Auto-close idle tabs after (Off, 1 hour, 1 day), shows the value and calls onTabAutoClose", async () => {
+it("GH-378 Settings > Layout > Tabs has Auto-close idle tabs after (Off, 1 hour, 1 day), shows the value and calls onTabAutoClose", async () => {
   const { q, calls, onTabAutoClose, pick } = await render();
-  await pick("tabs");
+  await pick("layout");
   expect(document.getElementById("settings-tabs-autoclose-label")?.textContent).toBe("Auto-close idle tabs after");
   expect(q("settings-tabs-autoclose")?.textContent).toContain("Off");
   await act(async () => q("settings-tabs-autoclose")!.click());
@@ -710,10 +738,10 @@ it("GH-378 Settings > Tabs has Auto-close idle tabs after (Off, 1 hour, 1 day), 
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
 });
 
-it("Settings > Screen has the Keep screen awake switches; unsupported here: held with the reason, choice still stored (GH-361)", async () => {
+it("Settings > General > Screen has the Keep screen awake switches; unsupported here: held with the reason, choice still stored (GH-361)", async () => {
   localStorage.removeItem("claude-ui.keepAwake");
   const { q, pick } = await render();
-  await pick("screen");
+  await pick("general");
   expect(q("settings-screen")?.querySelector("h3")?.textContent).toBe("Screen");
   // jsdom has no wake lock API.
   expect(q("settings-keep-awake")!.getAttribute("aria-disabled")).toBe("true");
@@ -728,7 +756,7 @@ it("Screen switches write the store; the sub-switch is held while the main one i
   try {
     saveKeepAwake({ on: false, onlyRunning: false });
     const { q, pick } = await render();
-    await pick("screen");
+    await pick("general");
     expect(q("settings-keep-awake-running")!.getAttribute("aria-disabled")).toBe("true");
     await act(async () => q("settings-keep-awake")!.click());
     expect(loadKeepAwake()).toEqual({ on: true, onlyRunning: false });

@@ -1,6 +1,6 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
-// Tabs form groups by project or by worktree (Settings > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
+// Tabs form groups by project or by worktree (Settings > Layout > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
 // Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359), Clean up tabs submenu (GH-378); Shift+F10 or the ContextMenu key opens it.
 // Clean up tabs by rule (GH-378): tab menu submenu, group chip "Clean up group", long press (or right click) on the phone close button.

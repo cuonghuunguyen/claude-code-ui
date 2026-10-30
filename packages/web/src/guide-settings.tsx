@@ -1,4 +1,4 @@
-// Settings > Guide (docs/spec.md "First-use guide"): per browser, nothing here reaches the daemon.
+// Settings > Help & about (docs/spec.md "First-use guide"): per browser, nothing here reaches the daemon.
 import { Button } from "@/components/ui/button";
 
 export function GuideSection({ onRestart }: { onRestart: () => void }) {

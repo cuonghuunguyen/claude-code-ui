@@ -7,7 +7,7 @@ Stops the screen from turning off while claude-ui is open, so you can watch a lo
 ## How to use
 
 1. Click the coffee button in the titlebar. It stays pressed while it is on.
-2. Or switch on **Keep screen awake** in [Settings › Screen](../reference/settings#screen), or run **Toggle keep screen awake** in the [command palette](palette).
+2. Or switch on **Keep screen awake** in [Settings › General › Screen](../reference/settings#screen), or run **Toggle keep screen awake** in the [command palette](palette).
 3. To hold the screen only while Claude works, also switch on **Only while a session is running**.
 
 ## Good to know

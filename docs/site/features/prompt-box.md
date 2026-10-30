@@ -14,7 +14,7 @@ The box at the bottom of a session. You type prompts here, and pick the model, m
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Next [permission mode](permissions) |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Jump to the prompt box from anywhere |
 
-In **Settings > Sending** you can swap the two: <kbd>Enter</kbd> queues and <kbd>Alt</kbd>+<kbd>Enter</kbd> steers. The send button follows the same choice, and a hint above it shows the keys.
+In **Settings > General > Sending** you can swap the two: <kbd>Enter</kbd> queues and <kbd>Alt</kbd>+<kbd>Enter</kbd> steers. The send button follows the same choice, and a hint above it shows the keys.
 
 ## Bash mode: `!`
 

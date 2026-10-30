@@ -140,7 +140,7 @@ export const STEPS: GuideStep[] = [
     chapter: "session",
     anchors: [cmd("settings.open")],
     title: "Replay any time",
-    body: "Settings › Guide restarts this tour.",
+    body: "Settings › Help & about restarts this tour.",
     side: "right",
   },
   {

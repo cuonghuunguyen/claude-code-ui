@@ -16,7 +16,7 @@ Changes, Files, Git graph and Terminal are **panes**. Each one is a tab of the s
 
 The [terminal](terminal) is in the bottom panel by default, under the session and the side panel. The bottom panel resizes (drag the handle above it), maximizes (**Maximize panel** / **Restore panel**) and hides (**Hide bottom panel**). Press <kbd>Ctrl</kbd>+<kbd>`</kbd> or use the terminal button in the titlebar to show or hide it.
 
-To keep the terminal in the side panel, set **Terminal position** to **Side panel** in [Settings › Terminal](../reference/settings#terminal), or move its tab.
+To keep the terminal in the side panel, set **Terminal position** to **Side panel** in [Settings › Layout › Terminal](../reference/settings#terminal), or move its tab.
 
 ## Good to know
 

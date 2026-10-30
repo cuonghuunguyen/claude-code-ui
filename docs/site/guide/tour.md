@@ -32,5 +32,5 @@ The screen has four parts. Each links to its own page.
 ## Good to know
 
 - Press <kbd>Ctrl</kbd>+<kbd>/</kbd> to see every [keyboard shortcut](../reference/shortcuts).
-- Restart the guided tour any time: **Settings › Guide**, or "Show guide" in the command palette.
+- Restart the guided tour any time: **Settings › Help & about**, or "Show guide" in the command palette.
 - On a phone the layout changes: the sidebar becomes a drawer and you see one pane at a time.

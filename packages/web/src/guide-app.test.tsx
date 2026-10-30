@@ -142,7 +142,7 @@ describe("first use", () => {
     await mount();
     await press({ key: "Escape" });
     expect(tour()).toBeNull();
-    expect(document.querySelector('[data-testid="toast"]')!.textContent).toBe("Tour closed. Restart it from Settings › Guide.");
+    expect(document.querySelector('[data-testid="toast"]')!.textContent).toBe("Tour closed. Restart it from Settings › Help & about.");
     expect(saved()).toMatchObject({ basics: "skipped", session: "skipped" });
     unmount();
     await mount();
@@ -184,14 +184,14 @@ describe("first use", () => {
 
 describe("restart", () => {
   const skipped = { v: 1, origin: "new", basics: "skipped", session: "skipped" };
-  it("Settings > Guide > Restart guide closes Settings and starts Basics at step 1", async () => {
+  it("Settings > Help & about > Restart guide closes Settings and starts Basics at step 1", async () => {
     localStorage.setItem(GUIDE_KEY, JSON.stringify(skipped));
     await mount();
     expect(tour()).toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="open-settings"]')!.click());
     await act(async () => {});
     expect(document.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-guide"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-about"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
     await act(async () => {});
     expect(document.querySelector('[data-testid="settings-dialog"]')).toBeNull();
@@ -217,7 +217,7 @@ describe("restart", () => {
     Object.defineProperty(btn, "getClientRects", { value: () => [{}] });
     btn.getBoundingClientRect = () => ({ left: 0, top: 0, width: 50, height: 20, right: 50, bottom: 20, x: 0, y: 0, toJSON() {} });
     await act(async () => btn.click());
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-guide"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-about"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
     await act(async () => {});
     await press({ key: "Escape" });
@@ -417,7 +417,7 @@ describe("the side panel hidden (crash regression, whole App)", () => {
     toggle.getBoundingClientRect = () => ({ left: 900, top: 4, width: 32, height: 32, right: 932, bottom: 36, x: 900, y: 4, toJSON() {} });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await act(async () => document.querySelector<HTMLElement>('[data-testid="open-settings"]')!.click());
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-guide"]')!.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-about"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
     await act(async () => {});
     expect(tour()!.textContent).toContain("Step 1 of 12");

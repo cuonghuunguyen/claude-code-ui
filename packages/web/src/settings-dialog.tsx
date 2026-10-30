@@ -1,7 +1,8 @@
-// Settings dialog (docs/spec.md "Settings"): two panes on the ConfigDialog shell, a list of groups on the left and the settings of the
-// selected group on the right (below md: the list first, a group drills in with a Back button). App-wide, daemon-side settings come from
-// SECTIONS, per-browser choices (Notifications, Timeline, Sending, Changes, Sidebar, Tabs, Keyboard, Guide) never reach the daemon.
-// A later setting is one more row in SECTIONS; a later group is one more entry in `groups`.
+// Settings dialog (docs/spec.md "Settings"): two panes on the ConfigDialog shell, a list of groups under category headings on the left
+// and the sections of the selected group on the right (below md: the list first, a group drills in with a Back button). App-wide,
+// daemon-side settings come from SECTIONS; per-browser choices (General, Layout, Keyboard, most of Notifications) never reach the daemon.
+// A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
+// more entry there.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
 import { sideStatus } from "./sides.tsx";
@@ -33,9 +34,12 @@ import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { swatchOf, THEMES, type ThemeId } from "./themes.ts";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
+/** Groups merged into larger ones: a remembered old id opens the group that holds its section now. */
+const MOVED: Record<string, string> = { timeline: "general", sending: "general", screen: "general", changes: "layout", sidebar: "layout", tabs: "layout", terminal: "layout", guide: "about" };
 const loadGroup = () => {
   try {
-    return localStorage.getItem(GROUP_KEY) ?? undefined;
+    const id = localStorage.getItem(GROUP_KEY) ?? undefined;
+    return id && (MOVED[id] ?? id);
   } catch {
     return undefined;
   }
@@ -49,7 +53,21 @@ export const saveGroup = (id: string) => {
   }
 };
 
-type Group = { id: string; title: string; body: ReactNode };
+type Category = "App" | "Sessions" | "Integrations" | "System";
+type Group = { id: string; title: string; category: Category; body: ReactNode };
+
+/** One titled block of rows inside a group's panel. */
+function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  return (
+    <section aria-labelledby={`settings-${id}`} className="flex flex-col" data-testid={`settings-${id}`}>
+      <h3 id={`settings-${id}`} className="pb-1 font-medium text-[13px] text-muted-foreground">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
 
 /** The titlebar usage ring's window (per browser); a row of the Usage limits group. */
 function UsageRingRow() {
@@ -81,10 +99,7 @@ function TimelineSection() {
   const on = useSignalOnly();
   const keys = keyText(useKeymap()("signal.toggle"));
   return (
-    <section aria-labelledby="settings-timeline" className="flex flex-col" data-testid="settings-timeline">
-      <h3 id="settings-timeline" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Timeline
-      </h3>
+    <Section id="timeline" title="Timeline">
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span id="settings-timeline-signal-label" className="block text-sm">
@@ -96,7 +111,7 @@ function TimelineSection() {
         </div>
         <Switch on={on} label="Signal only" held={false} onToggle={saveSignalOnly} title={on ? "Show every tool call" : "Fold tool calls into one line"} describedBy="settings-timeline-signal-hint" testId="settings-signal-only" />
       </div>
-    </section>
+    </Section>
   );
 }
 
@@ -104,10 +119,7 @@ function TimelineSection() {
 function SendingSection() {
   const mode = useSendMode();
   return (
-    <section aria-labelledby="settings-sending" className="flex flex-col" data-testid="settings-sending">
-      <h3 id="settings-sending" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Sending
-      </h3>
+    <Section id="sending" title="Sending">
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span id="settings-send-mode-label" className="block text-sm">While Claude works, Enter</span>
@@ -126,7 +138,7 @@ function SendingSection() {
           </SelectContent>
         </Select>
       </div>
-    </section>
+    </Section>
   );
 }
 
@@ -224,10 +236,7 @@ function ScreenSection() {
   const s = useKeepAwakeSetting();
   const supported = wakeLockSupported();
   return (
-    <section aria-labelledby="settings-screen" className="flex flex-col" data-testid="settings-screen">
-      <h3 id="settings-screen" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Screen
-      </h3>
+    <Section id="screen" title="Screen">
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
           <span className="block text-sm">Keep screen awake</span>
@@ -248,7 +257,240 @@ function ScreenSection() {
         </div>
         <Switch on={s.onlyRunning} label="Only while a session is running" held={!s.on || !supported} onToggle={(onlyRunning) => saveKeepAwake({ ...s, onlyRunning })} title="Only while a session is running" describedBy="settings-awake-running-hint" testId="settings-keep-awake-running" />
       </div>
+    </Section>
+  );
+}
+
+/** In-app (per browser; the page hears it through IN_APP_EVENT), Push (this browser's subscription) and Desktop (daemon-side) rows. */
+function NotificationsSection({ push, settings, daemon, saving, save }: { push?: PushUi; settings?: Settings; daemon?: SettingsResult["daemon"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void> }) {
+  const [inApp, setInApp] = useState(loadInApp);
+  useEffect(() => {
+    const sync = (e: Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
+    window.addEventListener(IN_APP_EVENT, sync);
+    return () => window.removeEventListener(IN_APP_EVENT, sync);
+  }, []);
+  return (
+    <section aria-labelledby="settings-notifications-title" className="flex flex-col" data-testid="settings-notifications">
+      <h3 id="settings-notifications-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
+        Notifications
+      </h3>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">In-app notifications</span>
+          <span id="settings-in-app-hint" className="block text-muted-foreground text-xs">
+            A notice in this page when a session you are not looking at needs input or finishes. Read-only requests can be allowed or denied from the notice. Kept in this browser.
+          </span>
+        </div>
+        <Switch on={inApp} label="In-app notifications" held={false} onToggle={(on) => (setInApp(on), saveInApp(on))} title="In-app notifications" describedBy="settings-in-app-hint" testId="settings-in-app" />
+      </div>
+      {push && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm">Push notifications</span>
+            <span id="settings-push-hint" className="block text-muted-foreground text-xs">
+              {push.supported
+                ? "This browser notifies you when a session needs input or finishes, also with the page closed. Not sent while this page is in front and shows in-app notifications. Kept in this browser."
+                : "Not available in this browser here: Web Push needs HTTPS or localhost. The daemon's desktop notifications are used instead."}
+            </span>
+            {push.error && (
+              <span role="alert" className="mt-1 block text-destructive text-xs">
+                {push.error}
+              </span>
+            )}
+          </div>
+          <Switch on={push.on} label="Push notifications" held={!push.supported || push.busy} onToggle={push.toggle} title="Push notifications" describedBy="settings-push-hint" testId="settings-push" />
+        </div>
+      )}
+      {/* An older daemon sends no `notifications`: no row. */}
+      {settings?.notifications && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm">{daemon?.host ? `Desktop notifications on ${daemon.host}` : "Desktop notifications on the daemon's computer"}</span>
+            <span id="settings-notifications-desktop-hint" className="block text-muted-foreground text-xs">
+              {daemon?.desktopForcedOff
+                ? "Turned off when the daemon started (--no-os-notify or CLAUDE_UI_OS_NOTIFY=0)."
+                : "The daemon's computer shows a system notification when no browser has push notifications on. For every browser of this daemon."}
+            </span>
+          </div>
+          <Switch
+            on={settings.notifications.desktop && !daemon?.desktopForcedOff}
+            label="Desktop notifications"
+            held={saving || !!daemon?.desktopForcedOff}
+            onToggle={(on) => void save({ notifications: { desktop: on } })}
+            title="Desktop notifications"
+            describedBy="settings-notifications-desktop-hint"
+            testId="settings-notifications-desktop"
+          />
+        </div>
+      )}
     </section>
+  );
+}
+
+/** The sidebar's own per-browser view (its options menu writes the same object). */
+function SidebarSection() {
+  const [view, setView] = useState(loadSidebarView);
+  useEffect(() => {
+    const sync = () => setView(loadSidebarView());
+    window.addEventListener(VIEW_EVENT, sync);
+    return () => window.removeEventListener(VIEW_EVENT, sync);
+  }, []);
+  return (
+    <Section id="sidebar" title="Sidebar">
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-sidebar-active-label" className="block text-sm">Show only active sessions</span>
+          <span id="settings-sidebar-active-hint" className="block text-muted-foreground text-xs">Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed. Kept in this browser.</span>
+        </div>
+        <Switch on={view.onlyActive} label="Show only active sessions" held={false} onToggle={(on) => saveSidebarView({ ...loadSidebarView(), onlyActive: on })} title="Show only active sessions" describedBy="settings-sidebar-active-hint" testId="settings-sidebar-active-only" />
+      </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-sidebar-layout-label" className="block text-sm">Group by</span>
+          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Worktree groups a project's sessions by worktree. Project lists them directly under the project, with each session's state as text. Kept in this browser.</span>
+        </div>
+        <Select value={view.layout} onValueChange={(v) => v && saveSidebarView({ ...loadSidebarView(), layout: v as "default" | "classic" })}>
+          <SelectTrigger aria-labelledby="settings-sidebar-layout-label" aria-describedby="settings-sidebar-layout-hint" data-testid="settings-sidebar-layout" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: string) => (v === "classic" ? "Project" : "Worktree")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Worktree</SelectItem>
+            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Project</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </Section>
+  );
+}
+
+/** Tab bar choices; App owns them (per browser) and passes the values in. */
+function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAutoClose }: { grouping: TabGrouping; onGrouping: (g: TabGrouping) => void; compact: boolean; onCompact?: (on: boolean) => void; autoClose: AutoClose; onAutoClose?: (v: AutoClose) => void }) {
+  return (
+    <Section id="tabs" title="Tabs">
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-tabs-grouping-label" className="block text-sm">Tab grouping</span>
+          <span id="settings-tabs-grouping-hint" className="block text-muted-foreground text-xs">How the tab bar groups open tabs. Kept in this browser.</span>
+        </div>
+        <Select value={grouping} onValueChange={(v) => v && onGrouping(v as TabGrouping)}>
+          <SelectTrigger aria-labelledby="settings-tabs-grouping-label" aria-describedby="settings-tabs-grouping-hint" data-testid="settings-tabs-grouping" className="w-36 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: TabGrouping) => TAB_GROUPINGS.find((g) => g.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {TAB_GROUPINGS.map((g) => (
+              <SelectItem key={g.value} value={g.value} data-testid={`settings-tabs-grouping-${g.value}`}>
+                {g.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {onCompact && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-tabs-compact-label" className="block text-sm">Compact tabs</span>
+            <span id="settings-tabs-compact-hint" className="block text-muted-foreground text-xs">
+              {grouping === "none" ? "Needs a tab grouping" : "Show each group as one chip; open its tabs from the chip."}
+            </span>
+          </div>
+          <Switch on={compact && grouping !== "none"} label="Compact tabs" held={grouping === "none"} onToggle={onCompact} title="Compact tabs" describedBy="settings-tabs-compact-hint" testId="settings-tabs-compact" />
+        </div>
+      )}
+      {onAutoClose && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-tabs-autoclose-label" className="block text-sm">Auto-close idle tabs after</span>
+            <span id="settings-tabs-autoclose-hint" className="block text-muted-foreground text-xs">
+              Closes idle tabs not used for this long. Never pinned, running, unread or with a draft. Sessions keep running. Kept in this browser.
+            </span>
+          </div>
+          <Select value={autoClose} onValueChange={(v) => v && onAutoClose(v as AutoClose)}>
+            <SelectTrigger aria-labelledby="settings-tabs-autoclose-label" aria-describedby="settings-tabs-autoclose-hint" data-testid="settings-tabs-autoclose" className="w-36 max-md:data-[size=default]:h-11">
+              <SelectValue>{(v: AutoClose) => AUTO_CLOSE.find((a) => a.value === v)?.label ?? v}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {AUTO_CLOSE.map((a) => (
+                <SelectItem key={a.value} value={a.value} data-testid={`settings-tabs-autoclose-${a.value}`}>
+                  {a.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/** The mode a session's Changes panel opens in (per browser). */
+function ChangesSection() {
+  const diffMode = useDefaultDiffMode();
+  return (
+    <Section id="changes" title="Changes">
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-changes-mode-label" className="block text-sm">Default diff view</span>
+          <span id="settings-changes-mode-hint" className="block text-muted-foreground text-xs">The mode the Changes panel opens in. A choice in a session's panel lasts for that session until the page reloads. Kept in this browser.</span>
+        </div>
+        <Select value={diffMode} onValueChange={(v) => v && saveDiffMode(v as DiffMode)}>
+          <SelectTrigger aria-labelledby="settings-changes-mode-label" aria-describedby="settings-changes-mode-hint" data-testid="settings-diff-mode" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {DIFF_MODES.map((m) => (
+              <SelectItem key={m.value} value={m.value} data-testid={`settings-diff-mode-${m.value}`}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </Section>
+  );
+}
+
+/** Where the terminal docks (per browser); App passes `onPosition` to move a live terminal with its shells. */
+function TerminalSection({ onPosition }: { onPosition?: (a: Area) => void }) {
+  const terminalDock = useTerminalDock();
+  return (
+    <Section id="terminal" title="Terminal">
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
+          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, a tab of the side panel, or a tab of the main area next to the session. Narrow screens show it as the terminal pane; with Main area, as the session's Terminal tab. Kept in this browser.</span>
+        </div>
+        <Select value={terminalDock} onValueChange={(v) => v && (onPosition ?? saveTerminalDock)(v as Area)}>
+          <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: Area) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {TERMINAL_DOCKS.map((d) => (
+              <SelectItem key={d.value} value={d.value} data-testid={`settings-terminal-position-${d.value}`}>
+                {d.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </Section>
+  );
+}
+
+/** Opens the Keyboard shortcuts dialog; the shortcut tips switch below it. */
+function KeyboardSection({ onShortcuts }: { onShortcuts: () => void }) {
+  return (
+    <Section id="keyboard" title="Keyboard">
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-keyboard-label" className="block text-sm">Keyboard shortcuts</span>
+          <span id="settings-keyboard-hint" className="block text-muted-foreground text-xs">See every shortcut and rebind it. Kept in this browser.</span>
+        </div>
+        <button type="button" onClick={onShortcuts} aria-describedby="settings-keyboard-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-shortcuts">
+          Customize…
+        </button>
+      </div>
+      <KeyTipsRow />
+    </Section>
   );
 }
 
@@ -329,29 +571,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [saving, setSaving] = useState(false);
   const [jiraToken, setJiraToken] = useState(false);
   const [jiraTokenReset, setJiraTokenReset] = useState(false);
-  // "Show only active sessions": the sidebar's own per-browser setting (its options menu writes it too).
-  const [onlyActive, setOnlyActive] = useState(() => loadSidebarView().onlyActive);
-  const [layout, setLayout] = useState(() => loadSidebarView().layout);
-  useEffect(() => {
-    const sync = () => {
-      setOnlyActive(loadSidebarView().onlyActive);
-      setLayout(loadSidebarView().layout);
-    };
-    sync();
-    window.addEventListener(VIEW_EVENT, sync);
-    return () => window.removeEventListener(VIEW_EVENT, sync);
-  }, [open]);
-  // In-app notifications: per browser; the page (App) hears the choice through IN_APP_EVENT.
-  const [inApp, setInApp] = useState(loadInApp);
-  useEffect(() => {
-    const sync = (e: Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
-    window.addEventListener(IN_APP_EVENT, sync);
-    return () => window.removeEventListener(IN_APP_EVENT, sync);
-  }, []);
   // The number field's text while typing; committed on Enter or blur.
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const diffMode = useDefaultDiffMode();
-  const terminalDock = useTerminalDock();
   const ask = useRef(request);
   ask.current = request;
 
@@ -455,263 +676,95 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       )}
     </>
   );
-  // One entry per group; a later group (e.g. Notifications) is one more line here.
-  const groups: Group[] = [
-    { id: "appearance", title: "Appearance", body: <AppearanceSection /> },
-    { id: "timeline", title: "Timeline", body: <TimelineSection /> },
-    { id: "sending", title: "Sending", body: <SendingSection /> },
-    {
-      id: "notifications",
-      title: "Notifications",
-      body: (
-        <section aria-labelledby="settings-notifications-title" className="flex flex-col" data-testid="settings-notifications">
-          <h3 id="settings-notifications-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
-            Notifications
-          </h3>
-          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-            <div className="min-w-0 flex-1">
-              <span className="block text-sm">In-app notifications</span>
-              <span id="settings-in-app-hint" className="block text-muted-foreground text-xs">
-                A notice in this page when a session you are not looking at needs input or finishes. Read-only requests can be allowed or denied from the notice. Kept in this browser.
-              </span>
-            </div>
-            <Switch on={inApp} label="In-app notifications" held={false} onToggle={(on) => (setInApp(on), saveInApp(on))} title="In-app notifications" describedBy="settings-in-app-hint" testId="settings-in-app" />
-          </div>
-          {push && (
-            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-              <div className="min-w-0 flex-1">
-                <span className="block text-sm">Push notifications</span>
-                <span id="settings-push-hint" className="block text-muted-foreground text-xs">
-                  {push.supported
-                    ? "This browser notifies you when a session needs input or finishes, also with the page closed. Not sent while this page is in front and shows in-app notifications. Kept in this browser."
-                    : "Not available in this browser here: Web Push needs HTTPS or localhost. The daemon's desktop notifications are used instead."}
-                </span>
-                {push.error && (
-                  <span role="alert" className="mt-1 block text-destructive text-xs">
-                    {push.error}
-                  </span>
-                )}
-              </div>
-              <Switch on={push.on} label="Push notifications" held={!push.supported || push.busy} onToggle={push.toggle} title="Push notifications" describedBy="settings-push-hint" testId="settings-push" />
-            </div>
-          )}
-          {/* An older daemon sends no `notifications`: no row. */}
-          {settings?.notifications && (
-            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-              <div className="min-w-0 flex-1">
-                <span className="block text-sm">{daemon?.host ? `Desktop notifications on ${daemon.host}` : "Desktop notifications on the daemon's computer"}</span>
-                <span id="settings-notifications-desktop-hint" className="block text-muted-foreground text-xs">
-                  {daemon?.desktopForcedOff
-                    ? "Turned off when the daemon started (--no-os-notify or CLAUDE_UI_OS_NOTIFY=0)."
-                    : "The daemon's computer shows a system notification when no browser has push notifications on. For every browser of this daemon."}
-                </span>
-              </div>
-              <Switch
-                on={settings.notifications.desktop && !daemon?.desktopForcedOff}
-                label="Desktop notifications"
-                held={saving || !!daemon?.desktopForcedOff}
-                onToggle={(on) => void save({ notifications: { desktop: on } })}
-                title="Desktop notifications"
-                describedBy="settings-notifications-desktop-hint"
-                testId="settings-notifications-desktop"
-              />
-            </div>
-          )}
-        </section>
-      ),
-    },
-    { id: "screen", title: "Screen", body: <ScreenSection /> },
-    {
-      id: "changes",
-      title: "Changes",
-      body: (
-    <section aria-labelledby="settings-changes" className="flex flex-col" data-testid="settings-changes">
-      <h3 id="settings-changes" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Changes
-      </h3>
-      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-        <div className="min-w-0 flex-1">
-          <span id="settings-changes-mode-label" className="block text-sm">Default diff view</span>
-          <span id="settings-changes-mode-hint" className="block text-muted-foreground text-xs">The mode the Changes panel opens in. A choice in a session's panel lasts for that session until the page reloads. Kept in this browser.</span>
-        </div>
-        <Select value={diffMode} onValueChange={(v) => v && saveDiffMode(v as DiffMode)}>
-          <SelectTrigger aria-labelledby="settings-changes-mode-label" aria-describedby="settings-changes-mode-hint" data-testid="settings-diff-mode" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {DIFF_MODES.map((m) => (
-              <SelectItem key={m.value} value={m.value} data-testid={`settings-diff-mode-${m.value}`}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    </section>
-      ),
-    },
-    {
-      id: "sidebar",
-      title: "Sidebar",
-      body: (
-    <section aria-labelledby="settings-sidebar" className="flex flex-col" data-testid="settings-sidebar">
-      <h3 id="settings-sidebar" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Sidebar
-      </h3>
-      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-        <div className="min-w-0 flex-1">
-          <span id="settings-sidebar-active-label" className="block text-sm">Show only active sessions</span>
-          <span id="settings-sidebar-active-hint" className="block text-muted-foreground text-xs">Lists sessions that are running or need input. Search still finds every session, and the one you have open stays listed. Kept in this browser.</span>
-        </div>
-        <Switch on={onlyActive} label="Show only active sessions" held={false} onToggle={(on) => saveSidebarView({ ...loadSidebarView(), onlyActive: on })} title="Show only active sessions" describedBy="settings-sidebar-active-hint" testId="settings-sidebar-active-only" />
-      </div>
-      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-        <div className="min-w-0 flex-1">
-          <span id="settings-sidebar-layout-label" className="block text-sm">Group by</span>
-          <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">Worktree groups a project's sessions by worktree. Project lists them directly under the project, with each session's state as text. Kept in this browser.</span>
-        </div>
-        <Select value={layout} onValueChange={(v) => v && saveSidebarView({ ...loadSidebarView(), layout: v as "default" | "classic" })}>
-          <SelectTrigger aria-labelledby="settings-sidebar-layout-label" aria-describedby="settings-sidebar-layout-hint" data-testid="settings-sidebar-layout" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: string) => (v === "classic" ? "Project" : "Worktree")}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="default" data-testid="settings-sidebar-layout-default">Worktree</SelectItem>
-            <SelectItem value="classic" data-testid="settings-sidebar-layout-classic">Project</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-    </section>
-      ),
-    },
-    {
-      id: "terminal",
-      title: "Terminal",
-      body: (
-    <section aria-labelledby="settings-terminal" className="flex flex-col" data-testid="settings-terminal">
-      <h3 id="settings-terminal" className="pb-1 font-medium text-[13px] text-muted-foreground">
-        Terminal
-      </h3>
-      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-        <div className="min-w-0 flex-1">
-          <span id="settings-terminal-position-label" className="block text-sm">Terminal position</span>
-          <span id="settings-terminal-position-hint" className="block text-muted-foreground text-xs">Where the terminal opens on wide screens: a tab of the bottom panel, under the session and side panel, a tab of the side panel, or a tab of the main area next to the session. Narrow screens show it as the terminal pane; with Main area, as the session's Terminal tab. Kept in this browser.</span>
-        </div>
-        <Select value={terminalDock} onValueChange={(v) => v && (onTerminalPosition ?? saveTerminalDock)(v as Area)}>
-          <SelectTrigger aria-labelledby="settings-terminal-position-label" aria-describedby="settings-terminal-position-hint" data-testid="settings-terminal-position" className="w-40 max-md:data-[size=default]:h-11">
-            <SelectValue>{(v: Area) => TERMINAL_DOCKS.find((d) => d.value === v)?.label ?? v}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {TERMINAL_DOCKS.map((d) => (
-              <SelectItem key={d.value} value={d.value} data-testid={`settings-terminal-position-${d.value}`}>
-                {d.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    </section>
-      ),
-    },
-    ...(onTabGrouping
-      ? [
-          {
-            id: "tabs",
-            title: "Tabs",
-            body: (
-        <section aria-labelledby="settings-tabs" className="flex flex-col" data-testid="settings-tabs">
-          <h3 id="settings-tabs" className="pb-1 font-medium text-[13px] text-muted-foreground">
-            Tabs
-          </h3>
-          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-            <div className="min-w-0 flex-1">
-              <span id="settings-tabs-grouping-label" className="block text-sm">Tab grouping</span>
-              <span id="settings-tabs-grouping-hint" className="block text-muted-foreground text-xs">How the tab bar groups open tabs. Kept in this browser.</span>
-            </div>
-            <Select value={tabGrouping ?? "project"} onValueChange={(v) => v && onTabGrouping(v as TabGrouping)}>
-              <SelectTrigger aria-labelledby="settings-tabs-grouping-label" aria-describedby="settings-tabs-grouping-hint" data-testid="settings-tabs-grouping" className="w-36 max-md:data-[size=default]:h-11">
-                <SelectValue>{(v: TabGrouping) => TAB_GROUPINGS.find((g) => g.value === v)?.label ?? v}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {TAB_GROUPINGS.map((g) => (
-                  <SelectItem key={g.value} value={g.value} data-testid={`settings-tabs-grouping-${g.value}`}>
-                    {g.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {onTabCompact && (
-            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-              <div className="min-w-0 flex-1">
-                <span id="settings-tabs-compact-label" className="block text-sm">Compact tabs</span>
-                <span id="settings-tabs-compact-hint" className="block text-muted-foreground text-xs">
-                  {tabGrouping === "none" ? "Needs a tab grouping" : "Show each group as one chip; open its tabs from the chip."}
-                </span>
-              </div>
-              <Switch on={tabCompact && tabGrouping !== "none"} label="Compact tabs" held={tabGrouping === "none"} onToggle={onTabCompact} title="Compact tabs" describedBy="settings-tabs-compact-hint" testId="settings-tabs-compact" />
-            </div>
-          )}
-          {onTabAutoClose && (
-            <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-              <div className="min-w-0 flex-1">
-                <span id="settings-tabs-autoclose-label" className="block text-sm">Auto-close idle tabs after</span>
-                <span id="settings-tabs-autoclose-hint" className="block text-muted-foreground text-xs">
-                  Closes idle tabs not used for this long. Never pinned, running, unread or with a draft. Sessions keep running. Kept in this browser.
-                </span>
-              </div>
-              <Select value={tabAutoClose} onValueChange={(v) => v && onTabAutoClose(v as AutoClose)}>
-                <SelectTrigger aria-labelledby="settings-tabs-autoclose-label" aria-describedby="settings-tabs-autoclose-hint" data-testid="settings-tabs-autoclose" className="w-36 max-md:data-[size=default]:h-11">
-                  <SelectValue>{(v: AutoClose) => AUTO_CLOSE.find((a) => a.value === v)?.label ?? v}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {AUTO_CLOSE.map((a) => (
-                    <SelectItem key={a.value} value={a.value} data-testid={`settings-tabs-autoclose-${a.value}`}>
-                      {a.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </section>
-            ),
-          },
-        ]
-      : []),
-    ...(onShortcuts
-      ? [
-          {
-            id: "keyboard",
-            title: "Keyboard",
-            body: (
-        <section aria-labelledby="settings-keyboard" className="flex flex-col" data-testid="settings-keyboard">
-          <h3 id="settings-keyboard" className="pb-1 font-medium text-[13px] text-muted-foreground">
-            Keyboard
-          </h3>
-          <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-            <div className="min-w-0 flex-1">
-              <span id="settings-keyboard-label" className="block text-sm">Keyboard shortcuts</span>
-              <span id="settings-keyboard-hint" className="block text-muted-foreground text-xs">See every shortcut and rebind it. Kept in this browser.</span>
-            </div>
-            <button type="button" onClick={onShortcuts} aria-describedby="settings-keyboard-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-shortcuts">
-              Customize…
-            </button>
-          </div>
-          <KeyTipsRow />
-        </section>
-            ),
-          },
-        ]
-      : []),
-    ...(onRestartGuide ? [{ id: "guide", title: "Guide", body: <GuideSection onRestart={onRestartGuide} /> }] : []),
+  const daemonGroup = (id: keyof Settings) => {
+    const sec = SECTIONS.find((x) => x.id === id)!;
     // A section the daemon does not know (an older daemon lacks `performance`) is left out.
-    ...SECTIONS.filter((sec) => !settings || settings[sec.id]).map((sec) => ({ id: sec.id, title: sec.title, body: sec.id === "usageLimit" ? <>{daemonSection(sec)}<UsageRingRow /></> : sec.id === "performance" ? <>{daemonSection(sec)}<PerformanceSection request={request} /></> : daemonSection(sec) })),
+    return settings && !settings[id] ? undefined : sec;
+  };
+  const orchestration = daemonGroup("orchestration");
+  const usageLimit = daemonGroup("usageLimit");
+  const performance = daemonGroup("performance");
+  const focus = daemonGroup("focus");
+  const git = daemonGroup("git");
+  // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
+  const groups: Group[] = [
+    { id: "appearance", title: "Appearance", category: "App", body: <AppearanceSection /> },
+    {
+      id: "general",
+      title: "General",
+      category: "App",
+      body: (
+        <>
+          <TimelineSection />
+          <SendingSection />
+          <ScreenSection />
+        </>
+      ),
+    },
+    {
+      id: "layout",
+      title: "Layout",
+      category: "App",
+      body: (
+        <>
+          <SidebarSection />
+          {onTabGrouping && <TabsSection grouping={tabGrouping ?? "project"} onGrouping={onTabGrouping} compact={tabCompact} onCompact={onTabCompact} autoClose={tabAutoClose} onAutoClose={onTabAutoClose} />}
+          <ChangesSection />
+          <TerminalSection onPosition={onTerminalPosition} />
+        </>
+      ),
+    },
+    { id: "notifications", title: "Notifications", category: "App", body: <NotificationsSection push={push} settings={settings} daemon={daemon} saving={saving} save={save} /> },
+    ...(onShortcuts ? [{ id: "keyboard", title: "Keyboard", category: "App" as const, body: <KeyboardSection onShortcuts={onShortcuts} /> }] : []),
+    ...(orchestration ? [{ id: "orchestration", title: orchestration.title, category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
+    ...(focus ? [{ id: "focus", title: focus.title, category: "Sessions" as const, body: daemonSection(focus) }] : []),
+    ...(usageLimit
+      ? [
+          {
+            id: "usageLimit",
+            title: usageLimit.title,
+            category: "Sessions" as const,
+            body: (
+              <>
+                {daemonSection(usageLimit)}
+                <UsageRingRow />
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(git ? [{ id: "git", title: git.title, category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
-      ? [{ id: "jira", title: "Jira", body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
+      ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
-    ...(sides?.some((x) => x.id !== LOCAL_SIDE) || docker ? [{ id: "sides", title: "Sides", body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
-    { id: "about", title: "About", body: <AboutSection daemonVersion={daemon?.version} /> },
+    ...(sides?.some((x) => x.id !== LOCAL_SIDE) || docker ? [{ id: "sides", title: "Sides", category: "System" as const, body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
+    ...(performance
+      ? [
+          {
+            id: "performance",
+            title: performance.title,
+            category: "System" as const,
+            body: (
+              <>
+                {daemonSection(performance)}
+                <PerformanceSection request={request} />
+              </>
+            ),
+          },
+        ]
+      : []),
+    {
+      id: "about",
+      title: onRestartGuide ? "Help & about" : "About",
+      category: "System",
+      body: (
+        <>
+          {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
+          <AboutSection daemonVersion={daemon?.version} />
+        </>
+      ),
+    },
   ];
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;
   const choose = (id: string, focus = false) => {
@@ -743,9 +796,15 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   return (
     <ConfigDialog title="Settings" open={open} onClose={onClose} testId="settings-dialog">
       {error && <Banner kind="error">{error}</Banner>}
-      <div className="flex min-h-0 gap-4 md:h-[380px] max-md:flex-1" data-testid="settings-layout">
+      <div className="flex min-h-0 gap-4 md:h-[480px] max-md:flex-1" data-testid="settings-layout">
         <div role="tablist" aria-label="Settings groups" aria-orientation="vertical" onKeyDown={onListKey} className={`flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto max-md:w-full ${drilled ? "max-md:hidden" : ""}`} data-testid="settings-groups">
-          {groups.map((g) => (
+          {groups.map((g, i) => [
+            // A category heading is a visual divider only: the tablist holds tabs, and every tab name stands on its own.
+            g.category !== groups[i - 1]?.category && (
+              <div key={`cat-${g.category}`} aria-hidden="true" className={`px-3 pb-0.5 font-medium text-[11px] text-muted-foreground/70 uppercase tracking-wide max-md:pb-1 ${i ? "pt-2 max-md:pt-3" : ""}`} data-testid={`settings-category-${g.category.toLowerCase()}`}>
+                {g.category}
+              </div>
+            ),
             <button
               key={g.id}
               ref={(el) => void (el ? tabRefs.current.set(g.id, el) : tabRefs.current.delete(g.id))}
@@ -756,12 +815,12 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
               aria-controls="settings-panel"
               tabIndex={g.id === selected.id ? 0 : -1}
               onClick={() => drillIn(g.id)}
-              className={`flex h-8 items-center rounded-md px-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 ${g.id === selected.id ? "bg-accent text-foreground md:font-medium" : "text-muted-foreground hover:bg-accent/60"}`}
+              className={`flex h-7 shrink-0 items-center rounded-md px-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 ${g.id === selected.id ? "bg-accent text-foreground md:font-medium" : "text-muted-foreground hover:bg-accent/60"}`}
               data-testid={`settings-group-${g.id}`}
             >
               {g.title}
-            </button>
-          ))}
+            </button>,
+          ])}
         </div>
         <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${selected.id}`} className={`flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto pr-3 pl-0.5 ${drilled ? "" : "max-md:hidden"}`} data-testid="settings-panel">
           <button ref={backRef} type="button" onClick={back} className="flex h-11 items-center gap-1 self-start rounded-md pr-3 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden" data-testid="settings-back">

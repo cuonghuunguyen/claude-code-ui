@@ -2985,7 +2985,7 @@ export function App() {
     const step = guideState.current?.step;
     setGuideRun((r) => ({ n: (r?.n ?? 0) + 1, ids, chapters: chaptersOf(ids), start: step && ids.includes(step) ? step : undefined, from }));
   };
-  // Settings > Guide > Restart guide and the palette's "Show guide": both chapters pending again, from the first step.
+  // Settings > Help & about > Restart guide and the palette's "Show guide": both chapters pending again, from the first step.
   const startGuide = (from?: "settings" | "palette") => {
     guideState.current = restartGuide(guideState.current ?? decideFirstUse(false, 0));
     saveGuide(guideState.current);
@@ -3019,7 +3019,7 @@ export function App() {
     }
     setGuideRun(undefined);
     guideStep.current = undefined;
-    if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Guide.");
+    if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Help & about.");
   };
   // Another tab of this profile finished or skipped the tour: this one ends it too.
   useEffect(() => {

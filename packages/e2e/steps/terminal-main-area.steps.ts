@@ -79,7 +79,7 @@ When("I open Settings and choose the terminal position {string}", async ({ page 
   const drawer = page.getByTestId("open-drawer");
   if (await drawer.isVisible()) await drawer.click();
   await page.getByTestId("open-settings").last().click();
-  await page.getByTestId("settings-group-terminal").click();
+  await page.getByTestId("settings-group-layout").click();
   await page.getByTestId("settings-terminal-position").click();
   await page.getByRole("option", { name: label, exact: true }).click();
   await expect(page.getByTestId("settings-terminal-position")).toContainText(label);
@@ -192,11 +192,11 @@ When("I click the Terminal tab of the {word} project", async ({ page, project },
 });
 
 Then("the terminal position hint mentions {string}", async ({ page }, text: string) => {
-  // The choose step closed Settings: open it again at the Terminal group.
+  // The choose step closed Settings: open it again at the Layout group.
   const drawer = page.getByTestId("open-drawer");
   if (await drawer.isVisible()) await drawer.click();
   await page.getByTestId("open-settings").last().click();
-  await page.getByTestId("settings-group-terminal").click();
+  await page.getByTestId("settings-group-layout").click();
   await expect(page.locator("#settings-terminal-position-hint")).toContainText(text);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("settings-terminal")).toHaveCount(0);

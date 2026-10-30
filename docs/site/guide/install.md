@@ -24,7 +24,7 @@ claude-code-ui runs a small local server (the **daemon**) on your computer. You 
 4. Click **Open project** and pick a folder.
 5. Type a prompt and press <kbd>Enter</kbd>.
 
-A short **guided tour** shows you around the first time. Skip it, or restart it later in **Settings › Guide**.
+A short **guided tour** shows you around the first time. Skip it, or restart it later in **Settings › Help & about**.
 
 ## Good to know
 

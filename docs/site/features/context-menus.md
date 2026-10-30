@@ -37,7 +37,7 @@ Right-click a group chip (the project name in front of its tabs):
 
 ![The right-click menu of a group chip](/screenshots/group-menu.png)
 
-With **Compact tabs** on ([Settings › Tabs](../reference/settings#tabs)), hovering or clicking the chip opens a menu that lists only the group's tabs. The group actions above stay in the chip's right-click menu.
+With **Compact tabs** on ([Settings › Layout › Tabs](../reference/settings#tabs)), hovering or clicking the chip opens a menu that lists only the group's tabs. The group actions above stay in the chip's right-click menu.
 
 ## Files
 

@@ -7,5 +7,6 @@ import { scene as groupMenu } from "./scenes/group-menu.ts";
 import { scene as sessionsScene } from "./scenes/sessions.ts";
 import { scene as terminal } from "./scenes/terminal.ts";
 import { scene as permissions } from "./scenes/permissions.ts";
+import { scene as settings } from "./scenes/settings.ts";
 
-export const SCENES: Record<string, Scene> = { permissions, focus, "new-session": newSession, files, terminal, sessions: sessionsScene, "group-menu": groupMenu };
+export const SCENES: Record<string, Scene> = { permissions, focus, "new-session": newSession, files, terminal, sessions: sessionsScene, "group-menu": groupMenu, settings };

@@ -5,7 +5,7 @@ export type ChapterState = "pending" | "done" | "skipped" | "offered";
 export type ChapterId = "basics" | "session";
 export type GuideState = {
   v: 1;
-  /** "new": first use, the tour starts by itself. "existing": offered in Settings > Guide and the palette only. */
+  /** "new": first use, the tour starts by itself. "existing": offered in Settings > Help & about and the palette only. */
   origin: "new" | "existing";
   basics: ChapterState;
   session: ChapterState;

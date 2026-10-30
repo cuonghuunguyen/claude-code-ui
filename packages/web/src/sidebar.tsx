@@ -209,7 +209,7 @@ export function SessionList({
     setViewState(next);
     saveSidebarView(next);
   };
-  // Settings > Sidebar changes the same setting.
+  // Settings > Layout > Sidebar changes the same setting.
   useEffect(() => {
     const sync = () => setViewState(loadSidebarView());
     window.addEventListener(VIEW_EVENT, sync);

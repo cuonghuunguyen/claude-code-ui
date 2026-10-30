@@ -173,7 +173,7 @@ function subscribe(l: () => void) {
 
 export const useLayout = (): Layout => useSyncExternalStore(subscribe, loadLayout, () => DEFAULT_LAYOUT);
 
-// Terminal position (Settings › Terminal) = the dock area of the terminal pane.
+// Terminal position (Settings › Layout › Terminal) = the dock area of the terminal pane.
 export const loadTerminalDock = (): Area => areaOf(loadLayout(), "terminal");
 export const saveTerminalDock = (d: Area) => saveLayout(movePane(loadLayout(), "terminal", d));
 export const useTerminalDock = (): Area => areaOf(useLayout(), "terminal");

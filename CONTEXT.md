@@ -124,7 +124,7 @@ A `> `-prefixed passage of an earlier message, inserted into the prompt as markd
 _Avoid_: reply, thread
 
 **Guided tour**:
-The first-use walkthrough: a dimmed page, a spotlight on one real control and a popover with Back, Next and Skip, in two chapters (Basics, Your session). Per browser; restarted from Settings › Guide or the palette ("Show guide").
+The first-use walkthrough: a dimmed page, a spotlight on one real control and a popover with Back, Next and Skip, in two chapters (Basics, Your session). Per browser; restarted from Settings › Help & about or the palette ("Show guide").
 _Avoid_: onboarding, walkthrough, wizard
 
 **Subagent run**:
@@ -218,7 +218,7 @@ A notice card in the open page about another session that needs input or finishe
 _Avoid_: toast (the component), alert, banner
 
 **Signal only**:
-A browser-wide timeline setting (Settings > Timeline, palette, Ctrl+Alt+S; one value for every session) that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
+A browser-wide timeline setting (Settings > General > Timeline, palette, Ctrl+Alt+S; one value for every session) that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
 _Avoid_: compact mode
 
 **Permission tier**:

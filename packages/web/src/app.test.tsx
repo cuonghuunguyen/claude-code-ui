@@ -5413,7 +5413,7 @@ describe("GH-397 Terminal in the main area", () => {
       await settle();
       await press({ key: "k", code: "KeyK", ctrlKey: true });
       await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
-      await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-terminal"]')!.click());
+      await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-layout"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
       await settle();
@@ -5466,7 +5466,7 @@ describe("GH-397 Terminal in the main area", () => {
         await settle();
         await press({ key: "k", code: "KeyK", ctrlKey: true });
         await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
-        await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-terminal"]')!.click());
+        await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-layout"]')!.click());
         await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
         await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
         await settle();
