@@ -100,7 +100,7 @@
     --context-1: #034cff; --context-2: #a753ae; --context-3: #006656; --context-4: #fb4804; --context-5: #8a6f00; --context-6: #0092a8;
     /* Commit graph lanes (8 colors, 3:1 on card, background, secondary and a hovered row). */
     --graph-1: #034cff; --graph-2: #a753ae; --graph-3: #006656; --graph-4: #d24a04; --graph-5: #8a6f00; --graph-6: #0086a0; --graph-7: #b82d35; --graph-8: #5230c2;
-    --secondary: #f2f2f2;
+    --secondary: #efefef;
     --tab-separator: #eeeeee; /* OpenCode bg-layer-03 */
     --kbd: #eeeeee; /* keybind chip: OpenCode bg-layer-03 */
     --secondary-foreground: #161616;
@@ -114,7 +114,7 @@
     --warning: #8a6100;
     --info: #2c47c8;
     /* Graph ref chips: text, tinted 18% as background (theme.test.ts: 4.5:1 on every row surface). */
-    --ref-local: #0f6a30; --ref-remote: #6a2fc0; --ref-head: #6e4c00;
+    --ref-local: #0f682f; --ref-remote: #6a2fc0; --ref-head: #6e4c00;
     --border: #0000001a;
     --input: #0000001a;
     --ring: #6485f6;
