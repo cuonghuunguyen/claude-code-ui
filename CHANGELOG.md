@@ -2,6 +2,48 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.0.0 - 2026-10-30
+
+### Added
+
+- Panes: Plan, Files, Git graph, the terminal, a single file, an artifact and a session can each show in the side panel, the bottom panel or as a tab in the main area. Drag a pane tab to move it between them. Split view shows a session beside one of its panes ([#395](https://github.com/cuonghuunguyen/claude-code-ui/issues/395), [#396](https://github.com/cuonghuunguyen/claude-code-ui/issues/396), [#397](https://github.com/cuonghuunguyen/claude-code-ui/issues/397), [#398](https://github.com/cuonghuunguyen/claude-code-ui/issues/398), [#399](https://github.com/cuonghuunguyen/claude-code-ui/issues/399), [#400](https://github.com/cuonghuunguyen/claude-code-ui/issues/400), [#401](https://github.com/cuonghuunguyen/claude-code-ui/issues/401), [#402](https://github.com/cuonghuunguyen/claude-code-ui/issues/402)).
+- Terminal in the main area: one tab per project folder; moving it keeps the running shell ([#397](https://github.com/cuonghuunguyen/claude-code-ui/issues/397)).
+- A session shown in the side or bottom panel has the full session features, its owner's pane tab and image attachments ([#401](https://github.com/cuonghuunguyen/claude-code-ui/issues/401), [#503](https://github.com/cuonghuunguyen/claude-code-ui/issues/503)).
+- Aside: `/btw` asks a side question in a floating popup, also while the turn runs. Keep it to turn it into a session ([#465](https://github.com/cuonghuunguyen/claude-code-ui/issues/465), [#466](https://github.com/cuonghuunguyen/claude-code-ui/issues/466), [#467](https://github.com/cuonghuunguyen/claude-code-ui/issues/467)).
+- Artifact browser: lists the artifacts a session published ([#176](https://github.com/cuonghuunguyen/claude-code-ui/issues/176)).
+- Settings › Appearance › Theme: Catppuccin, Tokyo Night, Solarized, Nord, Dracula and One Dark next to the default theme. Recolors the app, editor, diffs, terminal and git graph ([#468](https://github.com/cuonghuunguyen/claude-code-ui/issues/468)).
+- Nested repositories and submodules: found like VS Code (Settings › Git, same names as `git.*`). A repository selector picks which repository Changes and the Git graph show (remembered per project), with fetch, push and pull per repository. The file tree marks each file by its own repository; repository folders get Show changes and Show graph. Filter files and @-mentions find files inside nested repositories ([#388](https://github.com/cuonghuunguyen/claude-code-ui/issues/388), [#389](https://github.com/cuonghuunguyen/claude-code-ui/issues/389), [#390](https://github.com/cuonghuunguyen/claude-code-ui/issues/390), [#391](https://github.com/cuonghuunguyen/claude-code-ui/issues/391), [#392](https://github.com/cuonghuunguyen/claude-code-ui/issues/392), [#393](https://github.com/cuonghuunguyen/claude-code-ui/issues/393)).
+- Background shells: a running Bash command, also a `!` command, moves to the background with the card button or Ctrl+Shift+B (⌘⇧B on macOS). A Background shells list shows the session's shells with live output and Kill ([#440](https://github.com/cuonghuunguyen/claude-code-ui/issues/440), [#442](https://github.com/cuonghuunguyen/claude-code-ui/issues/442), [#485](https://github.com/cuonghuunguyen/claude-code-ui/issues/485)).
+- A `!` command sent while a turn runs is queued like a prompt instead of rejected ([#443](https://github.com/cuonghuunguyen/claude-code-ui/issues/443)).
+- A large paste shows as a collapsed Pasted text block in the prompt box and the sent message ([#441](https://github.com/cuonghuunguyen/claude-code-ui/issues/441)).
+- New worktrees get the gitignored files listed in `.worktreeinclude` ([#439](https://github.com/cuonghuunguyen/claude-code-ui/issues/439)).
+- Sidebar: Copy path on project and worktree rows ([#456](https://github.com/cuonghuunguyen/claude-code-ui/issues/456)).
+- Focus page: usage-limit row when auto-continue is off, worker rows nested under their coordinator, an optional Next for you chip (Settings › Focus, off by default) ([#305](https://github.com/cuonghuunguyen/claude-code-ui/issues/305), [#306](https://github.com/cuonghuunguyen/claude-code-ui/issues/306), [#307](https://github.com/cuonghuunguyen/claude-code-ui/issues/307)).
+- Orchestration: start a worker by project or worktree name. Workers hand off to the next stage by agent type. An optional total worker limit counts the whole daemon; the worker cap counts one coordinator's tree ([#454](https://github.com/cuonghuunguyen/claude-code-ui/issues/454), [#457](https://github.com/cuonghuunguyen/claude-code-ui/issues/457), [#484](https://github.com/cuonghuunguyen/claude-code-ui/issues/484)).
+
+### Changed
+
+- Files tab restores open editor tabs and unsaved drafts after a reload ([#366](https://github.com/cuonghuunguyen/claude-code-ui/issues/366)).
+- Clean up scans worktrees fast, shows the fetch, counts squash-merged worktrees as Safe. Remove worktree opens at once with Checking… and removes in the background with a Removing… row. Worktree status is cached ([#461](https://github.com/cuonghuunguyen/claude-code-ui/issues/461), [#462](https://github.com/cuonghuunguyen/claude-code-ui/issues/462), [#463](https://github.com/cuonghuunguyen/claude-code-ui/issues/463)).
+- WSL and Docker sides use the Node.js already in the container or distro when its version qualifies, else the pinned one, and come back with the hub without manual steps ([#458](https://github.com/cuonghuunguyen/claude-code-ui/issues/458), [#464](https://github.com/cuonghuunguyen/claude-code-ui/issues/464)).
+- Docker side bundle: concurrent downloads of a cold cache share one download, fallback reasons read correctly, leftover temp tars are cleaned, the cache is pruned ([#448](https://github.com/cuonghuunguyen/claude-code-ui/issues/448), [#449](https://github.com/cuonghuunguyen/claude-code-ui/issues/449), [#450](https://github.com/cuonghuunguyen/claude-code-ui/issues/450)).
+- The Focus tab keeps the side and bottom panels, so the prompt no longer jumps ([#367](https://github.com/cuonghuunguyen/claude-code-ui/issues/367)).
+- Phone: the tab name follows the finger on a swipe and settles in one transition ([#507](https://github.com/cuonghuunguyen/claude-code-ui/issues/507)).
+
+### Fixed
+
+- Jira token: bound to the host it was saved for, cleared on a host change, never sent over http, kept out of the log ([#451](https://github.com/cuonghuunguyen/claude-code-ui/issues/451), [#487](https://github.com/cuonghuunguyen/claude-code-ui/issues/487)).
+- Create worktree: long ticket summaries and branch folders over 64 characters, `fix-123` read as a ticket key, a stale branch list replacing the fetched one, deletion of your own `worktree-*` branch ([#452](https://github.com/cuonghuunguyen/claude-code-ui/issues/452), [#453](https://github.com/cuonghuunguyen/claude-code-ui/issues/453), [#460](https://github.com/cuonghuunguyen/claude-code-ui/issues/460), [#486](https://github.com/cuonghuunguyen/claude-code-ui/issues/486)).
+- Background shell output shows after `/clear` ([#496](https://github.com/cuonghuunguyen/claude-code-ui/issues/496)); subagent Bash cards keep Run in background ([#492](https://github.com/cuonghuunguyen/claude-code-ui/issues/492)).
+- Asides of a daemon on another port are cleaned up ([#495](https://github.com/cuonghuunguyen/claude-code-ui/issues/495)).
+- Focus page: error rows survive a reload and unread finished rows a daemon restart; it opens under a maximized bottom panel; the detail pane no longer repeats the command above the Permission card; the Next for you chip fills a mounted prompt box ([#308](https://github.com/cuonghuunguyen/claude-code-ui/issues/308), [#455](https://github.com/cuonghuunguyen/claude-code-ui/issues/455), [#499](https://github.com/cuonghuunguyen/claude-code-ui/issues/499), [#505](https://github.com/cuonghuunguyen/claude-code-ui/issues/505)).
+- Terminal: the selected terminal is restored per folder after a reload; tabs polish on narrow screens ([#490](https://github.com/cuonghuunguyen/claude-code-ui/issues/490), [#491](https://github.com/cuonghuunguyen/claude-code-ui/issues/491)).
+- Split view: focus after a split, a 0-size terminal, a stale drag ([#501](https://github.com/cuonghuunguyen/claude-code-ui/issues/501)). Open in tab from the file dialog keeps the editor focus ([#504](https://github.com/cuonghuunguyen/claude-code-ui/issues/504)).
+- Nested repository search stays fast on WSL, keeps empty nested repository folders, shares the cap and the repository scan ([#502](https://github.com/cuonghuunguyen/claude-code-ui/issues/502)).
+- Settings: a second fast edit is kept; Enter in a field on a phone no longer leaves the group ([#498](https://github.com/cuonghuunguyen/claude-code-ui/issues/498), [#500](https://github.com/cuonghuunguyen/claude-code-ui/issues/500)).
+- Markdown file preview shows tables at full height ([#444](https://github.com/cuonghuunguyen/claude-code-ui/issues/444)).
+- Worker view "also remove worktree" re-checks the worktree before removal ([#493](https://github.com/cuonghuunguyen/claude-code-ui/issues/493)).
+
 ## 0.8.0 - 2026-10-25
 
 ### Added

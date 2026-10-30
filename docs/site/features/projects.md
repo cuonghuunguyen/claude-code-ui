@@ -29,11 +29,17 @@ A **worktree** is an extra git checkout of the same repository, on its own branc
 3. For a new branch, **Base** picks the start point (default: the remote default branch, e.g. `origin/main`).
 4. The modal shows the branch and its folder (`.claude/worktrees/<branch with / replaced by ->`). Click **Create**. A new session tab opens in the worktree.
 
+A new worktree also gets the gitignored files that the `.worktreeinclude` file at the root of the main checkout lists (`.gitignore` syntax), for example `.env`. A file is copied only when a pattern matches it and git ignores it. Large files and large totals are skipped with a warning in the daemon log.
+
+A long ticket summary is shortened, so a generated name is always valid. An error shows only for a name you typed or edited. A folder name is at most 64 characters, also when you check out an existing branch with the **Branch** tab.
+
 **Shift+click** the button, or pick **New worktree** in the project menu, to create one at once with a generated name.
 
 The **Run session in** chip of a new session calls the main checkout **Primary worktree**.
 
-To remove many at once, see [Clean up](clean-up). To remove one, click its trash icon (on a phone: its menu › **Delete worktree…**).
+To remove many at once, see [Clean up](clean-up). To remove one, click its trash icon (on a phone: its menu › **Delete worktree…**). The dialog opens at once with **Checking…**. After you confirm, the row shows **Removing…** while the removal runs in the background.
+
+The menu of a project row and of a worktree row has **Copy path**.
 
 ## Projects header buttons
 

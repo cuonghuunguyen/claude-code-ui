@@ -21,9 +21,14 @@ One page that shows, per session, what needs you, what is working and what finis
 - Each list shows 5 rows and **+N more**.
 - Error and finished rows go away when you open the session. Finished rows also go after 24 hours.
 - The number on the tab and the title counts only sessions that wait for you (escalated, permission, question).
-- The usage-limit row shows only while auto-continue is on.
+- The usage-limit row shows also while auto-continue is off. Then it has no **Cancel continue**.
+- A [worker](orchestration) row is nested under its coordinator.
+- Error rows and unread finished rows are still there after a page reload or a daemon restart.
+- The detail of a request shows the tool and its command once, in the request card.
 - Answered requests shrink to one line until you leave the page.
 - Each request gets a **tier**. **Low** is a plain read (or, in some repos, an edit) inside the session's folder. Everything else is **high**. A high one shows **High tier · always asks** and has no **Allow always** here. Only you can answer it (see [Orchestration](orchestration)).
 - **Escalated by coordinator** marks a worker's request that its coordinator handed to you.
 - You can also open it with the link `#focus`.
+- Focus opens also while the bottom panel is maximized. The side and bottom panels stay while Focus shows, so the prompt box does not jump when you switch between Focus and a session.
+- With **Next for you** on (see [Settings › Focus](../reference/settings#focus)), a finished row has a chip with the predicted next prompt. Click it to put the text in that session's prompt box.
 - While Focus is open, [in-app notifications](notifications) for requests are hidden: you already see them here.

@@ -12,6 +12,8 @@ The middle of the screen is the **timeline**: your prompts, Claude's answers and
   - Read, Grep, Glob: the file or pattern.
   - TodoWrite: Claude's todo list. While Claude works, the list also sits above the prompt box.
   - Agent: a subagent run. Open it to see the subagent's own timeline.
+  - Bash that runs in the background: see [Background shells](background-shells).
+  - Artifact: a page Claude published. The card previews it. **Open in tab** shows it in its own tab, and the Artifacts pane lists all of the session (see [Panes & layout](panes)).
 - **Markdown answers** with code highlighting, tables, math and Mermaid diagrams.
 - **Sticky prompt:** when you scroll up, the prompt of the turn you are reading stays at the top. Click it to jump there.
 

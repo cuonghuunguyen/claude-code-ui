@@ -1801,7 +1801,7 @@ describe("WSL projects opened by their UNC path", () => {
     const list = await listWorktrees("\\\\wsl.localhost\\Ubuntu\\home\\me\\repo");
     expect(list).toEqual([
       { path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo", branch: "main", main: true },
-      { path: "C:\\wt", branch: "abcdef1", main: false },
+      { path: "C:\\wt", branch: "abcdef1", main: false, detached: true },
     ]);
   });
 

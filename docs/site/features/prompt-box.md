@@ -21,7 +21,10 @@ In **Settings > General > Sending** you can swap the two: <kbd>Enter</kbd> queue
 1. Type `!` as the first character. The box turns into a shell prompt.
 2. Type a command, for example `! npm test`, and press <kbd>Enter</kbd>.
 3. It runs in the session's folder. The output shows in the timeline, and Claude sees it in the next turn.
-4. **Stop** kills a command that hangs. <kbd>Esc</kbd> (or <kbd>Backspace</kbd> in an empty box) leaves bash mode.
+4. **Stop** kills a command that hangs. To keep a long command running while you go on, click **Run in background** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>, see [Background shells](background-shells)).
+5. <kbd>Esc</kbd> (or <kbd>Backspace</kbd> in an empty box) leaves bash mode.
+
+While Claude works, a `!` command waits in the queue like a message and runs when the session is idle.
 
 `!` also works in a new session's box: it starts the session and runs the command.
 
@@ -31,12 +34,15 @@ In **Settings > General > Sending** you can swap the two: <kbd>Enter</kbd> queue
 - A `/command` works in the middle of a message too, like in Claude Code.
 - Some open a dialog instead of being sent: `/mcp`, `/skills` (or `/help`), `/plugins`, `/resume`. See [MCP, skills & plugins](config-dialogs).
 - `/clear` starts a fresh session in the same tab.
+- `/btw <question>` asks an [aside](aside) in a floating popup, also while Claude works.
+- `/tasks` (or `/bashes`) opens the [Background shells](background-shells) list.
 
 ## Files and images
 
 - Type `@` and part of a file name to mention a file.
 - Paste or drop images into the box, or click **+** (**Add images and files**). PNG, JPEG, GIF and WebP go to Claude as images.
 - Other files are uploaded and added to the prompt as a path.
+- A large text paste (more than 800 characters or more than 2 line breaks) shows as a block `[Pasted text #1 +120 lines]` in the box and in the sent message. Click the block to read the text. Delete it like one character (<kbd>Backspace</kbd>). Claude gets the whole text. Several pastes get numbers #1, #2…
 
 ## Pickers under the box
 
