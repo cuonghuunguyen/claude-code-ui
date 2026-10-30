@@ -12,4 +12,8 @@ export default {
   "common.fileName.trailingDot": "A name cannot end with a dot or a space.",
   "common.fileName.reserved": "“{name}” is reserved on Windows.",
   "common.jira.httpsRule": "Jira URL must be an https address (http only for localhost or 127.0.0.1)",
+  "common.time.now": "now",
+  "common.time.minutes": "{n}m",
+  "common.time.hours": "{n}h",
+  "common.time.days": "{n}d",
 } as const;

@@ -41,7 +41,7 @@ Chưa có: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (tên đ
 | `--tailscale` | `CLAUDE_UI_TAILSCALE=1` | tắt | Phục vụ trên tailnet của bạn bằng `tailscale serve` và in liên kết HTTPS. Xem [Điện thoại và truy cập từ xa](../features/remote-access) |
 | `--hostname <name>` | `CLAUDE_UI_HOSTNAME` | | Tên HTTPS của proxy riêng của bạn đặt trước daemon. Không dùng chung với `--tailscale` |
 | `--lan` | `CLAUDE_UI_LAN=1` | tắt | Lắng nghe thêm trên mạng cục bộ, HTTP thuần |
-| `--allow-bypass` | `CLAUDE_UI_ALLOW_BYPASS=1` | tắt | Cung cấp chế độ "Bypass permissions" |
+| `--allow-bypass` | `CLAUDE_UI_ALLOW_BYPASS=1` | tắt | Cung cấp chế độ “Bỏ qua quyền” |
 | `--no-update-check` | `CLAUDE_UI_UPDATE_CHECK=0` | có kiểm tra | Không kiểm tra npm để tìm phiên bản mới |
 | `--no-os-notify` | `CLAUDE_UI_OS_NOTIFY=0` | bật | Không hiện thông báo màn hình nền trên máy tính này |
 | `--no-open` | `CLAUDE_UI_OPEN=0` | mở | Không mở giao diện web trong trình duyệt của máy tính này khi khởi động. Không bao giờ mở sau khi khởi động lại do cập nhật, qua SSH, hoặc trên Linux không có màn hình |

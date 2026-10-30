@@ -13,7 +13,7 @@ Khung **Tệp**: cây tệp và một trình soạn thảo đơn giản cho thư
 
 ## Chế độ xem tệp {#file-view}
 
-- Cây hiện biểu tượng loại tệp và dấu trạng thái git (đã sửa, đã thêm, chưa theo dõi…) cho từng tệp. Tệp trong kho mã lồng nhau hoặc submodule nhận dấu của kho mã riêng của nó. Thư mục kho mã hiện biểu tượng kho mã và submodule hiện biểu tượng lưu trữ; cả hai đều không nhận một chữ `U` đơn lẻ từ kho mã cha. Bấm chuột phải vào một mục để chọn **Hiện thay đổi** hoặc **Hiện đồ thị**: chúng chuyển [bộ chọn kho mã](/vi/features/changes#repositories) của Thay đổi và Git graph.
+- Cây hiện biểu tượng loại tệp và dấu trạng thái git (đã sửa, đã thêm, chưa theo dõi…) cho từng tệp. Tệp trong kho mã lồng nhau hoặc submodule nhận dấu của kho mã riêng của nó. Thư mục kho mã hiện biểu tượng kho mã và submodule hiện biểu tượng lưu trữ; cả hai đều không nhận một chữ `U` đơn lẻ từ kho mã cha. Bấm chuột phải vào một mục để chọn **Xem thay đổi** hoặc **Xem đồ thị**: chúng chuyển [bộ chọn kho mã](/vi/features/changes#repositories) của Thay đổi và Git graph.
 - Các tab đang mở và chỉnh sửa chưa lưu được khôi phục sau khi tải lại trang.
 - Một cú bấm đơn mở **tab xem trước** (tiêu đề in nghiêng); cú bấm đơn tiếp theo thay thế nó. Bấm đúp vào tab hoặc dòng trong cây, hoặc sửa tệp, để giữ nó mở.
 - Đường dẫn breadcrumb và dấu chưa lưu (●) nằm phía trên trình soạn thảo. Tệp Markdown có thể hiện bản xem trước đã dựng.

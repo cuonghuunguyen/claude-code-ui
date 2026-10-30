@@ -16,9 +16,9 @@ sudo apt install build-essential python3
 
 ### Trình duyệt liên tục yêu cầu ghép nối {#the-browser-keeps-asking-to-pair}
 
-Mở liên kết ghép nối mà daemon đã in khi khởi động (kết thúc bằng `#token=…`). Với ứng dụng trên Màn hình chính iPhone, dán liên kết đó vào **Liên kết ghép nối hoặc token** và nhấn **Ghép nối**. iOS có thể xóa dữ liệu lưu của ứng dụng sau nhiều tuần không dùng; khi đó hãy ghép nối lại.
+Mở liên kết ghép nối mà daemon đã in khi khởi động (kết thúc bằng `#token=…`). Với ứng dụng trên Màn hình chính iPhone, dán liên kết đó vào **Liên kết hoặc token ghép nối** và nhấn **Ghép nối**. iOS có thể xóa dữ liệu lưu của ứng dụng sau nhiều tuần không dùng; khi đó hãy ghép nối lại.
 
-### "This daemon does not accept that token" {#this-daemon-does-not-accept-that-token}
+### “Daemon này không chấp nhận token đó” {#this-daemon-does-not-accept-that-token}
 
 Token đã đổi (tệp `token` bị xóa, hoặc bạn dùng thư mục cấu hình khác). Hãy sao chép liên kết mà daemon in gần nhất.
 
@@ -32,7 +32,7 @@ Khởi động trên cổng khác: `claude-ui --port 4281`.
 
 ### Side cần Node.js hoặc công cụ build {#the-side-needs-nodejs-or-build-tools}
 
-Hộp thoại Mở dự án cho biết thiếu gì. Một bản phân phối WSL hoặc container Docker dùng glibc (Debian, Ubuntu, ...) chỉ cần `sh`, `tar` và `gzip` (bản phân phối WSL cần thêm `bash`): claude-code-ui dùng Node.js 22+ tìm thấy ở đó, nếu không thì tự mang theo bản riêng. Bản phân phối WSL cài bằng npm (musl, xem bên dưới) cần Node.js 22+, make, python3 và g++. Mở **What this container needs** trong hộp thoại để xem danh sách với dấu ✓ hoặc ✗ cho từng mục. Hộp thoại không kiểm tra đăng nhập Claude: phiên bắt đầu mà chưa đăng nhập sẽ báo như vậy. Xem [WSL và Docker](../features/wsl-docker).
+Hộp thoại Mở dự án cho biết thiếu gì. Một bản phân phối WSL hoặc container Docker dùng glibc (Debian, Ubuntu, ...) chỉ cần `sh`, `tar` và `gzip` (bản phân phối WSL cần thêm `bash`): claude-code-ui dùng Node.js 22+ tìm thấy ở đó, nếu không thì tự mang theo bản riêng. Bản phân phối WSL cài bằng npm (musl, xem bên dưới) cần Node.js 22+, make, python3 và g++. Mở **Container này cần gì** trong hộp thoại để xem danh sách với dấu ✓ hoặc ✗ cho từng mục. Hộp thoại không kiểm tra đăng nhập Claude: phiên bắt đầu mà chưa đăng nhập sẽ báo như vậy. Xem [WSL và Docker](../features/wsl-docker).
 
 ### Container Docker hoặc bản phân phối WSL cài bằng npm, không dùng bundle {#a-docker-container-or-wsl-distro-installs-with-npm-not-the-bundle}
 

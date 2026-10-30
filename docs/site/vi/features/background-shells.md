@@ -13,7 +13,7 @@ Một lệnh shell có thể chạy nền: lượt vẫn tiếp tục, lệnh ti
 1. Bấm **N shell** trên thanh trạng thái dưới ô nhập prompt, chạy **Shell nền** trong [bảng lệnh](palette), hoặc nhập `/tasks` (hoặc `/bashes`) vào ô nhập prompt.
 2. Danh sách hiển thị mọi shell của phiên, shell đang chạy ở trên, kèm lệnh, mô tả, trạng thái (đang chạy, đã hoàn thành, thất bại hoặc đã bị dừng) và thời gian chạy.
 3. Mở một shell để đọc kết quả của nó. Kết quả cập nhật trực tiếp khi shell chạy. Shell khởi động trước `/clear` vẫn hiển thị kết quả.
-4. **Dừng cưỡng bức** dừng một shell đang chạy sau khi bạn xác nhận.
+4. **Kill** dừng một shell đang chạy sau khi bạn xác nhận.
 
 ## Cần biết {#good-to-know}
 

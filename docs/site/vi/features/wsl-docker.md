@@ -14,7 +14,7 @@ Side WSL và Docker dừng sau khoảng 15 giây kể từ khi khởi động, v
 4. Lần đầu, bấm **Cài đặt**. claude-code-ui tự sao chép vào side (`~/.local/share/claude-ui/side`) và khởi động tại đó. Trong container Docker, nó mang theo Claude Code, và chỉ mang theo Node.js riêng khi container chưa có bản nào trong phạm vi yêu cầu (xem bên dưới).
 5. Chọn một thư mục và mở nó.
 
-Sau đó, **Kiểm tra lại** hiện trạng thái của side, còn **Cập nhật** hoặc **Cài đặt lại** làm mới side.
+Sau đó, **Kiểm tra lại** hiện trạng thái của side, còn **Cập nhật** hoặc **Cài lại** làm mới side.
 
 ## Side cần gì {#what-the-side-needs}
 
@@ -40,7 +40,7 @@ Bundle cần máy của bạn truy cập nodejs.org và npm registry một lần
 
 ## Quay lại sau khi khởi động lại {#coming-back-after-a-restart}
 
-Side đã chạy một lần sẽ khởi động lại cùng Claude UI, và tự khởi động lại nếu dừng (sau 2 giây, 10 giây và 60 giây; lần dừng thứ tư trong vòng mười phút hiện lỗi kèm **Thử lại**). Container chạy lại sẽ khởi động trong khoảng 30 giây. Sau bản build Claude UI mới, side cập nhật từ bundle đã tải; nếu distro hoặc container của nó cần npm, side vẫn tắt và thanh bên hiện **Cần cập nhật** kèm **Cập nhật**. Khi side đang khởi động, các dự án của nó vẫn nằm trong thanh bên. Trong **Cài đặt › Side**, **Khởi động cùng Claude UI** tắt hành vi này cho một side (các dự án của nó rời khỏi thanh bên) và **Tự động cập nhật** dừng việc cập nhật tự động.
+Side đã chạy một lần sẽ khởi động lại cùng Claude UI, và tự khởi động lại nếu dừng (sau 2 giây, 10 giây và 60 giây; lần dừng thứ tư trong vòng mười phút hiện lỗi kèm **Thử lại**). Container chạy lại sẽ khởi động trong khoảng 30 giây. Sau bản build Claude UI mới, side cập nhật từ bundle đã tải; nếu distro hoặc container của nó cần npm, side vẫn tắt và thanh bên hiện **Cần cập nhật** kèm **Cập nhật**. Khi side đang khởi động, các dự án của nó vẫn nằm trong thanh bên. Trong **Cài đặt › Sides**, **Khởi động cùng Claude UI** tắt hành vi này cho một side (các dự án của nó rời khỏi thanh bên) và **Tự động cập nhật** dừng việc cập nhật tự động.
 
 ## Cần biết {#good-to-know}
 

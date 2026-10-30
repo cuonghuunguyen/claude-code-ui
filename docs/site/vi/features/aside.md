@@ -4,7 +4,7 @@
 
 ## Cách dùng {#how-to-use}
 
-1. Trong một phiên, nhập `/btw` và câu hỏi của bạn vào ô nhập prompt, rồi nhấn <kbd>Enter</kbd>. Hoặc chạy **Đặt câu hỏi bên lề** trong [bảng lệnh](palette). Khi bảng quyền hoặc bảng câu hỏi thay thế ô nhập prompt, **Đặt câu hỏi bên lề** hiện một ô nhập một dòng.
+1. Trong một phiên, nhập `/btw` và câu hỏi của bạn vào ô nhập prompt, rồi nhấn <kbd>Enter</kbd>. Hoặc chạy **Hỏi bên lề** trong [bảng lệnh](palette). Khi bảng quyền hoặc bảng câu hỏi thay thế ô nhập prompt, **Hỏi bên lề** hiện một ô nhập một dòng.
 2. Cửa sổ nổi mở ngay và bắt đầu trả lời. Nó có dòng thời gian riêng, ô nhập prompt cho các câu hỏi tiếp theo, và bảng quyền cùng bảng câu hỏi riêng.
 3. Kéo cửa sổ bằng phần đầu, đổi kích thước bằng góc, hoặc bấm **Thu nhỏ câu hỏi bên lề** để gập nó thành một nhãn ở góc dưới bên phải.
 4. **Đóng câu hỏi bên lề** xóa câu hỏi bên lề.

@@ -9,7 +9,7 @@ Màn hình có bốn phần. Mỗi phần liên kết tới trang riêng.
 | **Thanh bên** | Trái | [Dự án](../features/projects) và các [phiên](../features/sessions) của chúng. Tìm kiếm, Focus và Cài đặt cũng nằm ở đây. |
 | **Thanh tab** | Trên | Các phiên đang mở dưới dạng [tab](../features/sessions#tabs), nhóm theo dự án. |
 | **Phiên** | Giữa | Cuộc trò chuyện với Claude: [dòng thời gian](../features/timeline) và [hộp prompt](../features/prompt-box) ở dưới cùng. |
-| **Bảng bên** | Phải | [Tệp](../features/files), [Thay đổi](../features/changes), [Đồ thị](../features/git-graph) và [terminal](../features/terminal). |
+| **Bảng bên** | Phải | [Tệp](../features/files), [Thay đổi](../features/changes), [Biểu đồ](../features/git-graph) và [terminal](../features/terminal). |
 
 ## Các từ bạn sẽ gặp {#words-you-will-see}
 
@@ -18,7 +18,7 @@ Màn hình có bốn phần. Mỗi phần liên kết tới trang riêng.
 - **Phiên:** một cuộc trò chuyện với Claude trong một thư mục.
 - **Lượt:** một prompt và mọi việc Claude làm cho prompt đó.
 - **Thẻ công cụ:** một việc Claude đã làm, như chạy lệnh hoặc sửa tệp.
-- **Yêu cầu quyền:** Claude hỏi trước khi chạy một công cụ. Xem [Quyền và chế độ](../features/permissions).
+- **Yêu cầu cấp quyền:** Claude hỏi trước khi chạy một công cụ. Xem [Quyền và chế độ](../features/permissions).
 
 ## Nút ở góc trên bên phải {#top-right-buttons}
 
@@ -32,5 +32,5 @@ Màn hình có bốn phần. Mỗi phần liên kết tới trang riêng.
 ## Cần biết {#good-to-know}
 
 - Nhấn <kbd>Ctrl</kbd>+<kbd>/</kbd> để xem mọi [phím tắt](../reference/shortcuts).
-- Chạy lại chuyến tham quan có hướng dẫn bất cứ lúc nào: **Cài đặt › Trợ giúp và giới thiệu**, hoặc "Hiện hướng dẫn" trong bảng lệnh.
+- Chạy lại chuyến tham quan có hướng dẫn bất cứ lúc nào: **Cài đặt › Trợ giúp & giới thiệu**, hoặc “Xem hướng dẫn” trong bảng lệnh.
 - Trên điện thoại, bố cục thay đổi: thanh bên thành ngăn kéo và bạn thấy một khung mỗi lần.

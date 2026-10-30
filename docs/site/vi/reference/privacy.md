@@ -28,7 +28,7 @@
 - Mỗi kết nối cần token ghép nối. Giữ liên kết ghép nối riêng tư: nó cấp toàn quyền truy cập.
 - **Daemon có thể chạy bất kỳ lệnh nào trên máy tính của bạn.** Coi quyền truy cập vào nó như quyền truy cập shell.
 - Phiên, tệp và terminal nằm trong các thư mục gốc được phép (`--roots`).
-- Yêu cầu quyền được bật mặc định. Chế độ "Bypass permissions" bị ẩn trừ khi bạn khởi động với `--allow-bypass`.
+- Yêu cầu quyền được bật mặc định. Chế độ “Bỏ qua quyền” bị ẩn trừ khi bạn khởi động với `--allow-bypass`.
 - Để hủy ghép nối mọi trình duyệt, xóa tệp `token` trong thư mục cấu hình và khởi động lại.
 
 ## Đăng nhập {#login}

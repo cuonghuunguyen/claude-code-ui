@@ -15,13 +15,13 @@ Hai đồng hồ nhỏ cho biết bạn còn lại bao nhiêu.
 
 Với `CLAUDE_CODE_OAUTH_TOKEN` (từ `claude setup-token`), vòng tròn hiển thị cửa sổ phiên và cửa sổ tuần sau một lượt, hoặc vòng tròn xám với **–** trước đó: token đó không đọc được mức dùng gói. Chạy `claude login` để xem mọi cửa sổ.
 
-Chọn cửa sổ mà vòng tròn hiển thị trong [Cài đặt › Giới hạn mức dùng](../reference/settings#usage-limits): Mức dùng cao nhất, Phiên (5 giờ) hoặc Tuần.
+Chọn cửa sổ mà vòng tròn hiển thị trong [Cài đặt › Giới hạn mức dùng](../reference/settings#usage-limits): Mức dùng cao nhất, Phiên (5 giờ) hoặc Hằng tuần.
 
 ## Tiếp tục sau khi đạt giới hạn {#continue-after-a-limit}
 
 Khi một phiên dừng vì giới hạn của gói, claude-code-ui có thể gửi "continue" cho phiên đó sau khi giới hạn đặt lại.
 
-1. Bật **Tự động tiếp tục sau khi giới hạn mức dùng đặt lại** trong **Cài đặt › Giới hạn mức dùng**.
+1. Bật **Tự động tiếp tục sau khi giới hạn mức dùng được đặt lại** trong **Cài đặt › Giới hạn mức dùng**.
 2. Một ghi chú phía trên ô nhập prompt cho biết khi nào phiên sẽ tiếp tục. **Hủy tự động tiếp tục** sẽ dừng việc đó.
 
 Tự gửi tin nhắn cũng hủy việc này. Nhiều phiên đã dừng sẽ tiếp tục lần lượt từng phiên.

@@ -25,17 +25,17 @@ Phần giữa màn hình là **dòng thời gian**: các prompt của bạn, câ
 | Sao chép câu trả lời của Claude | **Sao chép phản hồi** dưới một lượt đã xong |
 | Trích một phần câu trả lời | Chọn văn bản, bấm **Trích dẫn vào prompt** |
 | Mở ảnh lớn | Bấm vào ảnh |
-| Quay lại quá khứ | Di chuột lên prompt của bạn, bấm **Tua lại về trước tin nhắn này** |
+| Quay lại quá khứ | Di chuột lên prompt của bạn, bấm **Quay lại trước tin nhắn này** |
 
 ## Tua lại {#rewind}
 
 Tua lại đưa phiên về trạng thái trước một prompt của bạn. Chọn thứ cần khôi phục:
 
-- **Khôi phục mã và hội thoại**
-- **Khôi phục hội thoại** (tệp giữ nguyên)
+- **Khôi phục mã và cuộc trò chuyện**
+- **Khôi phục cuộc trò chuyện** (tệp giữ nguyên)
 - **Khôi phục mã** (cuộc trò chuyện giữ nguyên)
 
-Bạn cũng có thể chạy "Tua lại" từ [bảng lệnh](palette). Không thể tua lại khi Claude đang làm việc.
+Bạn cũng có thể chạy “Quay lại” từ [bảng lệnh](palette). Không thể tua lại khi Claude đang làm việc.
 
 ## Cần biết {#good-to-know}
 

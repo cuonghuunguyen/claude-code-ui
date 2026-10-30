@@ -9,7 +9,7 @@ claude-code-ui kiểm tra npm để tìm phiên bản mới khi khởi động v
 3. Nó khởi động lại khi không còn phiên nào đang làm việc. **Khởi động lại ngay** không chờ: nó kết thúc các lượt đang chạy và đóng các terminal.
 4. Trang tự kết nối lại. Các phiên của bạn trở lại.
 
-**Chưa phải bây giờ** ẩn thông báo đến phiên bản kế tiếp.
+**Chưa** ẩn thông báo đến phiên bản kế tiếp.
 
 ## Cách cập nhật từ terminal {#how-to-update-from-a-terminal}
 

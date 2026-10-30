@@ -8,8 +8,8 @@
 
 1. Mở [bảng lệnh](palette) và chạy **Dọn dẹp worktree và worker…**. Hoặc mở menu của một dự án và chọn **Dọn dẹp…**, hoặc menu của một coordinator và chọn **Dọn dẹp worker…** (xem [Menu ngữ cảnh](context-menus)).
 2. Đọc nhãn của từng hàng: **An toàn**, **Có công việc** (tệp chưa commit hoặc commit chưa push, kèm số lượng) hoặc **Bị chặn** (kèm lý do).
-3. Đánh dấu các hàng cần gỡ. Worktree an toàn và worker đã đóng được đánh dấu sẵn. Dùng **Cũ hơn** và **Chỉ an toàn** để thu hẹp danh sách.
-4. Bấm **Gỡ N**. Bản tóm tắt liệt kê những gì đã gỡ và những gì bị bỏ qua, cùng lý do.
+3. Đánh dấu các hàng cần gỡ. Worktree an toàn và worker đã đóng được đánh dấu sẵn. Dùng **Cũ hơn** và **Chỉ mục an toàn** để thu hẹp danh sách.
+4. Bấm **Xóa N**. Bản tóm tắt liệt kê những gì đã gỡ và những gì bị bỏ qua, cùng lý do.
 
 ## Dọn dẹp tab {#clean-up-tabs}
 
@@ -22,8 +22,8 @@
 ## Cần biết {#good-to-know}
 
 - Tab đang hoạt động, đã ghim, đang chạy, chưa đọc, và tab có bản nháp chưa gửi luôn được giữ lại. Đóng tab không dừng phiên của nó.
-- Gỡ một worktree có công việc cần thêm một ô đánh dấu: **Bỏ các tệp chưa commit và commit chưa push**. Nhánh đã merge có thể được xóa cùng (**Xóa luôn nhánh**, mặc định tắt).
+- Gỡ một worktree có công việc cần thêm một ô đánh dấu: **Bỏ tệp chưa commit và commit chưa push**. Nhánh đã merge có thể được xóa cùng (**Xóa cả nhánh**, mặc định tắt).
 - Việc quét nhanh và không làm chậm thanh trạng thái. Nhánh đã squash-merge được tính là đã merge, nên worktree của nó là **An toàn**. Trạng thái của worktree được lưu đệm để hiển thị; khi gỡ luôn kiểm tra lại.
 - Việc gỡ worktree chạy nền: mọi hàng trong hàng đợi hiển thị **Đang gỡ…**.
 - Mọi worktree liên kết nằm trong các thư mục gốc của bạn đều gỡ được, kể cả worktree tạo thủ công hoặc bằng công cụ khác. Worktree bị khóa hoặc là symlink thì **Bị chặn**.
-- Worktree gắn nhãn **Bên ngoài** không nằm trong `.claude/worktrees` và không được đánh dấu sẵn.
+- Worktree gắn nhãn **Ngoài** không nằm trong `.claude/worktrees` và không được đánh dấu sẵn.

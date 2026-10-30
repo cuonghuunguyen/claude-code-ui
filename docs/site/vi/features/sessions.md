@@ -50,7 +50,7 @@ Mỗi phiên đang mở là một tab ở phía trên. Các tab được nhóm t
 | Đóng cả nhóm | Bấm chuột giữa vào chip nhóm, hoặc bấm chuột phải vào chip › **Đóng nhóm** |
 | Sắp xếp lại | Kéo tab hoặc chip nhóm |
 
-Khi bật **Tab thu gọn**, mỗi nhóm chỉ hiện chip của nó: rê chuột hoặc bấm vào chip để chọn một tab của nhóm, và bấm chuột phải vào chip để dùng các thao tác nhóm ([Menu ngữ cảnh](/vi/features/context-menus#group-chips)).
+Khi bật **Tab gọn**, mỗi nhóm chỉ hiện chip của nó: rê chuột hoặc bấm vào chip để chọn một tab của nhóm, và bấm chuột phải vào chip để dùng các thao tác nhóm ([Menu ngữ cảnh](/vi/features/context-menus#group-chips)).
 
 Thêm phím tab khác (mở lại tab đã đóng, đóng nhóm): [Phím tắt](/vi/reference/shortcuts).
 
@@ -60,5 +60,5 @@ Trên điện thoại, chạm vào bộ chuyển tab để xem mọi tab. Vuốt
 
 - `/clear` (hoặc `/reset`, `/new`) bắt đầu một phiên mới trong cùng tab và giữ lại những gì bạn đã gõ.
 - **Đóng khi nhàn rỗi:** phiên không có tab nào hiển thị sẽ đóng tiến trình Claude sau 10 phút nhàn rỗi. Phiên vẫn nằm trong danh sách. Prompt tiếp theo sẽ tiếp tục nó. Đổi thời gian bằng [`CLAUDE_UI_IDLE_CLOSE_MINUTES`](/vi/reference/cli#environment-variables).
-- Đổi cách nhóm tab (theo dự án, theo worktree, hoặc không nhóm) và bật **Tab thu gọn** trong [Cài đặt › Bố cục › Tab](/vi/reference/settings#tabs).
+- Đổi cách nhóm tab (theo dự án, theo worktree, hoặc không nhóm) và bật **Tab gọn** trong [Cài đặt › Bố cục › Tab](/vi/reference/settings#tabs).
 - Nhóm thanh bên **Worktree** và **Dự án** (cũng có trong menu tùy chọn thanh bên), và "Chỉ hiện phiên đang hoạt động", nằm trong [Cài đặt › Bố cục › Thanh bên](/vi/reference/settings#sidebar).

@@ -27,7 +27,7 @@ Nếu Tailscale chưa sẵn sàng, claude-ui cho biết còn thiếu gì và tho
 Cần HTTPS (Tailscale hoặc proxy riêng của bạn).
 
 - **Chrome trên Android:** menu › **Cài đặt ứng dụng**.
-- **iPhone/iPad (iOS 16.4+), Safari:** **Chia sẻ** › **Thêm vào Màn hình chính**. Mở ứng dụng mới, dán liên kết ghép nối mà terminal đã in vào **Liên kết ghép nối hoặc token**, rồi chạm **Ghép nối**.
+- **iPhone/iPad (iOS 16.4+), Safari:** **Chia sẻ** › **Thêm vào Màn hình chính**. Mở ứng dụng mới, dán liên kết ghép nối mà terminal đã in vào **Liên kết hoặc token ghép nối**, rồi chạm **Ghép nối**.
 - **Chrome trên máy tính:** biểu tượng cài đặt ở thanh địa chỉ.
 
 ## LAN {#lan}

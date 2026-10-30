@@ -423,7 +423,7 @@ function ContainerStep({
 
 /** Recent projects shown while nothing is typed; a typed name shows every match. */
 const RECENT_SHOWN = 5;
-const ago = (ms: number) => ((time) => (time === "now" ? t("sidebar.op.justNow") : t("sidebar.op.ago", { time })))(timeAgo(ms));
+const ago = (ms: number) => ((time) => (time === t("common.time.now") ? t("sidebar.op.justNow") : t("sidebar.op.ago", { time })))(timeAgo(ms));
 
 /** `initial`: start value instead of the only root. `onTyped`: true when it took the typed value (another side's path). */
 function Browser({

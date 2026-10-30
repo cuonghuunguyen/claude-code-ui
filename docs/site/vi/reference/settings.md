@@ -11,9 +11,9 @@ Các nhóm nằm dưới bốn đề mục:
 | Ứng dụng | Giao diện, Chung, Bố cục, Thông báo, Bàn phím |
 | Phiên | Điều phối, Focus, Giới hạn mức dùng |
 | Tích hợp | Git, Jira |
-| Hệ thống | Side, Hiệu năng, Trợ giúp và giới thiệu |
+| Hệ thống | Sides, Hiệu năng, Trợ giúp & giới thiệu ||
 
-Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Giới hạn mức dùng (trừ vòng mức dùng), Git, Jira, Side, Hiệu năng và thông báo màn hình nền được lưu trong daemon và áp dụng cho mọi trình duyệt.
+Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Giới hạn mức dùng (trừ vòng mức dùng), Git, Jira, Sides, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
 
 ## Giao diện {#appearance}
 
@@ -35,7 +35,7 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Khi Claude đang làm việc, Enter | **Điều hướng lượt** (mặc định; <kbd>Alt</kbd>+<kbd>Enter</kbd> xếp hàng đợi) hoặc **xếp tin nhắn vào hàng đợi** (<kbd>Alt</kbd>+<kbd>Enter</kbd> điều hướng). Tin nhắn trong hàng đợi chờ và bắt đầu lượt riêng khi Claude rảnh. Nút gửi đổi theo lựa chọn này. |
+| Khi Claude đang làm việc, Enter | **Điều hướng lượt** (mặc định; <kbd>Alt</kbd>+<kbd>Enter</kbd> xếp hàng đợi) hoặc **xếp hàng tin nhắn** (<kbd>Alt</kbd>+<kbd>Enter</kbd> điều hướng). Tin nhắn trong hàng đợi chờ và bắt đầu lượt riêng khi Claude rảnh. Nút gửi đổi theo lựa chọn này. |
 
 ### Màn hình {#screen}
 
@@ -58,14 +58,14 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 | Cài đặt | Chức năng |
 | --- | --- |
 | Nhóm tab | Theo dự án, Theo worktree, hoặc Không |
-| Tab thu gọn | Hiện mỗi nhóm thành một chip. Mở các tab của nhóm từ chip. Cần có nhóm tab. |
-| Tự đóng tab rảnh sau | Tắt, 1 giờ hoặc 1 ngày. Không bao giờ đóng tab đã ghim, đang chạy hoặc chưa đọc, hay tab có bản nháp. Các phiên vẫn chạy. |
+| Tab gọn || Hiện mỗi nhóm thành một chip. Mở các tab của nhóm từ chip. Cần có nhóm tab. |
+| Tự đóng tab nhàn rỗi sau || Tắt, 1 giờ hoặc 1 ngày. Không bao giờ đóng tab đã ghim, đang chạy hoặc chưa đọc, hay tab có bản nháp. Các phiên vẫn chạy. |
 
 ### Thay đổi {#changes}
 
 | Cài đặt | Tùy chọn |
 | --- | --- |
-| Chế độ xem diff mặc định | Thay đổi của phiên, Chưa commit, So với nhánh |
+| Chế độ diff mặc định || Thay đổi của phiên, Chưa commit, So với nhánh |
 
 ### Terminal {#terminal}
 
@@ -79,13 +79,13 @@ Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ th
 | --- | --- |
 | Thông báo trong ứng dụng | Một thẻ trong trang này khi phiên khác cần nhập liệu hoặc hoàn tất. Bật mặc định. |
 | Thông báo đẩy | Thông báo từ trình duyệt này, kể cả khi đã đóng trang. Cần HTTPS hoặc localhost. |
-| Thông báo màn hình nền trên *máy tính* | Máy tính chạy daemon hiện thông báo hệ thống khi không có trình duyệt nào bật thông báo đẩy. Áp dụng cho mọi trình duyệt. |
+| Thông báo máy tính trên *máy của daemon* || Máy tính chạy daemon hiện thông báo hệ thống khi không có trình duyệt nào bật thông báo đẩy. Áp dụng cho mọi trình duyệt. |
 
 Xem [Thông báo](../features/notifications).
 
 ## Bàn phím {#keyboard}
 
-Mở hộp thoại [Phím tắt](shortcuts), nơi bạn có thể gán lại mọi phím tắt. **Hiện mẹo phím tắt**: sau lần nhấn thứ 2, 5 và 10 vào một nút, một mẹo hiện phím tắt của nút đó hoặc đề nghị gán phím. Không áp dụng trên màn hình cảm ứng.
+Mở hộp thoại [Phím tắt](shortcuts), nơi bạn có thể gán lại mọi phím tắt. **Hiện gợi ý phím tắt**: sau lần nhấn thứ 2, 5 và 10 vào một nút, một mẹo hiện phím tắt của nút đó hoặc đề nghị gán phím. Không áp dụng trên màn hình cảm ứng.
 
 ## Điều phối {#orchestration}
 
@@ -101,7 +101,7 @@ Cho phép một phiên bắt đầu và điều khiển các phiên worker. Tắ
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Tự tiếp tục sau khi giới hạn mức dùng được đặt lại | Gửi "continue" tới phiên đã bị giới hạn gói chặn, khi giới hạn được đặt lại. |
+| Tự động tiếp tục sau khi giới hạn mức dùng được đặt lại || Gửi "continue" tới phiên đã bị giới hạn gói chặn, khi giới hạn được đặt lại. |
 | Vòng mức dùng hiển thị | Mức dùng cao nhất, Phiên (5 giờ) hoặc Hằng tuần. Được lưu trong trình duyệt này. |
 
 ## Git {#git}
@@ -110,14 +110,14 @@ Các cài đặt giống tiện ích mở rộng Git của VS Code, cùng tên v
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Auto repository detection | `true` (mặc định), `subFolders`, `openEditors` hoặc `false`. |
-| Repository scan max depth | Độ sâu quét tìm kho mã. Mặc định `1`; `-1` = không giới hạn. |
-| Repository scan ignored folders | Tên thư mục bị bỏ qua khi quét. Mặc định `node_modules`. |
-| Scan repositories | Các đường dẫn bổ sung để tìm, tính từ thư mục dự án. |
-| Ignored repositories | Các kho mã cần loại trừ. |
-| Detect submodules / Detect submodules limit | Tìm submodule, tối đa số này (mặc định `10`). |
-| Ignore submodules | Bỏ qua thay đổi của submodule trong cây tệp. |
-| Open repository in parent folders | `always` (mặc định), `never` hoặc `prompt` (ở đây hoạt động như `always`). |
+| Tự động phát hiện kho mã || `true` (mặc định), `subFolders`, `openEditors` hoặc `false`. |
+| Độ sâu quét kho mã tối đa || Độ sâu quét tìm kho mã. Mặc định `1`; `-1` = không giới hạn. |
+| Thư mục bỏ qua khi quét kho mã || Tên thư mục bị bỏ qua khi quét. Mặc định `node_modules`. |
+| Quét kho mã || Các đường dẫn bổ sung để tìm, tính từ thư mục dự án. |
+| Kho mã bị bỏ qua || Các kho mã cần loại trừ. |
+| Phát hiện submodule / Giới hạn phát hiện submodule || Tìm submodule, tối đa số này (mặc định `10`). |
+| Bỏ qua submodule || Bỏ qua thay đổi của submodule trong cây tệp. |
+| Mở kho mã trong thư mục cha || `always` (mặc định), `never` hoặc `prompt` (ở đây hoạt động như `always`). |
 
 ## Jira {#jira}
 
@@ -125,12 +125,12 @@ Một kết nối Jira cho tab **Ticket** của [Tạo worktree](../features/pro
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Jira URL | Cloud: `https://<site>.atlassian.net`. Data Center hoặc Server: địa chỉ https của Jira của bạn (http chỉ cho `localhost` và `127.0.0.1`). Đổi host sẽ xóa token đã lưu. |
+| URL Jira || Cloud: `https://<site>.atlassian.net`. Data Center hoặc Server: địa chỉ https của Jira của bạn (http chỉ cho `localhost` và `127.0.0.1`). Đổi host sẽ xóa token đã lưu. |
 | Email | Email tài khoản Atlassian của bạn. Chỉ cho Jira Cloud. |
 | API token / Personal access token | Cloud: API token từ id.atlassian.com › Security › API tokens. Data Center hoặc Server: personal access token từ hồ sơ Jira của bạn. Chỉ lưu trên máy tính của daemon (`secrets.json`), không hiện lại: khi đó dòng này ghi **Đã đặt token**, kèm **Thay thế** và **Xóa**. |
-| Branch template | Cách một ticket đặt tên nhánh. Mặc định `{type}/{key}-{summary}`: `{type}` là `bugfix` cho Bug, `feature` cho Story, Task hoặc New Feature, còn lại để trống; `{key}` là mã ticket; `{summary}` là tiêu đề, đã rút gọn. |
-| Ticket filter (JQL) | Các ticket mà tab Ticket liệt kê, ví dụ `project = ABC AND statusCategory != Done`. Văn bản nhập vào tìm bên trong bộ lọc; mã ticket hoặc URL ticket bỏ qua bộ lọc. Để trống: các ticket đang mở của bạn. |
-| Kiểm tra kết nối | Hiện "Đã kết nối với *tên của bạn*" hoặc lỗi. |
+| Mẫu tên nhánh || Cách một ticket đặt tên nhánh. Mặc định `{type}/{key}-{summary}`: `{type}` là `bugfix` cho Bug, `feature` cho Story, Task hoặc New Feature, còn lại để trống; `{key}` là mã ticket; `{summary}` là tiêu đề, đã rút gọn. |
+| Bộ lọc ticket (JQL) || Các ticket mà tab Ticket liệt kê, ví dụ `project = ABC AND statusCategory != Done`. Văn bản nhập vào tìm bên trong bộ lọc; mã ticket hoặc URL ticket bỏ qua bộ lọc. Để trống: các ticket đang mở của bạn. |
+| Kiểm tra kết nối | Hiện “Đã kết nối với tư cách *tên của bạn*” hoặc lỗi. |
 
 ## Side {#sides}
 
@@ -147,13 +147,13 @@ Xem [WSL và Docker](../features/wsl-docker).
 
 | Cài đặt | Chức năng |
 | --- | --- |
-| Theo dõi hiệu năng | Đo độ phản hồi trên máy tính của daemon. Chỉ có thời lượng và số đếm; không có gì rời khỏi máy tính. Bên dưới: kết quả, **Xóa** và **Xuất JSON**. |
+| Giám sát hiệu năng || Đo độ phản hồi trên máy tính của daemon. Chỉ có thời lượng và số đếm; không có gì rời khỏi máy tính. Bên dưới: kết quả, **Xóa** và **Xuất JSON**. |
 
-## Trợ giúp và giới thiệu {#help-about}
+## Trợ giúp & giới thiệu {#help-about}
 
 ### Hướng dẫn {#guide}
 
-**Chuyến tham quan có hướng dẫn:** chạy lại chuyến tham quan ngắn về dự án, tab, tệp, thay đổi, đồ thị git và terminal.
+**Tham quan có hướng dẫn:** chạy lại chuyến tham quan ngắn về dự án, tab, tệp, thay đổi, đồ thị git và terminal.
 
 ### Giới thiệu {#about}
 

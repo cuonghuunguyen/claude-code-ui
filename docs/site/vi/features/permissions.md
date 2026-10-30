@@ -13,7 +13,7 @@ Một thẻ hiện phía trên ô nhập prompt. Thẻ cho biết công cụ và
 | --- | --- |
 | **Cho phép một lần** | Chạy lần này. |
 | **Luôn cho phép** | Chạy và lưu một quy tắc để Claude không hỏi lại cho cùng việc đó. Thẻ hiển thị quy tắc trước. |
-| **Từ chối** | Chặn lại. Nhập vào **Không, và cho Claude biết cần làm khác đi như thế nào** để nói lý do cho Claude. |
+| **Từ chối** | Chặn lại. Nhập vào **Không, và cho Claude biết cần làm khác đi** để nói lý do cho Claude. |
 
 - Với lần sửa tệp, **Sửa nội dung** cho phép bạn đổi văn bản trước khi cho phép.
 - Yêu cầu đang chờ bạn cũng được liệt kê trên [trang Focus](focus) và có thể gửi [thông báo](notifications).
@@ -39,8 +39,8 @@ Chế độ quyết định điều xảy ra trước khi một công cụ chạ
 
 Khi Claude lập xong kế hoạch, thẻ hiển thị kế hoạch với ba nút:
 
-- **Có, tự duyệt từng lần sửa:** bắt đầu, và hỏi trước khi sửa.
-- **Có, và tự chấp nhận lần sửa:** bắt đầu, và sửa mà không hỏi.
+- **Có, duyệt chỉnh sửa thủ công:** bắt đầu, và hỏi trước khi sửa.
+- **Có, và tự chấp nhận chỉnh sửa:** bắt đầu, và sửa mà không hỏi.
 - **Không, tiếp tục lập kế hoạch:** ở lại chế độ kế hoạch. Nhập nội dung cần đổi.
 
 ## Cần biết {#good-to-know}

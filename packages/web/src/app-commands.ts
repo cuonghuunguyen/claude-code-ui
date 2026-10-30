@@ -260,7 +260,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
         cwd: x.cwd,
         open: c.openIds.includes(x.id),
         // OpenCode's palette: "Just now", "2m ago".
-        meta: ((ago) => (ago === "now" ? t("app.cmd.justNow") : t("app.cmd.ago", { time: ago })))(timeAgo(x.lastActivity)),
+        meta: ((ago) => (ago === t("common.time.now") ? t("app.cmd.justNow") : t("app.cmd.ago", { time: ago })))(timeAgo(x.lastActivity)),
         searchOnly: i >= RECENT_SESSIONS,
         run: () => go(x.id),
       })),

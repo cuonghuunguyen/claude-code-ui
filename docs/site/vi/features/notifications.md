@@ -12,7 +12,7 @@ claude-code-ui báo cho bạn khi một phiên cần nhập liệu hoặc đã x
 
 1. Mở ứng dụng qua HTTPS, ví dụ với [`--tailscale`](remote-access), hoặc trên `localhost`.
 2. Trên iPhone hoặc iPad (iOS 16.4+): trước tiên thêm ứng dụng vào Màn hình chính và mở từ đó.
-3. Mở **Cài đặt › Thông báo** và bật **Thông báo push**.
+3. Mở **Cài đặt › Thông báo** và bật **Thông báo đẩy**.
 4. Cho phép thông báo khi trình duyệt hỏi.
 
 ## Thẻ trong ứng dụng {#in-app-cards}

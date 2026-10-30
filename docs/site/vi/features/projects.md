@@ -12,7 +12,7 @@
 
 ## Cách gỡ dự án {#how-to-remove-a-project}
 
-- Mở menu của dự án trong thanh bên và chọn **Gỡ khỏi danh sách (tệp được giữ)**.
+- Mở menu của dự án trong thanh bên và chọn **Xóa khỏi danh sách (giữ tệp)**.
 - Thao tác này chỉ ẩn dự án. Tệp và lịch sử phiên vẫn còn.
 
 ## Worktree {#worktrees}
@@ -26,7 +26,7 @@
    - **Ticket**: chọn một ticket Jira (ticket đang mở của bạn hiện trước; gõ một key, từ trong phần tóm tắt, hoặc dán liên kết ticket hoặc liên kết pull request có nhánh mang tên ticket). Tên nhánh lấy từ ticket, ví dụ `bugfix/PRJ-123-login-fails`; bạn có thể sửa. Nếu nhánh có key đó đã tồn tại, hãy **Checkout** nó thay vì tạo mới. Thiết lập Jira trong [Cài đặt › Jira](/vi/reference/settings#jira).
    - **Nhánh**: checkout một nhánh local hoặc remote có sẵn. Nhánh chỉ có ở remote sẽ được tạo nhánh local cùng tên theo dõi nó. Không chọn được nhánh đang được checkout trong worktree khác. Dán liên kết pull request (GitHub, GitLab, Bitbucket Server) để liệt kê nhánh mà nó được mở từ đó, hoặc liên kết hay key ticket để liệt kê các nhánh đặt tên theo ticket.
    - **Tên**: gõ tên bất kỳ. `Fix Login Ü` thành nhánh `fix-login-u`; `feat/x` giữ nguyên `feat/x`.
-3. Với nhánh mới, **Cơ sở** chọn điểm bắt đầu (mặc định: nhánh mặc định của remote, ví dụ `origin/main`).
+3. Với nhánh mới, **Nhánh gốc** chọn điểm bắt đầu (mặc định: nhánh mặc định của remote, ví dụ `origin/main`).
 4. Hộp thoại hiện nhánh và thư mục của nó (`.claude/worktrees/<branch with / replaced by ->`). Bấm **Tạo**. Một tab phiên mới mở trong worktree.
 
 Worktree mới cũng nhận các tệp bị gitignore mà tệp `.worktreeinclude` ở gốc bản checkout chính liệt kê (cú pháp `.gitignore`), ví dụ `.env`. Một tệp chỉ được sao chép khi có mẫu khớp và git bỏ qua nó. Việc sao chép dừng ở 2 GiB hoặc 50.000 tệp mỗi worktree, kèm cảnh báo trong nhật ký daemon. Liên kết không bao giờ được sao chép.
@@ -46,7 +46,7 @@ Menu của dòng dự án và của dòng worktree có **Sao chép đường d�
 | Nút | Tác dụng |
 | --- | --- |
 | Mở dự án | Thêm một dự án. |
-| Chọn phiên đang hoạt động | Cuộn thanh bên đến phiên bạn đang xem. |
+| Chọn phiên đang dùng || Cuộn thanh bên đến phiên bạn đang xem. |
 | Mở rộng tất cả / Thu gọn tất cả | Mở hoặc đóng mọi dự án (desktop). |
 | Tùy chọn thanh bên (`⋯`) | Bố cục, chỉ hiện phiên đang hoạt động, và nhiều hơn nữa. |
 

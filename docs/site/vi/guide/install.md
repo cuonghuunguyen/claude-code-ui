@@ -24,7 +24,7 @@ claude-code-ui chạy một máy chủ cục bộ nhỏ (**daemon**) trên máy 
 4. Nhấn **Mở dự án** và chọn một thư mục.
 5. Nhập prompt và nhấn <kbd>Enter</kbd>.
 
-Lần đầu, một **chuyến tham quan có hướng dẫn** ngắn sẽ giới thiệu giao diện. Bạn có thể bỏ qua, hoặc chạy lại sau trong **Cài đặt › Trợ giúp và giới thiệu**.
+Lần đầu, một **Tham quan có hướng dẫn** ngắn sẽ giới thiệu giao diện. Bạn có thể bỏ qua, hoặc chạy lại sau trong **Cài đặt › Trợ giúp & giới thiệu**.
 
 ## Cần biết {#good-to-know}
 

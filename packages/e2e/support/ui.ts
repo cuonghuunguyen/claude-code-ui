@@ -17,7 +17,8 @@ export const TOOL_STATUS: Record<string, string> = { running: "running", finishe
 
 export async function waitConnected(page: Page): Promise<void> {
   // On a phone the connection badge lives in the drawer: it is attached but not always visible.
-  await expect(page.getByTestId("connection-status").first()).toHaveText(/^\s*connected\s*$/, { timeout: RECONNECT_MS });
+  // By state, not by its text: the badge text follows the UI language (GH-510).
+  await expect(page.getByTestId("connection-status").first()).toHaveAttribute("data-status", "connected", { timeout: RECONNECT_MS });
   await expect(page.getByTestId("pairing-needed")).toHaveCount(0);
 }
 

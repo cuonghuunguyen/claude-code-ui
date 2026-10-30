@@ -37,7 +37,7 @@ Nhấp chuột phải vào nhãn nhóm (tên dự án đứng trước các tab 
 
 ![Menu chuột phải của một nhãn nhóm](/screenshots/group-menu.png)
 
-Khi bật **Tab thu gọn** ([Cài đặt › Bố cục › Tab](../reference/settings#tabs)), di chuột hoặc bấm vào nhãn sẽ mở một menu chỉ liệt kê các tab của nhóm. Các thao tác nhóm ở trên vẫn nằm trong menu chuột phải của nhãn.
+Khi bật **Tab gọn** ([Cài đặt › Bố cục › Tab](../reference/settings#tabs)), di chuột hoặc bấm vào nhãn sẽ mở một menu chỉ liệt kê các tab của nhóm. Các thao tác nhóm ở trên vẫn nằm trong menu chuột phải của nhãn.
 
 ## Tệp {#files}
 
@@ -46,4 +46,4 @@ Cây tệp có menu riêng, xem [Tệp](files#file-tree-menu).
 ## Cần biết {#good-to-know}
 
 - Lưu trữ các phiên nhàn rỗi sẽ hỏi trước và nêu số lượng. Một coordinator chỉ được lưu trữ khi nó và mọi worker của nó đều nhàn rỗi.
-- **Đóng các worker đã xong** không hỏi. **Gỡ các worker đã đóng…** và **Gỡ worker…** thì có hỏi.
+- **Đóng worker đã xong** không hỏi. **Gỡ worker đã đóng…** và **Gỡ worker…** thì có hỏi.

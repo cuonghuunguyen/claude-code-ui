@@ -219,10 +219,10 @@ export function byDay(sessions: SessionListItem[], now = Date.now()) {
 
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
-  if (m < 1440) return `${Math.floor(m / 60)}h`;
-  return `${Math.floor(m / 1440)}d`;
+  if (m < 1) return t("common.time.now");
+  if (m < 60) return t("common.time.minutes", { n: m });
+  if (m < 1440) return t("common.time.hours", { n: Math.floor(m / 60) });
+  return t("common.time.days", { n: Math.floor(m / 1440) });
 }
 
 const KEY = "claude-ui.collapsed";

@@ -8,8 +8,8 @@ Hộp ở cuối phiên. Bạn gõ prompt tại đây, và chọn model, chế �
 | --- | --- |
 | <kbd>Enter</kbd> | Gửi |
 | <kbd>Shift</kbd>+<kbd>Enter</kbd> | Xuống dòng |
-| <kbd>Enter</kbd> khi Claude đang làm việc | **Điều hướng (Steer)**: tin nhắn của bạn nhập vào lượt đang chạy ngay lập tức |
-| <kbd>Alt</kbd>+<kbd>Enter</kbd> khi Claude đang làm việc (<kbd>Option</kbd>+<kbd>Enter</kbd> trên Mac) | **Xếp hàng (Queue)**: tin nhắn của bạn chờ và bắt đầu lượt riêng khi Claude rảnh |
+| <kbd>Enter</kbd> khi Claude đang làm việc | **Điều hướng**: tin nhắn của bạn nhập vào lượt đang chạy ngay lập tức |
+| <kbd>Alt</kbd>+<kbd>Enter</kbd> khi Claude đang làm việc (<kbd>Option</kbd>+<kbd>Enter</kbd> trên Mac) | **Xếp hàng**: tin nhắn của bạn chờ và bắt đầu lượt riêng khi Claude rảnh |
 | <kbd>Esc</kbd> | Dừng lượt đang chạy (giống nút **Dừng**) |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | [Chế độ quyền](/vi/features/permissions) tiếp theo |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Nhảy đến hộp prompt từ mọi nơi |

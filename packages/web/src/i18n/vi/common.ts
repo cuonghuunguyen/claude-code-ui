@@ -13,4 +13,8 @@ export default {
   "common.fileName.trailingDot": "Tên không được kết thúc bằng dấu chấm hoặc dấu cách.",
   "common.fileName.reserved": "“{name}” là tên dành riêng trên Windows.",
   "common.jira.httpsRule": "URL Jira phải là địa chỉ https (http chỉ dùng cho localhost hoặc 127.0.0.1)",
+  "common.time.now": "vừa xong",
+  "common.time.minutes": "{n} phút",
+  "common.time.hours": "{n} giờ",
+  "common.time.days": "{n} ngày",
 } satisfies Partial<Messages>;

@@ -4290,7 +4290,7 @@ const STATUS_STYLE: Record<ConnectionStatus, string> = {
 function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   const tr = useT();
   return (
-    <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="connection-status" role="status">
+    <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="connection-status" data-status={status} role="status">
       <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
       {tr(`app.main.conn.${status}`)}
     </div>
