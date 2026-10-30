@@ -9,7 +9,7 @@ import { DIFF_THEMES, diffThemes } from "./code-palette.ts";
 import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
 import { createContext, use, useMemo, useState, type ReactNode } from "react";
-import { ArrowDownToLineIcon, Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { SendToBackIcon, Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolChevron, ToolContent, ToolHeader, ToolInput, ToolOutput, ToolStatusMark, toolRowClass } from "@/components/ai-elements/tool";
@@ -185,7 +185,7 @@ export function BackgroundButton({ pending, onClick }: { pending: boolean; onCli
       onClick={onClick}
       className={cn(OPEN_CLASS.replace("opacity-0 ", ""), "disabled:cursor-default disabled:opacity-50")}
     >
-      <ArrowDownToLineIcon aria-hidden className="size-4" />
+      <SendToBackIcon aria-hidden className="size-4" />
     </button>
   );
 }
