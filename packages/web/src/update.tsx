@@ -4,6 +4,7 @@ import { useState } from "react";
 import { DownloadIcon } from "lucide-react";
 import type { ServerMessage, UpdateState } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
+import { t, useT } from "./i18n.ts";
 import { TOAST_CARD } from "./toast.tsx";
 
 export type UpdateInfo = { version: string; current: string; state?: UpdateState };
@@ -25,24 +26,22 @@ function dismissed() {
   }
 }
 
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
 /** What the notice says in each phase. */
 export function updateText(u: UpdateInfo, error?: string): { title: string; description?: string } {
-  if (error) return { title: "Update failed", description: error };
+  if (error) return { title: t("app.update.failed"), description: error };
   switch (u.state?.phase) {
     case "installing":
-      return { title: `Installing claude-ui ${u.version}…`, description: "Sessions keep running meanwhile." };
+      return { title: t("app.update.installing", { version: u.version }), description: t("app.update.keepRunning") };
     case "waiting": {
       const { waitingFor, terminals } = u.state;
-      const closes = terminals ? `${waitingFor ? " and closes" : "Restarting closes"} ${plural(terminals, "open terminal")}` : "";
-      if (!waitingFor) return { title: "Update installed", description: `${closes}.` };
-      return { title: "Update installed", description: `Restarts when ${waitingFor === 1 ? "1 session is" : `${waitingFor} sessions are`} idle${closes}. Restart now ends ${plural(waitingFor, "running session")}.` };
+      const closes = terminals ? t(waitingFor ? "app.update.andClosesTerminals" : "app.update.restartClosesTerminals", { count: terminals }) : "";
+      if (!waitingFor) return { title: t("app.update.installed"), description: `${closes}.` };
+      return { title: t("app.update.installed"), description: `${t("app.update.restartsWhenIdle", { count: waitingFor })}${closes}. ${t("app.update.restartNowEnds", { count: waitingFor })}` };
     }
     case "restarting":
-      return { title: `Restarting claude-ui ${u.version}…`, description: "This page reconnects by itself." };
+      return { title: t("app.update.restarting", { version: u.version }), description: t("app.update.reconnects") };
     default:
-      return { title: "Update available", description: `claude-ui ${u.version} is available (you have ${u.current}).` };
+      return { title: t("app.update.available"), description: t("app.update.availableText", { version: u.version, current: u.current }) };
   }
 }
 
@@ -50,6 +49,7 @@ const ACTION =
   "cursor-pointer rounded-sm text-[13px] leading-5 font-medium text-muted-foreground outline-none first:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:min-h-11";
 
 export function UpdateToast({ update, request }: { update: UpdateInfo; request: (m: Request) => Promise<unknown> }) {
+  const t = useT();
   const [hiddenFor, setHiddenFor] = useState<string | null>(dismissed);
   const [error, setError] = useState<string>();
   const phase = update.state?.phase;
@@ -71,7 +71,7 @@ export function UpdateToast({ update, request }: { update: UpdateInfo; request: 
   };
   const { title, description } = updateText(update, error);
   const actions: [string, () => void][] =
-    error || !phase ? [[error ? "Try again" : "Update and restart", install], ["Not yet", notYet]] : phase === "waiting" ? [["Restart now", () => void request({ type: "update.restart", now: true }).catch(fail)]] : [];
+    error || !phase ? [[error ? t("app.update.tryAgain") : t("app.update.updateRestart"), install], [t("app.update.notYet"), notYet]] : phase === "waiting" ? [[t("app.update.restartNow"), () => void request({ type: "update.restart", now: true }).catch(fail)]] : [];
   return (
     <div role="status" data-testid="update-toast" className={`${TOAST_CARD} flex items-start gap-2.5`}>
       <DownloadIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

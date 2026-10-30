@@ -2,6 +2,7 @@
 import { isBackgroundShell } from "@claude-ui/protocol";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { GitStatus } from "@claude-ui/protocol";
+import { useT } from "./i18n.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { bashShell, type Shell } from "./shells.ts";
 import { wholeParts, type SessionView } from "./store.ts";
@@ -85,6 +86,7 @@ function Field({ field, children, label, onOpen }: { field: string; children: Re
 
 /** `onShells`: opens the shells list (GH-442); without it the shells field is plain text. */
 export function StatusBar(props: { view: SessionView; git?: () => Promise<GitStatus | null>; onShells?: () => void }) {
+  const t = useT();
   const { view } = props;
   const sum = totals(view);
   const shells = backgroundShells(view);
@@ -102,12 +104,12 @@ export function StatusBar(props: { view: SessionView; git?: () => Promise<GitSta
           (<span className="text-success">+{git.added}</span>,<span className="text-destructive">-{git.removed}</span>)
         </Field>
       )}
-      {tokensShown && <Field field="in">{`In: ${tokens(sum.input)}`}</Field>}
-      {tokensShown && <Field field="out">{`Out: ${tokens(sum.output)}`}</Field>}
-      {tokensShown && <Field field="cached">{`Cached: ${tokens(sum.cached)}`}</Field>}
+      {tokensShown && <Field field="in">{t("app.status.in", { tokens: tokens(sum.input) })}</Field>}
+      {tokensShown && <Field field="out">{t("app.status.out", { tokens: tokens(sum.output) })}</Field>}
+      {tokensShown && <Field field="cached">{t("app.status.cached", { tokens: tokens(sum.cached) })}</Field>}
       {shells.length > 0 && (
-        <Field field="shells" label="Background shells, show list" onOpen={props.onShells}>
-          {`${shells.length} shell${shells.length === 1 ? "" : "s"}`}
+        <Field field="shells" label={t("app.status.shellsLabel")} onOpen={props.onShells}>
+          {t("app.status.shells", { count: shells.length })}
         </Field>
       )}
     </div>

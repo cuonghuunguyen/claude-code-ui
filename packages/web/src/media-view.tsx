@@ -3,12 +3,14 @@ import { useState } from "react";
 import type { FsMediaResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import { fileSize, mediaKind } from "./files.ts";
+import { useT } from "./i18n.ts";
 import { baseName } from "./paths.ts";
 
 const touch = "max-md:h-11 pointer-coarse:h-11";
 
 /** Keyed by the media URL by the parent: a new URL (file changed) resets the failure and the size. */
 export function MediaView({ path, media, onShowSource }: { path: string; media: FsMediaResult; onShowSource?: () => void }) {
+  const t = useT();
   const kind = mediaKind(path)!;
   const [failed, setFailed] = useState(false);
   const [fit, setFit] = useState(true);
@@ -32,14 +34,14 @@ export function MediaView({ path, media, onShowSource }: { path: string; media: 
         )}
         {onShowSource && (
           <Button size="xs" variant="outline" onClick={onShowSource} className={touch}>
-            Show source
+            {t("files.media.showSource")}
           </Button>
         )}
       </div>
       <div className="grid min-h-0 flex-1 place-items-center overflow-auto bg-muted/40 p-4">
         {failed ? (
           <p role="status" className="text-muted-foreground text-sm" data-testid="file-notice">
-            Unable to load {kind === "svg" ? "image" : kind}.
+            {t("files.media.unable", { kind: t(kind === "video" ? "files.media.video" : kind === "audio" ? "files.media.audio" : "files.media.image") })}
           </p>
         ) : isImage ? (
           <img

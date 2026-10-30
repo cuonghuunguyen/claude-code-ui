@@ -21,7 +21,8 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
-import { chipOf, failureDialog, filterAvailable, formatInstalls, INSTALL_SCOPES, marketplaceLink, marketplaceOf, marketplaceText, TRUST_WARNING, updateNotice, type FailureAction } from "./plugins.ts";
+import { chipOf, failureDialog, filterAvailable, formatInstalls, INSTALL_SCOPES, marketplaceLink, marketplaceOf, marketplaceText, trustWarning, updateNotice, type FailureAction } from "./plugins.ts";
+import { useT } from "./i18n.ts";
 
 type Failure = { plugin: InstalledPlugin; kind: PluginUpdateFailure; message: string };
 
@@ -49,6 +50,7 @@ export function PluginsDialog({
   onRestarted: (sessionIds: string[]) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [tab, setTab] = useState<"plugins" | "marketplaces">("plugins");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string>();
@@ -145,7 +147,7 @@ export function PluginsDialog({
   const busy = useRef(new Set<string>());
   const [pending, setPending] = useState<{ id: string; what: "enabling" | "disabling" | "uninstalling" }[]>([]);
   const pendingOf = (id: string) => pending.find((x) => x.id === id)?.what;
-  const PENDING_TEXT = { enabling: "Enabling…", disabling: "Disabling…", uninstalling: "Uninstalling…" };
+  const PENDING_TEXT = { enabling: t("session.pluginsDialog.enabling"), disabling: t("session.pluginsDialog.disabling"), uninstalling: t("session.pluginsDialog.uninstalling") };
   const pend = async (id: string, what: (typeof pending)[number]["what"], msg: Request) => {
     // A ref: two clicks in one task both see the state from before the first.
     if (busy.current.has(id)) return;
@@ -224,7 +226,7 @@ export function PluginsDialog({
       setSource("");
       await refresh();
     } catch (e) {
-      setError(`Failed to add marketplace: ${(e as Error).message}`);
+      setError(t("session.pluginsDialog.addFailed", { error: (e as Error).message }));
     } finally {
       setAdding(false);
     }
@@ -253,7 +255,7 @@ export function PluginsDialog({
     <>
       {working && (
         <p role="status" className="text-muted-foreground text-sm" data-testid="plugins-installing">
-          {installing ? `Installing ${installing}…` : `Updating ${updating}…`}
+          {installing ? t("session.pluginsDialog.installing", { name: installing }) : t("session.pluginsDialog.updating", { name: updating! })}
         </p>
       )}
       {error && <Banner kind="error">{error}</Banner>}
@@ -262,10 +264,10 @@ export function PluginsDialog({
   );
 
   const pluginsTab = () => {
-    if (loading) return <Status>Loading plugins…</Status>;
-    if (adding) return <Status>Adding marketplace…</Status>;
-    if (loadError) return <Banner kind="error">Failed to load plugins: {loadError}</Banner>;
-    if (!installed.length && !shown.length && !search) return <Status>No plugins yet. Add a marketplace to find some.</Status>;
+    if (loading) return <Status>{t("session.pluginsDialog.loading")}</Status>;
+    if (adding) return <Status>{t("session.pluginsDialog.addingMarketplace")}</Status>;
+    if (loadError) return <Banner kind="error">{t("session.pluginsDialog.loadFailed", { error: loadError })}</Banner>;
+    if (!installed.length && !shown.length && !search) return <Status>{t("session.pluginsDialog.none")}</Status>;
     return (
       <>
         {lines}
@@ -275,8 +277,8 @@ export function PluginsDialog({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search plugins…"
-            aria-label="Search plugins…"
+            placeholder={t("session.pluginsDialog.search")}
+            aria-label={t("session.pluginsDialog.search")}
             autoComplete="off"
             spellCheck={false}
             className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
@@ -284,7 +286,7 @@ export function PluginsDialog({
           />
         </label>
         {installed.length > 0 && (
-          <Section title="Installed">
+          <Section title={t("session.pluginsDialog.installed")}>
             {installed.map((p) => (
               <li key={`${p.id}:${p.scope}`} className="flex min-h-11 items-start gap-3 rounded-md px-3 py-2 hover:bg-secondary/50" data-testid="plugin-installed">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -313,13 +315,13 @@ export function PluginsDialog({
                       {PENDING_TEXT[pendingOf(p.id)!]}
                     </span>
                   )}
-                  <Switch on={p.enabled} label={pendingOf(p.id) && pendingOf(p.id) !== "uninstalling" ? PENDING_TEXT[pendingOf(p.id)!] : `Enable ${p.id}`} held={working || !!pendingOf(p.id)} onToggle={(on) => void setEnabled(p.id, on)} />
+                  <Switch on={p.enabled} label={pendingOf(p.id) && pendingOf(p.id) !== "uninstalling" ? PENDING_TEXT[pendingOf(p.id)!] : t("session.pluginsDialog.enable", { name: p.id })} held={working || !!pendingOf(p.id)} onToggle={(on) => void setEnabled(p.id, on)} />
                   {p.updatable && (
-                    <IconButton label={updating === p.id ? "Updating…" : "Update plugin"} title={updating === p.id ? "Updating…" : "Update to the newest version"} disabled={working} onClick={() => void update(p)}>
+                    <IconButton label={updating === p.id ? t("session.pluginsDialog.updatingShort") : t("session.pluginsDialog.update")} title={updating === p.id ? t("session.pluginsDialog.updatingShort") : t("session.pluginsDialog.updateTitle")} disabled={working} onClick={() => void update(p)}>
                       <RefreshCwIcon className={cn(updating === p.id && "motion-safe:animate-spin")} />
                     </IconButton>
                   )}
-                  <IconButton label={pendingOf(p.id) === "uninstalling" ? "Uninstalling…" : `Uninstall ${p.id}`} title={pendingOf(p.id) === "uninstalling" ? "Uninstalling…" : "Uninstall"} disabled={working || !!pendingOf(p.id)} onClick={() => void uninstall(p)}>
+                  <IconButton label={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstallLabel", { name: p.id })} title={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstall")} disabled={working || !!pendingOf(p.id)} onClick={() => void uninstall(p)}>
                     <Trash2Icon />
                   </IconButton>
                 </div>
@@ -327,24 +329,24 @@ export function PluginsDialog({
             ))}
           </Section>
         )}
-        {refreshing && !available.length && <Status>Loading available plugins…</Status>}
+        {refreshing && !available.length && <Status>{t("session.pluginsDialog.loadingAvailable")}</Status>}
         {shown.length > 0 && (
-          <Section title="Available">
+          <Section title={t("session.pluginsDialog.available")}>
             {shown.map((p) => (
               <li key={p.pluginId} className="flex min-h-11 flex-wrap items-start gap-3 rounded-md px-3 py-2 hover:bg-secondary/50" data-testid="plugin-available">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
                     <span className="min-w-0 font-medium text-[13px] [overflow-wrap:anywhere]">{p.name}</span>
-                    {p.installCount > 0 && <span className="text-muted-foreground text-xs">{formatInstalls(p.installCount)} installs</span>}
+                    {p.installCount > 0 && <span className="text-muted-foreground text-xs">{t("session.pluginsDialog.installs", { n: formatInstalls(p.installCount) })}</span>}
                   </div>
                   {p.description && <p className="text-muted-foreground text-xs leading-4">{p.description}</p>}
                   <p className="flex items-center gap-1 text-muted-foreground text-xs">
-                    from {p.marketplaceName}
+                    {t("session.pluginsDialog.from", { name: p.marketplaceName })}
                     {p.official && <Official />}
                   </p>
                   {p.sourceUrl && (
                     <p className="min-w-0 break-all text-muted-foreground text-xs">
-                      Source:{" "}
+                      {t("session.pluginsDialog.source")}{" "}
                       <a href={p.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline-offset-4 hover:text-foreground hover:underline">
                         {p.sourceUrl}
                       </a>
@@ -352,7 +354,7 @@ export function PluginsDialog({
                   )}
                   {picking === p.pluginId && (
                     <div className="mt-1 flex flex-col gap-1.5" data-testid="plugin-scopes">
-                      <p className="rounded-md bg-warning/10 px-3 py-2 text-xs leading-4">{TRUST_WARNING}</p>
+                      <p className="rounded-md bg-warning/10 px-3 py-2 text-xs leading-4">{trustWarning()}</p>
                       {INSTALL_SCOPES.map((s) => (
                         <button
                           key={s.scope}
@@ -365,28 +367,28 @@ export function PluginsDialog({
                         </button>
                       ))}
                       <button type="button" onClick={() => setPicking(undefined)} className="self-start text-muted-foreground text-sm underline-offset-4 hover:text-foreground hover:underline max-md:min-h-11">
-                        Cancel
+                        {t("session.pluginsDialog.cancel")}
                       </button>
                     </div>
                   )}
                 </div>
                 {picking !== p.pluginId && (
                   <Button size="sm" className="shrink-0 max-md:h-11" disabled={working} onClick={() => setPicking(p.pluginId)}>
-                    Install
+                    {t("session.pluginsDialog.install")}
                   </Button>
                 )}
               </li>
             ))}
           </Section>
         )}
-        {search && !shown.length && <Status>No plugins match.</Status>}
+        {search && !shown.length && <Status>{t("session.pluginsDialog.noMatch")}</Status>}
       </>
     );
   };
 
   const marketplacesTab = () => {
-    if (loading) return <Status>Loading marketplaces…</Status>;
-    if (loadError) return <Banner kind="error">Failed to load marketplaces: {loadError}</Banner>;
+    if (loading) return <Status>{t("session.pluginsDialog.loadingMarketplaces")}</Status>;
+    if (loadError) return <Banner kind="error">{t("session.pluginsDialog.marketplacesFailed", { error: loadError })}</Banner>;
     return (
       <>
         {error && <Banner kind="error">{error}</Banner>}
@@ -396,19 +398,19 @@ export function PluginsDialog({
             value={source}
             onChange={(e) => setSource(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && void addMarketplace()}
-            placeholder="GitHub repo, URL, or path…"
-            aria-label="GitHub repo, URL, or path…"
+            placeholder={t("session.pluginsDialog.sourcePlaceholder")}
+            aria-label={t("session.pluginsDialog.sourcePlaceholder")}
             autoComplete="off"
             spellCheck={false}
             className="h-9 min-w-0 flex-1 rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
             data-testid="marketplace-source"
           />
           <Button className="h-9 max-md:h-11" disabled={!source.trim() || adding} onClick={() => void addMarketplace()}>
-            {adding ? "Adding…" : "Add"}
+            {adding ? t("session.pluginsDialog.adding") : t("session.pluginsDialog.add")}
           </Button>
         </div>
         {!marketplaces.length ? (
-          <Status>No marketplaces yet. Add one above.</Status>
+          <Status>{t("session.pluginsDialog.noMarketplaces")}</Status>
         ) : (
           <ul className="flex flex-col gap-px">
             {marketplaces.map((m) => {
@@ -431,22 +433,22 @@ export function PluginsDialog({
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <IconButton label="Refresh marketplace" onClick={() => void refreshMarketplace(m.name)}>
+                    <IconButton label={t("session.pluginsDialog.refreshMarketplace")} onClick={() => void refreshMarketplace(m.name)}>
                       <RefreshCwIcon />
                     </IconButton>
-                    <IconButton label={removing === m.name ? "Removing…" : "Remove marketplace"} disabled={!!removing} onClick={() => setConfirmRemove(m.name)}>
+                    <IconButton label={removing === m.name ? t("session.pluginsDialog.removing") : t("session.pluginsDialog.removeMarketplace")} disabled={!!removing} onClick={() => setConfirmRemove(m.name)}>
                       <Trash2Icon />
                     </IconButton>
                   </div>
                   {/* Owner decision (GH-42 question 3): removing a marketplace uninstalls its plugins, so it asks first. */}
                   {confirmRemove === m.name && (
                     <div className="flex w-full flex-wrap items-center gap-2" data-testid="marketplace-remove-confirm">
-                      <span className="text-sm">Remove {m.name}? Its plugins are uninstalled.</span>
+                      <span className="text-sm">{t("session.pluginsDialog.removeConfirm", { name: m.name })}</span>
                       <Button variant="destructive" className="max-md:h-11" autoFocus onClick={() => void removeMarketplace(m.name)}>
-                        Remove
+                        {t("session.pluginsDialog.remove")}
                       </Button>
                       <Button variant="secondary" className="max-md:h-11" onClick={() => setConfirmRemove(undefined)}>
-                        Cancel
+                        {t("session.pluginsDialog.cancel")}
                       </Button>
                     </div>
                   )}
@@ -461,20 +463,20 @@ export function PluginsDialog({
 
   const failureView = failure && failureDialog(failure.kind, failure.plugin.id);
   return (
-    <ConfigDialog title="Manage Plugins" open={open} onClose={onClose} busy={!!removing} testId="plugins-dialog">
+    <ConfigDialog title={t("session.pluginsDialog.title")} open={open} onClose={onClose} busy={!!removing} testId="plugins-dialog">
       {reloadFailed && sessionId && (
         <div role="status" className="flex flex-wrap items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm" data-testid="plugins-restart-banner">
-          <span className="flex-1">Plugin changes apply after Claude restarts</span>
+          <span className="flex-1">{t("session.pluginsDialog.restartBanner")}</span>
           <Button size="sm" className="max-md:h-11" onClick={() => void restart([sessionId])}>
-            Restart
+            {t("session.pluginsDialog.restart")}
           </Button>
         </div>
       )}
-      <div role="tablist" aria-label="Manage Plugins" className="flex gap-1 border-b pb-2">
+      <div role="tablist" aria-label={t("session.pluginsDialog.title")} className="flex gap-1 border-b pb-2">
         {(
           [
-            ["plugins", "Plugins", installed.length],
-            ["marketplaces", "Marketplaces", marketplaces.length],
+            ["plugins", t("session.pluginsDialog.tabPlugins"), installed.length],
+            ["marketplaces", t("session.pluginsDialog.tabMarketplaces"), marketplaces.length],
           ] as const
         ).map(([id, label, count]) => (
           <button
@@ -507,12 +509,12 @@ export function PluginsDialog({
         </SmallDialog>
       )}
       {failedReload && (
-        <SmallDialog title="Reload plugins" message="Reloading plugins failed in this session." close="Cancel" onClose={() => setFailedReload(undefined)} testId="plugins-reload-failed">
+        <SmallDialog title={t("session.pluginsDialog.reloadTitle")} message={t("session.pluginsDialog.reloadFailed")} close={t("session.pluginsDialog.cancel")} onClose={() => setFailedReload(undefined)} testId="plugins-reload-failed">
           <Button className="max-md:h-11" onClick={() => void retryReload()}>
-            Try again
+            {t("session.pluginsDialog.tryAgain")}
           </Button>
           <Button variant="secondary" className="max-md:h-11" onClick={() => void restart(failedReload)}>
-            Restart
+            {t("session.pluginsDialog.restart")}
           </Button>
         </SmallDialog>
       )}
@@ -533,11 +535,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-const Official = () => (
-  <span title="Official Claude Code marketplace" aria-label="Official Claude Code marketplace" role="img" className="inline-flex text-info">
-    <BadgeCheckIcon className="size-3.5" />
-  </span>
-);
+const Official = () => {
+  const t = useT();
+  return (
+    <span title={t("session.pluginsDialog.official")} aria-label={t("session.pluginsDialog.official")} role="img" className="inline-flex text-info">
+      <BadgeCheckIcon className="size-3.5" />
+    </span>
+  );
+};
 
 function IconButton({ label, title, disabled, onClick, children }: { label: string; title?: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
   return (
@@ -549,6 +554,7 @@ function IconButton({ label, title, disabled, onClick, children }: { label: stri
 
 /** The extension's plugin switch: `role="switch"`, Enter/Space toggle; OpenCode's 28×16 switch look, 44 px hit area on touch. */
 export function Switch({ on, label, held, onToggle, title, describedBy, testId = "plugin-switch" }: { on: boolean; label: string; held: boolean; onToggle: (on: boolean) => void; title?: string; describedBy?: string; testId?: string }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -557,7 +563,7 @@ export function Switch({ on, label, held, onToggle, title, describedBy, testId =
       aria-label={label}
       aria-describedby={describedBy}
       aria-disabled={held}
-      title={title ?? (on ? "Turn off (stays installed, does not load)" : "Enable plugin")}
+      title={title ?? (on ? t("session.pluginsDialog.switchOff") : t("session.pluginsDialog.switchOn"))}
       onClick={() => !held && onToggle(!on)}
       className="group grid size-7 place-items-center rounded-md outline-none max-md:size-11"
       data-testid={testId}

@@ -82,6 +82,8 @@ import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { copyFailText } from "./copy-text.ts";
+import { prefixTitle } from "./shortcut-titles.ts";
+import { t as tt, useT } from "./i18n.ts";
 import { noteRefs } from "./git-refs.ts";
 import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from "./workers.ts";
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
@@ -194,8 +196,8 @@ function removeDialogText(w: RemovingWt | undefined, worktrees: Record<string, W
   if (!w) return "";
   const text = (st: WorktreeStatusResult) => removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[w.project], w.path, st) });
   if (w.error !== undefined) return w.error;
-  if (w.checking) return w.cached ? `${text(w.cached)}${w.cached.checkedAt ? ` · checked ${timeAgo(w.cached.checkedAt)}` : ""} · Checking…` : "Checking…"; // an older daemon sends no checkedAt
-  if (w.status?.safety === "blocked") return `Worktree ${w.status.branch} cannot be removed: ${BLOCK_TEXT[w.status.blocked!]}`;
+  if (w.checking) return w.cached ? (w.cached.checkedAt ? tt("app.main.checkedAgo", { text: text(w.cached), time: timeAgo(w.cached.checkedAt) }) : tt("app.main.checkingCached", { text: text(w.cached) })) : tt("app.main.checkingEllipsis"); // an older daemon sends no checkedAt
+  if (w.status?.safety === "blocked") return tt("app.main.worktreeBlocked", { branch: w.status.branch, reason: BLOCK_TEXT[w.status.blocked!] });
   return w.status ? text(w.status) : "";
 }
 const loadFlag = (key: string) => {
@@ -248,6 +250,7 @@ function usePageFocused() {
 }
 
 export function App() {
+  const tr = useT();
   const [list, setList] = useState<SessionListItem[]>([]);
   // Account-wide plan limits; null (API key, Bedrock, Vertex) or not yet known hides the meter.
   const [plan, setPlan] = useState<PlanUsage | null>(null);
@@ -848,7 +851,7 @@ export function App() {
     delete clearQueue.current[from];
     for (const q of queued) {
       setOptimistic((o) => dropPending(o, from, q.key));
-      sendPrompt(to, q.text, q.images).catch((e: Error) => setError(`Prompt not sent: ${e.message}`));
+      sendPrompt(to, q.text, q.images).catch((e: Error) => setError(tr("app.main.promptNotSent", { message: e.message })));
     }
   }
 
@@ -900,7 +903,7 @@ export function App() {
       if (next) return open(next);
       setActiveId(undefined);
       history.replaceState(null, "", location.pathname + location.search);
-      if (!deleted) setError("That session no longer exists in the daemon.");
+      if (!deleted) setError(tr("app.main.sessionGone"));
     }
   }
 
@@ -1076,9 +1079,9 @@ export function App() {
     if (close(id) === false) return;
     if (id === NEW_TAB) return;
     setToast({
-      message: `Closed ${title}`,
+      message: tr("app.main.closed", { title }),
       action: {
-        label: "Undo",
+        label: tr("app.main.undo"),
         onClick: () => {
           if (!existsTab(id)) return;
           const r = restoreClosed(closedRef.current, tabsRef.current, id);
@@ -1140,7 +1143,7 @@ export function App() {
   function askDirtyFiles(ids: string[]): string[] {
     const dirty = dirtyFiles(ids);
     if (!dirty.length) return ids;
-    const text = dirty.length === 1 ? `Discard unsaved changes to ${baseName(pathOf(dirty[0]!)!)}?` : `Discard unsaved changes to ${dirty.length} files?`;
+    const text = dirty.length === 1 ? tr("app.main.discardOne", { name: baseName(pathOf(dirty[0]!)!) }) : tr("app.main.discardMany", { count: dirty.length });
     return confirm(text) ? ids : ids.filter((id) => !dirty.includes(id));
   }
 
@@ -1161,7 +1164,7 @@ export function App() {
     if (!entries.length) return;
     const wasActive = activeRef.current;
     const one = entries.length === 1 ? entries[0]!.id : undefined;
-    const title = one && (one === NEW_TAB ? "New session" : tabLabel(one));
+    const title = one && (one === NEW_TAB ? tr("app.main.newSession") : tabLabel(one));
     closeGroup(entries.map((e) => e.id), true);
     // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
     const prev = undoToast.current;
@@ -1169,9 +1172,9 @@ export function App() {
     const parts = [...joined, { entries, wasActive, onUndo }];
     const total = parts.reduce((n, p) => n + p.entries.length, 0);
     setToast({
-      message: joined.length ? `Closed ${total} tabs` : message ? message(entries.length, title) : one ? `Closed ${title}` : `Closed ${entries.length} tabs`,
+      message: joined.length ? tr("app.main.closedTabs", { count: total }) : message ? message(entries.length, title) : one ? tr("app.main.closed", { title: title ?? "" }) : tr("app.main.closedTabs", { count: entries.length }),
       action: {
-        label: "Undo",
+        label: tr("app.main.undo"),
         onClick: () => {
           // A cleanup during the toast's exit must not join a set that is back already.
           if (undoToast.current?.parts === parts) undoToast.current = undefined;
@@ -1238,7 +1241,7 @@ export function App() {
   /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
   function cleanUp(rule: CleanupRule, scope?: string[]) {
     const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
-    if (!ids.length) return setToast("No tabs to close");
+    if (!ids.length) return setToast(tr("app.main.noTabsToClose"));
     closeSeveral(ids);
   }
   const cleanupInfo = (scope?: string[]) => buildCleanupMenu(tabFacts(), cleanupCtx(), scope && new Set(scope));
@@ -1279,7 +1282,7 @@ export function App() {
   function copyText(text: string | undefined, what: string) {
     const fail = () => setToast(copyFailText(text));
     if (!text || !navigator.clipboard) return fail();
-    navigator.clipboard.writeText(text).then(() => setToast(`Copied ${what}`), fail);
+    navigator.clipboard.writeText(text).then(() => setToast(tr(what === "session ID" ? "app.main.copiedSessionId" : what === "cwd path" ? "app.main.copiedCwd" : what === "path" ? "app.main.copiedPath" : "app.main.copiedRelativePath")), fail);
   }
 
   /** Reveal in sidebar: shows the tab's session, shows the sidebar (the drawer below md), then the sidebar runs Select active session with focus. */
@@ -1496,7 +1499,7 @@ export function App() {
     const s = list.find((x) => x.id === card.sessionId);
     const d = describeCard(card, views[card.sessionId], s?.cwd ?? "");
     const keys = specOf("notifications.focus");
-    return cardText({ kind: d.kind, title: s?.title || "Untitled", body: d.summary }) + (cardNote.hint && keys ? ` ${keyText(keys)} goes to notifications.` : "");
+    return cardText({ kind: d.kind, title: s?.title || tr("app.palette.untitled"), body: d.summary }) + (cardNote.hint && keys ? ` ${tr("app.main.notificationsHint", { key: keyText(keys) })}` : "");
   })();
   // The note holds for the count it was said with; another count takes over with the plain count text.
   useEffect(() => setCardNote((n) => (n && n.at === undefined ? { ...n, at: waitingN } : n && n.at !== waitingN ? undefined : n)), [waitingN, cardNote]);
@@ -1504,7 +1507,7 @@ export function App() {
   const cardItems: CardItem[] = notify.cards.map((card) => {
     const s = list.find((x) => x.id === card.sessionId);
     const cwd = s?.cwd ?? "";
-    return { card, d: describeCard(card, views[card.sessionId], cwd), title: s?.title || "Untitled", place: cwd ? (worktreeName(cwd, worktrees) ?? projectName(cwd)) : "", cwd: cwd || undefined };
+    return { card, d: describeCard(card, views[card.sessionId], cwd), title: s?.title || tr("app.palette.untitled"), place: cwd ? (worktreeName(cwd, worktrees) ?? projectName(cwd)) : "", cwd: cwd || undefined };
   });
   const cardsNow = useNow(60_000);
 
@@ -1517,7 +1520,7 @@ export function App() {
       setPushOn(!pushOn);
     } catch (e) {
       const m = (e as Error).message;
-      setPushError(/blocked/.test(m) ? "Notifications are blocked for this site in the browser. Allow them in the site settings, then turn this on again." : m);
+      setPushError(/blocked/.test(m) ? tr("app.main.pushBlocked") : m);
     } finally {
       setPushBusy(false);
     }
@@ -1664,11 +1667,11 @@ export function App() {
       // The counts the user saw: the daemon checks again and refuses (`stale`) when there is more work now.
       const st = w.status;
       const r = await client.current!.request<WorktreeRemoveResult>({ type: "worktree.remove", cwd: w.project, path: w.path, ...(st && { expectSafe: st.safety === "safe", expect: { uncommitted: st.uncommitted, ahead: st.ahead } }) });
-      if (r?.ignoredDeleted) setToast(`Removed ${w.branch ?? lastSegment(w.path)}: ${ignoredText(r.ignoredDeleted)} deleted`);
+      if (r?.ignoredDeleted) setToast(tr("app.main.removedIgnored", { name: w.branch ?? lastSegment(w.path), ignored: ignoredText(r.ignoredDeleted) }));
       if (draftCwd === w.path) setDraftCwd(w.project);
       await refreshList();
     } catch (e) {
-      setError(`Worktree ${w.branch ?? lastSegment(w.path)} not removed: ${(e as Error).message}`);
+      setError(tr("app.main.worktreeNotRemoved", { name: w.branch ?? lastSegment(w.path), message: (e as Error).message }));
     } finally {
       markRemoving(w.path, false);
     }
@@ -1749,11 +1752,10 @@ export function App() {
     setError(undefined);
     const results = await Promise.allSettled(ids.map((sessionId) => client.current!.request({ type: a === "close" ? "worker.close" : "worker.remove", sessionId })));
     const bad = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-    const verb = a === "close" ? "closed" : "removed";
     if (bad.length) {
-      setError(`${ids.length - bad.length} of ${ids.length} ${ids.length === 1 ? "worker" : "workers"} ${verb}: ${(bad[0]!.reason as Error).message}`);
+      setError(tr(a === "close" ? "app.main.workersCloseFailed" : "app.main.workersRemoveFailed", { done: ids.length - bad.length, count: ids.length, message: (bad[0]!.reason as Error).message }));
       void refreshList();
-    } else setToast(`${verb[0]!.toUpperCase()}${verb.slice(1)} ${ids.length === 1 ? "1 worker" : `${ids.length} workers`}`);
+    } else setToast(tr(a === "close" ? "app.main.workersClosed" : "app.main.workersRemoved", { count: ids.length }));
   }
 
   /** Remove worker: asks first; offers the worker's own worktree too when the app may remove it. */
@@ -1768,7 +1770,7 @@ export function App() {
     if (!hit) return;
     try {
       const st = await client.current!.request<WorktreeStatusResult>({ type: "worktree.status", cwd: hit.project, path: hit.path });
-      if (st.safety === "blocked") setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: `Worktree ${st.branch} cannot be removed: ${BLOCK_TEXT[st.blocked!]}` } : c));
+      if (st.safety === "blocked") setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: tr("app.main.worktreeBlocked", { branch: st.branch, reason: BLOCK_TEXT[st.blocked!] }) } : c));
       else setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, branch: st.branch, status: st, text: removeWorktreeText(st, { keepsBranch: keepsBranch(worktrees[hit.project], hit.path) }) } : c));
     } catch (e) {
       setRemovingWorker((c) => (c?.id === id ? { ...c, loading: false, error: (e as Error).message } : c));
@@ -1781,7 +1783,7 @@ export function App() {
     } catch (e) {
       return setError((e as Error).message);
     }
-    setToast(`Removed worker ${w.name}`);
+    setToast(tr("app.main.workerRemoved", { name: w.name }));
     if (withWorktree && w.project && w.path) await removeWorktree({ project: w.project, path: w.path, status: w.status });
   }
 
@@ -1795,9 +1797,9 @@ export function App() {
       for (const r of rs) if (r.status === "rejected") failed.push(r.reason as Error);
     }
     if (failed.length) {
-      setError(`${ids.length - failed.length} of ${ids.length} sessions archived: ${failed[0]!.message}`);
+      setError(tr("app.main.archiveFailed", { done: ids.length - failed.length, count: ids.length, message: failed[0]!.message }));
       void refreshList();
-    } else setToast(`Archived ${ids.length} ${ids.length === 1 ? "session" : "sessions"}`);
+    } else setToast(tr("app.main.archived", { count: ids.length }));
   }
 
   function deleteSession(sessionId: string) {
@@ -1843,14 +1845,14 @@ export function App() {
     });
     if (stray.length) closeGroup(stray);
   }, [layout, tabs, list]);
-  const ownerTitle = (o: string) => list.find((s) => s.id === o)?.title || titles[o] || "Untitled";
+  const ownerTitle = (o: string) => list.find((s) => s.id === o)?.title || titles[o] || tr("app.palette.untitled");
   /** A pane tab's title: Files and Git graph name the owner's folder ("demo", "demo · feature"), Plan the owner's title. */
   const paneTitle = (ref: string) => {
     const k = kindOf(ref)!;
     if (k === "file") return baseName(pathOf(ref)!);
     if (k === "artifact") {
       const part = views[ownerOf(ref)]?.parts.get(partIdOf(ref)!);
-      return (part?.type === "tool_call" && artifactTitle(part)) || artTitles[ref] || "Artifact";
+      return (part?.type === "tool_call" && artifactTitle(part)) || artTitles[ref] || tr("app.paneKind.artifact");
     }
     const c = PER_CWD.includes(k) ? cwdOfOwner(ownerOf(ref)) : undefined;
     return paneTabTitle(k, c ? (worktreeName(c, worktrees) ?? projectName(c)) : ownerTitle(ownerOf(ref)));
@@ -1867,7 +1869,7 @@ export function App() {
     if (autoClose === "off" || document.visibilityState !== "visible" || !autoCloseDue(Date.now(), autoRan.current)) return;
     autoRan.current = Date.now();
     const ids = autoCloseTargets(tabFacts(), cleanupCtx(), autoClose);
-    if (ids.length) closeSeveral(ids, (n, t) => (n === 1 ? `Auto-closed ${t}` : `Auto-closed ${n} idle tabs`));
+    if (ids.length) closeSeveral(ids, (n, title) => (n === 1 ? tr("app.main.autoClosedOne", { title: title ?? "" }) : tr("app.main.autoClosedMany", { count: n })));
   };
   useEffect(() => {
     if (autoClose === "off" || status !== "connected" || !listLoaded || !keysFinal) return;
@@ -1928,7 +1930,7 @@ export function App() {
     style: { order: split!.ids[0] === id ? 0 : 2, flex: `${split!.ids[0] === id ? drawnRatio : 1 - drawnRatio} 1 0%` },
     id: `split-${id}`,
     role: "group",
-    "aria-label": `${isPaneRef(id) ? tabLabel(id) : list.find((l) => l.id === id)?.title || titles[id] || "Untitled"}, split ${split!.ids.indexOf(id) + 1} of 2${id === activeId ? ", active" : ""}`,
+    "aria-label": tr(id === activeId ? "app.main.splitLabelActive" : "app.main.splitLabel", { title: isPaneRef(id) ? tabLabel(id) : list.find((l) => l.id === id)?.title || titles[id] || tr("app.palette.untitled"), n: split!.ids.indexOf(id) + 1 }),
     "data-testid": "split",
     "data-active": id === activeId ? "" : undefined,
     onPointerDownCapture: () => focusSplit(id),
@@ -2257,13 +2259,13 @@ export function App() {
     return () => (window.removeEventListener("dragend", end), window.removeEventListener("drop", end));
   }, []);
   const NO_MAIN_TAB = {
-    files: "Files moved to the main area. Its tab opens when a session shows.",
-    graph: "Git graph moved to the main area. Its tab opens for a git project.",
-    terminal: "Terminal moved to the main area. Its tab opens when a session shows.",
-    artifacts: "Artifacts moved to the main area. Its tab opens when the session has artifacts.",
-    plan: "Plan moved to the main area. Its tab opens when the session has a plan.",
+    files: tr("app.main.noMainTab.files"),
+    graph: tr("app.main.noMainTab.graph"),
+    terminal: tr("app.main.noMainTab.terminal"),
+    artifacts: tr("app.main.noMainTab.artifacts"),
+    plan: tr("app.main.noMainTab.plan"),
   };
-  const kindToast = (p: PaneId) => (n: number) => `Closed ${n} ${PANE_LABEL[p]} ${n === 1 ? "tab" : "tabs"}`;
+  const kindToast = (p: PaneId) => (n: number) => tr("app.main.closedPaneTabs", { count: n, pane: PANE_LABEL[p] });
   /** Back to a dock: the pane's main tabs close, one toast with Undo (the layout comes back first). */
   const leaveMain = (p: PaneId) => {
     if (areaOf(loadLayout(), p) !== "main") return;
@@ -2331,7 +2333,7 @@ export function App() {
   }
   const focusDockedPrompt = (id: string) => {
     const focus = (frames: number) => {
-      const el = document.querySelector<HTMLElement>(`[data-docked-session="${id}"] textarea[aria-label="Prompt"]`);
+      const el = document.querySelector<HTMLElement>(`[data-docked-session="${id}"] textarea[data-prompt]`);
       if (el?.offsetParent) el.focus();
       else if (frames > 0) requestAnimationFrame(() => focus(frames - 1));
     };
@@ -2412,8 +2414,8 @@ export function App() {
     setPaneTabs({});
     const kinds = new Set(refs.map((r) => kindOf(r) as PaneId));
     const undoAll = () => (saveLayout(prev), saveDocked(prevDocked));
-    if (refs.length) closeSeveral(refs, kinds.size === 1 ? kindToast([...kinds][0]!) : (n) => `Closed ${n} pane tabs`, undoAll);
-    else if (hadDocked) setToast({ message: "Moved docked sessions back to the main area", action: { label: "Undo", onClick: () => saveDocked(prevDocked) } });
+    if (refs.length) closeSeveral(refs, kinds.size === 1 ? kindToast([...kinds][0]!) : (n) => tr("app.main.closedPaneTabsMixed", { count: n }), undoAll);
+    else if (hadDocked) setToast({ message: tr("app.main.dockedBack"), action: { label: tr("app.main.undo"), onClick: () => saveDocked(prevDocked) } });
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
@@ -2574,7 +2576,7 @@ export function App() {
   };
   /** Opens or focuses the Files / Git graph tab of the folder of `sid` (default: the shown session, else the one shown last). */
   const showKind = (p: "files" | "graph", sid = paneOwner) => {
-    if (!sid) return setToast(`Open a session to show ${PANE_LABEL[p]}.`);
+    if (!sid) return setToast(tr("app.main.openSessionToShow", { pane: PANE_LABEL[p] }));
     openPaneTab(paneTabFor(tabsRef.current, p, sid, cwdOfOwner));
   };
   /** The tab of a pane ref takes the focus (its strip button; on a phone its body). */
@@ -2611,7 +2613,7 @@ export function App() {
     open(ref);
   };
   /** Ctrl+`, the terminal buttons, New terminal, the narrow switcher with home = main: the current session's project terminal tab. */
-  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast("Open a session to show Terminal."));
+  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast(tr("app.main.openSessionToShow", { pane: PANE_LABEL.terminal })));
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
@@ -2663,7 +2665,7 @@ export function App() {
               onFocusTab={() => focusTabOf(ref)}
             />
           ) : (
-            <p className="m-auto text-muted-foreground text-sm">Loading file…</p>
+            <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingFile")}</p>
           )}
         </div>
       );
@@ -2682,13 +2684,13 @@ export function App() {
               onTitle={(t) => setArtTitles((m) => (m[ref] === t ? m : { ...m, [ref]: t }))}
             />
           ) : (
-            <p className="m-auto text-muted-foreground text-sm">Loading preview…</p>
+            <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingPreview")}</p>
           )}
         </div>
       );
     }
     const cwd = cwdOfOwner(ownerOf(ref));
-    const loading = <p className="m-auto text-muted-foreground text-sm">Loading {kind === "files" ? "files" : "graph"}…</p>;
+    const loading = <p className="m-auto text-muted-foreground text-sm">{tr(kind === "files" ? "app.main.loadingFiles" : "app.main.loadingGraph")}</p>;
     return (
       <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
         {!cwd ? (
@@ -2801,9 +2803,9 @@ export function App() {
     project
       ? paletteOrder((await client.current!.request<McpListResult>({ type: "mcp.list", cwd: project, ...(projectSession && { sessionId: projectSession }) })).servers).map((x) => ({
           id: `mcp:${x.name}`,
-          group: "MCP servers",
+          group: tr("app.cmd.mcp"),
           title: x.name,
-          description: "Open MCP server details",
+          description: tr("app.main.mcpDetails"),
           meta: `${statusIcon(x.status)} ${statusLabel(x.status)}`,
           searchOnly: true,
           run: () => openMcp(x.name),
@@ -2964,7 +2966,7 @@ export function App() {
     toggleKeepAwake: awake.supported ? awake.toggle : undefined,
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
-    resetKeyTips: () => (resetAllKeyTips(), setToast("Shortcut tips reset.")),
+    resetKeyTips: () => (resetAllKeyTips(), setToast(tr("app.main.tipsReset"))),
     openMcp: project ? () => openMcp() : undefined,
     openSkills: project ? openSkills : undefined,
     openShells: shown && !draftShown ? () => openShells(shown.id) : undefined,
@@ -3019,7 +3021,7 @@ export function App() {
     }
     setGuideRun(undefined);
     guideStep.current = undefined;
-    if (outcome === "skipped") setToast("Tour closed. Restart it from Settings › Help & about.");
+    if (outcome === "skipped") setToast(tr("app.main.tourClosed"));
   };
   // Another tab of this profile finished or skipped the tour: this one ends it too.
   useEffect(() => {
@@ -3095,7 +3097,7 @@ export function App() {
   type TermProps = { shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
-      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading terminal…</p>}>
+      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
         <TerminalPanel client={client.current!} status={status} cwd={cwd} {...p} />
       </Suspense>
     </section>
@@ -3227,7 +3229,7 @@ export function App() {
   const bottomDropRef = useAreaDrop(dropHandlers("bottom"));
   const dropPane = (a: DockArea) => (p: PaneId) => (setDrag(undefined), setDropAt(undefined), move(p, a));
   const terminalToggle = areaOf(layout, "terminal") !== "side" && (
-    <IconButton className={QUIET_PRESSED} label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
+    <IconButton className={QUIET_PRESSED} label={withKey(tr("app.main.toggleTerminal"), specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle" command="terminal.toggle">
       <SquareTerminalIcon />
     </IconButton>
   );
@@ -3241,7 +3243,7 @@ export function App() {
       className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!panelHost ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
-      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label="Side panel" data-drop-target={dragging("side") && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label={tr("app.main.sidePanel")} data-drop-target={dragging("side") && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
         <DockHeader
           area="side"
           panes={areaPanes("side")}
@@ -3270,7 +3272,7 @@ export function App() {
     <SideState value={sideState}>
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar">
-        <IconButton className="md:hidden" label="Sessions" onClick={() => setDrawer(true)} testId="open-drawer">
+        <IconButton className="md:hidden" label={tr("app.main.sessions")} onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
         </IconButton>
         {status !== "unauthorized" && (
@@ -3298,7 +3300,7 @@ export function App() {
             activeId={activeId}
             info={(id) => {
               const s = sessionOf(ownerOf(id));
-              if (id === NEW_TAB) return { title: "New session", unread: false, titleLoading: !!optimistic[NEW_TAB]?.length };
+              if (id === NEW_TAB) return { title: tr("app.main.newSession"), unread: false, titleLoading: !!optimistic[NEW_TAB]?.length };
               const g = tabGroup(s?.cwd, grouping, worktrees);
               const groupInfo = keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" };
               const pk = kindOf(id);
@@ -3309,8 +3311,9 @@ export function App() {
               }
               if (pk) return { title: paneTitle(id), kind: pk, cwd: s?.cwd, ...groupInfo, worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, unread: false, transcript: false };
               const item = list.find((l) => l.id === id);
-              const title = item?.title || titles[id] || "Untitled";
-              return { title, titleLoading: titleLoading(title, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
+              const raw = item?.title || titles[id] || "Untitled";
+              const title = raw === "Untitled" ? tr("app.palette.untitled") : raw === "New session" ? tr("app.main.newSession") : raw;
+              return { title, titleLoading: titleLoading(raw, prompted.has(id)), cwd: s?.cwd, ...(keysFinal ? { group: g.key, groupLabel: g.label || undefined, groupSub: g.sub, groupColor: g.color || undefined } : { group: "" }), worktree: s?.cwd ? worktreeName(s.cwd, worktrees) : undefined, state: shownState(views[id]) ?? s?.state, unread: unread.has(id), archived: item?.archived, transcript: item?.transcript };
             }}
             renaming={renaming?.in === "tab" ? renaming.id : undefined}
             renamingFromMenu={renaming?.menu}
@@ -3343,27 +3346,27 @@ export function App() {
           {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
-            <IconButton className="max-sm:hidden" label={quickOpenLabel} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
+            <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
               <SearchIcon />
             </IconButton>
           )}
           <KeepAwakeButton className="max-sm:hidden" status={awake.status} error={awake.error} onToggle={awake.toggle} testId="keep-awake" />
-          <IconButton className="max-sm:hidden" label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="theme-toggle">
+          <IconButton className="max-sm:hidden" label={tr("app.main.themeLabel", { theme: tr(`app.main.theme.${theme}`) })} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
           {panelHost && (
-            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? "No panes in the side panel" : withKey("Toggle side panel", specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel && !sideEmpty} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
+            <IconButton className="max-lg:hidden aria-expanded:bg-transparent aria-expanded:text-faint aria-expanded:shadow-none aria-expanded:hover:bg-accent aria-expanded:hover:text-foreground" label={sideEmpty ? tr("app.main.noSidePanes") : withKey(tr("app.main.toggleSidePanel"), specOf("panel.toggle"))} disabled={sideEmpty} expanded={panel && !sideEmpty} controls="side-panel" onClick={() => (setBottomMax(false), setPanel((v) => !v))} testId="panel-toggle" command="panel.toggle">
               {layout.side === "left" ? <PanelLeftIcon /> : <PanelRightIcon />}
             </IconButton>
           )}
           {panelHost && (
-            <IconButton className={`max-lg:hidden ${QUIET_PRESSED}`} label={withKey("Toggle terminal", specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
+            <IconButton className={`max-lg:hidden ${QUIET_PRESSED}`} label={withKey(tr("app.main.toggleTerminal"), specOf("terminal.toggle"))} pressed={inSight("terminal")} onClick={toggleTerminal} testId="terminal-toggle-titlebar" command="terminal.toggle">
               <SquareTerminalIcon />
             </IconButton>
           )}
         </div>
       </header>
-      <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? "Untitled")} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
+      <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? tr("app.palette.untitled"))} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
       <CleanupDialog
         scope={cleanup}
         list={list}
@@ -3374,14 +3377,14 @@ export function App() {
         onRemoving={markRemoving}
         onDone={(r) => {
           void refreshList();
-          if (!cleanupOpen.current) setToast(summaryText(r) + (r.skipped[0] ? `: ${r.skipped[0].label}: ${r.skipped[0].reason}` : ""));
+          if (!cleanupOpen.current) setToast(r.skipped[0] ? tr("app.main.cleanupSkipped", { summary: summaryText(r), label: r.skipped[0].label, reason: r.skipped[0].reason }) : summaryText(r));
         }}
       />
       <ConfirmDialog
         open={closingGroup !== undefined}
-        title={`Close ${lastClosingGroup.current.ids.length} tabs of ${lastClosingGroup.current.name}?`}
-        description={`Sessions keep running. Reopen them from the sidebar or with Reopen closed tab.${dirtyFileCount(lastClosingGroup.current.ids) ? ` Unsaved edits in ${dirtyFileCount(lastClosingGroup.current.ids)} file ${dirtyFileCount(lastClosingGroup.current.ids) === 1 ? "tab" : "tabs"} are discarded.` : ""}`}
-        confirm="Close group"
+        title={tr("app.main.closeGroupTitle", { count: lastClosingGroup.current.ids.length, name: lastClosingGroup.current.name })}
+        description={`${tr("app.main.closeGroupBody")}${dirtyFileCount(lastClosingGroup.current.ids) ? ` ${tr("app.main.closeGroupDirty", { count: dirtyFileCount(lastClosingGroup.current.ids) })}` : ""}`}
+        confirm={tr("app.main.closeGroup")}
         onConfirm={() => {
           const g = closingGroup!;
           setClosingGroup(undefined);
@@ -3399,9 +3402,9 @@ export function App() {
       />
       <ConfirmDialog
         open={removing !== undefined}
-        title="Remove project?"
-        description={`“${projectName(lastRemoving.current)}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.`}
-        confirm="Remove"
+        title={tr("app.main.removeProject")}
+        description={tr("app.main.removeProjectBody", { name: projectName(lastRemoving.current) })}
+        confirm={tr("app.main.remove")}
         onConfirm={() => {
           // The row below (else above) is taken now: once project.remove answers, the removed row may be gone.
           const cwds = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
@@ -3431,9 +3434,9 @@ export function App() {
       />
       <ConfirmDialog
         open={removingWorker !== undefined}
-        title={`Remove worker ${lastRemovingWorker.current?.name ?? ""}?`}
-        description="Its session and transcript are removed for good; the name is free again. The terminal CLI loses it too."
-        confirm="Remove"
+        title={tr("app.main.removeWorkerTitle", { name: lastRemovingWorker.current?.name ?? "" })}
+        description={tr("app.main.removeWorkerBody")}
+        confirm={tr("app.main.remove")}
         destructive
         confirmDisabled={!!removingWorker?.loading && alsoWorktree}
         onConfirm={() => {
@@ -3449,21 +3452,21 @@ export function App() {
             {!lastRemovingWorker.current.error && (
               <label className="flex min-h-8 cursor-pointer items-center gap-2 max-md:min-h-11">
                 <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={alsoWorktree} disabled={lastRemovingWorker.current.loading} onChange={(e) => setAlsoWorktree(e.target.checked)} data-testid="remove-worker-worktree" />
-                <span>Also remove worktree {lastRemovingWorker.current.branch ?? ""}</span>
+                <span>{tr("app.main.alsoRemoveWorktree", { branch: lastRemovingWorker.current.branch ?? "" })}</span>
               </label>
             )}
             <p className="text-muted-foreground" data-testid="remove-worker-worktree-text">
-              {lastRemovingWorker.current.error ?? (lastRemovingWorker.current.loading ? "Checking the worktree…" : lastRemovingWorker.current.text)}
-              {!lastRemovingWorker.current.error && lastRemovingWorker.current.others > 0 && ` ${lastRemovingWorker.current.others} other ${lastRemovingWorker.current.others === 1 ? "session" : "sessions"} there; their transcripts stay.`}
+              {lastRemovingWorker.current.error ?? (lastRemovingWorker.current.loading ? tr("app.main.checkingWorktree") : lastRemovingWorker.current.text)}
+              {!lastRemovingWorker.current.error && lastRemovingWorker.current.others > 0 && ` ${tr("app.main.otherSessions", { count: lastRemovingWorker.current.others })}`}
             </p>
           </div>
         )}
       </ConfirmDialog>
       <ConfirmDialog
         open={removingWorkers !== undefined}
-        title={`Remove ${lastRemovingWorkers.current?.ids.length === 1 ? "1 closed worker" : `${lastRemovingWorkers.current?.ids.length ?? 0} closed workers`}?`}
-        description={`Workers of “${lastRemovingWorkers.current?.title ?? ""}”: ${lastRemovingWorkers.current?.names ?? ""}. Their sessions and transcripts are removed for good. Worktrees stay.`}
-        confirm="Remove"
+        title={tr("app.main.removeWorkersTitle", { count: lastRemovingWorkers.current?.ids.length ?? 0 })}
+        description={tr("app.main.removeWorkersBody", { title: lastRemovingWorkers.current?.title ?? "", names: lastRemovingWorkers.current?.names ?? "" })}
+        confirm={tr("app.main.remove")}
         destructive
         onConfirm={() => {
           const ids = removingWorkers!.ids;
@@ -3475,9 +3478,9 @@ export function App() {
       />
       <ConfirmDialog
         open={archiving !== undefined}
-        title={`Archive ${lastArchiving.current?.ids.length === 1 ? "1 session" : `${lastArchiving.current?.ids.length ?? 0} sessions`}?`}
-        description={`Sessions in ${lastArchiving.current?.where ?? ""} idle for more than ${daysLabel(lastArchiving.current?.days ?? 1)}. They move to Archived sessions; Unarchive brings one back.`}
-        confirm="Archive"
+        title={tr("app.main.archiveTitle", { count: lastArchiving.current?.ids.length ?? 0 })}
+        description={tr("app.main.archiveBody", { where: lastArchiving.current?.where ?? "", days: daysLabel(lastArchiving.current?.days ?? 1) })}
+        confirm={tr("app.main.archive")}
         onConfirm={() => {
           const ids = archiving!.ids;
           setArchiving(undefined);
@@ -3488,9 +3491,9 @@ export function App() {
       />
       <ConfirmDialog
         open={removingWt !== undefined}
-        title={`Remove worktree ${lastRemovingWt.current?.branch ?? ""}?`}
+        title={tr("app.main.removeWorktreeTitle", { branch: lastRemovingWt.current?.branch ?? "" })}
         description={removeDialogText(lastRemovingWt.current, worktrees)}
-        confirm="Remove worktree"
+        confirm={tr("app.main.removeWorktree")}
         destructive
         confirmDisabled={lastRemovingWt.current?.checking}
         hideConfirm={!!lastRemovingWt.current && (lastRemovingWt.current.error !== undefined || lastRemovingWt.current.status?.safety === "blocked")}
@@ -3524,12 +3527,12 @@ export function App() {
           <ConnectionBadge status={status} />
           <div className="flex items-center gap-2 sm:hidden" data-testid="drawer-tools">
             {canQuickOpen && (
-              <IconButton label={quickOpenLabel} onClick={() => (setDrawer(false), showQuickOpen())} testId="drawer-quick-open">
+              <IconButton label={quickOpenLabel()} onClick={() => (setDrawer(false), showQuickOpen())} testId="drawer-quick-open">
                 <SearchIcon />
               </IconButton>
             )}
             <KeepAwakeButton status={awake.status} error={awake.error} onToggle={awake.toggle} testId="drawer-keep-awake" />
-            <IconButton label={`Theme: ${theme} (click to change)`} onClick={() => setTheme(nextPref)} testId="drawer-theme">
+            <IconButton label={tr("app.main.themeLabel", { theme: tr(`app.main.theme.${theme}`) })} onClick={() => setTheme(nextPref)} testId="drawer-theme">
               <ThemeIcon />
             </IconButton>
           </div>
@@ -3577,7 +3580,7 @@ export function App() {
             data-command="settings.open"
           >
             <SettingsIcon className="size-4" />
-            Settings
+            {tr("app.main.settings")}
           </button>
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
@@ -3634,9 +3637,9 @@ export function App() {
                 {tabs.filter(isPaneRef).map(paneTabBody)}
                 {splitCramped && (
                   <div className="order-first flex shrink-0 items-center gap-2 border-b px-3 py-1 text-muted-foreground text-xs" data-testid="split-hint" role="status">
-                    <span className="min-w-0 truncate">Split hidden — widen the window or hide a panel</span>
+                    <span className="min-w-0 truncate">{tr("app.main.splitHidden")}</span>
                     <button type="button" className="shrink-0 cursor-pointer rounded-sm px-1.5 py-0.5 text-foreground underline underline-offset-2 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={joinSplits}>
-                      Close split
+                      {tr("app.main.closeSplit")}
                     </button>
                   </div>
                 )}
@@ -3694,7 +3697,7 @@ export function App() {
                         onPrompt: (text, images) => (isClearCommand(text) ? notHere() : sendPrompt(a.id, text, images)),
                       })
                     ) : (
-                      <p className="m-auto text-muted-foreground text-sm">Loading…</p>
+                      <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loading")}</p>
                     )}
                   </AsidePopup>
                 );
@@ -3759,7 +3762,7 @@ export function App() {
               )}
               {activeId !== NEW_TAB && activeId !== FOCUS_TAB && !mainShown && (
                 <div className={`${card} flex-1`}>
-                  <div className="m-auto text-muted-foreground">Open or create a session to start.</div>
+                  <div className="m-auto text-muted-foreground">{tr("app.main.openOrCreate")}</div>
                 </div>
               )}
               {panelTarget && (
@@ -3842,7 +3845,7 @@ export function App() {
                   )}
                   {createPortal(
                     isGit && areaOf(layout, "graph") !== "main" && (shows("graph") || graphCwd === panelTarget.cwd) && (
-                      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">Loading graph…</p>}>
+                      <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingGraph")}</p>}>
                         <GraphPane hidden={!shows("graph")} client={client.current!} cwd={panelTarget.cwd} repos={repos === null ? null : repoList} onRefresh={reloadRepos} />
                       </Suspense>
                     ),
@@ -3851,7 +3854,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "plan") !== "main" && panelTarget.sessionId && (
                       <div className={shows("plan") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <PlanPane view={panelView} label="Plan" onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
+                        <PlanPane view={panelView} label={PANE_LABEL.plan} onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
                       </div>
                     ),
                     hosts.plan,
@@ -3859,7 +3862,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "artifacts") !== "main" && panelTarget.sessionId && (
                       <div className={shows("artifacts") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label="Artifacts" load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
+                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label={PANE_LABEL.artifacts} load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
                       </div>
                     ),
                     hosts.artifacts,
@@ -3877,7 +3880,7 @@ export function App() {
             {panelHost && !bottomMax && <TerminalResizer height={terminalHeight} onResize={setTerminalHeight} />}
             <section
               id="bottom-panel"
-              aria-label="Bottom panel"
+              aria-label={tr("app.main.bottomPanel")}
               className={`${card} ${!panelHost ? "hidden" : bottomMax ? "flex-1" : "h-(--terminal-h) max-h-[60vh] min-h-25 flex-none"} ${dropCls("bottom")}`}
               data-testid="bottom-panel"
               data-dock="bottom"
@@ -3897,10 +3900,10 @@ export function App() {
                 {...dockedProps("bottom")}
                 extra={
                   <>
-                    <IconButton label={bottomMax ? "Restore panel" : "Maximize panel"} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
+                    <IconButton label={bottomMax ? tr("app.main.restorePanel") : tr("app.main.maximizePanel")} pressed={bottomMax} onClick={() => setBottomMax((m) => !m)} testId="dock-maximize">
                       {bottomMax ? <ChevronDownIcon /> : <ChevronUpIcon />}
                     </IconButton>
-                    <IconButton label="Hide bottom panel" onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
+                    <IconButton label={tr("app.main.hideBottomPanel")} onClick={() => (setBottomOpen(false), focusShownPrompt())} testId="dock-hide">
                       <XIcon />
                     </IconButton>
                   </>
@@ -4086,14 +4089,14 @@ export function App() {
       <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 left-1/2 z-50 w-max max-w-[calc(100vw-24px)] -translate-x-1/2" data-testid="prefix-hint">
         {prefixOn && (
           <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2 text-xs shadow-floating ring-[0.5px] ring-foreground/15">
-            <span className="font-medium">{keyText(specOf("leader"))} then</span>
+            <span className="font-medium">{tr("app.main.prefixThen", { key: keyText(specOf("leader")) })}</span>
             {PREFIX_KEYS.map((p) => (
               <span key={p.key} className="text-muted-foreground">
-                <kbd className="font-sans font-medium text-foreground">{p.key}</kbd> {p.title}
+                <kbd className="font-sans font-medium text-foreground">{p.key}</kbd> {prefixTitle(p.id)}
               </span>
             ))}
             <span className="text-muted-foreground">
-              <kbd className="font-sans font-medium text-foreground">Esc</kbd> cancel
+              <kbd className="font-sans font-medium text-foreground">Esc</kbd> {tr("app.main.cancel")}
             </span>
           </p>
         )}
@@ -4113,7 +4116,7 @@ export function App() {
         <KeyTips
           hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
           onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
-          onTurnedOff={() => setToast("Shortcut tips off. Turn them on in Settings › Keyboard.")}
+          onTurnedOff={() => setToast(tr("app.main.tipsOff"))}
         />
         <NotificationStack
           items={cardItems}
@@ -4139,8 +4142,9 @@ type Pane = "session" | PaneId;
 
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
+  const tr = useT();
   return (
-    <div className="flex gap-1 pointer-coarse:gap-2" role="tablist" aria-label="Panes">
+    <div className="flex gap-1 pointer-coarse:gap-2" role="tablist" aria-label={tr("app.main.panes")}>
       {panes.map((p) => (
         <Button
           key={p}
@@ -4153,7 +4157,7 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
           data-testid={`pane-${p}`}
           data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
         >
-          {p}
+          {tr(`app.dock.tab.${p}`)}
           {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
         </Button>
       ))}
@@ -4163,12 +4167,13 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
 
 /** Drag handle (or arrow keys) between the session and the side panel on wide screens. */
 function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: number) => void; side: DockSide }) {
+  const tr = useT();
   const clamp = (w: number) => Math.round(Math.max(280, Math.min(w, window.innerWidth - 480)));
   return (
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize side panel"
+      aria-label={tr("app.main.resizeSidePanel")}
       aria-valuenow={width}
       tabIndex={0}
       className={`hidden w-1.5 shrink-0 cursor-col-resize touch-none ${side === "left" ? "border-r" : "border-l"} bg-border/40 hover:bg-primary/30 focus-visible:bg-primary/30 lg:block`}
@@ -4185,6 +4190,7 @@ function PanelResizer({ width, onResize, side }: { width: number; onResize: (w: 
 
 /** Drag handle (or arrow keys) between the two splits; it takes the gap between them. */
 function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: number) => void }) {
+  const tr = useT();
   const row = split.dir === "row";
   const min = row ? SPLIT_MIN_W : SPLIT_MIN_H;
   const GAP = 8;
@@ -4201,7 +4207,7 @@ function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: num
     <div
       role="separator"
       aria-orientation={row ? "vertical" : "horizontal"}
-      aria-label="Resize split"
+      aria-label={tr("app.main.resizeSplit")}
       aria-valuenow={Math.round(split.ratio * 100)}
       aria-valuemin={15}
       aria-valuemax={85}
@@ -4226,12 +4232,13 @@ function SplitResizer({ split, onResize }: { split: Split; onResize: (ratio: num
 
 /** Drag handle (or arrow keys) on the sessions sidebar's right edge on md and up; it sits in the gap beside the sidebar. */
 function SidebarResizer({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+  const tr = useT();
   const clamp = (w: number) => Math.round(Math.max(200, Math.min(w, 560, window.innerWidth / 2)));
   return (
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize sidebar"
+      aria-label={tr("app.main.resizeSidebar")}
       aria-valuenow={width}
       tabIndex={0}
       className="-mx-2 hidden w-2 shrink-0 cursor-col-resize touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 md:block"
@@ -4251,12 +4258,13 @@ function SidebarResizer({ width, onResize }: { width: number; onResize: (w: numb
 
 /** Drag handle (or arrow keys) between the work area and the bottom panel on wide screens (OpenCode: 100px to 60% of the window). */
 function TerminalResizer({ height, onResize }: { height: number; onResize: (h: number) => void }) {
+  const tr = useT();
   const clamp = (h: number) => Math.round(Math.max(100, Math.min(h, window.innerHeight * 0.6)));
   return (
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize terminal"
+      aria-label={tr("app.main.resizeTerminal")}
       aria-valuenow={height}
       tabIndex={0}
       className="hidden h-2 shrink-0 cursor-row-resize touch-none rounded-full hover:bg-primary/30 focus-visible:bg-primary/30 lg:block"
@@ -4280,10 +4288,11 @@ const STATUS_STYLE: Record<ConnectionStatus, string> = {
 };
 
 function ConnectionBadge({ status }: { status: ConnectionStatus }) {
+  const tr = useT();
   return (
     <div className="flex items-center gap-2 text-muted-foreground text-xs" data-testid="connection-status" role="status">
       <span className={`size-2 rounded-full ${STATUS_STYLE[status]}`} aria-hidden />
-      {status === "unauthorized" ? "not paired" : status}
+      {tr(`app.main.conn.${status}`)}
     </div>
   );
 }
@@ -4432,6 +4441,7 @@ export function NewSession({
   insert?: string;
   onInserted?: () => void;
 }) {
+  const tr = useT();
   const { model, mode, effort } = draft;
   const project = cwd ? projectOf(cwd, worktrees) : "";
   const runIn = ((project && worktrees[project]) || []).filter((w) => !w.outsideRoots).sort(byRow);
@@ -4470,10 +4480,10 @@ export function NewSession({
           onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, { text, images }) : Promise.reject(new Error("no project")))}
           onBash={cwd ? (command) => onStart(cwd, { model, mode, effort }, { command }) : undefined}
           state={connected ? "idle" : "disconnected"}
-          blocked={creating ? "Creating worktree…" : undefined}
+          blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
-          label="First prompt"
-          placeholder={cwd ? `Ask Claude in ${worktreeName(cwd, worktrees) ?? projectName(cwd)}…` : "Open a project to start"}
+          label={tr("app.main.firstPrompt")}
+          placeholder={cwd ? tr("app.main.askClaudeIn", { place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
           autoFocus
           disabled={!cwd}
           inputRef={inputRef}
@@ -4485,7 +4495,7 @@ export function NewSession({
         // Project chip: Base UI Select like the prompt toolbar pickers; "Open project…" is its last item.
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-1">
         <Select value={project} onValueChange={(v) => (v === OPEN ? onOpenProject() : v && onCwd(v))}>
-          <SelectTrigger aria-label="Project" title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
+          <SelectTrigger aria-label={tr("app.main.project")} title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
             <ProjectAvatar cwd={project} />
             <span className="min-w-0 truncate font-medium" data-testid="new-project">
               {projectName(project)}
@@ -4506,7 +4516,7 @@ export function NewSession({
             <SelectSeparator />
             <SelectItem value={OPEN} className={ROW}>
               <FolderPlusIcon />
-              Open project…
+              {tr("app.main.openProjectEllipsis")}
             </SelectItem>
           </SelectContent>
         </Select>
@@ -4517,17 +4527,17 @@ export function NewSession({
             </span>
             {/* OpenCode PromptWorkspaceSelector: "Run session in", Run session in, Primary worktree (OpenCode: Local repository), the worktrees, New worktree. */}
             <Select value={cwd} onValueChange={(v) => (v === NEW_WT ? onNewWorktree?.(project) : v && onCwd(v))}>
-              <SelectTrigger aria-label={`${here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}, Run session in`} title={cwd} data-testid="worktree-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
+              <SelectTrigger aria-label={tr("app.main.runSessionInLabel", { name: here?.main ? tr("app.main.primaryWorktree") : (here?.branch ?? projectName(cwd)) })} title={cwd} data-testid="worktree-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
                 {here?.main ? <MonitorIcon /> : <GitBranchIcon />}
-                <span className="min-w-0 max-w-50 truncate">{here?.main ? "Primary worktree" : (here?.branch ?? projectName(cwd))}</span>
+                <span className="min-w-0 max-w-50 truncate">{here?.main ? tr("app.main.primaryWorktree") : (here?.branch ?? projectName(cwd))}</span>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-48 max-w-[calc(100vw-2rem)] p-0.5">
                 <SelectGroup>
-                  <SelectLabel>Run session in</SelectLabel>
+                  <SelectLabel>{tr("app.main.runSessionIn")}</SelectLabel>
                   {runIn.map((w) => (
                     <SelectItem key={w.path} value={w.path} title={w.path} className={ROW}>
                       {w.main ? <MonitorIcon /> : <GitBranchIcon />}
-                      <span className="truncate">{w.main ? "Primary worktree" : (w.branch ?? projectName(w.path))}</span>
+                      <span className="truncate">{w.main ? tr("app.main.primaryWorktree") : (w.branch ?? projectName(w.path))}</span>
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -4536,7 +4546,7 @@ export function NewSession({
                     <SelectSeparator />
                     <SelectItem value={NEW_WT} className={ROW} data-testid="new-worktree-item">
                       <GitBranchPlusIcon />
-                      <span className="truncate">New worktree</span>
+                      <span className="truncate">{tr("app.main.newWorktree")}</span>
                     </SelectItem>
                   </>
                 )}
@@ -4546,14 +4556,14 @@ export function NewSession({
         )}
         {worktreeJob?.error && (
           <p role="alert" className="w-full text-center text-destructive text-sm" data-testid="worktree-error">
-            Worktree not created: {worktreeJob.error}
+            {tr("app.main.worktreeNotCreated", { message: worktreeJob.error })}
           </p>
         )}
         </div>
       ) : (
         <Button variant="secondary" size="sm" onClick={onOpenProject} data-testid="new-open-project" className="max-md:h-11">
           <FolderPlusIcon />
-          Open project
+          {tr("app.main.openProject")}
         </Button>
       )}
     </div>
@@ -4564,7 +4574,7 @@ export function NewSession({
 const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) =>
   offered.length && models.length ? permissionModesFor({ allowBypass: offered.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) }) : offered;
 
-const autoUnavailable = (models: ModelInfo[], model: string) => `Auto mode not available for ${models.find((m) => m.value === model)?.displayName ?? model}; switched to Ask`;
+const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string };
@@ -4719,6 +4729,7 @@ export function SessionPane({
   /** GH-401: shown in a dock (side or bottom panel): Esc answers only from inside that dock. */
   docked?: boolean;
 }) {
+  const tr = useT();
   const phone = usePhone();
   const current = runOf(view, run);
   const pendingPart = pendingPermission(view);
@@ -4803,7 +4814,7 @@ export function SessionPane({
       // Delete and Send now of an item that is gone: nothing to report, nothing to change in the box.
       const gone = (e as RequestError).code === "unknown_item";
       if (gone && how !== "edit") return;
-      setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? "Already sent" : `${how === "send" ? "Send now" : how === "edit" ? "Edit" : "Delete"} failed: ${e.message}` });
+      setTakeBack({ key: pendingKey(), text: "", images: [], error: gone ? tr("app.prompt.alreadySent") : tr(how === "send" ? "app.prompt.sendNowFailed" : how === "edit" ? "app.prompt.editFailed" : "app.prompt.deleteFailed", { message: e.message }) });
     };
     if (how === "send") return void onSendQueued?.(id).catch(fail);
     void onDequeue?.(id).then((r) => how === "edit" && setTakeBack({ key: pendingKey(), text: r.text, images: r.images, bash: r.bash }), fail);
@@ -4905,7 +4916,7 @@ export function SessionPane({
               <div className={`flex ${index ? "mt-3" : ""}`} data-testid="orchestration-notice">
                 <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-secondary px-2 py-0.5 text-muted-foreground text-xs">
                   <UsersIcon className="size-3.5 shrink-0" aria-hidden />
-                  <span className="sr-only">Orchestration notice: </span>
+                  <span className="sr-only">{tr("app.prompt.orchestration")} </span>
                   <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(ORCHESTRATION_NOTICE.length).trim()}</span>
                 </span>
               </div>
@@ -4921,8 +4932,8 @@ export function SessionPane({
                     {/* No tooltip prop: its trigger renders a button around this button. */}
                     <MessageAction
                       className="pointer-coarse:size-11"
-                      title="Rewind"
-                      label="Rewind to before this message"
+                      title={tr("app.prompt.rewind")}
+                      label={tr("app.prompt.rewindLabel")}
                       disabled={turnRunning}
                       onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
                     >
@@ -4963,7 +4974,7 @@ export function SessionPane({
               <>
                 {row}
                 <MessageActions className="mt-1">
-                  <CopyAction text={copyText} label="Copy response" className="max-md:size-11" />
+                  <CopyAction text={copyText} label={tr("app.prompt.copyResponse")} className="max-md:size-11" />
                 </MessageActions>
               </>
             ) : (
@@ -4985,13 +4996,13 @@ export function SessionPane({
             held={view.queue?.held}
             bashWait={
               view.externalTurn || view.working
-                ? "Runs when the terminal CLI turn ends"
+                ? tr("app.prompt.bashWaitCli")
                 : rewindRunning
-                  ? "Runs when the rewind ends"
+                  ? tr("app.prompt.bashWaitRewind")
                   : shellRunning
-                    ? "Runs when the running shell command ends"
+                    ? tr("app.prompt.bashWaitShell")
                   : turnRunning || isClearing
-                    ? "A shell command cannot steer a turn: it runs when the turn ends"
+                    ? tr("app.prompt.bashWaitTurn")
                     : undefined
             }
             onSendNow={(id) => chipAction(id, "send")}
@@ -5039,13 +5050,13 @@ export function SessionPane({
               usage={view.contextUsage}
               stats={totals(view)}
               todos={showTodoDock(view.state, view.todos, false) ? view.todos : undefined}
-              blocked={view.externalTurn ? "A terminal CLI turn is running in this session" : isClearing ? "Clearing the conversation… your message sends when it is done" : undefined}
+              blocked={view.externalTurn ? tr("app.prompt.blockedCli") : isClearing ? tr("app.prompt.blockedClearing") : undefined}
               queueing={!view.externalTurn && isClearing}
               blockedIcon={!view.externalTurn && isClearing ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
-              label="Prompt"
+              label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? "Claude is working…" : "Ask Claude…") : turnRunning ? (onQueue ? (sendModeSetting === "queue" ? "Claude is working… (Enter to queue, Alt+Enter to steer, Esc to stop)" : "Claude is working… (Enter to steer, Alt+Enter to queue, Esc to stop)") : "Claude is working… (Enter to steer, Esc to stop)") : "Ask Claude… (Enter to send, Shift+Enter for newline, paste or drop images)"}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
             />
           </>
         )}
@@ -5167,6 +5178,7 @@ function PromptBox({
   queueing?: boolean;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const tr = useT();
   const phone = usePhone();
   // The stored draft holds each pasted text as a pasted_content block (GH-441); the box shows it as a token with a chip.
   const [initialText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
@@ -5189,6 +5201,8 @@ function PromptBox({
   const [caret, setCaret] = useState(0);
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
   const [sendError, setSendError] = useState<string>();
+  // The text of the last attach error: only that one is stale when the next attach starts.
+  const attachError = useRef<string | undefined>(undefined);
   // Bash mode: the text is a shell command, the box looks like OpenCode's shell mode.
   const [bash, setBash] = useState(false);
   const stored = useMemo(() => expandPastes(text, prunePastes(text, pastes), "0000"), [text, pastes]);
@@ -5344,7 +5358,7 @@ function PromptBox({
       onBash!(command).catch((e: Error) => {
         restore(t);
         setBash(true);
-        setSendError(`Command not run: ${e.message}`);
+        setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
       });
       edit("");
       setBash(false);
@@ -5355,9 +5369,9 @@ function PromptBox({
     // shortcut: /btw sends text only; pass images if asked.
     const aside = onAside && asideOf(t);
     if (aside !== undefined && onAside) {
-      if (!aside) return setSendError("Type a question after /btw");
+      if (!aside) return setSendError(tr("app.prompt.asideNeedsQuestion"));
       setSendError(undefined);
-      onAside(aside).catch((e: Error) => (restore(t), setSendError(`Aside not opened: ${e.message}`)));
+      onAside(aside).catch((e: Error) => (restore(t), setSendError(tr("app.prompt.asideNotOpened", { message: e.message }))));
       return setPastes({}), edit("");
     }
     const dialog = onDialog && dialogOf(t, commands);
@@ -5372,7 +5386,7 @@ function PromptBox({
       onQueue(t, sent).catch((e: Error) => {
         restore(t);
         setImages((cur) => [...sent, ...cur]);
-        setSendError(`Not queued: ${e.message}`);
+        setSendError(tr("app.prompt.notQueued", { message: e.message }));
       });
       dropDraft();
       edit("");
@@ -5389,7 +5403,7 @@ function PromptBox({
       // Back into the prompt box, before anything typed since.
       restore(t);
       setImages((cur) => [...sent, ...cur]);
-      setSendError(`Prompt not sent: ${e.message}`);
+      setSendError(tr("app.main.promptNotSent", { message: e.message }));
     });
     dropDraft();
     edit("");
@@ -5413,9 +5427,9 @@ function PromptBox({
     const all = [...files];
     // Checked before reading: a big file would be held in memory as base64 and could exceed the daemon's frame limit.
     const big = all.find((f) => f.size > MAX_UPLOAD_BYTES);
-    if (big) return setSendError(`Attach failed: ${big.name} is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+    if (big) return setSendError((attachError.current = tr("app.prompt.attachTooBig", { name: big.name, mb: MAX_UPLOAD_BYTES / 1024 / 1024 })));
     // Only an earlier attach error is stale now; a send error stays until the next send.
-    setSendError((e) => (e?.startsWith("Attach failed") ? undefined : e));
+    setSendError((e) => (e !== undefined && e === attachError.current ? undefined : e));
     const others = all.filter((f) => !isPromptImage(f.type));
     const added = await readImages(all);
     setImages((i) => [...i, ...added]);
@@ -5429,7 +5443,7 @@ function PromptBox({
         return r.text;
       });
     } catch (e) {
-      setSendError(`Attach failed: ${(e as Error).message}`);
+      setSendError((attachError.current = tr("app.prompt.attachFailed", { message: (e as Error).message })));
     }
   };
   const onPaste = (e: ClipboardEvent) => {
@@ -5544,7 +5558,7 @@ function PromptBox({
       <ul
         id="command-picker"
         role="listbox"
-        aria-label="Files"
+        aria-label={tr("app.palette.groupFiles")}
         data-testid="mention-picker"
         className="absolute inset-x-0 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 font-mono text-sm shadow-md"
       >
@@ -5569,7 +5583,7 @@ function PromptBox({
       <ul
         id="command-picker"
         role="listbox"
-        aria-label="Commands and skills"
+        aria-label={tr("app.prompt.commandsAndSkills")}
         className="absolute inset-x-0 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 text-sm shadow-md"
       >
         {matches.map((c, i) => (
@@ -5608,10 +5622,11 @@ function PromptBox({
         aria-expanded={pickerOpen}
         aria-controls="command-picker"
         aria-activedescendant={pickerOpen ? `command-${selected}` : undefined}
-        aria-label={bash ? "Shell command" : label}
+        aria-label={bash ? tr("app.prompt.shellCommand") : label}
+        data-prompt
         className={`field-sizing-content max-h-[min(240px,40dvh)] min-h-[calc(2lh+1.5rem)] max-sm:min-h-[calc(1lh+1.5rem)] w-full resize-none bg-transparent pt-4 pb-2 text-sm outline-none pointer-coarse:text-base ${bash ? "pr-4 pl-8 font-mono" : "px-4"}`}
         rows={phone ? 1 : 2}
-        placeholder={bash ? (running || blocked ? "Queue a shell command: it runs when the current work ends" : "Run a shell command (Esc to exit)") : placeholder}
+        placeholder={bash ? (running || blocked ? tr("app.prompt.bashQueue") : tr("app.prompt.bashRun")) : placeholder}
         autoFocus={autoFocus}
         disabled={disabled}
         value={text}
@@ -5674,7 +5689,8 @@ function Timeline({ view, parentId, items = timeline(view, parentId) }: { view: 
   );
 }
 
-function CopyAction({ text, label = "Copy message", className = "" }: { text: string; label?: string; className?: string }) {
+function CopyAction({ text, label, className = "" }: { text: string; label?: string; className?: string }) {
+  const tr = useT();
   const [copied, setCopied] = useState(false);
   // navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>), so Copy does nothing there.
   const copy = () =>
@@ -5686,7 +5702,7 @@ function CopyAction({ text, label = "Copy message", className = "" }: { text: st
       () => {},
     );
   return (
-    <MessageAction title="Copy" label={label} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
+    <MessageAction title={tr("app.prompt.copy")} label={label ?? tr("app.prompt.copyMessage")} className={`pointer-coarse:size-11 ${className}`} onClick={copy}>
       {copied ? <CheckIcon /> : <CopyIcon />}
     </MessageAction>
   );
@@ -5703,6 +5719,7 @@ function RewindPanel(props: {
   rewind: (mode: RewindMode) => Promise<void>;
   onCancel: () => void;
 }) {
+  const tr = useT();
   const [preview, setPreview] = useState<RewindPreview>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -5724,11 +5741,11 @@ function RewindPanel(props: {
       className="ml-auto flex w-full max-w-md flex-col gap-2 rounded-lg border p-3 text-sm"
       data-testid="rewind-panel"
     >
-      {!preview && !error && <p className="text-muted-foreground">Checking file changes…</p>}
+      {!preview && !error && <p className="text-muted-foreground">{tr("app.rewindPanel.checking")}</p>}
       {preview && preview.filesChanged.length > 0 && (
         <div>
           <p className="text-muted-foreground text-xs">
-            Restore code changes {preview.filesChanged.length} file(s), +{preview.insertions} −{preview.deletions}:
+            {tr("app.rewindPanel.restore", { count: preview.filesChanged.length, insertions: preview.insertions, deletions: preview.deletions })}
           </p>
           <ul className="font-mono text-xs" data-testid="rewind-files">
             {preview.filesChanged.map((f) => (
@@ -5739,7 +5756,7 @@ function RewindPanel(props: {
           </ul>
         </div>
       )}
-      {preview && !options.length && <p className="text-muted-foreground">Nothing to rewind: first message and no file changes.</p>}
+      {preview && !options.length && <p className="text-muted-foreground">{tr("app.rewindPanel.nothing")}</p>}
       {error && <p className="text-destructive">{error}</p>}
       <div className="flex flex-wrap gap-2">
         {options.map((o) => (
@@ -5748,7 +5765,7 @@ function RewindPanel(props: {
           </Button>
         ))}
         <Button size="sm" variant="ghost" onClick={props.onCancel}>
-          Cancel
+          {tr("app.rewindPanel.cancel")}
         </Button>
       </div>
     </div>
@@ -5780,6 +5797,7 @@ function UserMessage({ part, view, index, pending, actions, children }: { part: 
 
 /** Optimistic prompt (GH-133): the bubble of a sent prompt until its user_text arrives; same box as the real one. */
 function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; index: number }) {
+  const tr = useT();
   const part: UserTextPart = { type: "user_text", id: p.key, text: p.text, images: p.images };
   return (
     <UserMessage
@@ -5791,7 +5809,7 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
         <>
           <CopyAction text={stripPasted(p.text)} />
           <QuoteAction text={splitUploads(stripPasted(p.text)).text} />
-          <MessageAction className="pointer-coarse:size-11" title="Rewind" label="Rewind to before this message" disabled>
+          <MessageAction className="pointer-coarse:size-11" title={tr("app.prompt.rewind")} label={tr("app.prompt.rewindLabel")} disabled>
             <RotateCcwIcon />
           </MessageAction>
         </>
@@ -5802,16 +5820,18 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
 
 /** The working row: shown while a turn runs, and at once for a just-sent prompt. */
 function ThinkingRow({ className }: { className?: string }) {
+  const tr = useT();
   return (
     <div data-testid="thinking" className={className}>
       <Shimmer as="span" className="font-medium text-sm">
-        Thinking
+        {tr("app.timeline.thinking")}
       </Shimmer>
     </div>
   );
 }
 
 function PartView({ part, view }: { part: Part; view: SessionView }) {
+  const tr = useT();
   const openRun = use(OpenRunContext);
   switch (part.type) {
     case "user_text": {
@@ -5835,7 +5855,7 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
               {files.map((f) => (
                 <div key={f.path} title={f.name} data-testid="attachment" className="flex w-40 flex-col gap-1.5 rounded-md bg-accent p-2 text-[11px] leading-3 tracking-[0.05px] shadow-[inset_0_0_0_0.5px_var(--border)]">
                   <span className="truncate font-medium">{f.name}</span>
-                  <span className="text-muted-foreground">{/\.([^.]+)$/.exec(f.name)?.[1]!.toUpperCase() ?? "File"}</span>
+                  <span className="text-muted-foreground">{/\.([^.]+)$/.exec(f.name)?.[1]!.toUpperCase() ?? tr("app.timeline.file")}</span>
                 </div>
               ))}
             </div>
@@ -5862,14 +5882,14 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
     case "turn_interrupted":
       return (
         <div className="text-muted-foreground text-xs" data-testid="turn-interrupted">
-          Interrupted by user
+          {tr("app.timeline.interrupted")}
         </div>
       );
     case "notice":
       // Claude Code's banner levels: notice in inactive gray, warning prominent. A run of blank lines shows as one.
       return (
         <div data-testid="notice" className={`flex items-start gap-1.5 text-xs ${part.level === "warning" ? "text-warning" : "text-muted-foreground"}`}>
-          {part.level === "warning" && <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />}
+          {part.level === "warning" && <TriangleAlertIcon role="img" aria-label={tr("app.timeline.warning")} className="mt-px size-3.5 shrink-0" />}
           <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{part.text.replace(/\n{3,}/g, "\n\n")}</span>
         </div>
       );
@@ -5884,10 +5904,11 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
 
 /** Bash mode: what the user ran (`!command`) and its output, always open; a status line while running, stopped or failed. */
 function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
+  const tr = useT();
   const output = [part.stdout, part.stderr].filter(Boolean).join("\n");
   const call: ToolCall = { type: "tool_call", id: part.id, toolUseId: part.id, tool: "Bash", input: { command: part.command }, status: part.status === "running" ? "running" : "done" };
   const result = output ? { type: "tool_result" as const, id: `${part.id}:result`, toolUseId: part.id, output, isError: part.status === "error" } : undefined;
-  const status = part.status === "running" ? (part.shell ? "Running in background" : "Running…") : part.status === "stopped" ? "Stopped" : part.exitCode ? `Exit code ${part.exitCode}` : undefined;
+  const status = part.status === "running" ? (part.shell ? tr("app.timeline.bashBackground") : tr("app.timeline.bashRunning")) : part.status === "stopped" ? tr("app.timeline.bashStopped") : part.exitCode ? tr("app.timeline.bashExit", { code: part.exitCode }) : undefined;
   // Run in background (GH-485): at once while the command runs, the daemon keeps the process.
   const toBackground = use(BackgroundShellContext);
   const [moving, setMoving] = useState<{ error?: string }>();
@@ -5903,7 +5924,7 @@ function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
       </div>
       {canBackground && moving?.error && (
         <p role="alert" data-testid="run-in-background-error" className="text-destructive text-xs">
-          Could not run in background: {moving.error}
+          {tr("app.timeline.backgroundFailed", { message: moving.error })}
         </p>
       )}
     </div>
@@ -5913,36 +5934,38 @@ function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
 /** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
 /** "type/subtype" of an SDK message, e.g. "system/task_updated", muted; the error text of a failed query as a warning notice. */
 function RawPart({ message }: { message: unknown }) {
+  const tr = useT();
   const { type, subtype, error } = (message ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
   if (typeof error === "string")
     return (
       <div className="flex items-start gap-1.5 text-warning text-xs" data-testid="raw-part">
-        <TriangleAlertIcon role="img" aria-label="Warning" className="mt-px size-3.5 shrink-0" />
+        <TriangleAlertIcon role="img" aria-label={tr("app.timeline.warning")} className="mt-px size-3.5 shrink-0" />
         <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</span>
       </div>
     );
   return (
     <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
-      {[type, subtype].filter((v) => typeof v === "string").join("/") || "SDK message"}
+      {[type, subtype].filter((v) => typeof v === "string").join("/") || tr("app.timeline.sdkMessage")}
     </div>
   );
 }
 
 /** OpenCode compaction divider (line, label, line, 10px block padding); the summary Claude continues from, collapsed below it. */
 function CompactionDivider({ id, summary }: { id: string; summary?: string }) {
+  const tr = useT();
   // Outside the item: an item leaving the rendered window keeps its open summary.
   const { open, onOpenChange } = useExpanded(`compaction:${id}`);
   return (
     <div data-testid="compaction" className="flex flex-col">
       <div className="flex items-center gap-3 py-2.5 text-muted-foreground text-xs">
         <span className="h-px flex-1 bg-border" aria-hidden />
-        <span className="whitespace-nowrap">Conversation compacted</span>
+        <span className="whitespace-nowrap">{tr("app.timeline.compacted")}</span>
         <span className="h-px flex-1 bg-border" aria-hidden />
       </div>
       {summary && (
         <details className="group text-sm" data-testid="compaction-summary" open={open} onToggle={(e) => onOpenChange(e.currentTarget.open)}>
           <summary className="mx-auto flex min-h-6 w-fit cursor-pointer items-center rounded px-2 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-            Summary
+            {tr("app.timeline.summary")}
           </summary>
           <div className="mt-2 rounded-lg bg-muted p-3">
             <MessageResponse mode="static">{summary}</MessageResponse>
@@ -5975,13 +5998,14 @@ function AssistantText({ text, streaming }: { text: string; streaming: boolean }
 }
 
 function TurnFooter({ part }: { part: Extract<Part, { type: "turn_result" }> }) {
+  const tr = useT();
   const { usage } = part;
   const input = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens;
   const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   return (
     <div className="text-muted-foreground text-xs" data-testid="turn-result">
-      {part.isError && <span className="mr-2 text-destructive">error</span>}
-      {(part.durationMs / 1000).toFixed(1)}s · {fmt(input)} in / {fmt(usage.outputTokens)} out tokens
+      {part.isError && <span className="mr-2 text-destructive">{tr("app.timeline.error")}</span>}
+      {tr("app.timeline.turnStats", { seconds: (part.durationMs / 1000).toFixed(1), input: fmt(input), output: fmt(usage.outputTokens) })}
       {part.costUsd !== undefined && ` · $${part.costUsd.toFixed(4)}`}
     </div>
   );

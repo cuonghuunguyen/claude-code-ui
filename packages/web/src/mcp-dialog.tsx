@@ -9,14 +9,14 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import {
-  ACTION_ERROR,
-  ACTION_LABEL,
+  actionError,
+  actionLabel,
   actionsFor,
   buildAdd,
   canRemove,
   errorLine,
   groupServers,
-  PROJECT_SCOPE_WARNING,
+  projectScopeWarning,
   resultText,
   safeAuthUrl,
   SCOPES,
@@ -27,6 +27,7 @@ import {
   type AddForm,
   type McpAction,
 } from "./mcp.ts";
+import { useT } from "./i18n.ts";
 
 /** Status polling: every 2 s while an OAuth flow waits (the extension's), every 5 s while a server is connecting. */
 export const AUTH_POLL_MS = 2000;
@@ -56,6 +57,7 @@ export function McpDialog({
   request: <T>(msg: Request) => Promise<T>;
   onClose: () => void;
 }) {
+  const t = useT();
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
@@ -148,7 +150,7 @@ export function McpDialog({
     } catch (e) {
       // The failure text of the action, with the CLI's reason when it gives one.
       const reason = (e as Error).message;
-      setError(reason ? `${ACTION_ERROR[action]}: ${reason}` : ACTION_ERROR[action]);
+      setError(reason ? `${actionError(action)}: ${reason}` : actionError(action));
     } finally {
       setBusy(undefined);
       await load();
@@ -175,7 +177,7 @@ export function McpDialog({
     if (tab) tab.opener = null;
     try {
       const r = await request<McpAuthResult>({ type: "mcp.authenticate", ...base, name });
-      if (r.authUrl && !safeAuthUrl(r.authUrl)) throw new Error(`Sign-in page not opened: not https: ${r.authUrl}`);
+      if (r.authUrl && !safeAuthUrl(r.authUrl)) throw new Error(t("session.mcpDialog.signInNotOpened", { url: r.authUrl }));
       if (r.authUrl && tab) tab.location.href = r.authUrl;
       else tab?.close();
       if (r.requiresUserAction) {
@@ -188,7 +190,7 @@ export function McpDialog({
       }
     } catch (e) {
       tab?.close();
-      setError((e as Error).message || ACTION_ERROR.authenticate);
+      setError((e as Error).message || actionError("authenticate"));
     } finally {
       setBusy(undefined);
     }
@@ -201,7 +203,7 @@ export function McpDialog({
       setCallbackUrl("");
       void checkConnection(name);
     } catch (e) {
-      setError((e as Error).message || ACTION_ERROR.callback);
+      setError((e as Error).message || actionError("callback"));
     }
   }
   const remove = (name: string, scope: ConfigScope) =>
@@ -225,38 +227,38 @@ export function McpDialog({
   );
   const addButton = (
     <Button variant="secondary" className="self-start max-md:h-11" onClick={() => (clear(), setAdding(true))} data-testid="mcp-add">
-      Add server
+      {t("session.mcpDialog.addServer")}
     </Button>
   );
 
   return (
     <ConfigDialog
-      title="MCP servers"
+      title={t("session.mcpDialog.title")}
       open={open}
       onClose={onClose}
       busy={formBusy || busy?.action === "remove"}
       testId="mcp-dialog"
       footer={
         <a href={DOCS} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
-          Learn more about MCP
+          {t("session.mcpDialog.learnMore")}
         </a>
       }
     >
-      {loading && <p className="text-muted-foreground text-sm">Loading MCP servers…</p>}
-      {retrying && !adding && <p className="text-muted-foreground text-sm">Retrying…</p>}
+      {loading && <p className="text-muted-foreground text-sm">{t("session.mcpDialog.loading")}</p>}
+      {retrying && !adding && <p className="text-muted-foreground text-sm">{t("session.mcpDialog.retrying")}</p>}
       {!loading && !retrying && !adding && empty && (
         <div className="flex flex-col items-start gap-3 py-2">
           {banners}
-          <p className="text-muted-foreground text-sm">No MCP servers configured.</p>
+          <p className="text-muted-foreground text-sm">{t("session.mcpDialog.empty")}</p>
           {addButton}
         </div>
       )}
       {loadError && !adding && (
         <Banner kind="error">
-          Failed to load servers: {loadError}
+          {t("session.mcpDialog.loadFailed", { error: loadError })}
           <br />
           <button type="button" className="underline underline-offset-4" onClick={() => (setRetrying(true), void load())}>
-            Retry
+            {t("session.mcpDialog.retry")}
           </button>
         </Banner>
       )}
@@ -271,15 +273,15 @@ export function McpDialog({
               type="text"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter servers…"
-              aria-label="Filter servers…"
+              placeholder={t("session.mcpDialog.filter")}
+              aria-label={t("session.mcpDialog.filter")}
               autoComplete="off"
               spellCheck={false}
               className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
               data-testid="mcp-filter"
             />
           </label>
-          {!groups.length && <p className="py-6 text-center text-muted-foreground text-sm">No matching servers.</p>}
+          {!groups.length && <p className="py-6 text-center text-muted-foreground text-sm">{t("session.mcpDialog.noMatch")}</p>}
           <div className="flex flex-col gap-4" data-testid="mcp-list">
             {groups.map(([scope, list]) => (
               <div key={scope} className="flex flex-col gap-px">
@@ -324,7 +326,7 @@ export function McpDialog({
             onClick={() => show(undefined)}
             onKeyDown={(e) => e.repeat && (e.key === "Enter" || e.key === " ") && e.preventDefault()}
           >
-            ← Back to list
+            {t("session.mcpDialog.back")}
           </Button>
           {banners}
           {!error && current.error && <Banner kind="error">{errorLine(current.error)}</Banner>}
@@ -343,7 +345,7 @@ export function McpDialog({
                 onClick={() => run[a](current.name)}
                 data-testid={`mcp-${a}`}
               >
-                {busy?.server === current.name && busy.action === a ? ACTION_LABEL[a][1] : ACTION_LABEL[a][0]}
+                {actionLabel(a, busy?.server === current.name && busy.action === a)}
               </Button>
             ))}
             {canRemove(current) && (
@@ -353,49 +355,49 @@ export function McpDialog({
           {waiting === current.name && current.status !== "connected" && (
             <div className="flex w-full flex-col gap-2 rounded-md bg-secondary/60 p-3 text-sm" data-testid="mcp-auth-wait">
               <div className="flex flex-wrap items-center gap-2">
-                <span>Waiting for sign-in in the browser…</span>
+                <span>{t("session.mcpDialog.waitingSignIn")}</span>
                 <Button variant="secondary" size="sm" className="max-md:h-11" onClick={() => checkConnection(current.name)}>
-                  Check connection
+                  {t("session.mcpDialog.checkConnection")}
                 </Button>
               </div>
               {/* The CLI's redirect listener is on the daemon machine: a phone's redirect fails, so its URL is pasted here. */}
-              <strong className="font-medium">Browser shows a connection error after sign-in? Copy that page's address and paste it here:</strong>
+              <strong className="font-medium">{t("session.mcpDialog.callbackHint")}</strong>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={callbackUrl}
                   onChange={(e) => setCallbackUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && void submitCallback(current.name)}
-                  placeholder="http://localhost:.../callback?code=...&state=..."
-                  aria-label="Callback URL"
+                  placeholder={t("session.mcpDialog.callbackPlaceholder")}
+                  aria-label={t("session.mcpDialog.callbackLabel")}
                   autoComplete="off"
                   spellCheck={false}
                   className="h-8 min-w-0 flex-1 rounded-md bg-background px-3 text-sm outline-none ring-1 ring-border placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:text-base"
                   data-testid="mcp-callback"
                 />
                 <Button className="max-md:h-11" onClick={() => void submitCallback(current.name)}>
-                  Submit
+                  {t("session.mcpDialog.submit")}
                 </Button>
               </div>
               {authUrl && (
                 <a href={authUrl} target="_blank" rel="noopener noreferrer" className="self-start text-muted-foreground underline underline-offset-4 hover:text-foreground max-md:inline-flex max-md:min-h-11 max-md:items-center">
-                  Re-open authentication page
+                  {t("session.mcpDialog.reopenAuth")}
                 </a>
               )}
             </div>
           )}
           {current.status === "connected" && !!current.tools?.length && (
             <button type="button" className="text-muted-foreground text-sm hover:text-foreground max-md:min-h-11" onClick={() => setShowTools((v) => !v)} aria-expanded={showTools} data-testid="mcp-tools-toggle">
-              {showTools ? "Hide tools ▴" : `View tools (${current.tools.length}) ▾`}
+              {showTools ? t("session.mcpDialog.hideTools") : t("session.mcpDialog.viewTools", { count: current.tools.length })}
             </button>
           )}
           {showTools && current.tools && (
             <ul className="flex w-full flex-col gap-px" data-testid="mcp-tools">
-              {current.tools.map((t) => (
-                <li key={t.name} className="flex min-h-8 items-center gap-2 rounded-md px-3 text-[13px]">
-                  <span className="min-w-0 truncate font-mono">{t.name}</span>
-                  {t.readOnly && <span className="rounded px-1.5 py-0.5 text-muted-foreground text-xs ring-1 ring-border">read-only</span>}
-                  {t.destructive && <span className="rounded px-1.5 py-0.5 text-destructive text-xs ring-1 ring-destructive/40">destructive</span>}
+              {current.tools.map((tool) => (
+                <li key={tool.name} className="flex min-h-8 items-center gap-2 rounded-md px-3 text-[13px]">
+                  <span className="min-w-0 truncate font-mono">{tool.name}</span>
+                  {tool.readOnly && <span className="rounded px-1.5 py-0.5 text-muted-foreground text-xs ring-1 ring-border">{t("session.mcpDialog.readOnly")}</span>}
+                  {tool.destructive && <span className="rounded px-1.5 py-0.5 text-destructive text-xs ring-1 ring-destructive/40">{t("session.mcpDialog.destructive")}</span>}
                 </li>
               ))}
             </ul>
@@ -409,6 +411,7 @@ export function McpDialog({
 const ICON_COLOR: Record<string, string> = { connected: "text-success", failed: "text-destructive", "needs-auth": "text-warning" };
 
 function StatusBadge({ status }: { status: string }) {
+  useT();
   return (
     <span className="flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground" data-testid="mcp-status">
       <span aria-hidden className={ICON_COLOR[status] ?? "text-faint"}>
@@ -421,23 +424,24 @@ function StatusBadge({ status }: { status: string }) {
 
 /** "Remove" with the extension's inline confirmation. */
 function Remove({ name, scope, disabled, removing, onRemove }: { name: string; scope: ConfigScope; disabled: boolean; removing: boolean; onRemove: () => void }) {
+  const t = useT();
   const [confirm, setConfirm] = useState(false);
   if (!confirm)
     return (
       <Button variant="destructive" className="max-md:h-11" disabled={disabled} onClick={() => setConfirm(true)} data-testid="mcp-remove">
-        Remove
+        {t("session.mcpDialog.remove")}
       </Button>
     );
   return (
     <div className="flex w-full flex-wrap items-center gap-2" data-testid="mcp-remove-confirm">
       <span className="text-sm">
-        Remove {name} from {scope} config?
+        {t("session.mcpDialog.removeConfirm", { name, scope })}
       </span>
       <Button variant="destructive" className="max-md:h-11" disabled={disabled} onClick={onRemove}>
-        {removing ? "Removing…" : "Confirm remove"}
+        {removing ? t("session.mcpDialog.removing") : t("session.mcpDialog.confirmRemove")}
       </Button>
       <Button variant="secondary" className="max-md:h-11" disabled={disabled} onClick={() => setConfirm(false)} autoFocus>
-        Cancel
+        {t("session.mcpDialog.cancel")}
       </Button>
     </div>
   );
@@ -450,6 +454,7 @@ const inputClass =
 
 /** "Add MCP server" form. `onSubmit` rejects with the daemon's error, shown above the form. */
 function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scope: ConfigScope, config: McpAddConfig) => Promise<void>; onBack: () => void; onBusy: (b: boolean) => void }) {
+  const t = useT();
   const [form, setForm] = useState<AddForm>({ name: "", transport: "stdio", command: "", args: "", env: "", url: "", headers: "" });
   const [scope, setScope] = useState<ConfigScope>("local");
   const [busy, setBusy] = useState(false);
@@ -464,7 +469,7 @@ function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scop
     try {
       await onSubmit(r.name, scope, r.config);
     } catch (e) {
-      setError((e as Error).message || "Failed to add server");
+      setError((e as Error).message || actionError("add"));
     } finally {
       setBusy(false);
       onBusy(false);
@@ -495,34 +500,34 @@ function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scop
   return (
     <div className="flex flex-col items-stretch gap-3" data-testid="mcp-add-form">
       <Button variant="ghost" size="sm" className="-ml-2 self-start text-muted-foreground max-md:h-11" onClick={onBack} disabled={busy}>
-        ← Back to list
+        {t("session.mcpDialog.back")}
       </Button>
-      <h3 className="font-medium text-[15px]">Add MCP server</h3>
+      <h3 className="font-medium text-[15px]">{t("session.mcpDialog.addTitle")}</h3>
       {error && <Banner kind="error">{error}</Banner>}
       <div className={field}>
         <label className={label} htmlFor="mcp-add-name">
-          Name
+          {t("session.mcpDialog.name")}
         </label>
-        <input id="mcp-add-name" autoFocus className={cn(inputClass, "h-9 max-md:h-11")} placeholder="example-tools" value={form.name} onChange={set("name")} autoComplete="off" spellCheck={false} />
+        <input id="mcp-add-name" autoFocus className={cn(inputClass, "h-9 max-md:h-11")} placeholder={t("session.mcpDialog.namePlaceholder")} value={form.name} onChange={set("name")} autoComplete="off" spellCheck={false} />
       </div>
-      {options("Transport", TRANSPORTS, form.transport, (t) => setForm((f) => ({ ...f, transport: t })))}
+      {options(t("session.mcpDialog.transport"), TRANSPORTS, form.transport, (transport) => setForm((f) => ({ ...f, transport })))}
       {form.transport === "stdio" ? (
         <>
           <div className={field}>
             <label className={label} htmlFor="mcp-add-command">
-              Command
+              {t("session.mcpDialog.command")}
             </label>
-            <input id="mcp-add-command" className={cn(inputClass, "h-9 max-md:h-11")} placeholder="npx" value={form.command} onChange={set("command")} autoComplete="off" spellCheck={false} />
+            <input id="mcp-add-command" className={cn(inputClass, "h-9 max-md:h-11")} placeholder={t("session.mcpDialog.commandPlaceholder")} value={form.command} onChange={set("command")} autoComplete="off" spellCheck={false} />
           </div>
           <div className={field}>
             <label className={label} htmlFor="mcp-add-args">
-              Arguments (one per line)
+              {t("session.mcpDialog.args")}
             </label>
             <textarea id="mcp-add-args" rows={3} className={cn(inputClass, "py-2 font-mono")} value={form.args} onChange={set("args")} spellCheck={false} />
           </div>
           <div className={field}>
             <label className={label} htmlFor="mcp-add-env">
-              Environment variables (KEY=value, one per line)
+              {t("session.mcpDialog.env")}
             </label>
             <textarea id="mcp-add-env" rows={3} className={cn(inputClass, "py-2 font-mono")} value={form.env} onChange={set("env")} spellCheck={false} />
           </div>
@@ -531,22 +536,22 @@ function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scop
         <>
           <div className={field}>
             <label className={label} htmlFor="mcp-add-url">
-              URL
+              {t("session.mcpDialog.url")}
             </label>
-            <input id="mcp-add-url" className={cn(inputClass, "h-9 max-md:h-11")} placeholder="https://example.com/mcp" value={form.url} onChange={set("url")} autoComplete="off" spellCheck={false} />
+            <input id="mcp-add-url" className={cn(inputClass, "h-9 max-md:h-11")} placeholder={t("session.mcpDialog.urlPlaceholder")} value={form.url} onChange={set("url")} autoComplete="off" spellCheck={false} />
           </div>
           <div className={field}>
             <label className={label} htmlFor="mcp-add-headers">
-              Headers (Header-Name: value, one per line)
+              {t("session.mcpDialog.headers")}
             </label>
             <textarea id="mcp-add-headers" rows={3} className={cn(inputClass, "py-2 font-mono")} value={form.headers} onChange={set("headers")} spellCheck={false} />
           </div>
         </>
       )}
-      {options("Scope", SCOPES, scope, setScope)}
-      {scope === "project" && <p className="rounded-md bg-warning/10 px-3 py-2 text-sm">{PROJECT_SCOPE_WARNING}</p>}
+      {options(t("session.mcpDialog.scope"), SCOPES, scope, setScope)}
+      {scope === "project" && <p className="rounded-md bg-warning/10 px-3 py-2 text-sm">{projectScopeWarning()}</p>}
       <Button className="self-start max-md:h-11" onClick={() => void submit()} disabled={busy} data-testid="mcp-add-submit">
-        {busy ? "Adding…" : "Add server"}
+        {busy ? t("session.mcpDialog.adding") : t("session.mcpDialog.addServer")}
       </Button>
     </div>
   );

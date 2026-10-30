@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useKeyContextMenu } from "./context-menu-key.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import type { MenuEntry } from "./sidebar-menus.ts";
+import { useT } from "./i18n.ts";
 
 export const CHECK_ITEM = cn(ITEM, "gap-2");
 export const Tick = ({ on }: { on: boolean }) => <span className="grid size-4 shrink-0 place-items-center">{on && <CheckIcon className="size-4" aria-hidden />}</span>;
@@ -73,12 +74,13 @@ export function RowContextMenu({ entries, children, testId }: { entries: () => M
 
 /** `...` menu of a project or worktree row below `md`: the same entries as the context menu, so the label keeps the room. */
 export function RowMenu({ label, testId, entries, disabled }: { label: string; testId: string; entries: () => MenuEntry[]; disabled?: boolean }) {
+  const t = useT();
   return (
     <Menu.Root>
       <Menu.Trigger
-        aria-label={`Actions for ${label}`}
+        aria-label={t("sidebar.actionsFor", { name: label })}
         disabled={disabled}
-        title="Actions"
+        title={t("sidebar.actions")}
         className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4"
         data-testid={testId}
       >

@@ -8,6 +8,7 @@ import {
   selectedQuote,
   selectionTarget,
 } from "./quote.ts";
+import { useT } from "./i18n.ts";
 
 /** Sends a quote to the active prompt box; absent outside App (the hover action then renders nothing). */
 export const QuoteContext = createContext<
@@ -16,6 +17,7 @@ export const QuoteContext = createContext<
 
 /** Floating "Quote" next to a selection inside one timeline message (VS Code plan-review "Add Comment" pattern). */
 export function QuoteButton({ onQuote }: { onQuote: (quote: string) => void }) {
+  const t = useT();
   const [shown, setShown] = useState<{ quote: string; rect: DOMRect }>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
@@ -84,19 +86,20 @@ export function QuoteButton({ onQuote }: { onQuote: (quote: string) => void }) {
       onClick={() => (onQuote(shown.quote), setShown(undefined))}
     >
       <TextQuoteIcon />
-      Quote
+      {t("session.quote.button")}
     </Button>
   );
 }
 
 /** Hover "Quote": the selection inside this message, else the whole message (cut at the cap). */
 export function QuoteAction({ text }: { text: string }) {
+  const t = useT();
   const quote = use(QuoteContext);
   if (!quote) return null;
   return (
     <MessageAction
-      title="Quote"
-      label="Quote in prompt"
+      title={t("session.quote.button")}
+      label={t("session.quote.label")}
       className="pointer-coarse:size-11"
       onPointerDown={(e) => e.preventDefault()}
       onMouseDown={(e) => e.preventDefault()}

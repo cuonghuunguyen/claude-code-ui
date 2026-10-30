@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
 import { SessionList } from "./sidebar.tsx";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
+import { setLocalePref } from "./i18n.ts";
 import { SideLabel, SideState } from "./sides.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -1327,5 +1328,18 @@ describe("status of a project's side (GH-458)", () => {
   it("a ready side shows no status", async () => {
     const { groups } = await render({ sideState: state({ state: "ready" }) });
     expect(groups().find((x) => x.dataset.cwd === web)!.querySelector('[data-testid="sidebar-side-status"]')).toBeNull();
+  });
+});
+
+describe("Vietnamese", () => {
+  afterEach(() => setLocalePref("system"));
+  it("renders the sidebar texts in Vietnamese and switches back", async () => {
+    setLocalePref("vi");
+    await render();
+    expect(document.querySelector<HTMLInputElement>('[data-testid="session-search"]')?.placeholder).toBe("Tìm phiên");
+    expect(document.body.textContent).toContain("Dự án");
+    expect(document.querySelector('[data-testid="open-project"]')?.getAttribute("aria-label")).toBe("Mở dự án");
+    await reactAct(async () => setLocalePref("system"));
+    expect(document.querySelector<HTMLInputElement>('[data-testid="session-search"]')?.placeholder).toBe("Search sessions");
   });
 });

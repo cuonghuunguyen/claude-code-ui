@@ -2,6 +2,8 @@
 import { useSyncExternalStore } from "react";
 import { IS_MAC, SHORTCUTS, altGrChar, canon, isAltCode, matchesKey, parseSpec, defaultSpec, shortcutById, type Shortcut } from "./shortcuts.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
+import { t, type Key } from "./i18n.ts";
+import { shortcutTitle } from "./shortcut-titles.ts";
 
 const KEY = "claude-ui.keybindings";
 
@@ -9,25 +11,27 @@ const KEY = "claude-ui.keybindings";
 const RESERVED = ["mod+t", "mod+w", "mod+n", "mod+shift+t", "mod+shift+n", "mod+shift+w", "ctrl+tab", "ctrl+shift+tab", "ctrl+pageup", "ctrl+pagedown", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `mod+${n}`)];
 
 /** Keys the prompt box uses for editing (spec -> what it does): binding one would block paste, undo or word navigation there. `mod` is Ctrl, Cmd on macOS. */
-const EDITING_ALL: [string, string][] = [
-  ["mod+a", "Select all"], ["mod+c", "Copy"], ["mod+v", "Paste"], ["mod+shift+v", "Paste as plain text"], ["mod+x", "Cut"], ["mod+z", "Undo"], ["mod+shift+z", "Redo"],
+// The second item is a catalog key: the text is looked up when the message is built, never at module load.
+const EDITING_ALL: [string, Key][] = [
+  ["mod+a", "keymap.edit.selectAll"], ["mod+c", "keymap.edit.copy"], ["mod+v", "keymap.edit.paste"], ["mod+shift+v", "keymap.edit.pastePlain"], ["mod+x", "keymap.edit.cut"], ["mod+z", "keymap.edit.undo"], ["mod+shift+z", "keymap.edit.redo"],
 ];
-const arrows = (mod: string, what: string, keys = ["arrowleft", "arrowright", "arrowup", "arrowdown"]): [string, string][] =>
-  keys.flatMap((k) => [[`${mod}+${k}`, what] as [string, string], [`${mod}+shift+${k}`, what]]);
-const EDITING_WIN: [string, string][] = [
-  ["mod+y", "Redo"], ["mod+backspace", "Delete word"], ["mod+delete", "Delete word"],
-  ...arrows("mod", "Move or select by word", ["arrowleft", "arrowright"]), ...arrows("mod", "Move or select by paragraph", ["arrowup", "arrowdown"]),
-  ...arrows("mod", "Start or end of text", ["home", "end"]),
+const arrows = (mod: string, what: Key, keys = ["arrowleft", "arrowright", "arrowup", "arrowdown"]): [string, Key][] =>
+  keys.flatMap((k) => [[`${mod}+${k}`, what] as [string, Key], [`${mod}+shift+${k}`, what]]);
+const EDITING_WIN: [string, Key][] = [
+  ["mod+y", "keymap.edit.redo"], ["mod+backspace", "keymap.edit.deleteWord"], ["mod+delete", "keymap.edit.deleteWord"],
+  ...arrows("mod", "keymap.edit.moveWord", ["arrowleft", "arrowright"]), ...arrows("mod", "keymap.edit.moveParagraph", ["arrowup", "arrowdown"]),
+  ...arrows("mod", "keymap.edit.startEndText", ["home", "end"]),
 ];
-const EDITING_MAC: [string, string][] = [
-  ["mod+backspace", "Delete line"], ["alt+backspace", "Delete word"], ["alt+delete", "Delete word"],
-  ...arrows("mod", "Start or end of line or text"), ...arrows("alt", "Move or select by word"),
+const EDITING_MAC: [string, Key][] = [
+  ["mod+backspace", "keymap.edit.deleteLine"], ["alt+backspace", "keymap.edit.deleteWord"], ["alt+delete", "keymap.edit.deleteWord"],
+  ...arrows("mod", "keymap.edit.startEndLineText"), ...arrows("alt", "keymap.edit.moveWord"),
 ];
 
 /** What the prompt box does with this key, or undefined. */
 const editingKey = (spec: string, mac: boolean) => {
   const c = canon(spec, mac);
-  return [...EDITING_ALL, ...(mac ? EDITING_MAC : EDITING_WIN)].find(([s]) => canon(s, mac) === c)?.[1];
+  const hit = [...EDITING_ALL, ...(mac ? EDITING_MAC : EDITING_WIN)].find(([s]) => canon(s, mac) === c);
+  return hit && t(hit[1]);
 };
 
 /** Why `spec` cannot be a binding, or undefined when it can. */
@@ -35,19 +39,19 @@ export function bindingError(spec: string, mac = IS_MAC) {
   const { key, mods: set } = parseSpec(spec);
   const mods = [...set];
   // Older builds stored "dead": it fires on every dead key.
-  if (["dead", "unidentified", "process", ""].includes(key)) return "This key cannot be a shortcut";
-  if (!mods.some((m) => m === "mod" || m === "ctrl" || m === "meta" || m === "alt")) return "Use Ctrl, Cmd or Alt with the key, or it would fire while typing";
+  if (["dead", "unidentified", "process", ""].includes(key)) return t("keymap.cannot");
+  if (!mods.some((m) => m === "mod" || m === "ctrl" || m === "meta" || m === "alt")) return t("keymap.needsMod");
   const ctrl = set.has("ctrl") || (set.has("mod") && !mac);
   const meta = set.has("meta") || (set.has("mod") && mac);
   const typable = [...key].length === 1 || key === "space";
   // AltGr types a character with a punctuation or non-ASCII key (Spanish AltGr+[ key types "["). A spec cannot tell the number pad from the
   // main row, so the number pad operators stay allowed (the recorder refuses them on the main row).
-  if (!mac && ctrl && set.has("alt") && !meta && [...key].length === 1 && !/^[a-z0-9+\-*/.]$/.test(key)) return "Ctrl+Alt is AltGr on this keyboard and types a character with this key. Pick another key.";
+  if (!mac && ctrl && set.has("alt") && !meta && [...key].length === 1 && !/^[a-z0-9+\-*/.]$/.test(key)) return t("keymap.altGrType");
   // Option (+Shift) on a printing key types a character on macOS (Option+L is "@" on a German layout).
-  if (mac && set.has("alt") && !ctrl && !meta && typable) return "On macOS Option types a character with this key. Add Cmd or Ctrl.";
-  if (RESERVED.some((r) => canon(r, mac) === canon(spec, mac))) return "The browser keeps this shortcut";
+  if (mac && set.has("alt") && !ctrl && !meta && typable) return t("keymap.optionType");
+  if (RESERVED.some((r) => canon(r, mac) === canon(spec, mac))) return t("keymap.reserved");
   const editing = editingKey(spec, mac);
-  if (editing) return `The prompt box uses this key (${editing}). Pick another key.`;
+  if (editing) return t("keymap.promptUses", { what: editing });
   return undefined;
 }
 
@@ -111,10 +115,13 @@ export function conflictOf(id: string, spec: string, mac = IS_MAC, e?: KeyboardE
   const c = canon(spec, mac);
   const bound = (s: Shortcut) => (s.id !== id ? specOf(s.id, mac) : undefined);
   const other = SHORTCUTS.find((s) => bound(s) && (canon(bound(s)!, mac) === c || (e && matchesKey(bound(s)!, e, mac))));
-  if (other) return { id: other.id, title: other.title };
+  if (other) return { id: other.id, title: shortcutTitle(other.id) };
   if (id !== "sidebar.toggle") {
     const f = Object.entries(FORMAT_KEYS).find(([, k]) => canon(k, mac) === c || (e && matchesKey(k, e, mac)));
-    if (f) return { title: `${f[0][0]!.toUpperCase()}${f[0].slice(1)} in the prompt box` };
+    if (f) {
+      const name = t(`shortcuts.format.${f[0] as keyof typeof FORMAT_KEYS}`);
+      return { title: t("shortcuts.inPromptBox", { name: `${name[0]!.toUpperCase()}${name.slice(1)}` }) };
+    }
   }
   return undefined;
 }
@@ -134,17 +141,17 @@ const physicalKey = (e: KeyboardEvent, mac: boolean) =>
 /** Why the recorder refuses this key press, or undefined when it can be a binding (then specFromEvent and bindingError decide). */
 export function pressError(e: KeyboardEvent, mac = IS_MAC) {
   const altGr = altGrChar(e, mac);
-  if (altGr === "Dead") return "Ctrl+Alt is AltGr on this keyboard and starts an accented letter with this key. Pick another key.";
-  if (altGr) return `Ctrl+Alt is AltGr on this keyboard and types “${altGr}” with this key, so the shortcut would block typing it. Pick another key.`;
-  if (isAltCode(e, mac)) return "Alt with a number pad digit types a character code (Alt+0169 is ©). Use the digits above the letters.";
+  if (altGr === "Dead") return t("keymap.altGrDead");
+  if (altGr) return t("keymap.altGrChar", { char: altGr });
+  if (isAltCode(e, mac)) return t("keymap.altCode");
   if (mac && e.altKey && !e.ctrlKey && !e.metaKey && typesCharacter(e)) {
-    if (e.key === "Dead") return "On macOS Option starts an accented letter with this key, so the shortcut would block typing it. Add Cmd or Ctrl.";
-    return `On macOS Option types ${e.key === " " ? "a no-break space" : `“${e.key}”`} with this key, so the shortcut would block typing it. Add Cmd or Ctrl.`;
+    if (e.key === "Dead") return t("keymap.optionDead");
+    return t("keymap.optionChar", { char: e.key === " " ? t("keymap.noBreakSpace") : `“${e.key}”` });
   }
   if (physicalKey(e, mac)) return undefined;
   // Every dead key reports "Dead": a binding on one would fire on all of them.
-  if (e.key === "Dead") return "This is a dead key: it starts an accented letter. Pick another key.";
-  if (e.key === "Unidentified" || e.key === "Process") return "The browser does not say which key this is. Pick another key.";
+  if (e.key === "Dead") return t("keymap.dead");
+  if (e.key === "Unidentified" || e.key === "Process") return t("keymap.unidentified");
   return undefined;
 }
 

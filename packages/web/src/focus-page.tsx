@@ -4,6 +4,7 @@ import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import { useT, type Key } from "./i18n.ts";
 import { loadDraft, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
@@ -37,6 +38,7 @@ const LAST_ITEMS = 6;
 
 /** The last steps of the session in signal-only form, read-only: the last prompt onward, never the request itself. */
 function RecentContext({ view }: { view: SessionView }) {
+  const t = useT();
   const items = useMemo(() => {
     const all = signalItems(timeline(view), (c) => awaitingPermission(view).has(c.toolUseId));
     const lastPrompt = all.map((i) => i.kind === "part" && i.part.type === "user_text").lastIndexOf(true);
@@ -45,7 +47,7 @@ function RecentContext({ view }: { view: SessionView }) {
       .filter((i) => i.kind === "fold" || (i.kind === "part" && ["user_text", "assistant_text", "tool_call", "notice"].includes(i.part.type) && !(i.part.type === "tool_call" && awaitingPermission(view).has(i.part.toolUseId))))
       .slice(-LAST_ITEMS);
   }, [view]);
-  if (!items.length) return <p className="text-muted-foreground text-sm">No steps yet.</p>;
+  if (!items.length) return <p className="text-muted-foreground text-sm">{t("app.focusPage.noSteps")}</p>;
   return (
     <ul className="flex flex-col gap-1.5" data-testid="focus-context">
       {items.map((item) => {
@@ -80,23 +82,24 @@ type Props = {
   onCancelContinue: (sessionId: string) => void;
 };
 
-const TASK_GROUPS: { status: TodoItem["status"]; label: string }[] = [
-  { status: "completed", label: "Done" },
-  { status: "in_progress", label: "In progress" },
-  { status: "pending", label: "Next" },
+const TASK_GROUPS: { status: TodoItem["status"]; label: Key }[] = [
+  { status: "completed", label: "app.focusPage.taskDone" },
+  { status: "in_progress", label: "app.focusPage.taskInProgress" },
+  { status: "pending", label: "app.focusPage.taskNext" },
 ];
 
 /** The session's todo list in three groups, with k of n; completed items muted. */
 function TaskList({ items }: { items: TodoItem[] }) {
+  const t = useT();
   return (
-    <section aria-label="Tasks" data-testid="focus-tasks">
-      <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Tasks · {taskProgress(items)}</h3>
+    <section aria-label={t("app.focusPage.tasks")} data-testid="focus-tasks">
+      <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">{t("app.focusPage.tasksProgress", { progress: taskProgress(items) ?? "" })}</h3>
       <div className="flex max-h-48 flex-col gap-2 overflow-y-auto">
         {TASK_GROUPS.map(({ status, label }) => {
           const group = items.filter((t) => t.status === status);
           return group.length ? (
             <div key={status}>
-              <p className="mb-0.5 text-faint text-xs">{label}</p>
+              <p className="mb-0.5 text-faint text-xs">{t(label)}</p>
               <ul className="flex flex-col gap-1">
                 {group.map((t, n) => (
                   <li key={n} className={`flex items-start gap-2 text-sm ${status === "completed" ? "text-muted-foreground line-through" : ""}`}>
@@ -127,9 +130,10 @@ const KIND_ICON: Record<AttentionKind, { icon: typeof CircleAlertIcon; tone: str
 type SectionKey = "needs" | "working" | "finished";
 
 export function FocusPage({ list, views, worktrees, waiting, selected, onSelect, onRespond, onAnswer, onOpenSession, unread, activity, onCancelContinue }: Props) {
+  const t = useT();
   const now = useNow(1000);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ needs: false, working: false, finished: false });
-  const titleOf = (id: string) => list.find((s) => s.id === id)?.title || "Untitled";
+  const titleOf = (id: string) => list.find((s) => s.id === id)?.title || t("app.focusPage.untitled");
   // Rows answered while this page is shown, anywhere (here or in the session): one line each until the page is left.
   const [answered, setAnswered] = useState<Answered[]>([]);
   const previous = useRef(waiting);
@@ -166,7 +170,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   useEffect(() => {
     if (!refocus.current) return;
     refocus.current = false;
-    card.current?.querySelector<HTMLElement>("form input[type=radio], form input[type=checkbox], form button:not([aria-label='Stop'])")?.focus();
+    card.current?.querySelector<HTMLElement>("form input[type=radio], form input[type=checkbox], form button:not([data-testid$='-stop'])")?.focus();
   }, [current?.id]);
   const moveOn = (w: Waiting) => {
     refocus.current = true;
@@ -181,7 +185,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const more = (key: SectionKey, n: number) =>
     n > 0 || expanded[key] ? (
       <button type="button" className="mt-1 w-full cursor-pointer rounded-lg px-2.5 py-1.5 text-left text-muted-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))} data-testid="focus-more">
-        {expanded[key] ? "Show less" : `+${n} more`}
+        {expanded[key] ? t("app.focusPage.showLess") : t("app.focusPage.more", { count: n })}
       </button>
     ) : null;
   const select = (id: string) => (setDetail(true), onSelect(id));
@@ -212,7 +216,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
       <AttentionRowView row={r} title={titleOf(r.sessionId)} now={now} selected={r.id === current?.id} onSelect={() => select(r.id)} onAct={() => (r.action === "cancel_continue" ? ((pendingFocus.current = { id: r.id, before: shownIds }), onCancelContinue(r.sessionId)) : onOpenSession(r.sessionId))} />
       {r.suggestion && (
         <button type="button" title={r.suggestion} className="mt-1 ml-2.5 flex max-w-[calc(100%-0.625rem)] cursor-pointer items-center rounded-full border px-2.5 py-1 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => pickSuggestion(r.sessionId, r.suggestion!)} data-testid="focus-suggestion">
-          <span className="truncate">Next for you: {r.suggestion}</span>
+          <span className="truncate">{t("app.focusPage.nextForYou", { suggestion: r.suggestion })}</span>
         </button>
       )}
     </li>
@@ -229,7 +233,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     nestRows(items, list, idOf).map((g) => {
       if (!g.workers.length) return g.own.map(render);
       const open = !collapsed.has(g.root);
-      const label = `${open ? "Collapse" : "Expand"} the workers of ${titleOf(g.root)}`;
+      const label = t(open ? "app.focusPage.collapseWorkers" : "app.focusPage.expandWorkers", { title: titleOf(g.root) });
       const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
       return (
         <li key={`group:${g.root}`} data-testid="focus-group">
@@ -244,7 +248,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
             <button type="button" aria-expanded={open} aria-label={label} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 pointer-coarse:min-h-11" onClick={() => fold(g.root)} data-testid="focus-group-toggle">
               <Chevron className="size-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1 truncate font-medium">{titleOf(g.root)}</span>
-              <span className="shrink-0 text-muted-foreground text-xs">{g.workers.length} {g.workers.length === 1 ? "worker" : "workers"} · {word(g.workers[0]!)}</span>
+              <span className="shrink-0 text-muted-foreground text-xs">{t("app.focusPage.workerKind", { workers: t("app.focusPage.workers", { count: g.workers.length }), kind: word(g.workers[0]!) })}</span>
             </button>
           )}
           {open && <ul className="mt-1 flex flex-col gap-1.5 border-l pl-3 max-md:ml-2" data-testid="focus-workers">{g.workers.map(render)}</ul>}
@@ -262,14 +266,14 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
     <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
-          <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">Focus</h1>
+          <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">{t("app.focusPage.title")}</h1>
           <p className="truncate text-muted-foreground text-sm" data-testid="focus-subtitle">
             {focusSubtitle(attention, working.length)}
           </p>
         </div>
         {n > 0 && (
           <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => next && onSelect(next.part.id)} data-testid="focus-next">
-            Next waiting
+            {t("app.focusPage.nextWaiting")}
             <span className="flex gap-0.5 max-md:hidden" aria-hidden>
               {keys.map((k) => <kbd key={k} className="rounded border px-1 font-mono text-[10px]">{k}</kbd>)}
             </span>
@@ -280,7 +284,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
         <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto border-r p-3 max-md:border-r-0 ${detail && current ? "max-md:hidden" : ""}`} data-testid="focus-queue">
           {!needsEmpty ? (
             <section aria-labelledby="focus-needs">
-              <h2 id="focus-needs" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Needs you · {attention.filter((r) => r.kind !== "finished").length}</h2>
+              <h2 id="focus-needs" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">{t("app.focusPage.needsYou", { count: attention.filter((r) => r.kind !== "finished").length })}</h2>
               <ul className="flex flex-col gap-1.5">
                 {answered.map((a) => (
                   <li key={a.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground text-sm pointer-coarse:min-h-11" data-testid="focus-answered">
@@ -295,34 +299,34 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
           ) : (
             <section className="px-1 py-6 text-center" data-testid="focus-empty">
               <CheckIcon className="mx-auto mb-2 size-6 text-success" aria-hidden />
-              <p className="font-medium">Nothing needs you</p>
-              <p className="text-muted-foreground text-sm">{working.length ? "These sessions are still working." : "No session is running."}</p>
+              <p className="font-medium">{t("app.focusPage.nothingNeedsYou")}</p>
+              <p className="text-muted-foreground text-sm">{working.length ? t("app.focusPage.stillWorking") : t("app.focusPage.noneRunning")}</p>
             </section>
           )}
           {working.length > 0 && (
             <section aria-labelledby="focus-running">
-              <h2 id="focus-running" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Working · {working.length}</h2>
+              <h2 id="focus-running" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">{t("app.focusPage.working", { count: working.length })}</h2>
               <ul className="flex flex-col gap-1">
                 {renderGroups(workingShown.shown, (w) => w.session.id, ({ session: s, now: nowText, progress, quietMs }) => (
                   <li key={s.id}>
                     <button type="button" className="flex w-full cursor-pointer flex-col rounded-lg px-2.5 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" onClick={() => onOpenSession(s.id)} data-testid="focus-running-row">
                       <span className="flex items-center gap-2">
                         <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />
-                        <span className="min-w-0 flex-1 truncate">{s.title || "Untitled"}</span>
+                        <span className="min-w-0 flex-1 truncate">{s.title || t("app.focusPage.untitled")}</span>
                         <span className="shrink-0 text-muted-foreground text-xs">{quietMs > QUIET_SHOWN_MS ? quietLabel(quietMs) : timeAgo(s.lastActivity, now)}</span>
                       </span>
                       <span className="truncate pl-6 text-muted-foreground text-xs" data-testid="focus-now">{nowText}</span>
                       {progress && <span className="truncate pl-6 text-muted-foreground text-xs" data-testid="focus-progress">{progress}</span>}
                     </button>
                   </li>
-                ), () => "Working")}
+                ), () => t("app.focusPage.workingKind"))}
               </ul>
               {more("working", workingShown.more)}
             </section>
           )}
           {finished.shown.length > 0 && (
             <section aria-labelledby="focus-finished">
-              <h2 id="focus-finished" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">Finished while you were away · {attention.filter((r) => r.kind === "finished").length}</h2>
+              <h2 id="focus-finished" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">{t("app.focusPage.finished", { count: attention.filter((r) => r.kind === "finished").length })}</h2>
               <ul className="flex flex-col gap-1.5">{renderGroups(finished.shown, (r) => r.sessionId, renderRow, (r) => KIND_LABEL[r.kind])}</ul>
               {more("finished", finished.more)}
             </section>
@@ -333,16 +337,16 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
             <>
               <Button type="button" variant="ghost" className="w-fit md:hidden max-md:h-11 pointer-coarse:h-11" onClick={() => setDetail(false)} data-testid="focus-back">
                 <ArrowLeftIcon />
-                Back to queue
+                {t("app.focusPage.backToQueue")}
               </Button>
               <div className="flex flex-wrap items-center gap-2">
                 <ProjectAvatar cwd={session.cwd} />
                 <div className="min-w-0 flex-1">
-                  <h2 className="truncate font-medium" data-testid="focus-title">{session.title || "Untitled"}</h2>
+                  <h2 className="truncate font-medium" data-testid="focus-title">{session.title || t("app.focusPage.untitled")}</h2>
                   <p className="truncate text-muted-foreground text-xs" title={session.cwd}>{worktreeName(session.cwd, worktrees) ?? projectName(session.cwd)}</p>
                 </div>
                 <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onOpenSession(session.id)} data-testid="focus-open-session">
-                  Open session
+                  {t("app.focusPage.openSession")}
                   <ArrowRightIcon />
                 </Button>
               </div>
@@ -354,21 +358,21 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
               )}
               {current.action === "cancel_continue" && (
                 <Button type="button" variant="outline" className="w-fit max-md:h-11 pointer-coarse:h-11" onClick={() => onCancelContinue(session.id)} data-testid="focus-cancel-continue">
-                  Cancel continue
+                  {t("app.focusPage.cancelContinue")}
                 </Button>
               )}
               {tasks.length > 0 && <TaskList items={tasks} />}
               {view && (
-                <section aria-label="Recent context, signal only">
-                  <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">Recent context · signal only</h3>
+                <section aria-label={t("app.focusPage.recentContext")}>
+                  <h3 className="mb-1.5 font-medium text-muted-foreground text-xs">{t("app.focusPage.recentContextHeading")}</h3>
                   <RecentContext view={view} />
                 </section>
               )}
               {req && (
-                <section className="flex flex-col gap-1.5" aria-label="Request">
+                <section className="flex flex-col gap-1.5" aria-label={t("app.focusPage.request")}>
                   <p className="flex items-center gap-1.5 text-warning text-xs" data-testid="focus-waiting">
                     <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden />
-                    waiting {waitLabel(now - req.since)}
+                    {t("app.focusPage.waiting", { time: waitLabel(now - req.since) })}
                   </p>
                   <div ref={card}>
                     {req.part.type === "permission_request" ? (
@@ -381,7 +385,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
               )}
             </>
           ) : (
-            <p className="m-auto text-muted-foreground text-sm">Nothing is waiting for you.</p>
+            <p className="m-auto text-muted-foreground text-sm">{t("app.focusPage.nothingWaiting")}</p>
           )}
         </div>
       </div>
@@ -390,6 +394,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
 }
 
 function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row: AttentionRow; title: string; now: number; selected: boolean; onSelect: () => void; onAct: () => void }) {
+  const t = useT();
   const { icon: Icon, tone } = KIND_ICON[row.kind];
   const kindTone = BLOCKING.has(row.kind) ? "text-warning" : row.kind === "error" ? "text-destructive" : "text-muted-foreground";
   const age = row.request ? waitLabel(now - row.since) : row.kind === "stuck" ? "" : timeAgo(row.since, now);
@@ -420,7 +425,7 @@ function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row:
     <div className={`flex items-start gap-1 rounded-lg ${selected ? "bg-secondary ring-2 ring-foreground" : ""}`}>
       {select}
       <Button type="button" variant="outline" size="sm" className="mt-1.5 mr-1.5 shrink-0 max-md:h-11 pointer-coarse:h-11" onClick={onAct} data-testid="focus-row-action">
-        {row.action === "cancel_continue" ? "Cancel continue" : "Open session"}
+        {row.action === "cancel_continue" ? t("app.focusPage.cancelContinue") : t("app.focusPage.openSession")}
       </Button>
     </div>
   );
@@ -428,6 +433,7 @@ function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row:
 
 /** The sidebar's Focus entry above Projects, with how many sessions wait. */
 export function FocusRow({ count, active, onOpen }: { count: number; active: boolean; onOpen: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -438,11 +444,11 @@ export function FocusRow({ count, active, onOpen }: { count: number; active: boo
       data-command="focus.open"
     >
       <CrosshairIcon className="size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1 truncate font-medium">Focus</span>
+      <span className="min-w-0 flex-1 truncate font-medium">{t("app.focusPage.title")}</span>
       {count > 0 && (
         <span className="flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums leading-5" data-testid="focus-count">
           <CircleAlertIcon className="size-3" aria-hidden />
-          {count} waiting
+          {t("app.focusPage.sidebarWaiting", { count })}
         </span>
       )}
     </button>

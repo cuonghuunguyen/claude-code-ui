@@ -1,30 +1,31 @@
 import { CoffeeIcon } from "lucide-react";
 import { IconButton } from "./tabs-bar.tsx";
 import { wakeLockReason, type KeepAwakeStatus } from "./keep-awake.ts";
+import { t, useT } from "./i18n.ts";
 
 /** The tooltip for each state; the accessible name stays fixed and `aria-pressed` carries the state. */
 export function keepAwakeTitle(status: KeepAwakeStatus, error?: string): string {
   switch (status) {
     case "off":
-      return "Screen may sleep";
+      return t("awake.off");
     case "held":
-      return "Keep screen awake";
     case "pending":
-      return "Keep screen awake";
+      return t("awake.label");
     case "idle":
-      return "Keep screen awake (waits for a running session)";
+      return t("awake.idle");
     case "hidden":
-      return "Keep screen awake (resumes when the page is visible)";
+      return t("awake.hidden");
     case "refused":
-      return `Keep screen awake: the browser refused (${error ?? "error"}), e.g. battery saver. Retries when you return to the page.`;
+      return t("awake.refused", { error: error ?? "error" });
     case "unsupported":
-      return `Keep screen awake is not available here: ${wakeLockReason()}`;
+      return t("awake.unsupported", { reason: wakeLockReason() });
   }
 }
 
 export function KeepAwakeButton({ status, error, onToggle, className, testId }: { status: KeepAwakeStatus; error?: string; onToggle: () => void; className?: string; testId: string }) {
+  const t = useT();
   return (
-    <IconButton className={className} label="Keep screen awake" title={keepAwakeTitle(status, error)} pressed={status !== "off" && status !== "unsupported"} disabled={status === "unsupported"} onClick={onToggle} testId={testId} command="awake.toggle">
+    <IconButton className={className} label={t("awake.label")} title={keepAwakeTitle(status, error)} pressed={status !== "off" && status !== "unsupported"} disabled={status === "unsupported"} onClick={onToggle} testId={testId} command="awake.toggle">
       <CoffeeIcon className={status === "refused" ? "text-warning" : undefined} />
     </IconButton>
   );

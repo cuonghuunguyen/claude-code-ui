@@ -1,5 +1,6 @@
 // Shells list (GH-442; Claude Code /tasks): the shown session's background shells.
 import { isBackgroundShell, type Part, type ToolStatus } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 import { wholeParts, type SessionView, type ToolCall } from "./store.ts";
 
 export const isRunningShell = (c: ToolCall) => c.status === "pending" || c.status === "running";
@@ -19,6 +20,6 @@ export function shellsOf(v: SessionView): Shell[] {
 }
 
 /** Claude Code's task states. */
-export const SHELL_STATUS: Record<ToolStatus, string> = { pending: "Running", running: "Running", done: "Completed", error: "Failed", denied: "Failed", stopped: "Killed" };
+export const shellStatus = (s: ToolStatus): string => t(s === "pending" || s === "running" ? "files.shell.running" : s === "done" ? "files.shell.completed" : s === "stopped" ? "files.shell.killed" : "files.shell.failed");
 
 export const shellInput = (c: ToolCall) => c.input as { command?: string; description?: string };

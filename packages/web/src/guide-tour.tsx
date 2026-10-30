@@ -8,6 +8,7 @@ import { shownPrompt } from "./config-dialog.tsx";
 import { trapTab } from "./focus-trap.ts";
 import { GUTTER, isVisible, placePopover, resolveAnchor, type GuideHost, type Rect, type Side } from "./guide.ts";
 import { adapt, stepById } from "./guide-steps.ts";
+import { useT } from "./i18n.ts";
 import { keyLabels } from "./shortcuts.ts";
 
 const PAD = 4;
@@ -53,6 +54,7 @@ function useMedia(query: string) {
 }
 
 export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, returnFocus, visible = isVisible }: GuideTourProps) {
+  const t = useT();
   const media = useMedia("(max-width: 767px)");
   const narrow = forced ?? media;
   const steps = ids.flatMap((id) => stepById(id) ?? []);
@@ -191,11 +193,11 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
         {arrow && <span aria-hidden data-testid="guide-arrow" className="absolute size-2 rotate-45 bg-popover" style={arrow} />}
         <div className="flex items-center justify-between gap-2">
           <span className="text-muted-foreground text-xs tabular-nums" data-testid="guide-progress">
-            Step {index + 1} of {n}
+            {t("app.guideTour.step", { index: index + 1, total: n })}
           </span>
           <button
             type="button"
-            aria-label="Close tour"
+            aria-label={t("app.guideTour.close")}
             onClick={skip}
             className="flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:-m-3 pointer-coarse:size-11"
           >
@@ -212,7 +214,7 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
         </div>
         {keys.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs" data-testid="guide-keys">
-            <span>{coarseOnly ? "With a keyboard" : "Shortcut"}</span>
+            <span>{coarseOnly ? t("app.guideTour.withKeyboard") : t("app.guideTour.shortcut")}</span>
             {keys.map((k, i) => (
               <Fragment key={k.id}>
                 <kbd className="flex shrink-0 gap-0.5 font-sans">
@@ -235,13 +237,13 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
         <div className="flex items-center gap-2 pt-1">
           {!last && (
             <Button variant="ghost" size="sm" className={`-ml-2.5 text-muted-foreground ${btn}`} onClick={skip}>
-              Skip tour
+              {t("app.guideTour.skip")}
             </Button>
           )}
           <div className="ml-auto flex items-center gap-2">
             {index > 0 && (
               <Button variant="ghost" size="sm" className={`text-muted-foreground ${btn}`} onClick={back}>
-                Back
+                {t("app.guideTour.back")}
               </Button>
             )}
             {step.action && (
@@ -250,12 +252,12 @@ export function GuideTour({ ids, start, host, narrow: forced, onStep, onEnd, ret
               </Button>
             )}
             <Button ref={nextBtn} size="sm" className={btn} onClick={next}>
-              {step.id === "welcome" ? "Start tour" : last ? "Done" : "Next"}
+              {step.id === "welcome" ? t("app.guideTour.start") : last ? t("app.guideTour.done") : t("app.guideTour.next")}
             </Button>
           </div>
         </div>
         <div className="sr-only" role="status" aria-live="polite" data-testid="guide-live">
-          {`Step ${index + 1} of ${n}. ${step.title}. ${plain(body)}`}
+          {t("app.guideTour.live", { index: index + 1, total: n, title: step.title, body: plain(body) })}
         </div>
       </div>
     </div>,

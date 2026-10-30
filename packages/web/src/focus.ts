@@ -1,5 +1,6 @@
 // Focus page model (docs/spec.md "Focus"): every unanswered permission request and question across the listed sessions.
 import type { Part, SessionListItem, TodoItem } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 import { lastLine } from "./notify.ts";
 import { relPath } from "./paths.ts";
 import { clockText } from "./plan-meter.tsx";
@@ -47,7 +48,7 @@ export const callSummary = (tool: string, input: unknown, cwd = "") => [tool, ca
 
 /** "Bash · npm run test -- auth", "Edit · docs/setup.md +12 −3", "Question · Keep the old route?". */
 export function requestSummary(part: PermissionRequest | QuestionRequest, cwd = ""): string {
-  if (part.type === "question") return `Question · ${part.questions[0]?.question ?? ""}`;
+  if (part.type === "question") return t("app.focus.questionSummary", { question: part.questions[0]?.question ?? "" });
   const detail = callDetail(part.input, cwd);
   const stats = diffStats(part.tool, part.input);
   return [part.tool, [detail, stats && `+${stats.added} −${stats.removed}`].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
@@ -57,18 +58,18 @@ export function requestSummary(part: PermissionRequest | QuestionRequest, cwd = 
 export function answeredLabel(part: PermissionRequest | QuestionRequest, cwd = ""): string {
   if (part.type === "question") {
     const answers = Object.values(part.answers ?? {});
-    return answers.length ? `Answered: ${answers.join(", ")}` : "Cancelled";
+    return answers.length ? t("app.focus.answered", { answers: answers.join(", ") }) : t("app.focus.cancelled");
   }
   const what = requestSummary(part, cwd).replace(/^[^·]*· ?/, "") || part.tool;
   switch (part.decision) {
     case "allow":
-      return `Allowed ${what}`;
+      return t("app.focus.allowed", { what });
     case "allow_always":
-      return `Always allowed ${what}`;
+      return t("app.focus.alwaysAllowed", { what });
     case "deny":
-      return `Denied ${what}`;
+      return t("app.focus.denied", { what });
     default:
-      return "Cancelled";
+      return t("app.focus.cancelled");
   }
 }
 
@@ -88,7 +89,7 @@ export function waitLabel(ms: number): string {
 }
 
 /** The status text a screen reader hears when the count changes. */
-export const waitingStatus = (n: number) => (n === 0 ? "No session needs input" : n === 1 ? "1 session needs input" : `${n} sessions need input`);
+export const waitingStatus = (n: number) => (n === 0 ? t("app.focus.noneNeedInput") : t("app.focus.needInput", { count: n }));
 
 // ---- GH-270: what needs a look, per session ----
 
@@ -97,7 +98,29 @@ export type AttentionKind = "escalated" | "permission" | "question" | "error" | 
 export const KIND_ORDER: readonly AttentionKind[] = ["escalated", "permission", "question", "error", "limit", "stuck", "finished"];
 /** Kinds that block the session until the user acts: the only ones the badge counts. */
 export const BLOCKING: ReadonlySet<AttentionKind> = new Set<AttentionKind>(["escalated", "permission", "question"]);
-export const KIND_LABEL: Record<AttentionKind, string> = { escalated: "Escalated", permission: "Permission", question: "Question", error: "Error", limit: "Usage limit", stuck: "Quiet", finished: "Finished" };
+export const KIND_LABEL: Record<AttentionKind, string> = {
+  get escalated() {
+    return t("app.focus.kind.escalated");
+  },
+  get permission() {
+    return t("app.focus.kind.permission");
+  },
+  get question() {
+    return t("app.focus.kind.question");
+  },
+  get error() {
+    return t("app.focus.kind.error");
+  },
+  get limit() {
+    return t("app.focus.kind.limit");
+  },
+  get stuck() {
+    return t("app.focus.kind.stuck");
+  },
+  get finished() {
+    return t("app.focus.kind.finished");
+  },
+};
 
 export type AttentionRow = {
   /** The request's part id for request kinds, else `${kind}:${sessionId}`. */
@@ -153,25 +176,25 @@ function errorText(view: SessionView): string {
     const error = p.type === "raw" ? (p.message as { error?: unknown } | null)?.error : undefined;
     if (error) return String(error).replace(/^Error:\s*/i, "");
   }
-  return "the turn ended with an error";
+  return t("app.focus.turnError");
 }
 
 /** The todo list a row shows: the live list while the turn runs, the last one once idle (the store clears `todos` on idle, also with a background task still running). */
 export const rowTodos = (v: SessionView): TodoItem[] => (v.state === "idle" ? v.lastTodos : v.todos);
 
 /** "k of n": the task at work (completed ones plus the in-progress one) of all; undefined for an empty list. */
-export const taskProgress = (items: TodoItem[]) => (items.length ? `${items.filter((t) => t.status === "completed").length + (items.some((t) => t.status === "in_progress") ? 1 : 0)} of ${items.length}` : undefined);
+export const taskProgress = (items: TodoItem[]) => (items.length ? t("app.focus.progress", { done: items.filter((x) => x.status === "completed").length + (items.some((x) => x.status === "in_progress") ? 1 : 0), total: items.length }) : undefined);
 
 /** "4 of 4 · Done: <last completed item>"; undefined for an empty list or none completed. */
 export function doneSummary(items: TodoItem[]): string | undefined {
   const last = lastOf(items, (t) => t.status === "completed");
-  return last ? `${taskProgress(items)} · Done: ${last.content}` : undefined;
+  return last ? t("app.focus.doneSummary", { progress: taskProgress(items)!, item: last.content }) : undefined;
 }
 
 /** "quiet 6m", "quiet 1h 3m". */
 export function quietLabel(ms: number): string {
   const m = Math.max(0, Math.floor(ms / 60_000));
-  return m < 60 ? `quiet ${m}m` : `quiet ${Math.floor(m / 60)}h ${m % 60}m`;
+  return m < 60 ? t("app.focus.quietMinutes", { m }) : t("app.focus.quietHours", { h: Math.floor(m / 60), m: m % 60 });
 }
 
 /** What a running session does now: the in-progress task, the running call, else Compacting, Thinking or Writing. */
@@ -182,18 +205,18 @@ export function nowLine(view: SessionView, cwd = ""): string {
   const running = lastOf(parts, (p) => p.type === "tool_call" && p.status === "running");
   if (running?.type === "tool_call") return callSummary(running.tool, running.input, cwd);
   const last = parts.at(-1);
-  if (last?.type === "compaction" && !last.summary) return "Compacting";
-  if (last?.type === "thinking" && last.streaming) return "Thinking";
-  return "Writing";
+  if (last?.type === "compaction" && !last.summary) return t("app.focus.compacting");
+  if (last?.type === "thinking" && last.streaming) return t("app.focus.thinking");
+  return t("app.focus.writing");
 }
 
 const rowOfRequest = (w: Waiting, cwd: string): AttentionRow => {
   const { part } = w;
-  const ask = part.type === "question" ? `Answer: ${part.questions[0]?.question ?? ""}` : undefined;
+  const ask = part.type === "question" ? t("app.focus.answer", { question: part.questions[0]?.question ?? "" }) : undefined;
   const escalated = !!part.escalated;
   const kind: AttentionKind = escalated ? "escalated" : part.type === "question" ? "question" : "permission";
-  const reason = ask ?? (escalated ? `Decide: ${requestSummary(part, cwd)}` : `Allow or deny ${requestSummary(part, cwd)}`);
-  return { id: part.id, kind, sessionId: w.sessionId, since: w.since, reason, detail: escalated && part.reason ? `Coordinator: ${part.reason}` : undefined, request: part, action: "answer" };
+  const reason = ask ?? (escalated ? t("app.focus.decide", { summary: requestSummary(part, cwd) }) : t("app.focus.allowOrDeny", { summary: requestSummary(part, cwd) }));
+  return { id: part.id, kind, sessionId: w.sessionId, since: w.since, reason, detail: escalated && part.reason ? t("app.focus.coordinator", { reason: part.reason }) : undefined, request: part, action: "answer" };
 };
 
 /** Every row of the Needs you and Finished lists, in display order: request rows, then at most one row per session without a request. */
@@ -211,20 +234,20 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
     // After a daemon restart the sessions are closed and mostly without a view: `unread` (the browser's seen mark or shown record) alone says it finished unseen.
     if (!view) {
-      if (s.state === "closed" && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, "Review the result", "open"));
+      if (s.state === "closed" && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, t("app.focus.reviewResult"), "open"));
       continue;
     }
-    if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, `Check the error: ${errorText(view)}`, "open"));
-    else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset: continues at ${clock(view.continueAt)}`, "cancel_continue"));
-    else if (view.limitStop) rows.push(row("limit", s.lastActivity, `Wait for the usage limit to reset${view.limitStop.resetsAt ? `: resets at ${clock(view.limitStop.resetsAt)}` : ""}`, "open"));
+    if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, t("app.focus.checkError", { error: errorText(view) }), "open"));
+    else if (view.continueAt !== undefined) rows.push(row("limit", s.lastActivity, t("app.focus.limitContinues", { time: clock(view.continueAt) }), "cancel_continue"));
+    else if (view.limitStop) rows.push(row("limit", s.lastActivity, view.limitStop.resetsAt ? t("app.focus.limitResets", { time: clock(view.limitStop.resetsAt) }) : t("app.focus.limitWait"), "open"));
     else if ((view.state === "running" || view.externalTurn) && !busy(view) && i.now - i.activity(s.id) >= STUCK_MS) {
       const at = i.activity(s.id);
       const lastCall = lastOf(topLevel(view), (p) => p.type === "tool_call");
-      rows.push(row("stuck", at, `Check it: ${quietLabel(i.now - at)}${lastCall?.type === "tool_call" ? ` since ${callSummary(lastCall.tool, lastCall.input, s.cwd)}` : ""}`, "open"));
+      rows.push(row("stuck", at, lastCall?.type === "tool_call" ? t("app.focus.checkItSince", { quiet: quietLabel(i.now - at), call: callSummary(lastCall.tool, lastCall.input, s.cwd) }) : t("app.focus.checkIt", { quiet: quietLabel(i.now - at) }), "open"));
     } else if ((view.state === "idle" || s.state === "closed") && !view.working && !view.externalTurn && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) {
       const text = lastOf(topLevel(view), (p) => p.type === "assistant_text");
       const line = text?.type === "assistant_text" ? lastLine(text.text) : undefined;
-      rows.push({ ...row("finished", s.lastActivity, line ? `Review: ${line}` : "Review the result", "open", doneSummary(view.lastTodos)), ...(view.suggestion && { suggestion: view.suggestion }) });
+      rows.push({ ...row("finished", s.lastActivity, line ? t("app.focus.review", { line }) : t("app.focus.reviewResult"), "open", doneSummary(view.lastTodos)), ...(view.suggestion && { suggestion: view.suggestion }) });
     }
   }
   const order = new Map(rows.map((r, n) => [r, n]));
@@ -256,8 +279,8 @@ export const blockingCount = (rows: AttentionRow[]) => new Set(rows.filter((x) =
 export function focusSubtitle(rows: AttentionRow[], working: number): string {
   const b = blockingCount(rows);
   const review = new Set(rows.filter((x) => !BLOCKING.has(x.kind)).map((x) => x.sessionId)).size;
-  const parts = [b && `${b} ${b === 1 ? "needs" : "need"} you`, review && `${review} to review`, working && `${working} working`].filter(Boolean);
-  return parts.length ? parts.join(" · ") : "Nothing needs you";
+  const parts = [b && t("app.focus.subNeeds", { count: b }), review && t("app.focus.subReview", { count: review }), working && t("app.focus.subWorking", { count: working })].filter(Boolean);
+  return parts.length ? parts.join(" · ") : t("app.focus.nothingNeeds");
 }
 
 // ---- GH-305: worker rows nest under their coordinator ----

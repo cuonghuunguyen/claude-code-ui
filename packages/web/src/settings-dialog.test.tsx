@@ -947,3 +947,21 @@ it("Appearance (GH-510): Language offers System, English, Tiếng Việt; a pick
   act(() => setLocalePref("system"));
   expect(document.getElementById("settings-language-label")!.textContent).toBe("Language");
 });
+
+it("renders Vietnamese: group list, daemon rows with their hints, and select labels", async () => {
+  const { setLocalePref } = await import("./i18n.ts");
+  act(() => setLocalePref("vi"));
+  try {
+    const { q, pick } = await render();
+    expect(q("settings-groups")!.textContent).toContain("Giao diện");
+    await pick("orchestration");
+    expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Số worker tối đa mỗi cây");
+    expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Bật điều phối");
+    expect(document.getElementById("settings-orchestration-enabled-hint")?.textContent).toContain("Mọi phiên có thể khởi động");
+    await pick("general");
+    expect(q("settings-dialog")!.textContent).toContain("Chỉ tín hiệu");
+    expect(q("settings-send-mode")!.textContent).toContain("Điều hướng lượt");
+  } finally {
+    act(() => setLocalePref("system"));
+  }
+});

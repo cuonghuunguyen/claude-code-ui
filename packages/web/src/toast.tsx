@@ -2,6 +2,7 @@
 // At 600px and below it is full width (16px offsets). It slides in and out (280ms transform, 160ms opacity; none under reduced motion).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
+import { useT } from "./i18n.ts";
 
 /** Surface of a toast (Toast, UpdateToast, StaleToast, the notification card); the ToastRegion places it. */
 export const TOAST_CARD = "pointer-events-auto rounded-lg bg-card p-3 text-foreground shadow-floating ring-[0.5px] ring-foreground/15";
@@ -16,6 +17,7 @@ export function ToastRegion({ children }: { children?: ReactNode }) {
 }
 
 export function Toast({ message, action, onClose, bigTargets, silent }: { message: string; /** A text button after the message (Undo); it runs, then the toast goes. */ action?: { label: string; onClick: () => void }; onClose: () => void; /** 44 px buttons below `md` also for a mouse (a toast a narrow desktop window can show, like the key tip), not only for a coarse pointer. */ bigTargets?: boolean; /** No `role="status"`: the owner announces the message through its own live region that exists before the text (screen readers skip a live region created with its text). */ silent?: boolean }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const exit = useRef<ReturnType<typeof setTimeout>>(undefined);
   // A toast that is replaced while it leaves must not close its successor.
@@ -64,7 +66,7 @@ export function Toast({ message, action, onClose, bigTargets, silent }: { messag
       </div>
       <button
         type="button"
-        aria-label="Dismiss"
+        aria-label={t("app.toast.dismiss")}
         onClick={close}
         className={`flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:-m-3 pointer-coarse:size-11${bigTargets ? " max-md:-m-3 max-md:size-11" : ""}`}
       >

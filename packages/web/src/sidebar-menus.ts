@@ -1,6 +1,7 @@
 // Pure parts of the sidebar context menus (GH-358): menu entries, bulk worker targets, idle sessions to archive.
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import type { SessionGroup, WorktreeRow } from "./sessions.ts";
+import { t } from "./i18n.ts";
 
 export type MenuEntry =
   | { kind: "item"; id: string; label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean }
@@ -10,7 +11,7 @@ export type MenuEntry =
 
 const DAY = 86_400_000;
 export const ARCHIVE_DAYS = [1, 7, 30] as const;
-export const daysLabel = (d: number) => (d === 1 ? "1 day" : `${d} days`);
+export const daysLabel = (d: number) => t("sidebar.days", { count: d });
 
 /** Ends and doubled separators dropped (a section may be empty). */
 export function tidy(entries: MenuEntry[]): MenuEntry[] {
@@ -61,7 +62,7 @@ export const groupSessions = (g: SessionGroup | WorktreeRow): SessionListItem[] 
 
 /** At most `max` names, then "+k more". */
 export function confirmNames(names: string[], max = 10) {
-  return names.length > max ? `${names.slice(0, max).join(", ")}, +${names.length - max} more` : names.join(", ");
+  return names.length > max ? t("sidebar.namesMore", { names: names.slice(0, max).join(", "), count: names.length - max }) : names.join(", ");
 }
 
 
@@ -85,20 +86,20 @@ export function groupEntries(o: {
 }): MenuEntry[] {
   const p = o.prefix;
   const e: MenuEntry[] = [];
-  if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: "New session", onSelect: o.newSession });
+  if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: t("sidebar.menu.newSession"), onSelect: o.newSession });
   if (o.newWorktree) {
     const nw = o.newWorktree;
-    e.push({ kind: "item", id: `${p}new-worktree`, label: "New worktree", onSelect: () => nw(true) }, { kind: "item", id: `${p}create-worktree`, label: "Create worktree…", onSelect: () => nw(false) });
+    e.push({ kind: "item", id: `${p}new-worktree`, label: t("sidebar.menu.newWorktree"), onSelect: () => nw(true) }, { kind: "item", id: `${p}create-worktree`, label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false) });
   }
-  if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: "Copy path", onSelect: o.copyPath });
+  if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
   if (!o.archivedView) {
-    e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: "Hide inactive sessions", checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: "Archive idle sessions older than" });
+    e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: t("sidebar.menu.hideInactive"), checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: t("sidebar.menu.archiveIdleOlder") });
     for (const d of ARCHIVE_DAYS) {
       const n = o.archiveCount(d);
       e.push({ kind: "item", id: `${p}archive-${d}`, label: `${daysLabel(d)} (${n})…`, disabled: n === 0, onSelect: () => o.onArchive(d) });
     }
   }
-  if (o.cleanUp) e.push({ kind: "sep" }, { kind: "item", id: `${p}cleanup`, label: "Clean up…", onSelect: o.cleanUp });
+  if (o.cleanUp) e.push({ kind: "sep" }, { kind: "item", id: `${p}cleanup`, label: t("sidebar.menu.cleanUp"), onSelect: o.cleanUp });
   if (o.tail) e.push({ kind: "sep" }, { kind: "item", id: o.tail.id, label: o.tail.label, destructive: true, onSelect: o.tail.onSelect });
   return tidy(e);
 }
@@ -106,8 +107,8 @@ export function groupEntries(o: {
 /** Bulk worker actions of a coordinator (the N workers row); `finished` / `closed` are the ids workerCounts returned. */
 export function workerEntries(prefix: string, c: { finished: string[]; closed: string[] }, on: { close: () => void; remove: () => void; cleanUp?: () => void }): MenuEntry[] {
   return [
-    { kind: "item", id: `${prefix}close-finished`, label: `Close finished workers (${c.finished.length})`, disabled: !c.finished.length, onSelect: on.close },
-    { kind: "item", id: `${prefix}remove-closed`, label: `Remove closed workers… (${c.closed.length})`, disabled: !c.closed.length, destructive: true, onSelect: on.remove },
-    ...(on.cleanUp ? [{ kind: "item" as const, id: `${prefix}cleanup`, label: "Clean up workers…", onSelect: on.cleanUp }] : []),
+    { kind: "item", id: `${prefix}close-finished`, label: t("sidebar.action.closeFinished", { count: c.finished.length }), disabled: !c.finished.length, onSelect: on.close },
+    { kind: "item", id: `${prefix}remove-closed`, label: t("sidebar.action.removeClosed", { count: c.closed.length }), disabled: !c.closed.length, destructive: true, onSelect: on.remove },
+    ...(on.cleanUp ? [{ kind: "item" as const, id: `${prefix}cleanup`, label: t("sidebar.action.cleanUpWorkers"), onSelect: on.cleanUp }] : []),
   ];
 }

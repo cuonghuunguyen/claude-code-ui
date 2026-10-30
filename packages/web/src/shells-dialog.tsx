@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { duration, useNow } from "./agents.tsx";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
+import { useT } from "./i18n.ts";
 import { ConfirmDialog } from "./session-actions.tsx";
-import { isRunningShell, SHELL_STATUS, shellInput, shellsOf, type Shell } from "./shells.ts";
+import { isRunningShell, shellStatus, shellInput, shellsOf, type Shell } from "./shells.ts";
 import type { SessionView } from "./store.ts";
 import { ToolBody } from "./tool-card.tsx";
 
@@ -21,6 +22,7 @@ const runTime = (c: Shell, now: number) => (c.startedAt === undefined ? undefine
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function Output({ call, output }: { call: Shell; output: (toolUseId: string) => Promise<ShellOutputResult> }) {
+  const tr = useT();
   const running = isRunningShell(call);
   const [out, setOut] = useState<ShellOutputResult>();
   const [error, setError] = useState<string>();
@@ -45,11 +47,11 @@ function Output({ call, output }: { call: Shell; output: (toolUseId: string) => 
   }, [call.toolUseId, running]);
   return (
     <>
-      {error && <Banner kind="error">Output not available: {error}</Banner>}
+      {error && <Banner kind="error">{tr("files.shell.outputUnavailable", { error })}</Banner>}
       {!out && !error && <Skeleton className="h-16 w-full" />}
       {out && (
         <div data-testid="shell-output" className="space-y-1">
-          {out.truncated && <p className="text-muted-foreground text-xs">Showing the last 30,000 characters.</p>}
+          {out.truncated && <p className="text-muted-foreground text-xs">{tr("files.shell.truncated")}</p>}
           <ToolBody call={call} result={{ type: "tool_result", id: `${call.id}:result`, toolUseId: call.toolUseId, output: out.output, isError: call.status === "error" }} tail />
         </div>
       )}
@@ -70,6 +72,7 @@ export function ShellsDialog({
   output: (toolUseId: string) => Promise<ShellOutputResult>;
   kill: (toolUseId: string) => Promise<unknown>;
 }) {
+  const tr = useT();
   const [selected, setSelected] = useState<string>();
   const [confirm, setConfirm] = useState(false);
   const [killing, setKilling] = useState(false);
@@ -91,10 +94,10 @@ export function ShellsDialog({
   }, [running]);
   const select = (id?: string) => (setSelected(id), setKilling(false), setKillError(undefined));
   return (
-    <ConfigDialog title="Background shells" open={open} onClose={onClose} testId="shells-dialog">
+    <ConfigDialog title={tr("files.shell.title")} open={open} onClose={onClose} testId="shells-dialog">
       {!call && !shells.length && (
         <p data-testid="shells-empty" className="text-muted-foreground text-sm">
-          No background shells in this session.
+          {tr("files.shell.empty")}
         </p>
       )}
       {!call && shells.length > 0 && (
@@ -109,8 +112,8 @@ export function ShellsDialog({
                     <span className="truncate">{label(c)}</span>
                     {description && <code className="truncate text-muted-foreground text-xs">{command}</code>}
                     <span className="text-muted-foreground text-xs">
-                      {SHELL_STATUS[c.status]}
-                      {c.exitCode !== undefined && ` · exit ${c.exitCode}`}
+                      {shellStatus(c.status)}
+                      {c.exitCode !== undefined && ` · ${tr("files.shell.exit", { code: c.exitCode })}`}
                     </span>
                   </span>
                   {time && <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{time}</span>}
@@ -123,35 +126,35 @@ export function ShellsDialog({
       {selected && !call && (
         <>
           <Button variant="ghost" onClick={() => select(undefined)}>
-            Back to shells
+            {tr("files.shell.back")}
           </Button>
-          <p className="text-muted-foreground text-sm">This shell is not in the session any more.</p>
+          <p className="text-muted-foreground text-sm">{tr("files.shell.gone")}</p>
         </>
       )}
       {call && (
         <>
           <div className="flex items-center gap-2">
-            <button type="button" aria-label="Back to shells" className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" onClick={() => select(undefined)}>
+            <button type="button" aria-label={tr("files.shell.back")} className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" onClick={() => select(undefined)}>
               <ArrowLeftIcon aria-hidden className="size-4" />
             </button>
             <span className="min-w-0 flex-1 truncate font-medium text-sm">{label(call)}</span>
             {running && (
               <Button variant="destructive" data-testid="shell-kill" disabled={killing} className="max-md:h-11" onClick={() => setConfirm(true)}>
-                {killing ? "Killing…" : "Kill"}
+                {killing ? tr("files.shell.killing") : tr("files.shell.kill")}
               </Button>
             )}
           </div>
           <div data-testid="shell-meta" className="text-muted-foreground text-xs tabular-nums">
-            {SHELL_STATUS[call.status]}
-            {call.exitCode !== undefined && ` · exit code ${call.exitCode}`}
+            {shellStatus(call.status)}
+            {call.exitCode !== undefined && ` · ${tr("files.shell.exitCode", { code: call.exitCode })}`}
             {runTime(call, now) && ` · ${runTime(call, now)}`}
             {!running && told.includes(call.toolUseId) && (
               <span data-testid="shell-told" className="block">
-                Claude will be told on your next message.
+                {tr("files.shell.told")}
               </span>
             )}
           </div>
-          {killError && <Banner kind="error">Could not kill: {killError}</Banner>}
+          {killError && <Banner kind="error">{tr("files.shell.killFailed", { error: killError })}</Banner>}
           {call.text !== undefined ? (
             // A bash mode shell: the card's own output, live through the part (no file read).
             <div data-testid="shell-output">
@@ -162,9 +165,9 @@ export function ShellsDialog({
           )}
           <ConfirmDialog
             open={confirm}
-            title="Kill shell?"
-            description={`"${shellInput(call).command ?? ""}" stops now. Claude gets notified.`}
-            confirm="Kill"
+            title={tr("files.shell.killTitle")}
+            description={tr("files.shell.killBody", { command: shellInput(call).command ?? "" })}
+            confirm={tr("files.shell.kill")}
             destructive
             testId="shell-kill"
             onCancel={() => setConfirm(false)}

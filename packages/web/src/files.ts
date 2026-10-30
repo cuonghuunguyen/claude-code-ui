@@ -2,6 +2,7 @@
 import { Compartment, EditorState, Text, type TransactionSpec } from "@codemirror/state";
 import type { FsMediaResult, FsReadResult } from "@claude-ui/protocol";
 import type { RequestError } from "./client.ts";
+import { t } from "./i18n.ts";
 import { mentionPath } from "./mentions.ts";
 import { isWinPath, relPath } from "./paths.ts";
 
@@ -103,7 +104,7 @@ export function restoredTab(path: string, r: FsReadResult, d?: { draft: string; 
 }
 
 /** A saved draft whose file is gone (or cannot be read: `error`): kept dirty; Save creates the file again. */
-export const goneTab = (path: string, d: { draft: string }, error = "Deleted on disk. Save creates it again."): Tab => ({ path, disk: "", mtime: 0, draft: d.draft, gone: true, error });
+export const goneTab = (path: string, d: { draft: string }, error = t("files.goneError")): Tab => ({ path, disk: "", mtime: 0, draft: d.draft, gone: true, error });
 
 /** A disk version read after a change: a clean tab reloads, a dirty one gets a conflict. */
 export function diskChanged(t: Tab, r: FsReadResult): Tab {
@@ -196,13 +197,13 @@ export function readFailure(e: RequestError): { text: string; notice: boolean; h
   const size = e.size === undefined ? "" : ` (${fileSize(e.size)})`;
   switch (e.code) {
     case "binary":
-      return { text: `Binary file, not shown${size}`, notice: true, hint: "Only text files open in the editor." };
+      return { text: t("files.read.binary", { size }), notice: true, hint: t("files.read.binaryHint") };
     case "too_large":
-      return { text: `File too large to show${size}`, notice: true, hint: "The editor opens text files up to 2 MB." };
+      return { text: t("files.read.tooLarge", { size }), notice: true, hint: t("files.read.tooLargeHint") };
     case "not_utf8":
-      return { text: `File is not UTF-8 text, not shown${size}`, notice: true, hint: "The editor opens UTF-8 text only." };
+      return { text: t("files.read.notUtf8", { size }), notice: true, hint: t("files.read.notUtf8Hint") };
     case "not_a_file":
-      return { text: "Not a file", notice: true };
+      return { text: t("files.read.notAFile"), notice: true };
     default:
       return { text: e.message, notice: false };
   }

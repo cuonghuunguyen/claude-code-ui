@@ -4,15 +4,13 @@ import { Popover } from "@base-ui/react/popover";
 import { TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
 import { Ring } from "./context-meter.tsx";
+import { t, useT } from "./i18n.ts";
 import { ringWindow, useUsageRing } from "./usage-ring.ts";
 
 /** A window at or past this percent shows the warning state, also when the server still grades it normal. */
 const WARN_PERCENT = 80;
 
 /** Daemon login CLAUDE_CODE_OAUTH_TOKEN (claude setup-token): plan usage is not readable (GH-261). */
-export const OAUTH_UNAVAILABLE = "Plan usage is not available with CLAUDE_CODE_OAUTH_TOKEN";
-const OAUTH_NOTE = "Its token (claude setup-token) cannot read plan usage. Run claude login on the daemon's computer to see it here.";
-const OAUTH_PARTIAL = "Only the session and weekly windows are known with CLAUDE_CODE_OAUTH_TOKEN, updated after each turn. Run claude login for every window.";
 
 export type PlanLevel = "ok" | "warning" | "limit";
 const RANK: PlanLevel[] = ["ok", "warning", "limit"];
@@ -49,8 +47,8 @@ export function clockText(at: number, now = Date.now()) {
 
 /** "Resets 13:40 (in 2h 5m)": time only today, weekday and date otherwise. */
 export function resetText(at: number, now = Date.now()) {
-  if (at <= now) return "Resets now";
-  return `Resets ${clockText(at, now)} (in ${duration(at - now)})`;
+  if (at <= now) return t("app.plan.resetsNow");
+  return t("app.plan.resets", { time: clockText(at, now), duration: duration(at - now) });
 }
 
 /** Date.now(), updated every `ms` while `on`: relative reset times count down. */
@@ -66,11 +64,11 @@ export function useNow(ms: number, on: boolean) {
 }
 
 /** "Limit reached" plus the window when the server named it. */
-const limitText = (u: PlanUsage) => `Limit reached${u.statusLimit ? `: ${u.statusLimit}` : ""}`;
+const limitText = (u: PlanUsage) => (u.statusLimit ? t("app.plan.limitReachedWindow", { window: u.statusLimit }) : t("app.plan.limitReached"));
 
 const lower = (s: string) => s[0]!.toLowerCase() + s.slice(1);
 
-const NAME: Record<PlanLevel, string> = { ok: "Plan usage", warning: "Plan usage warning", limit: "Plan usage limit reached" };
+const NAME: Record<PlanLevel, () => string> = { ok: () => t("app.plan.name"), warning: () => t("app.plan.nameWarning"), limit: () => t("app.plan.nameLimit") };
 
 /** The server's headline window; in a warning or limit state the highest window in that state, so the number matches the icon. */
 function headline(windows: PlanWindow[], level: PlanLevel) {
@@ -80,6 +78,7 @@ function headline(windows: PlanWindow[], level: PlanLevel) {
 
 /** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
 export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bottom" }) {
+  const t = useT();
   const limited = usage.status === "rejected";
   // Mounted only while open: "in 2h 5m" stays current while it shows.
   const now = useNow(15_000, true);
@@ -91,12 +90,12 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
         className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
         <div className="flex items-baseline justify-between gap-2">
-          <Popover.Title className="font-medium">Plan usage</Popover.Title>
-          {usage.plan && <span className="text-muted-foreground text-xs">{`${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)} plan`}</span>}
+          <Popover.Title className="font-medium">{t("app.plan.name")}</Popover.Title>
+          {usage.plan && <span className="text-muted-foreground text-xs">{t("app.plan.planName", { plan: `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)}` })}</span>}
         </div>
         {usage.auth === "oauth_token" && (
           <p data-testid="plan-auth-note" className="mt-2 text-muted-foreground text-xs">
-            {usage.windows.length ? OAUTH_PARTIAL : `${OAUTH_UNAVAILABLE}. ${OAUTH_NOTE}`}
+            {usage.windows.length ? t("app.plan.oauthPartial") : `${t("app.plan.oauthUnavailable")}. ${t("app.plan.oauthNote")}`}
           </p>
         )}
         {limited && (
@@ -113,7 +112,7 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate">{w.label}</span>
                   {/* The server can grade a low percent as warning: not color only. */}
-                  {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? "limit reached" : "warning"} className={`size-3 shrink-0 ${TEXT[l]}`} />}
+                  {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? t("app.plan.limitIcon") : t("app.plan.warningIcon")} className={`size-3 shrink-0 ${TEXT[l]}`} />}
                   <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
@@ -131,20 +130,21 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
 }
 
 export function PlanMeter({ usage }: { usage: PlanUsage }) {
+  const t = useT();
   const level = planLevel(usage);
   // Settings > Usage limits > Usage ring shows: the number and ring follow the chosen window; level, color and icon stay with the worst one.
   const head = ringWindow(usage.windows, useUsageRing()) ?? headline(usage.windows, level);
   const limited = usage.status === "rejected";
   const unavailable = usage.windows.length === 0 && usage.auth === "oauth_token";
   const summary = limited
-    ? `Plan usage: ${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}`
+    ? t("app.plan.summaryLimited", { limit: `${lower(limitText(usage))}${usage.statusResetsAt ? `, ${lower(resetText(usage.statusResetsAt))}` : ""}` })
     : unavailable
-      ? OAUTH_UNAVAILABLE
-      : `${NAME[level]}: ${head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : "no windows"}`;
+      ? t("app.plan.oauthUnavailable")
+      : t("app.plan.summaryWindow", { name: NAME[level](), window: head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : t("app.plan.noWindows") });
   return (
     <Popover.Root>
       <Popover.Trigger
-        aria-label={`${summary}, show details`}
+        aria-label={t("app.plan.showDetails", { summary })}
         title={summary}
         data-testid="plan-meter"
         data-level={level}

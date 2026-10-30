@@ -1,6 +1,7 @@
 // File references in markdown (docs/spec.md "Session view UX", "Editor"): inline code like `src/a.ts:12` and relative links open the Files tab.
 import { createContext, createElement, use, useEffect, useState, type ComponentProps } from "react";
 import { defaultComponents, defaultRemarkPlugins, type Components } from "streamdown";
+import { useT } from "./i18n.ts";
 import { inDir, isWinPath, joinPath, sepOf, withSep } from "./paths.ts";
 import { CwdContext } from "./tool-card.tsx";
 
@@ -126,18 +127,20 @@ function useTarget() {
 const refClass = "cursor-pointer text-left underline decoration-dotted underline-offset-2 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
 
 function FileCode(props: ComponentProps<"code">) {
+  const t = useT();
   const { open, base, root } = useTarget();
   const text = typeof props.children === "string" ? props.children : undefined;
   const ref = open && base && text ? fileRef(text, base, root) : undefined;
   if (!ref) return createElement(defaultComponents.code as never, props as never);
   return (
-    <button type="button" className={`rounded bg-muted px-1.5 py-0.5 font-mono text-sm ${refClass}`} title="Open in file dialog" onClick={() => open!(ref.path, ref.line)}>
+    <button type="button" className={`rounded bg-muted px-1.5 py-0.5 font-mono text-sm ${refClass}`} title={t("files.openInDialog")} onClick={() => open!(ref.path, ref.line)}>
       {text}
     </button>
   );
 }
 
 function FileAnchor(props: ComponentProps<"a">) {
+  const t = useT();
   const { open, base, root } = useTarget();
   const href = props.href;
   if (!href?.startsWith(FILE_LINK)) return createElement(defaultComponents.a as never, props as never);
@@ -145,7 +148,7 @@ function FileAnchor(props: ComponentProps<"a">) {
   const ref = open && base ? (fileRef(percentDecoded(target), base, root) ?? linkRef(target, base, root)) : undefined;
   if (!ref) return <span>{props.children}</span>;
   return (
-    <button type="button" className={`text-primary ${refClass}`} title="Open in file dialog" onClick={() => open!(ref.path, ref.line)}>
+    <button type="button" className={`text-primary ${refClass}`} title={t("files.openInDialog")} onClick={() => open!(ref.path, ref.line)}>
       {props.children}
     </button>
   );

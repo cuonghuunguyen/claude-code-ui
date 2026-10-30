@@ -2,6 +2,7 @@
 import { useId } from "react";
 import { Popover } from "@base-ui/react/popover";
 import type { ContextUsage } from "@claude-ui/protocol";
+import { useT } from "./i18n.ts";
 import type { Totals } from "./status-bar.tsx";
 
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -43,8 +44,9 @@ const costText = (t: Totals) => (t.cost === undefined ? "—" : `${t.costPartial
 /** The breakdown popup; a Popover.Root child (context meter, status bar). */
 /** `stats`: the session's token totals, shown like OpenCode's Context tab stats; none before the first turn result. */
 export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side: "top" | "bottom"; stats?: Totals }) {
+  const t = useT();
   const { totalTokens, maxTokens, percentage, categories } = usage;
-  const tokens = `${full.format(totalTokens)} / ${full.format(maxTokens)} tokens · ${percentage}%`;
+  const tokens = t("app.context.total", { used: full.format(totalTokens), max: full.format(maxTokens), percent: percentage });
   return (
   <Popover.Portal>
     <Popover.Positioner side={side} align="end" sideOffset={6} className="z-50">
@@ -52,17 +54,17 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
         data-testid="context-breakdown"
         className="w-72 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-3 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none"
       >
-        <Popover.Title className="font-medium">Context window</Popover.Title>
+        <Popover.Title className="font-medium">{t("app.context.title")}</Popover.Title>
         <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">{tokens}</p>
         {stats && (
           // OpenCode Context tab Stat: 12px label (weak) over 12px value (strong), two columns.
           <div data-testid="context-stats" className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[12px] tabular-nums">
             {(
               [
-                ["Input tokens", full.format(stats.uncached)],
-                ["Output tokens", full.format(stats.output)],
-                ["Cache tokens (read/write)", `${full.format(stats.cached)} / ${full.format(stats.cacheWrite)}`],
-                ["Total cost", costText(stats)],
+                [t("app.context.inputTokens"), full.format(stats.uncached)],
+                [t("app.context.outputTokens"), full.format(stats.output)],
+                [t("app.context.cacheTokens"), `${full.format(stats.cached)} / ${full.format(stats.cacheWrite)}`],
+                [t("app.context.totalCost"), costText(stats)],
               ] as const
             ).map(([label, value]) => (
               <div key={label} className="flex flex-col gap-0.5">
@@ -95,12 +97,13 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
 }
 
 export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: Totals }) {
+  const t = useT();
   const { totalTokens, maxTokens, percentage } = usage;
   const tip = useId();
   const rows: [string, string][] = [
-    ["Tokens", `${full.format(totalTokens)} / ${full.format(maxTokens)}`],
-    ["Usage", `${percentage}%`],
-    ...(stats?.cost === undefined ? [] : [["Cost", costText(stats)] as [string, string]]),
+    [t("app.context.rowTokens"), `${full.format(totalTokens)} / ${full.format(maxTokens)}`],
+    [t("app.context.rowUsage"), `${percentage}%`],
+    ...(stats?.cost === undefined ? [] : [[t("app.context.rowCost"), costText(stats)] as [string, string]]),
   ];
   return (
     <Popover.Root>
@@ -119,7 +122,7 @@ export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: To
           ))}
         </span>
         <Popover.Trigger
-          aria-label={`Context window: ${full.format(totalTokens)} of ${full.format(maxTokens)} tokens (${percentage}%), show breakdown`}
+          aria-label={t("app.context.meterLabel", { used: full.format(totalTokens), max: full.format(maxTokens), percent: percentage })}
           aria-describedby={tip}
           data-testid="context-meter"
           className="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs tabular-nums hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring outline-none data-popup-open:bg-accent data-popup-open:text-foreground pointer-coarse:h-11"

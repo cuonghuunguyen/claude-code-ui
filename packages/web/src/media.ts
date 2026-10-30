@@ -1,6 +1,7 @@
 // Base64 payloads a snapshot or page left out (GH-274): loaded with session.media when shown, cached per session part.
 import { parseOmitted } from "@claude-ui/protocol";
 import { createContext, useContext, useEffect, useState } from "react";
+import { t } from "./i18n.ts";
 
 /** Loads the data URL of payload `index` of a part (session.media). */
 export type MediaLoader = (partId: string, index: number) => Promise<string>;
@@ -53,7 +54,7 @@ export async function restoreImages(images: string[], partId: string, loader: Me
     images.map((src, i) => {
       if (!parseOmitted(src)) return src;
       return (loader ? loadMedia(loader, partId, i) : Promise.reject(new Error("no loader"))).catch(() => {
-        throw new Error(`Image ${i + 1} could not be loaded, so the prompt cannot be restored. Nothing was rewound.`);
+        throw new Error(t("files.media.restoreFailed", { n: i + 1 }));
       });
     }),
   );

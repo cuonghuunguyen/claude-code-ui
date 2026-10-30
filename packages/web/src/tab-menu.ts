@@ -1,5 +1,6 @@
 // Tab context menu above the session items (GH-359): data, so more sections (Split, GH-356) slot in.
 import type { KeyboardEvent } from "react";
+import { t } from "./i18n.ts";
 
 export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession" | "moveToFiles" | "moveToArtifacts" | "copyPath" | "copyRel" | "revealInFiles";
 export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote" | TabCommand; label: string; disabled?: boolean; testId: string };
@@ -9,19 +10,19 @@ const entry = (id: TabMenuEntry["id"], label: string, disabled = false): TabMenu
 /** Sections of the tab context menu, a separator between sections: move, close, pin, copy and reveal, then split. The New session tab (`session` false) has the first two only. */
 export function tabMenuSections(s: { session: boolean; /** Absent: pinning is not offered. */ pinned?: boolean; first: boolean; last: boolean; canOthers: boolean; canRight: boolean; canAll: boolean; canReopen: boolean; hasCwd: boolean; /** GH-401: wide screens: a session tab can move to the side or bottom panel. */ dock?: boolean; /** A pane tab (GH-395): move to a dock, go to its session; no copy or reveal. */ pane?: { label: string; /** An item tab, no dock: a file (GH-399: Move to Files, copy paths, Reveal in Files) or an artifact (GH-400: none of those). */ item?: "file" | "artifact" }; /** Split view (GH-356): absent on narrow screens, where there is no split. */ split?: { can: boolean; /** Git graph: the reason line follows the disabled items. */ whole?: boolean } }): TabMenuEntry[][] {
   const sections = [
-    [entry("moveLeft", "Move left", s.first), entry("moveRight", "Move right", s.last)],
-    [entry("close", "Close tab"), entry("closeOthers", "Close others", !s.canOthers), entry("closeRight", "Close to the right", !s.canRight), entry("closeAll", "Close all", !s.canAll), entry("reopen", "Reopen closed tab", !s.canReopen)],
+    [entry("moveLeft", t("app.tabMenu.moveLeft"), s.first), entry("moveRight", t("app.tabMenu.moveRight"), s.last)],
+    [entry("close", t("app.tabMenu.close")), entry("closeOthers", t("app.tabMenu.closeOthers"), !s.canOthers), entry("closeRight", t("app.tabMenu.closeRight"), !s.canRight), entry("closeAll", t("app.tabMenu.closeAll"), !s.canAll), entry("reopen", t("app.tabMenu.reopen"), !s.canReopen)],
   ];
   if (!s.session) return sections;
   if (s.pane) {
-    const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can), ...(s.split.whole ? [entry("splitNote", "Git graph needs the whole area", true)] : [])]] : [];
-    const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
-    return [...sections, ...pin, ...[s.pane.item === "artifact" ? [entry("moveToArtifacts", "Move to Artifacts")] : s.pane.item === "file" ? [entry("moveToFiles", "Move to Files"), entry("copyPath", "Copy path"), entry("copyRel", "Copy relative path"), entry("revealInFiles", "Reveal in Files")] : [entry("moveSide", `Move ${s.pane.label} to side panel`), entry("moveBottom", `Move ${s.pane.label} to bottom panel`)]], [entry("goToSession", "Go to session")], ...split];
+    const split = s.split ? [[entry("splitRight", t("app.tabMenu.splitRight"), !s.split.can), entry("splitDown", t("app.tabMenu.splitDown"), !s.split.can), ...(s.split.whole ? [entry("splitNote", t("app.tabMenu.splitNote"), true)] : [])]] : [];
+    const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", t("app.tabMenu.unpin")) : entry("pin", t("app.tabMenu.pin"))]];
+    return [...sections, ...pin, ...[s.pane.item === "artifact" ? [entry("moveToArtifacts", t("app.tabMenu.moveToArtifacts"))] : s.pane.item === "file" ? [entry("moveToFiles", t("app.tabMenu.moveToFiles")), entry("copyPath", t("app.tabMenu.copyPath")), entry("copyRel", t("app.tabMenu.copyRel")), entry("revealInFiles", t("app.tabMenu.revealInFiles"))] : [entry("moveSide", t("app.tabMenu.movePaneSide", { pane: s.pane.label })), entry("moveBottom", t("app.tabMenu.movePaneBottom", { pane: s.pane.label }))]], [entry("goToSession", t("app.tabMenu.goToSession"))], ...split];
   }
-  const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", "Unpin tab") : entry("pin", "Pin tab")]];
-  const split = s.split ? [[entry("splitRight", "Split right", !s.split.can), entry("splitDown", "Split down", !s.split.can)]] : [];
-  const dock = s.dock ? [[entry("moveSide", "Move to side panel"), entry("moveBottom", "Move to bottom panel")]] : [];
-  return [...sections, ...pin, ...dock, [entry("copyId", "Copy session ID"), entry("copyCwd", "Copy cwd path", !s.hasCwd), entry("reveal", "Reveal in sidebar")], ...split];
+  const pin = s.pinned === undefined ? [] : [[s.pinned ? entry("unpin", t("app.tabMenu.unpin")) : entry("pin", t("app.tabMenu.pin"))]];
+  const split = s.split ? [[entry("splitRight", t("app.tabMenu.splitRight"), !s.split.can), entry("splitDown", t("app.tabMenu.splitDown"), !s.split.can)]] : [];
+  const dock = s.dock ? [[entry("moveSide", t("app.tabMenu.moveSide")), entry("moveBottom", t("app.tabMenu.moveBottom"))]] : [];
+  return [...sections, ...pin, ...dock, [entry("copyId", t("app.tabMenu.copyId")), entry("copyCwd", t("app.tabMenu.copyCwd"), !s.hasCwd), entry("reveal", t("app.tabMenu.reveal"))], ...split];
 }
 
 /** The first item of the newest open menu that is not disabled. */

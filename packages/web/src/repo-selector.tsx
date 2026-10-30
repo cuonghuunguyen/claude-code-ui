@@ -8,6 +8,7 @@ import { repoTree, type GitRepo, type GitReposResult } from "@claude-ui/protocol
 import { cn } from "@/lib/utils";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { baseName } from "./paths.ts";
+import { useT } from "./i18n.ts";
 import { repoMove, repoRows, repoTypeAhead, truncationNotes, type RepoRow } from "./repo-selector-model.ts";
 
 /** Above this many entries the tree has a filter. */
@@ -23,6 +24,7 @@ export function RepoIcon({ kind, className }: { kind: GitRepo["kind"]; className
 const rowClass = "flex h-7 w-full cursor-pointer items-center gap-1.5 pr-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset max-md:h-11 pointer-coarse:h-11";
 
 function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list: GitRepo[]; truncated?: GitReposResult["truncated"]; selected?: GitRepo; onSelect: (rel: string) => void; limit: number; close: () => void }) {
+  const t = useT();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<string | undefined>(selected?.path);
@@ -100,15 +102,15 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
               // ←/→ move the caret here; the Changes list's ←/→ cycle must not see them. Esc must reach the popover.
               else if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.stopPropagation();
             }}
-            placeholder="Filter repositories"
-            aria-label="Filter repositories"
+            placeholder={t("sidebar.repo.filter")}
+            aria-label={t("sidebar.repo.filter")}
             className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
             data-testid="repo-filter"
           />
         </label>
       )}
-      <div ref={treeRef} role="tree" aria-label="Repositories" className="min-h-0 overflow-auto py-1" onKeyDown={onKeyDown} data-testid="repo-tree">
-        {rows.length === 0 && <p className="px-3 py-2 text-muted-foreground text-sm">No repositories match.</p>}
+      <div ref={treeRef} role="tree" aria-label={t("sidebar.repo.repositories")} className="min-h-0 overflow-auto py-1" onKeyDown={onKeyDown} data-testid="repo-tree">
+        {rows.length === 0 && <p className="px-3 py-2 text-muted-foreground text-sm">{t("sidebar.repo.noMatch")}</p>}
         {rows.map((r, i) => {
           const disabled = !!r.repo.outsideRoots;
           const isSelected = r.repo.path === selected?.path;
@@ -146,7 +148,7 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
               <RepoIcon kind={r.repo.kind} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{r.label}</span>
-                {disabled && <span className="block text-muted-foreground text-xs">outside the allowed folders</span>}
+                {disabled && <span className="block text-muted-foreground text-xs">{t("sidebar.repo.outside")}</span>}
               </span>
               {r.repo.branch && <span className="max-w-24 shrink truncate font-mono text-muted-foreground text-xs">{r.repo.branch}</span>}
               {isSelected && <CheckIcon className="size-4 shrink-0" aria-hidden />}
@@ -168,9 +170,10 @@ function RepoTree({ list, truncated, selected, onSelect, limit, close }: { list:
 /** `selected`: the resolved repository (undefined while none is usable). `submoduleLimit`: the daemon's per-repository submodule limit, for the truncation note. */
 /** `className`: extra classes of the trigger on wide screens (below md it is always `h-11 w-full`). */
 export function RepoSelector({ list, truncated, selected, onSelect, submoduleLimit = 10, className }: { list: GitRepo[]; truncated?: GitReposResult["truncated"]; selected?: GitRepo; onSelect: (rel: string) => void; submoduleLimit?: number; className?: string }) {
+  const t = useT();
   const narrow = useNarrow();
   const [open, setOpen] = useState(false);
-  const name = selected ? baseName(selected.path) : "No repository";
+  const name = selected ? baseName(selected.path) : t("sidebar.repo.none");
   const trigger = cn(
     "flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-transparent px-2 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent",
     narrow ? "h-11 w-full" : cn("h-7 max-w-56 shrink-0", className),
@@ -183,7 +186,7 @@ export function RepoSelector({ list, truncated, selected, onSelect, submoduleLim
       <ChevronDownIcon className="ml-auto size-4 shrink-0 text-faint" aria-hidden />
     </>
   );
-  const label = `Repository: ${name}${selected?.branch ? `, branch ${selected.branch}` : ""}`;
+  const label = selected?.branch ? t("sidebar.repo.labelBranch", { name, branch: selected.branch }) : t("sidebar.repo.label", { name });
   const content = <RepoTree list={list} truncated={truncated} selected={selected} onSelect={onSelect} limit={submoduleLimit} close={() => setOpen(false)} />;
   if (narrow)
     return (
@@ -198,7 +201,7 @@ export function RepoSelector({ list, truncated, selected, onSelect, submoduleLim
             className="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl bg-popover pb-[env(safe-area-inset-bottom)] text-popover-foreground shadow-floating ring-[0.5px] ring-foreground/15 outline-none"
             data-testid="repo-sheet"
           >
-            <Dialog.Title className="px-4 py-3 font-medium text-[15px]">Repositories</Dialog.Title>
+            <Dialog.Title className="px-4 py-3 font-medium text-[15px]">{t("sidebar.repo.repositories")}</Dialog.Title>
             {open && content}
           </Dialog.Popup>
         </Dialog.Portal>

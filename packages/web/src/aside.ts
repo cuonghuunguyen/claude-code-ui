@@ -1,5 +1,6 @@
 // Aside popups (docs/spec.md "Aside"): state and geometry helpers; the popup itself is aside-popup.tsx.
 import type { SessionListItem, SessionInfo } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -39,4 +40,4 @@ export function clampRect(r: Rect, viewport: { w: number; h: number }): Rect {
 }
 
 /** Focus lists an Aside's requests as its own session (the list never has it): "Aside: <title>". */
-export const asideItem = (a: AsideState, info: SessionInfo): SessionListItem => ({ ...info, id: a.id, title: `Aside: ${a.title}`, lastActivity: 0, archived: false, transcript: true });
+export const asideItem = (a: AsideState, info: SessionInfo): SessionListItem => ({ ...info, id: a.id, title: t("session.asidePopup.title", { title: a.title }), lastActivity: 0, archived: false, transcript: true });

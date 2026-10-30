@@ -2,12 +2,13 @@
 import type { Worktree } from "@claude-ui/protocol";
 import { projectCwd, projectOf } from "./sessions.ts";
 import { projectName } from "./tabs.ts";
+import { t } from "./i18n.ts";
 
 export type TabGrouping = "project" | "worktree" | "none";
 export const TAB_GROUPINGS: { value: TabGrouping; label: string }[] = [
-  { value: "project", label: "By project" },
-  { value: "worktree", label: "By worktree" },
-  { value: "none", label: "None" },
+  { value: "project", get label() { return t("settings.tabs.byProject"); } },
+  { value: "worktree", get label() { return t("settings.tabs.byWorktree"); } },
+  { value: "none", get label() { return t("settings.tabs.none"); } },
 ];
 
 /** Group of a tab: `key` (the strip's group and collapse key, "" = no chip), chip `label`, `sub` (tooltip headline "<project> · <branch>" in worktree grouping), `color` (cwd whose avatar color the chip takes). */

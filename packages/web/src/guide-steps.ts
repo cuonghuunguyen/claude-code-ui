@@ -1,5 +1,6 @@
 // The guided tour's steps (docs/spec.md "First-use guide"): data only. The tour component resolves anchors and renders; nothing here knows key text,
 // a step names command ids (`keys`) and the host maps them to key specs.
+import { t, type Key } from "./i18n.ts";
 import type { ChapterId, GuideActions, Side } from "./guide.ts";
 
 export type GuideStep = {
@@ -31,29 +32,29 @@ export type GuideCtx = { session: boolean; git: boolean; narrow: boolean };
 const cmd = (id: string) => `[data-command="${id}"]`;
 const tid = (id: string) => `[data-testid="${id}"]`;
 
-export const STEPS: GuideStep[] = [
+const DEFS: StepDef[] = [
   {
     id: "welcome",
     chapter: "basics",
     anchors: [],
-    title: "Welcome to Claude UI",
-    body: "A one-minute tour of projects, sessions, files, changes, git and the terminal. Press → or Next.",
+    title: "app.guide.welcome.title",
+    body: "app.guide.welcome.body",
   },
   {
     id: "project",
     chapter: "basics",
     anchors: [tid("empty-open-project"), tid("open-project"), tid("new-open-project")],
-    narrow: { anchors: [tid("open-drawer")], body: "A project is a folder on this machine. Sessions run in it. Tap ☰, then **Add project**." },
-    title: "Add a project",
-    body: "A project is a folder on this machine. Sessions run in it, and its files, changes and git history show beside the chat.",
+    narrow: { anchors: [tid("open-drawer")], body: "app.guide.project.narrow" },
+    title: "app.guide.project.title",
+    body: "app.guide.project.body",
     side: "right",
   },
   {
     id: "new-session",
     chapter: "basics",
     anchors: [cmd("session.new")],
-    title: "Start a session",
-    body: "**+** opens a New session tab: pick the project, type a prompt, Enter sends. Each session is a tab.",
+    title: "app.guide.new-session.title",
+    body: "app.guide.new-session.body",
     keys: ["session.new"],
     side: "bottom",
   },
@@ -61,9 +62,9 @@ export const STEPS: GuideStep[] = [
     id: "sidebar",
     chapter: "basics",
     anchors: [cmd("sidebar.toggle")],
-    narrow: { anchors: [tid("open-drawer")], body: "☰ opens projects and sessions.", keys: [] },
-    title: "Your projects and sessions",
-    body: "The sidebar lists projects and their sessions. Hide it to get room.",
+    narrow: { anchors: [tid("open-drawer")], body: "app.guide.sidebar.narrow", keys: [] },
+    title: "app.guide.sidebar.title",
+    body: "app.guide.sidebar.body",
     keys: ["sidebar.toggle"],
     side: "bottom",
   },
@@ -71,37 +72,37 @@ export const STEPS: GuideStep[] = [
     id: "palette",
     chapter: "basics",
     anchors: [],
-    title: "Everything from the keyboard",
-    body: "The command palette runs any command, opens sessions and searches messages.",
+    title: "app.guide.palette.title",
+    body: "app.guide.palette.body",
     keys: ["palette.open"],
   },
   {
     id: "basics-end",
     chapter: "basics",
     anchors: [],
-    title: "You're set",
-    body: "Open a session and we'll show files, changes, the git graph and the terminal.",
-    action: { label: "Add project", run: "openProject" },
+    title: "app.guide.basics-end.title",
+    body: "app.guide.basics-end.body",
+    action: { label: "app.guide.basics-end.action", run: "openProject" },
   },
   // Chapter "Your session": needs a shown session (a non-draft session tab).
   {
     id: "tabs",
     chapter: "session",
     anchors: [tid("tab-strip")],
-    narrow: { anchors: [tid("tab-switcher")], body: "Each open session is a tab. Tap to switch sessions; closing a tab does not stop the session.", keys: [] },
-    title: "Tabs",
-    body: "Each open session is a tab. Drag to reorder, middle-click to close; closing a tab does not stop the session.",
+    narrow: { anchors: [tid("tab-switcher")], body: "app.guide.tabs.narrow", keys: [] },
+    title: "app.guide.tabs.title",
+    body: "app.guide.tabs.body",
     keys: ["tab.next", "tab.close"],
-    keyNames: ["next", "close"],
+    keyNames: ["app.guide.keyName.next", "app.guide.keyName.close"],
     side: "bottom",
   },
   {
     id: "files",
     chapter: "session",
     anchors: [cmd("pane.files")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
-    title: "Files",
-    body: "Browse and edit the project's files. @ in the prompt mentions a file.",
+    alt: { anchors: [cmd("panel.toggle")], body: "app.guide.altPanel", keys: ["panel.toggle"] },
+    title: "app.guide.files.title",
+    body: "app.guide.files.body",
     keys: ["pane.files"],
     side: "left",
   },
@@ -109,9 +110,9 @@ export const STEPS: GuideStep[] = [
     id: "changes",
     chapter: "session",
     anchors: [cmd("pane.changes")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
-    title: "Changes",
-    body: "Every file Claude edited, as a diff. Switch to Uncommitted or Against branch for git diffs.",
+    alt: { anchors: [cmd("panel.toggle")], body: "app.guide.altPanel", keys: ["panel.toggle"] },
+    title: "app.guide.changes.title",
+    body: "app.guide.changes.body",
     keys: ["pane.changes"],
     side: "left",
   },
@@ -120,9 +121,9 @@ export const STEPS: GuideStep[] = [
     chapter: "session",
     needs: "git",
     anchors: [cmd("pane.graph")],
-    alt: { anchors: [cmd("panel.toggle")], body: "Show the side panel to see files, changes and the git graph.", keys: ["panel.toggle"] },
-    title: "Git graph",
-    body: "Commits of the current branch. Pick one to see its files and diffs.",
+    alt: { anchors: [cmd("panel.toggle")], body: "app.guide.altPanel", keys: ["panel.toggle"] },
+    title: "app.guide.graph.title",
+    body: "app.guide.graph.body",
     keys: ["pane.graph"],
     side: "left",
   },
@@ -130,8 +131,8 @@ export const STEPS: GuideStep[] = [
     id: "terminal",
     chapter: "session",
     anchors: [cmd("terminal.toggle"), tid("pane-terminal")],
-    title: "Terminal",
-    body: "A shell in the project folder, kept while the daemon runs.",
+    title: "app.guide.terminal.title",
+    body: "app.guide.terminal.body",
     keys: ["terminal.toggle"],
     side: "left",
   },
@@ -139,20 +140,63 @@ export const STEPS: GuideStep[] = [
     id: "replay",
     chapter: "session",
     anchors: [cmd("settings.open")],
-    title: "Replay any time",
-    body: "Settings › Help & about restarts this tour.",
+    title: "app.guide.replay.title",
+    body: "app.guide.replay.body",
     side: "right",
   },
   {
     id: "shortcuts",
     chapter: "session",
     anchors: [],
-    title: "All shortcuts",
-    body: "Every shortcut in one list. You can rebind any of them, the tmux-style prefix key included.",
+    title: "app.guide.shortcuts.title",
+    body: "app.guide.shortcuts.body",
     keys: ["shortcuts.open"],
-    action: { label: "Show all shortcuts", run: "openShortcuts" },
+    action: { label: "app.guide.shortcuts.action", run: "openShortcuts" },
   },
 ];
+
+/** A step as written below: the texts are catalog keys; `STEPS` reads them in the current language each time (getters). */
+type StepDef = Omit<GuideStep, "title" | "body" | "alt" | "narrow" | "action" | "keyNames"> & {
+  title: Key;
+  body: Key;
+  alt?: { anchors: string[]; body: Key; keys?: string[] };
+  narrow?: { anchors?: string[]; body?: Key; keys?: string[] };
+  keyNames?: Key[];
+  action?: { label: Key; run: keyof GuideActions };
+};
+
+const localize = (d: StepDef): GuideStep => ({
+  ...d,
+  get title() {
+    return t(d.title);
+  },
+  get body() {
+    return t(d.body);
+  },
+  alt: d.alt && {
+    ...d.alt,
+    get body() {
+      return t(d.alt!.body);
+    },
+  },
+  narrow: d.narrow && {
+    ...d.narrow,
+    get body() {
+      return d.narrow!.body && t(d.narrow!.body);
+    },
+  },
+  get keyNames() {
+    return d.keyNames?.map((k) => t(k));
+  },
+  action: d.action && {
+    ...d.action,
+    get label() {
+      return t(d.action!.label);
+    },
+  },
+});
+
+export const STEPS: GuideStep[] = DEFS.map(localize);
 
 const byId = new Map(STEPS.map((s) => [s.id, s]));
 export const stepById = (id: string) => byId.get(id);

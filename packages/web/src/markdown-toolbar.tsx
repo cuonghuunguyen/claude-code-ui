@@ -3,6 +3,7 @@ import { BoldIcon, CodeIcon, ItalicIcon, LinkIcon, ListIcon, SquareCodeIcon } fr
 import { formatEdit, type MarkdownFormat } from "./markdown-format.ts";
 import { IS_MAC, keyLabels, matchesKey } from "./shortcuts.ts";
 import { GHOST } from "./toolbar.tsx";
+import { useT, type Key } from "./i18n.ts";
 
 /** Not in `KEYS`: `mod+b` is the sidebar there; inside the prompt box it formats instead. */
 export const FORMAT_KEYS = { bold: "mod+b", italic: "mod+i", code: "mod+e" } as const;
@@ -31,17 +32,18 @@ export function formatShortcut(e: KeyboardEvent<HTMLTextAreaElement>): boolean {
 }
 
 const ICON = "size-4";
-const BUTTONS: { format: MarkdownFormat; name: string; icon: ReactNode; key?: keyof typeof FORMAT_KEYS }[] = [
-  { format: "bold", name: "Bold", icon: <BoldIcon className={ICON} />, key: "bold" },
-  { format: "italic", name: "Italic", icon: <ItalicIcon className={ICON} />, key: "italic" },
-  { format: "code", name: "Inline code", icon: <CodeIcon className={ICON} />, key: "code" },
-  { format: "codeBlock", name: "Code block", icon: <SquareCodeIcon className={ICON} /> },
-  { format: "link", name: "Link", icon: <LinkIcon className={ICON} /> },
-  { format: "bulletList", name: "Bullet list", icon: <ListIcon className={ICON} /> },
+const BUTTONS: { format: MarkdownFormat; name: Key; icon: ReactNode; key?: keyof typeof FORMAT_KEYS }[] = [
+  { format: "bold", name: "session.markdownToolbar.bold", icon: <BoldIcon className={ICON} />, key: "bold" },
+  { format: "italic", name: "session.markdownToolbar.italic", icon: <ItalicIcon className={ICON} />, key: "italic" },
+  { format: "code", name: "session.markdownToolbar.code", icon: <CodeIcon className={ICON} />, key: "code" },
+  { format: "codeBlock", name: "session.markdownToolbar.codeBlock", icon: <SquareCodeIcon className={ICON} /> },
+  { format: "link", name: "session.markdownToolbar.link", icon: <LinkIcon className={ICON} /> },
+  { format: "bulletList", name: "session.markdownToolbar.bulletList", icon: <ListIcon className={ICON} /> },
 ];
 
 /** Formatting row at the top of the prompt box: plain-text markdown edits, no WYSIWYG. One Tab stop, arrows move (WAI-ARIA toolbar). */
 export function MarkdownToolbar({ input, disabled }: { input: RefObject<HTMLTextAreaElement | null>; disabled?: boolean }) {
+  const t = useT();
   const [active, setActive] = useState(0);
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const move = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -53,7 +55,7 @@ export function MarkdownToolbar({ input, disabled }: { input: RefObject<HTMLText
     refs.current[next]?.focus();
   };
   return (
-    <div role="toolbar" aria-label="Formatting" data-testid="markdown-toolbar" className="flex items-center gap-1 px-2 pt-2 pointer-coarse:gap-2" onKeyDown={move}>
+    <div role="toolbar" aria-label={t("session.markdownToolbar.label")} data-testid="markdown-toolbar" className="flex items-center gap-1 px-2 pt-2 pointer-coarse:gap-2" onKeyDown={move}>
       {BUTTONS.map((b, i) => {
         const spec = b.key && FORMAT_KEYS[b.key];
         const letter = spec ? keyLabels(spec)[1]! : "";
@@ -62,8 +64,8 @@ export function MarkdownToolbar({ input, disabled }: { input: RefObject<HTMLText
             key={b.format}
             ref={(el) => void (refs.current[i] = el)}
             type="button"
-            aria-label={b.name}
-            title={spec ? `${b.name} (${IS_MAC ? `⌘${letter}` : `Ctrl+${letter}`})` : b.name}
+            aria-label={t(b.name)}
+            title={spec ? `${t(b.name)} (${IS_MAC ? `⌘${letter}` : `Ctrl+${letter}`})` : t(b.name)}
             aria-keyshortcuts={spec ? `${IS_MAC ? "Meta" : "Control"}+${letter}` : undefined}
             data-testid={`format-${b.format}`}
             disabled={disabled}

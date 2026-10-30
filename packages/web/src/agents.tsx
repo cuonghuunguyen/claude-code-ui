@@ -7,6 +7,7 @@ import type { Part, SessionState, ToolStatus } from "@claude-ui/protocol";
 import { partOf, wholeParts, type SessionView } from "./store.ts";
 import { GHOST } from "./toolbar.tsx";
 import { NO_LINKS, type AgentLinks, type WorkerRow } from "./workers.ts";
+import { t, useT, type Key } from "./i18n.ts";
 
 export type Run = Extract<Part, { type: "subagent" }>;
 
@@ -34,9 +35,11 @@ export function inRun(view: SessionView, toolUseId: string, runId: string) {
   return false;
 }
 
-const STATUS_LABEL: Record<ToolStatus, string> = { pending: "Running", running: "Running", done: "Done", error: "Failed", denied: "Denied", stopped: "Stopped" };
+const STATUS_KEY = { pending: "sidebar.agents.running", running: "sidebar.agents.running", done: "sidebar.agents.done", error: "sidebar.agents.failed", denied: "sidebar.agents.denied", stopped: "sidebar.agents.stopped" } as const satisfies Record<ToolStatus, Key>;
+const statusLabel = (s: ToolStatus) => t(STATUS_KEY[s]);
 
-const WORKER_LABEL: Record<SessionState, string> = { running: "Running", idle: "Idle", needs_input: "Needs input", error: "Error", closed: "Closed" };
+const WORKER_KEY = { running: "sidebar.agents.running", idle: "sidebar.agents.idle", needs_input: "sidebar.agents.needsInput", error: "sidebar.agents.error", closed: "sidebar.agents.closed" } as const satisfies Record<SessionState, Key>;
+const workerLabel = (s: SessionState) => t(WORKER_KEY[s]);
 
 /** 12s, 3m 05s, 1h 02m. */
 export function duration(ms: number) {
@@ -137,12 +140,13 @@ function flatten(view: SessionView, links: AgentLinks, closedOpen: boolean): Nod
 export function AgentsButton({ view, current, onOpen, side = "top" }: { view: SessionView; current?: string; onOpen: (id?: string) => void; side?: "top" | "bottom" }) {
   const [open, setOpen] = useState(false);
   const all = wholeParts(view).filter((p): p is Run => p.type === "subagent");
+  const t = useT();
   const { links, onOpenSession } = useContext(AgentLinksContext);
   // Another session's tab hides this pane (Activity), which would freeze the closing popup: it opens that tab once the map is closed.
   const target = useRef<string>(undefined);
   const running = all.filter(isRunning).length + links.workers.filter((w) => w.state === "running").length;
   if (!all.length && !links.workers.length && !links.closed.length && !links.coordinator) return null;
-  const label = running ? `Agents, ${running} running` : "Agents";
+  const label = running ? t("sidebar.agents.agentsRunning", { count: running }) : t("sidebar.agents.agents");
   return (
     <Popover.Root
       open={open}
@@ -160,7 +164,7 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
     >
       <Popover.Trigger aria-label={label} title={label} data-testid="agents-button" className={`${GHOST} flex shrink-0 items-center`}>
         <NetworkIcon aria-hidden className="size-4" />
-        <span className="hidden @2xl:inline">Agents</span>
+        <span className="hidden @2xl:inline">{t("sidebar.agents.agents")}</span>
         {running > 0 && (
           <span data-testid="agents-running" className="min-w-4 rounded-full bg-accent px-1 text-center text-xs text-foreground tabular-nums">
             {running}
@@ -174,7 +178,7 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
             data-testid="agent-map"
             className="w-96 max-w-[calc(100vw-32px)] origin-(--transform-origin) rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 motion-reduce:animate-none"
           >
-            <Popover.Title className="px-2 pt-1.5 pb-1 font-medium text-[13px] text-muted-foreground">Agent map</Popover.Title>
+            <Popover.Title className="px-2 pt-1.5 pb-1 font-medium text-[13px] text-muted-foreground">{t("sidebar.agents.map")}</Popover.Title>
             <AgentTree
               view={view}
               current={current}
@@ -199,6 +203,7 @@ export function AgentsButton({ view, current, onOpen, side = "top" }: { view: Se
 const rowKey = (r: Node) => (r.kind === "run" ? r.run.id : r.kind === "worker" ? `w:${r.worker.id}` : r.kind);
 
 function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { view: SessionView; current?: string; links: AgentLinks; onOpen: (id?: string) => void; onOpenSession: (id: string) => void; onClose: () => void }) {
+  const t = useT();
   const [closedOpen, setClosedOpen] = useState(false);
   const rows = flatten(view, links, closedOpen);
   const now = useNow(rows.some((r) => r.kind === "run" && isRunning(r.run)));
@@ -248,11 +253,11 @@ function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { v
     }
   };
   return (
-    <ul role="tree" aria-label="Agent map" className="max-h-[min(60vh,420px)] overflow-y-auto" onKeyDown={onKeyDown}>
+    <ul role="tree" aria-label={t("sidebar.agents.map")} className="max-h-[min(60vh,420px)] overflow-y-auto" onKeyDown={onKeyDown}>
       {rows.map((r, i) => {
         const run = r.kind === "run" ? r.run : undefined;
-        const name = r.kind === "run" ? r.run.description || "Subagent run" : r.kind === "session" ? "Session" : r.kind === "coordinator" ? `Coordinator: ${r.title}` : r.kind === "workers" ? "Workers" : r.kind === "worker" ? r.worker.name : `Closed (${r.n})`;
-        const status = run ? `${STATUS_LABEL[run.status]}, ${runDuration(run, now)}` : r.kind === "worker" ? `worker, ${WORKER_LABEL[r.worker.state]}` : "";
+        const name = r.kind === "run" ? r.run.description || t("sidebar.agents.subagentRun") : r.kind === "session" ? t("sidebar.agents.session") : r.kind === "coordinator" ? t("sidebar.agents.coordinator", { title: r.title }) : r.kind === "workers" ? t("sidebar.agents.workers") : r.kind === "worker" ? r.worker.name : t("sidebar.agents.closedCount", { count: r.n });
+        const status = run ? `${statusLabel(run.status)}, ${runDuration(run, now)}` : r.kind === "worker" ? t("sidebar.agents.workerState", { state: workerLabel(r.worker.state) }) : "";
         const selected = (r.kind === "run" || r.kind === "session") && (run?.id ?? undefined) === current;
         const inert = r.kind === "workers";
         const testId = r.kind === "run" || r.kind === "session" ? "agent-node" : `agent-${r.kind}`;
@@ -294,12 +299,12 @@ function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { v
             </span>
             {run && (
               <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground tabular-nums">
-                {STATUS_LABEL[run.status]} · {runDuration(run, now)}
+                {statusLabel(run.status)} · {runDuration(run, now)}
               </span>
             )}
             {r.kind === "worker" && (
               <span aria-hidden className="shrink-0 text-[12px] text-muted-foreground">
-                {WORKER_LABEL[r.worker.state]}
+                {workerLabel(r.worker.state)}
               </span>
             )}
           </li>
@@ -311,33 +316,34 @@ function AgentTree({ view, current, links, onOpen, onOpenSession, onClose }: { v
 
 /** Top bar of the subagent view (OpenCode child session header): Back, parent / description, status and duration, Children, Agents. */
 export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run; onOpen: (id?: string) => void }) {
+  const t = useT();
   const parent = runOf(view, run.parentId);
   const children = runsOf(view, run.id);
   const now = useNow(isRunning(run) || children.some(isRunning));
-  const back = parent ? `Back to ${parent.description || "parent run"}` : "Back to session";
+  const back = parent ? t("sidebar.agents.backTo", { name: parent.description || t("sidebar.agents.parentRun") }) : t("sidebar.agents.backToSession");
   return (
     <header className="flex h-12 shrink-0 items-center gap-1 border-b px-2 sm:px-4" data-testid="subagent-bar">
       <button type="button" aria-label={back} title={back} data-testid="subagent-back" className={`${GHOST} flex w-7 shrink-0 items-center justify-center px-0! pointer-coarse:w-11`} onClick={() => onOpen(parent?.id)}>
         <ArrowLeftIcon aria-hidden className="size-4" />
       </button>
       <button type="button" tabIndex={-1} aria-hidden className="hidden min-w-0 max-w-[30%] cursor-pointer truncate text-[13px] text-muted-foreground hover:text-foreground sm:block" onClick={() => onOpen(parent?.id)}>
-        {parent ? parent.description || "Subagent run" : "Session"}
+        {parent ? parent.description || t("sidebar.agents.subagentRun") : t("sidebar.agents.session")}
       </button>
       <span aria-hidden className="hidden px-1 text-[11px] text-muted-foreground sm:inline">
         /
       </span>
       <h1 className="min-w-0 flex-1 truncate font-medium text-[13px]" data-testid="subagent-title">
-        {run.description || "Subagent run"}
+        {run.description || t("sidebar.agents.subagentRun")}
       </h1>
       <span className="flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground tabular-nums" data-testid="subagent-status">
         <StatusMark run={run} />
-        {STATUS_LABEL[run.status]}
+        {statusLabel(run.status)}
         <span className="hidden sm:inline"> · {runDuration(run, now)}</span>
       </span>
       {children.length > 0 && (
         <Menu.Root>
-          <Menu.Trigger aria-label={`Children, ${children.length} subagent runs`} data-testid="subagent-children" className={`${GHOST} flex shrink-0 items-center`}>
-            <span className="hidden sm:inline">Children</span>
+          <Menu.Trigger aria-label={t("sidebar.agents.childrenAria", { count: children.length })} data-testid="subagent-children" className={`${GHOST} flex shrink-0 items-center`}>
+            <span className="hidden sm:inline">{t("sidebar.agents.children")}</span>
             <span className="tabular-nums">{children.length}</span>
             <ChevronDownIcon aria-hidden className="size-4" />
           </Menu.Trigger>
@@ -352,8 +358,8 @@ export function SubagentBar({ view, run, onOpen }: { view: SessionView; run: Run
                     className="flex h-7 cursor-pointer items-center gap-2 rounded-sm px-3 outline-none data-highlighted:bg-accent pointer-coarse:h-11"
                   >
                     <StatusMark run={c} />
-                    <span title={c.description || "Subagent run"} className="min-w-0 flex-1 truncate">
-                      {c.description || "Subagent run"}
+                    <span title={c.description || t("sidebar.agents.subagentRun")} className="min-w-0 flex-1 truncate">
+                      {c.description || t("sidebar.agents.subagentRun")}
                     </span>
                     <span className="shrink-0 text-[12px] text-muted-foreground tabular-nums">{runDuration(c, now)}</span>
                   </Menu.Item>
@@ -387,19 +393,20 @@ export function NotPromptable({
   stopping?: boolean;
   error?: string;
 }) {
+  const t = useT();
   const parent = runOf(view, run.parentId);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-muted p-3 text-sm text-muted-foreground" data-testid="not-promptable">
       <p className="min-w-0 flex-1">
-        Subagent runs cannot be prompted.{" "}
+        {t("sidebar.agents.cannotPrompt")}{" "}
         <button type="button" className="cursor-pointer text-foreground hover:underline pointer-coarse:min-h-11" data-testid="not-promptable-back" onClick={() => onOpen(parent?.id)}>
-          {parent ? "Back to parent run." : "Back to main session."}
+          {t(parent ? "sidebar.agents.backToParent" : "sidebar.agents.backToMain")}
         </button>
       </p>
       {isRunning(run) && (
         <button type="button" data-testid="stop-agent" disabled={stopping} className={`${GHOST} flex shrink-0 items-center text-foreground! disabled:opacity-50`} onClick={() => onStop(run.id)}>
           <SquareIcon aria-hidden className="size-3 fill-current" />
-          {stopping ? "Stopping…" : "Stop agent"}
+          {t(stopping ? "sidebar.agents.stopping" : "sidebar.agents.stop")}
         </button>
       )}
       {error && isRunning(run) && (

@@ -18,6 +18,7 @@ import { trapTab } from "./focus-trap.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import { openContextMenuFromKey } from "./tab-menu.ts";
 import type { connect, ConnectionStatus } from "./client.ts";
+import { useT } from "./i18n.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
 import { loadLanguage, syntaxStyle } from "./code-theme.ts";
@@ -130,6 +131,7 @@ export function FilesPanel({
   /** Run the editor sync (disk watch, reload on change) for the store. App turns it off for every view and runs one `EditorSync` itself: fs.watch replaces the watch set per connection. */
   sync?: boolean;
 }) {
+  const tr = useT();
   const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
   const store = (editors ?? own)!;
   const { tabs, activePath, recent, gitNudge, error, loading } = useEditorStore(store);
@@ -190,7 +192,7 @@ export function FilesPanel({
   }, [wide]);
   /** Pop out in the Files tab, Open in editor in the file dialog (for a file inside `cwd`): the file view's way to the other place. */
   const tabButton = active && onOpenTab && inDir(active.path, cwd) && (
-    <Button size="icon-sm" variant="ghost" onClick={() => onOpenTab(active.path)} title="Open in tab" aria-label="Open in tab" className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
+    <Button size="icon-sm" variant="ghost" onClick={() => onOpenTab(active.path)} title={tr("files.openInTab")} aria-label={tr("files.openInTab")} className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
       <ExternalLinkIcon />
     </Button>
   );
@@ -199,7 +201,7 @@ export function FilesPanel({
       {tabButton}
       {inDir(active.path, cwd) && onOpenInFiles && (
         <Button size="sm" variant="ghost" onClick={onOpenInFiles} className="max-md:h-11 pointer-coarse:h-11" data-testid="open-in-editor">
-          <SquareArrowOutUpRightIcon /> Open in editor
+          <SquareArrowOutUpRightIcon /> {tr("files.panel.openInEditor")}
         </Button>
       )}
     </>
@@ -207,7 +209,7 @@ export function FilesPanel({
     <>
       {tabButton}
       {onPopOut && (
-        <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Pop out" aria-label="Pop out to file dialog" className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
+        <Button size="icon-sm" variant="ghost" onClick={onPopOut} title={tr("files.panel.popOut")} aria-label={tr("files.panel.popOutLong")} className="max-md:size-11 pointer-coarse:size-11" data-testid="files-popout">
           <Maximize2Icon />
         </Button>
       )}
@@ -256,7 +258,7 @@ export function FilesPanel({
           className="flex min-h-0 flex-1 flex-col overflow-auto py-1 font-mono text-xs"
           id="file-tree"
           data-testid="file-tree"
-          aria-label="File tree"
+          aria-label={tr("files.panel.tree")}
         >
           <FileTree
             key={cwd}
@@ -299,7 +301,7 @@ export function FilesPanel({
           aria-controls="file-tree"
           data-testid="toggle-tree"
         >
-          {treeShown ? <ChevronDownIcon /> : <ChevronRightIcon />} Files
+          {treeShown ? <ChevronDownIcon /> : <ChevronRightIcon />} {tr("files.title")}
         </Button>
         {treeShown && (
           <>
@@ -309,8 +311,8 @@ export function FilesPanel({
               className="ml-auto max-md:size-11 pointer-coarse:size-11"
               onClick={() => tree.current?.collapseAll()}
               disabled={filtering}
-              title="Collapse all folders"
-              aria-label="Collapse all folders"
+              title={tr("files.panel.collapseAll")}
+              aria-label={tr("files.panel.collapseAll")}
               data-testid="tree-collapse-all"
             >
               <ChevronsDownUpIcon />
@@ -321,8 +323,8 @@ export function FilesPanel({
               className="max-md:size-11 pointer-coarse:size-11"
               onClick={() => active && void tree.current?.reveal(active.path, true)}
               disabled={!active}
-              title="Reveal active file in tree"
-              aria-label="Reveal active file in tree"
+              title={tr("files.panel.reveal")}
+              aria-label={tr("files.panel.reveal")}
               data-testid="tree-reveal"
             >
               <LocateFixedIcon />
@@ -334,8 +336,8 @@ export function FilesPanel({
           variant="ghost"
           className={`${treeShown ? "" : "ml-auto "}max-md:size-11 pointer-coarse:size-11`}
           onClick={() => setTreeKey((k) => k + 1)}
-          title="Reload the file tree"
-          aria-label="Reload the file tree"
+          title={tr("files.panel.reloadTree")}
+          aria-label={tr("files.panel.reloadTree")}
         >
           <RotateCwIcon />
         </Button>
@@ -353,7 +355,7 @@ export function FilesPanel({
         </div>
       )}
       {wide && treeShown && !empty && (
-        <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label="Resize file tree" testId="files-tree-resizer" />
+        <ListResizer list={treeColumn} width={treeWidth} onResize={(w) => (setTreeWidth(w), saveListWidth(w, TREE_WIDTH_KEY))} label={tr("files.panel.resizeTree")} testId="files-tree-resizer" />
       )}
       {overlay && <div className="absolute inset-0 z-10 bg-overlay/40" onClick={() => closeDrawer(true)} data-testid="file-tree-scrim" />}
       {/* Narrow: one container, so the tree keeps its folders and filter while the drawer is closed (hidden, not unmounted) or no file is open (it then fills the panel). */}
@@ -363,7 +365,7 @@ export function FilesPanel({
           hidden={!treeShown}
           tabIndex={empty ? undefined : -1}
           role={empty ? undefined : "region"}
-          aria-label={empty ? undefined : "File tree"}
+          aria-label={empty ? undefined : tr("files.panel.tree")}
           className={cn("flex flex-col outline-none", empty ? "min-h-0 flex-1" : "absolute inset-y-0 left-0 z-20 w-[min(320px,85%)] border-r bg-card shadow-floating ring-[0.5px] ring-foreground/15")}
           data-testid={empty ? undefined : "file-tree-drawer"}
           onKeyDown={(e) => {
@@ -377,7 +379,7 @@ export function FilesPanel({
       )}
       <div inert={overlay} className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>
       {shown.length > 0 && (
-        <div className="flex h-9 shrink-0 overflow-x-auto border-b bg-card text-xs max-md:h-auto" role="tablist" aria-label="Editor tabs">
+        <div className="flex h-9 shrink-0 overflow-x-auto border-b bg-card text-xs max-md:h-auto" role="tablist" aria-label={tr("files.panel.editorTabs")}>
           {shown.map((p) => {
             const t = tabs[p]!;
             return (
@@ -396,7 +398,7 @@ export function FilesPanel({
                 >
                   <button
                     className={cn("flex items-center gap-1.5 py-1.5 max-md:min-h-11 max-md:min-w-11", t.preview && "italic")}
-                    aria-label={t.preview ? `${baseName(p)}, preview` : undefined}
+                    aria-label={t.preview ? tr("files.panel.previewTab", { name: baseName(p) }) : undefined}
                     onClick={() => store.setActive(p)}
                     onDoubleClick={() => update(p, pin)}
                     onAuxClick={(e) => e.button === 1 && (e.preventDefault(), close(p))}
@@ -404,14 +406,14 @@ export function FilesPanel({
                     <FileIcon path={p} className="size-4 shrink-0" />
                     <span>
                       {baseName(p)}
-                      {isDirty(t) && <span aria-label="unsaved"> ●</span>}
+                      {isDirty(t) && <span aria-label={tr("files.panel.unsaved")}> ●</span>}
                       {t.conflict && <span className="text-warning"> !</span>}
                     </span>
                   </button>
                   <button
                     className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground max-md:size-11 pointer-coarse:size-11"
                     onClick={() => close(p)}
-                    aria-label={`Close ${baseName(p)}`}
+                    aria-label={tr("files.panel.closeTab", { name: baseName(p) })}
                   >
                     ×
                   </button>
@@ -421,19 +423,19 @@ export function FilesPanel({
                     <ContextMenu.Popup className={POPUP} data-testid="editor-tab-menu">
                       {onOpenTab && inDir(p, cwd) && (
                         <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-openTab" onClick={() => onOpenTab(p)}>
-                          Open in tab
+                          {tr("files.openInTab")}
                         </ContextMenu.Item>
                       )}
                       <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-close" onClick={() => close(p)}>
-                        Close
+                        {tr("files.close")}
                       </ContextMenu.Item>
                       {onCopy && (
                         <>
                           <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyPath" onClick={() => onCopy(p, "path")}>
-                            Copy path
+                            {tr("files.menu.copyPath")}
                           </ContextMenu.Item>
                           <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyRel" onClick={() => onCopy(relPath(p, cwd), "relative path")}>
-                            Copy relative path
+                            {tr("files.menu.copyRel")}
                           </ContextMenu.Item>
                         </>
                       )}
@@ -448,21 +450,21 @@ export function FilesPanel({
       {loading && active && (
         // The editor stays mounted (undo history, cursor, scroll) while another file loads.
         <p className="shrink-0 border-b px-2 py-1 text-muted-foreground text-xs" role="status" data-testid="file-loading">
-          Loading file…
+          {tr("files.loadingFile")}
         </p>
       )}
       {suspended ? (
         <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="files-suspended">
-          Open in the file dialog
+          {tr("files.panel.inDialog")}
         </p>
       ) : loading && !active ? (
         <p className="m-auto p-4 text-muted-foreground text-sm" role="status" data-testid="file-loading">
-          Loading file…
+          {tr("files.loadingFile")}
         </p>
       ) : active ? (
         <FileEditor store={store} path={active.path} cwd={cwd} client={client} viewRef={editor} onSend={onSend} onFolder={revealFolder} onLink={openLink} place={placeButton} />
       ) : (
-        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">Open a file from the tree.</p>
+        !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">{tr("files.panel.openFromTree")}</p>
       )}
       </div>
       </div>
@@ -496,6 +498,7 @@ export function FileEditor({
   /** The header's last button(s): Pop out, Open in editor, Move to Files. */
   place?: ReactNode;
 }) {
+  const tr = useT();
   const { tabs, sourceOnly, goto, draftsNotKept } = useEditorStore(store);
   const active = tabs[path];
   const [mdView, setMdView] = useState<MdView>(loadMdView);
@@ -532,17 +535,17 @@ export function FileEditor({
     <div className="flex min-h-0 flex-1 flex-col">
       {active.conflict && (
         <div className="flex flex-wrap items-center gap-2 border-b bg-warning/10 px-2 py-1.5 text-xs" role="alert" data-testid="editor-conflict">
-          <span className="flex-1">Changed on disk while you have unsaved edits.</span>
+          <span className="flex-1">{tr("files.panel.conflict")}</span>
           <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => store.reload(path)}>
-            Reload from disk
+            {tr("files.reloadFromDisk")}
           </Button>
           <Button size="xs" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => void save(path, true)}>
-            Overwrite with mine
+            {tr("files.panel.overwrite")}
           </Button>
         </div>
       )}
       {active.error && <p className="border-b px-2 py-1 text-destructive text-xs">{active.error}</p>}
-      {draftsNotKept && <p className="border-b px-2 py-1 text-destructive text-xs">Unsaved edits are too large to keep across a reload.</p>}
+      {draftsNotKept && <p className="border-b px-2 py-1 text-destructive text-xs">{tr("files.panel.draftsNotKept")}</p>}
       {active.media ? (
         <>
           {placeHeader}
@@ -553,7 +556,7 @@ export function FileEditor({
           <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1 text-xs" data-testid="file-path-header">
             <Breadcrumb path={path} cwd={cwd} onFolder={onFolder} />
             {md && (
-              <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Markdown view">
+              <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={tr("files.panel.mdView")}>
                 {(narrow ? (["source", "preview"] as const) : (["source", "preview", "split"] as const)).map((m) => (
                   <Button
                     key={m}
@@ -564,14 +567,14 @@ export function FileEditor({
                     onClick={() => (store.setSourceOnly(undefined), setMdView(m), saveMdView(m))}
                     data-testid={`md-view-${m}`}
                   >
-                    {m === "source" ? "Source" : m === "preview" ? "Preview" : "Split"}
+                    {m === "source" ? tr("files.panel.source") : m === "preview" ? tr("files.panel.preview") : tr("files.panel.split")}
                   </Button>
                 ))}
               </div>
             )}
             {mediaKind(path) === "svg" && (
               <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void store.switchView(path, false)} className="max-md:h-11 pointer-coarse:h-11">
-                Show preview
+                {tr("files.artifact.show")}
               </Button>
             )}
             {/* preventDefault keeps the editor focused, so a desktop selection stays visible; the selection lives in the editor state either way. */}
@@ -581,13 +584,13 @@ export function FileEditor({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd))}
               className="max-md:h-11 pointer-coarse:h-11"
-              title="Insert the file and selected lines into the prompt box (Alt+K, Option+K on macOS)"
+              title={tr("files.panel.sendSelectionTitle")}
               data-testid="send-selection"
             >
-              Send selection to Claude
+              {tr("files.panel.sendSelection")}
             </Button>
             <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(path)} data-testid="editor-save">
-              Save
+              {tr("files.panel.save")}
             </Button>
             {place}
           </div>
@@ -609,7 +612,7 @@ export function FileEditor({
             {md && view !== "source" && (
               <div
                 tabIndex={0}
-                aria-label="Markdown preview"
+                aria-label={tr("files.panel.mdPreview")}
                 data-testid="md-preview"
                 className={`min-h-0 min-w-0 flex-1 overflow-auto px-4 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === "split" ? "border-l" : ""}`}
               >
@@ -658,6 +661,7 @@ export function FileTab({
   onMoveToFiles: (path: string) => void;
   onFocusTab: () => void;
 }) {
+  const tr = useT();
   const { tabs, error } = useEditorStore(store);
   const viewRef = useRef<EditorView>(undefined);
   const loaded = !!tabs[path];
@@ -682,7 +686,7 @@ export function FileTab({
   if (!loaded)
     return (
       <p className={cn("m-auto p-4 text-sm", error ? "text-destructive" : "text-muted-foreground")} role="status" data-testid="file-tab-loading">
-        {error ?? "Loading file…"}
+        {error ?? tr("files.loadingFile")}
       </p>
     );
   return (
@@ -696,7 +700,7 @@ export function FileTab({
       onFolder={onFolder}
       onLink={onLink}
       place={
-        <Button size="icon-sm" variant="ghost" onClick={() => onMoveToFiles(path)} title="Move to Files" aria-label="Move to Files" className="max-md:size-11 pointer-coarse:size-11" data-testid="file-tab-to-files">
+        <Button size="icon-sm" variant="ghost" onClick={() => onMoveToFiles(path)} title={tr("files.panel.moveToFiles")} aria-label={tr("files.panel.moveToFiles")} className="max-md:size-11 pointer-coarse:size-11" data-testid="file-tab-to-files">
           <FolderInputIcon />
         </Button>
       }
@@ -706,13 +710,14 @@ export function FileTab({
 
 /** The file's path below `cwd` as folders (a click reveals one in the tree) and the file name. */
 function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFolder: (dir: string) => void }) {
+  const tr = useT();
   const rel = relPath(path, cwd);
   const parts = rel.split(/[\\/]/).filter(Boolean);
   const base = rel === path ? "" : path.slice(0, path.length - rel.length);
   const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
   const collapse = useNarrow() && parts.length > 4;
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0 max-md:basis-full md:flex-1" title={path}>
+    <nav aria-label={tr("files.panel.breadcrumb")} className="min-w-0 max-md:basis-full md:flex-1" title={path}>
       <ol className="flex min-w-0 items-center font-mono text-muted-foreground">
         {parts.map((part, i) => {
           const last = i === parts.length - 1;

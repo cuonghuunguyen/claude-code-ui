@@ -1,11 +1,12 @@
 // Create worktree modal logic (GH-447, docs/spec.md "Worktrees"): Branch source choice, branch rows, Base picker options.
 import { jiraKeyOf, pullRequestOf, type BranchRow, type PullRequestLink } from "@claude-ui/protocol";
+import { t, type Key } from "./i18n.ts";
 
 export type Source = "ticket" | "branch" | "name";
-export const SOURCES: { id: Source; title: string }[] = [
-  { id: "ticket", title: "Ticket" },
-  { id: "branch", title: "Branch" },
-  { id: "name", title: "Name" },
+export const SOURCES: { id: Source; title: Key }[] = [
+  { id: "ticket", title: "sidebar.wt.src.ticket" },
+  { id: "branch", title: "sidebar.wt.src.branch" },
+  { id: "name", title: "sidebar.wt.src.name" },
 ];
 const SOURCE_KEY = "claude-ui.worktreeSource";
 /** The last Branch source used in this browser, if any. */
@@ -24,7 +25,7 @@ export function saveSource(s: Source) {
   } catch {}
 }
 
-export const branchKind = (r: BranchRow) => (r.local && r.remote ? "Local · Remote" : r.local ? "Local" : "Remote");
+export const branchKind = (r: BranchRow) => t(r.local && r.remote ? "sidebar.wt.kindBoth" : r.local ? "sidebar.wt.kindLocal" : "sidebar.wt.kindRemote");
 /** What `worktree.create {checkout}` gets: the local branch when there is one, else the remote one. */
 export const checkoutRef = (r: BranchRow) => (r.local ? `refs/heads/${r.name}` : r.remote!);
 const remoteLabel = (ref: string) => ref.replace(/^refs\/remotes\//, "");

@@ -1,6 +1,7 @@
 // Split view (docs/spec.md "Split view", GH-356): the session area shows a session and another session or a splittable pane (GH-398) side by side or stacked. `activeId` stays the single source of truth for "the current session": the active split always shows it.
 import { FOCUS_TAB, NEW_TAB, closeTab } from "./tabs.ts";
 import { isPaneRef, kindOf, ownerOf, splittable } from "./pane-ref.ts";
+import { t } from "./i18n.ts";
 
 export type SplitDir = "row" | "col";
 /** `ids`: tab per split in screen order (left/top first). `at`: index of the active split. `ratio`: size share of `ids[0]`. `runs`: subagent view per non-active split tab. */
@@ -78,7 +79,17 @@ export function splitTo(s: Split | undefined, tabs: readonly string[], activeId:
 }
 
 export type SplitRefusal = "whole" | "session" | "changes";
-export const REFUSAL_TEXT: Record<SplitRefusal, string> = { whole: "Git graph needs the whole area", session: "A split needs a session", changes: "Changes stays in a panel" };
+export const REFUSAL_TEXT: Record<SplitRefusal, string> = {
+  get whole() {
+    return t("app.split.whole");
+  },
+  get session() {
+    return t("app.split.session");
+  },
+  get changes() {
+    return t("app.split.changes");
+  },
+};
 /** Why dropping `t` in `zone` (centre: over split `over` of the shown split `s`) cannot happen; undefined = it can. A centre drop outside a shown split just opens the tab. */
 export function dropRefusal(s: Split | undefined, shown: boolean, tabs: readonly string[], activeId: string | undefined, t: string, zone: DropZone, over: number): SplitRefusal | undefined {
   if (zone === "center" && !(shown && !!s && over >= 0)) return undefined;

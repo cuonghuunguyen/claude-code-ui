@@ -2,9 +2,11 @@ import { useState } from "react";
 import { PencilIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isImeKey } from "./ime.ts";
+import { useT } from "./i18n.ts";
 
 /** A list of strings, edited like VS Code's settings UI: a row per entry with Edit and Remove, "Add item" opens an input with OK / Cancel. Every OK saves the whole array. */
 export function ListSetting({ id, label, hint, value, saving, onSave }: { id: string; label: string; hint: string; value: string[]; saving: boolean; onSave: (next: string[]) => Promise<void> }) {
+  const tr = useT();
   // index of the entry being edited; value.length = a new entry.
   const [at, setAt] = useState<number>();
   const [text, setText] = useState("");
@@ -44,7 +46,7 @@ export function ListSetting({ id, label, hint, value, saving, onSave }: { id: st
         OK
       </Button>
       <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={saving} onClick={cancel} data-testid={`${id}-cancel`}>
-        Cancel
+        {tr("list.cancel")}
       </Button>
     </div>
   );
@@ -60,10 +62,10 @@ export function ListSetting({ id, label, hint, value, saving, onSave }: { id: st
             ) : (
               <>
                 <span className="min-w-0 flex-1 truncate font-mono text-xs" title={v}>{v}</span>
-                <button type="button" aria-label={`Edit ${v}`} title="Edit" disabled={saving} onClick={() => open(i)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`${id}-edit`}>
+                <button type="button" aria-label={tr("list.editItem", { item: v })} title={tr("list.edit")} disabled={saving} onClick={() => open(i)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`${id}-edit`}>
                   <PencilIcon className="size-3.5" />
                 </button>
-                <button type="button" aria-label={`Remove ${v}`} title="Remove" disabled={saving} onClick={() => remove(i)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`${id}-remove`}>
+                <button type="button" aria-label={tr("list.removeItem", { item: v })} title={tr("list.remove")} disabled={saving} onClick={() => remove(i)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`${id}-remove`}>
                   <XIcon className="size-3.5" />
                 </button>
               </>
@@ -76,7 +78,7 @@ export function ListSetting({ id, label, hint, value, saving, onSave }: { id: st
       ) : (
         <div>
           <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={saving} onClick={() => open(value.length)} data-testid={`${id}-add`}>
-            Add item
+            {tr("list.add")}
           </Button>
         </div>
       )}

@@ -5,12 +5,14 @@ import { bind, bindingError, conflictOf, isChanged, pressError, resetAll, resetB
 import { PREFIX_KEYS } from "./leader.ts";
 import { FORMAT_KEYS } from "./markdown-toolbar.tsx";
 import { IS_MAC, SHORTCUTS, keyLabels, shortcutById, type ShortcutGroup } from "./shortcuts.ts";
+import { groupTitle, prefixTitle, shortcutTitle } from "./shortcut-titles.ts";
+import { useT, type Key } from "./i18n.ts";
 
 const GROUPS: ShortcutGroup[] = ["General", "Tabs", "Panels", "Session", "Prefix"];
-const GROUP_TITLE: Record<ShortcutGroup, string> = { General: "General", Tabs: "Tabs", Panels: "Panels", Session: "Session", Prefix: "Prefix key" };
 
-const Chips = ({ spec }: { spec?: string }) =>
-  spec ? (
+const Chips = ({ spec }: { spec?: string }) => {
+  const t = useT();
+  return spec ? (
     <kbd className="flex shrink-0 gap-0.5 font-sans">
       {keyLabels(spec).map((k, i) => (
         <span key={i} className="grid h-5 min-w-5 place-items-center rounded-xs bg-kbd px-1 font-medium text-[11px] text-muted-foreground uppercase leading-none">
@@ -19,18 +21,20 @@ const Chips = ({ spec }: { spec?: string }) =>
       ))}
     </kbd>
   ) : (
-    <span className="text-faint text-xs">Not set</span>
+    <span className="text-faint text-xs">{t("shortcuts.notSet")}</span>
   );
+};
 
 const btn = "rounded-md px-2 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:min-w-11 h-7";
 
 /** Fixed keys of other places: shown, not editable. */
-const FIXED: { title: string; spec: string }[] = [
-  { title: "Stop the running turn", spec: "escape" },
-  { title: "Change permission mode (prompt box)", spec: "shift+tab" },
+const FIXED: { title: Key; spec: string }[] = [
+  { title: "shortcuts.fixed.stop", spec: "escape" },
+  { title: "shortcuts.fixed.mode", spec: "shift+tab" },
 ];
 
 export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClose: () => void; /** Opens recording on this command's row (the key promoter's "Assign a shortcut…"). */ edit?: string }) {
+  const t = useT();
   useKeymap();
   const [filter, setFilter] = useState("");
   const [recording, setRecording] = useState<string>();
@@ -100,15 +104,15 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
 
   return (
     <ConfigDialog
-      title="Keyboard shortcuts"
+      title={t("shortcuts.title")}
       open={open}
       onClose={onClose}
       testId="shortcuts-dialog"
       footer={
         <>
-          <span className="flex-1 text-muted-foreground text-xs">Kept in this browser.</span>
+          <span className="flex-1 text-muted-foreground text-xs">{t("shortcuts.kept")}</span>
           <button type="button" className={`${btn} border`} onClick={() => (resetAll(), stop())} data-testid="shortcuts-reset-all">
-            Reset all
+            {t("shortcuts.resetAll")}
           </button>
         </>
       }
@@ -118,21 +122,21 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
         ref={filterRef}
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
-        placeholder="Filter by name or key"
-        aria-label="Filter shortcuts"
+        placeholder={t("shortcuts.filter")}
+        aria-label={t("shortcuts.filterLabel")}
         className="h-8 shrink-0 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
         data-testid="shortcuts-filter"
       />
       {GROUPS.map((g) =>
         section(
-          GROUP_TITLE[g],
+          groupTitle(g),
           [
-            ...SHORTCUTS.filter((s) => s.group === g && shows(s.title, specOf(s.id))).map((s) => (
+            ...SHORTCUTS.filter((s) => s.group === g && shows(shortcutTitle(s.id), specOf(s.id))).map((s) => (
               <div key={s.id} className={`${rowClass} flex-wrap`} data-testid={`shortcut-row-${s.id}`}>
-                <span className="min-w-0 flex-1 text-sm">{s.title}</span>
+                <span className="min-w-0 flex-1 text-sm">{shortcutTitle(s.id)}</span>
                 {recording === s.id ? (
                   <span role="status" className="text-sm" data-testid="shortcut-recording">
-                    Press keys… (Esc cancels, Backspace removes)
+                    {t("shortcuts.recording")}
                   </span>
                 ) : (
                   <Chips spec={specOf(s.id)} />
@@ -142,12 +146,12 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
                   ref={(b) => void (b ? editRefs.current.set(s.id, b) : editRefs.current.delete(s.id))}
                   className={btn}
                   onClick={() => (stop(), setRecording(s.id))}
-                  aria-label={`Edit ${s.title}`} data-testid={`shortcut-edit-${s.id}`}>
-                  Edit
+                  aria-label={t("shortcuts.editLabel", { title: shortcutTitle(s.id) })} data-testid={`shortcut-edit-${s.id}`}>
+                  {t("shortcuts.edit")}
                 </button>
                 {isChanged(s.id) && (
-                  <button type="button" className={btn} onClick={() => (resetBinding(s.id), stop(), setRefocus(s.id))} aria-label={`Reset ${s.title}`} data-testid={`shortcut-reset-${s.id}`}>
-                    Reset
+                  <button type="button" className={btn} onClick={() => (resetBinding(s.id), stop(), setRefocus(s.id))} aria-label={t("shortcuts.resetLabel", { title: shortcutTitle(s.id) })} data-testid={`shortcut-reset-${s.id}`}>
+                    {t("shortcuts.reset")}
                   </button>
                 )}
                 {recording === s.id && error && (
@@ -157,7 +161,7 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
                 )}
                 {pending?.id === s.id && (
                   <p role="alert" className="flex basis-full flex-wrap items-center gap-2 text-xs" data-testid="shortcut-conflict">
-                    <span className="flex-1">Already used by {pending.with.title}</span>
+                    <span className="flex-1">{t("shortcuts.usedBy", { title: pending.with.title })}</span>
                     {pending.with.id && (
                       <button
                         type="button"
@@ -165,21 +169,21 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
                         onClick={() => (bind(pending.with.id!, null), bind(pending.id, pending.spec), stop(), setRefocus(pending.id))}
                         data-testid="shortcut-replace"
                       >
-                        Replace
+                        {t("shortcuts.replace")}
                       </button>
                     )}
                     <button type="button" className={`${btn} border`} onClick={() => (stop(), setRefocus(pending.id))} data-testid="shortcut-cancel">
-                      Cancel
+                      {t("shortcuts.cancel")}
                     </button>
                   </p>
                 )}
               </div>
             )),
             ...(g === "Prefix"
-              ? PREFIX_KEYS.filter((p) => shows(p.title, p.key)).map((p) => (
+              ? PREFIX_KEYS.filter((p) => shows(prefixTitle(p.id), p.key)).map((p) => (
                   <div key={p.key} className={rowClass}>
-                    <span className="min-w-0 flex-1 text-sm">{p.title}</span>
-                    <span className="text-faint text-xs">then</span>
+                    <span className="min-w-0 flex-1 text-sm">{prefixTitle(p.id)}</span>
+                    <span className="text-faint text-xs">{t("shortcuts.then")}</span>
                     <Chips spec={p.key === "1-9" ? "1-9" : p.key} />
                   </div>
                 ))
@@ -188,21 +192,21 @@ export function ShortcutsDialog({ open, onClose, edit }: { open: boolean; onClos
         ),
       )}
       {section(
-        "In the prompt box",
-        Object.entries(FORMAT_KEYS)
-          .filter(([name, spec]) => shows(name, spec))
+        t("shortcuts.inPrompt"),
+        (Object.entries(FORMAT_KEYS) as [keyof typeof FORMAT_KEYS, string][])
+          .filter(([name, spec]) => shows(t(`shortcuts.format.${name}`), spec))
           .map(([name, spec]) => (
             <div key={name} className={rowClass}>
-              <span className="min-w-0 flex-1 text-sm capitalize">{name}</span>
+              <span className="min-w-0 flex-1 text-sm capitalize">{t(`shortcuts.format.${name}`)}</span>
               <Chips spec={spec} />
             </div>
           )),
       )}
       {section(
-        "Fixed",
-        FIXED.filter((f) => shows(f.title, f.spec)).map((f) => (
+        t("shortcuts.fixed"),
+        FIXED.filter((f) => shows(t(f.title), f.spec)).map((f) => (
           <div key={f.title} className={rowClass}>
-            <span className="min-w-0 flex-1 text-sm">{f.title}</span>
+            <span className="min-w-0 flex-1 text-sm">{t(f.title)}</span>
             <Chips spec={f.spec} />
           </div>
         )),

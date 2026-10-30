@@ -6,6 +6,7 @@ import { Task, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
 import { CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { todoSummary } from "./tools.ts";
+import { t as tr, useT } from "./i18n.ts";
 
 /**
  * OpenCode shows the dock only while the session works or waits for an answer, and hides it once all items are done.
@@ -32,7 +33,18 @@ const saveOpen = (open: boolean) => {
   }
 };
 // Screen-reader status; the mark is aria-hidden and strikethrough is not announced.
-export const statusText = { completed: "Completed", in_progress: "In progress", pending: "Pending" } as const;
+// Getters: the text is read at render time, in the language then current.
+export const statusText = {
+  get completed() {
+    return tr("session.todo.completed");
+  },
+  get in_progress() {
+    return tr("session.todo.inProgress");
+  },
+  get pending() {
+    return tr("session.todo.pending");
+  },
+};
 
 export function Mark({ status }: { status: TodoItem["status"] }) {
   return (
@@ -52,6 +64,7 @@ export function Mark({ status }: { status: TodoItem["status"] }) {
 }
 
 export function TodoDock({ items, className }: { items: TodoItem[]; className?: string }) {
+  const t = useT();
   const [open, setOpen] = useState(loadOpen);
   const active = items.find((i) => i.status === "in_progress") ?? items.find((i) => i.status === "pending");
   return (
@@ -61,7 +74,7 @@ export function TodoDock({ items, className }: { items: TodoItem[]; className?: 
       data-testid="todo-dock"
       className={cn("w-full overflow-hidden rounded-xl border-[0.5px] bg-muted", className)}
     >
-      <TaskTrigger title="Todos" className="flex h-[42px] w-full cursor-pointer items-center gap-2 pr-3 pl-4 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset pointer-coarse:h-11">
+      <TaskTrigger title={t("session.todo.title")} className="flex h-[42px] w-full cursor-pointer items-center gap-2 pr-3 pl-4 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset pointer-coarse:h-11">
         <span className="shrink-0 text-muted-foreground">
           {todoSummary(items)}
         </span>

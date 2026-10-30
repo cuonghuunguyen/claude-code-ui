@@ -1,23 +1,38 @@
 // Clean up tabs (GH-378): rule-based bulk close over tab + session facts. Pure; App builds the facts.
 import type { SessionState } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 import { NEW_TAB } from "./tabs.ts";
 
 export type CleanupRule = "idle" | "finished" | "archived" | "unused1h" | "unused1d" | "unused7d" | "workers";
 export const CLEANUP_RULES: CleanupRule[] = ["idle", "finished", "archived", "unused1h", "unused1d", "unused7d", "workers"];
 export const RULE_LABEL: Record<CleanupRule, string> = {
-  idle: "Close idle tabs",
-  finished: "Close finished tabs",
-  archived: "Close tabs of archived or deleted sessions",
-  unused1h: "Close tabs not used for 1 hour",
-  unused1d: "Close tabs not used for 1 day",
-  unused7d: "Close tabs not used for 7 days",
-  workers: "Close worker tabs",
+  get idle() {
+    return t("app.cleanup.rule.idle");
+  },
+  get finished() {
+    return t("app.cleanup.rule.finished");
+  },
+  get archived() {
+    return t("app.cleanup.rule.archived");
+  },
+  get unused1h() {
+    return t("app.cleanup.rule.unused1h");
+  },
+  get unused1d() {
+    return t("app.cleanup.rule.unused1d");
+  },
+  get unused7d() {
+    return t("app.cleanup.rule.unused7d");
+  },
+  get workers() {
+    return t("app.cleanup.rule.workers");
+  },
 };
 export const UNUSED_MS = { unused1h: 3_600_000, unused1d: 86_400_000, unused7d: 604_800_000 } as const;
 
 export type KeepReason = "active" | "pinned" | "loading" | "unknown" | "running" | "needs_input" | "unread" | "draft";
 const REASON_ORDER: KeepReason[] = ["pinned", "loading", "unknown", "running", "needs_input", "unread", "draft"]; // "active" never shown
-const REASON_WORD: Record<KeepReason, string> = { active: "active", pinned: "pinned", loading: "loading", unknown: "unknown", running: "running", needs_input: "needs input", unread: "unread", draft: "draft" };
+const reasonWord = (r: KeepReason) => t(`app.cleanup.reason.${r}`);
 
 export type TabFacts = {
   id: string;
@@ -81,15 +96,15 @@ export function cleanupMenu(facts: TabFacts[], c: CleanupContext, scope?: Readon
   const items = CLEANUP_RULES.map((rule) => ({ rule, label: RULE_LABEL[rule], count: cleanupTargets(rule, facts, c, scope).length }));
   const reasons = facts.filter((f) => !scope || scope.has(f.id)).map((f) => keepReason(f, c));
   const kept = reasons.filter((r): r is KeepReason => !!r && r !== "active");
-  const words = REASON_ORDER.filter((r) => kept.includes(r)).map((r) => REASON_WORD[r]);
-  return { items, kept: { count: kept.length, text: kept.length ? `${kept.length} kept: ${words.join("/")}` : "" } };
+  const words = REASON_ORDER.filter((r) => kept.includes(r)).map(reasonWord);
+  return { items, kept: { count: kept.length, text: kept.length ? t("app.cleanup.kept", { count: kept.length, words: words.join("/") }) : "" } };
 }
 
 export type AutoClose = "off" | "1h" | "1d";
 export const AUTO_CLOSE: { value: AutoClose; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "1h", label: "1 hour" },
-  { value: "1d", label: "1 day" },
+  { value: "off", get label() { return t("app.cleanup.autoOff"); } },
+  { value: "1h", get label() { return t("app.cleanup.auto1h"); } },
+  { value: "1d", get label() { return t("app.cleanup.auto1d"); } },
 ];
 export const AUTO_CLOSE_EVERY_MS = 15 * 60_000;
 const AUTO_MS = { "1h": UNUSED_MS.unused1h, "1d": UNUSED_MS.unused1d } as const;

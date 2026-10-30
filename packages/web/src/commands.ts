@@ -1,5 +1,6 @@
 // Slash command picker logic: `/` at the start of an empty-argument prompt lists matching commands and skills.
 import type { SlashCommand } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 export type CommandToken = { start: number; query: string; /** End of the whole word: a caret inside it leaves the rest of the word after the caret. */ end: number; lead: boolean };
 
@@ -49,7 +50,7 @@ export function choose(c: SlashCommand, typed = ""): { send: string } | { text: 
 /** /btw (docs/spec.md "Aside"): the question after it ("" when none); undefined for any other text. Handled by the web app, never sent. */
 export const asideOf = (text: string) => /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim())?.[1]?.trim() ?? (text.trim() === "/btw" ? "" : undefined);
 /** The picker row of /btw. */
-export const ASIDE_COMMAND: SlashCommand = { name: "btw", description: "Ask an aside: a read-only side conversation forked from this session", argumentHint: "<question>" };
+export const ASIDE_COMMAND: SlashCommand = { name: "btw", get description() { return t("app.slash.btw"); }, argumentHint: "<question>" };
 
 /** The dialogs the web app opens itself. */
 export type DialogName = "mcp" | "skills" | "plugins" | "resume" | "shells";
@@ -59,11 +60,11 @@ export type DialogName = "mcp" | "skills" | "plugins" | "resume" | "shells";
  * `always`: also when the CLI has a command of that name (`/mcp`); the others only without one (the CLI's own command wins).
  */
 export const DIALOG_COMMANDS: (SlashCommand & { dialog: DialogName; always?: boolean })[] = [
-  { name: "mcp", description: "Configure Model Context Protocol servers", argumentHint: "", dialog: "mcp", always: true },
-  { name: "skills", description: "List available skills", argumentHint: "", dialog: "skills" },
-  { name: "plugins", aliases: ["plugin", "marketplace"], description: "Install, enable, or disable plugins", argumentHint: "", dialog: "plugins" },
-  { name: "tasks", aliases: ["bashes"], description: "List and manage background shells", argumentHint: "", dialog: "shells", always: true },
-  { name: "resume", description: "Resume a previous session", argumentHint: "", dialog: "resume", always: true },
+  { name: "mcp", get description() { return t("app.slash.mcp"); }, argumentHint: "", dialog: "mcp", always: true },
+  { name: "skills", get description() { return t("app.slash.skills"); }, argumentHint: "", dialog: "skills" },
+  { name: "plugins", aliases: ["plugin", "marketplace"], get description() { return t("app.slash.plugins"); }, argumentHint: "", dialog: "plugins" },
+  { name: "tasks", aliases: ["bashes"], get description() { return t("app.slash.tasks"); }, argumentHint: "", dialog: "shells", always: true },
+  { name: "resume", get description() { return t("app.slash.resume"); }, argumentHint: "", dialog: "resume", always: true },
 ];
 
 const has = (commands: SlashCommand[], name: string) => commands.some((c) => c.name === name || c.aliases?.includes(name));

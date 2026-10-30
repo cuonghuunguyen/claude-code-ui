@@ -1,6 +1,7 @@
 // Pure logic of the Clean up dialog (GH-377, docs/spec.md "Layout"): candidates, safety text, selection, filters, sequential run.
 import type { SessionListItem, SessionState, Worktree, WorktreeBlock, WorktreeRemoveResult, WorktreeStatusResult } from "@claude-ui/protocol";
 import { externalWorktree, repoOf } from "./sessions.ts";
+import { t } from "./i18n.ts";
 
 const DAY = 86_400_000;
 
@@ -8,13 +9,26 @@ export type CleanupScope = { kind: "all" } | { kind: "project"; cwd: string } | 
 export type WorktreeCandidate = { key: string; project: string; path: string; branch?: string; external: boolean; outsideRoots: boolean; locked: boolean; sessions: number; lastActivity?: number };
 export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** The session that started it (a worker of a worker has a worker here). */ coordinatorId?: string; /** Path of its linked worktree candidate. */ worktree?: string };
 
+/** Read when shown (getters), so the text follows the language. */
 export const BLOCK_TEXT: Record<WorktreeBlock, string> = {
-  locked: "Locked (git worktree lock)",
-  symlink: "The path is a symbolic link",
-  outside_roots: "Outside the allowed roots",
-  sessions_running: "A session there is running or needs input",
-  removing: "Removal in progress",
-  contains_worktree: "Contains another worktree",
+  get locked() {
+    return t("sidebar.block.locked");
+  },
+  get symlink() {
+    return t("sidebar.block.symlink");
+  },
+  get outside_roots() {
+    return t("sidebar.block.outside_roots");
+  },
+  get sessions_running() {
+    return t("sidebar.block.sessions_running");
+  },
+  get removing() {
+    return t("sidebar.block.removing");
+  },
+  get contains_worktree() {
+    return t("sidebar.block.contains_worktree");
+  },
 };
 
 export function cleanupCandidates(
@@ -66,16 +80,15 @@ export type Row =
   | ({ kind: "worktree" } & WorktreeCandidate & { status?: WorktreeStatusResult; /** The last result before the fresh one arrived (GH-463). */ cached?: WorktreeStatusResult; error?: string })
   | ({ kind: "worker" } & WorkerCandidate);
 
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 /** The daemon stops counting files at 1000: that number means "at least". */
 export const countText = (n: number) => (n >= 1000 ? "1000+" : String(n));
 /** "N ignored files", `1000+` when capped. */
-export const ignoredText = (n: number) => `${countText(n)} ignored ${n === 1 ? "file" : "files"}`;
+export const ignoredText = (n: number) => t("sidebar.cl.ignored", { count: n, shown: countText(n) });
 
 export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "checking"; reason?: string; /** Checking: what the cached result says. */ cached?: ReturnType<typeof rowSafety> } {
   if (r.kind === "worker") {
-    if (r.state === "running") return { safety: "blocked", reason: "Running" };
-    if (r.state === "needs_input") return { safety: "blocked", reason: "Needs input" };
+    if (r.state === "running") return { safety: "blocked", reason: t("sidebar.agents.running") };
+    if (r.state === "needs_input") return { safety: "blocked", reason: t("sidebar.agents.needsInput") };
     return { safety: "safe" };
   }
   if (r.outsideRoots) return { safety: "blocked", reason: BLOCK_TEXT.outside_roots };
@@ -83,10 +96,10 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   if (r.error) return { safety: "blocked", reason: r.error };
   const st = r.status;
   if (!st) return { safety: "checking", ...(r.cached && { cached: rowSafety({ ...r, status: r.cached, cached: undefined }) }) };
-  if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : "Blocked" };
-  if (st.safety === "has_work") return { safety: "has_work", reason: st.uncommitted ? `${plural(st.uncommitted, "file")}, ${plural(st.ahead, "commit")}` : `${plural(st.ahead, "commit")}, has unmerged commits` };
+  if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : t("sidebar.cl.blocked") };
+  if (st.safety === "has_work") return { safety: "has_work", reason: st.uncommitted ? `${t("sidebar.cl.files", { count: st.uncommitted })}, ${t("sidebar.wt.commits", { count: st.ahead })}` : t("sidebar.cl.unmerged", { commits: t("sidebar.wt.commits", { count: st.ahead }) }) };
   // Squash or rebase merged: ahead, but the base already has the changes.
-  if (st.mergedInto) return { safety: "safe", reason: `changes already in ${st.mergedInto} (squash/rebase merged)` };
+  if (st.mergedInto) return { safety: "safe", reason: t("sidebar.cl.merged", { base: st.mergedInto }) };
   return { safety: "safe" };
 }
 
@@ -113,7 +126,7 @@ export function filterRows(rows: Row[], f: Filter, now: number): Row[] {
   });
 }
 
-export const confirmLabel = (n: number, m: number) => (m ? `Remove ${n} (${m} with unsaved work)` : `Remove ${n}`);
+export const confirmLabel = (n: number, m: number) => (m ? t("sidebar.cl.confirmUnsaved", { count: n, unsaved: m }) : t("sidebar.cl.confirm", { count: n }));
 
 export type Item = { key: string; label: string; run: () => Promise<WorktreeRemoveResult | object> };
 export type CleanupResult = { removed: string[]; skipped: { label: string; reason: string }[]; notes: string[] };
@@ -126,8 +139,8 @@ export async function runCleanup(items: Item[], onProgress: (done: number) => vo
     try {
       const r = (await it.run()) as WorktreeRemoveResult;
       out.removed.push(it.label);
-      if (r?.branchKept) out.notes.push(`Branch ${it.label} kept: ${r.branchKept}`);
-      if (r?.ignoredDeleted) out.notes.push(`${it.label}: ${ignoredText(r.ignoredDeleted)} deleted`);
+      if (r?.branchKept) out.notes.push(t("sidebar.cl.branchKept", { label: it.label, reason: r.branchKept }));
+      if (r?.ignoredDeleted) out.notes.push(t("sidebar.cl.ignoredDeleted", { label: it.label, ignored: ignoredText(r.ignoredDeleted) }));
     } catch (e) {
       out.skipped.push({ label: it.label, reason: (e as Error).message });
     }
@@ -136,7 +149,7 @@ export async function runCleanup(items: Item[], onProgress: (done: number) => vo
   return out;
 }
 
-export const summaryText = (r: CleanupResult) => `Removed ${r.removed.length}, skipped ${r.skipped.length}`;
+export const summaryText = (r: CleanupResult) => t("sidebar.cl.summary", { removed: r.removed.length, skipped: r.skipped.length });
 
 export const rowLabel = (r: Row) => (r.kind === "worker" ? r.name : (r.branch ?? r.path.split(/[\\/]/).filter(Boolean).at(-1) ?? r.path));
 

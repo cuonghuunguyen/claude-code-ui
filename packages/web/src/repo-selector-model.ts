@@ -1,6 +1,7 @@
 // Rows and keyboard model of the repository selector tree (docs/spec.md "Repository selector"); mirrors file-tree-model's moveFocus/typeAhead for a repo tree.
 import { repoTree, type GitRepo, type GitReposResult, type RepoNode } from "@claude-ui/protocol";
 import { baseName } from "./paths.ts";
+import { t } from "./i18n.ts";
 
 export type RepoRow = { repo: GitRepo; depth: number; label: string; hasChildren: boolean; expanded: boolean; parent?: string; posinset: number; setsize: number };
 
@@ -70,14 +71,14 @@ export function repoTypeAhead(rows: RepoRow[], from: number, buffer: string): nu
 }
 
 /** Footer lines of the selector: the list was cut by the scan, or a repository lists more submodules than the daemon reads. */
-export function truncationNotes(t: GitReposResult["truncated"], list: GitRepo[], limit: number): string[] {
-  if (!t) return [];
+export function truncationNotes(trunc: GitReposResult["truncated"], list: GitRepo[], limit: number): string[] {
+  if (!trunc) return [];
   const notes: string[] = [];
-  if (t.scan === "count" || t.scan === "time" || t.scan === "entries") notes.push(`Showing the first ${list.length} repositories`);
-  for (const s of t.submodules ?? []) {
+  if (trunc.scan === "count" || trunc.scan === "time" || trunc.scan === "entries") notes.push(t("sidebar.repo.showingFirst", { count: list.length }));
+  for (const s of trunc.submodules ?? []) {
     const repo = list.find((r) => r.path === s.repo);
     const name = repo ? (repo.rel && repo.rel.split("/").some((x) => x && x !== "..") ? repo.rel : baseName(repo.path)) : baseName(s.repo);
-    notes.push(`${s.count} submodules of ${name}, only the first ${limit} shown`);
+    notes.push(t("sidebar.repo.submodules", { count: s.count, name, limit }));
   }
   return notes;
 }

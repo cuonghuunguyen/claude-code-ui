@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { GitRemoteResult } from "@claude-ui/protocol";
 import type { connect, RequestError } from "./client.ts";
 import type { RemoteRequest } from "./git-branch-menu.tsx";
+import { t } from "./i18n.ts";
 import { noteRefs } from "./git-refs.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -31,7 +32,7 @@ export function runRemoteOp(client: Client, msg: RemoteRequest, done: string, ru
       noteRefs(at, r.remote?.refs ?? undefined);
       end({ ok: true, text: done, output: r.remote?.output || undefined });
     },
-    (e: RequestError) => end({ ok: false, text: e.message || "git failed" }),
+    (e: RequestError) => end({ ok: false, text: e.message || t("files.gitFailed") }),
   );
   return true;
 }

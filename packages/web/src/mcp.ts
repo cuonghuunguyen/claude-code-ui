@@ -1,8 +1,9 @@
 // MCP servers dialog logic, same behaviour as the Claude Code VS Code extension, own texts.
 import type { ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 const ICONS: Record<string, string> = { connected: "✓", failed: "✗", "needs-auth": "⚠", pending: "◐", disabled: "○" };
-const LABELS: Record<string, string> = { connected: "Connected", failed: "Failed", "needs-auth": "Needs Auth", pending: "Connecting…", disabled: "Disabled" };
+const STATUSES = ["connected", "failed", "needs-auth", "pending", "disabled"] as const;
 /** A sign-in page the dialog may open: https, or http on this machine (a local OAuth server); never javascript:, data: or file:. */
 export function safeAuthUrl(url: string) {
   try {
@@ -14,11 +15,11 @@ export function safeAuthUrl(url: string) {
 }
 
 export const statusIcon = (status: string) => ICONS[status] ?? "?";
-export const statusLabel = (status: string) => LABELS[status] ?? status;
+export const statusLabel = (status: string) => ((STATUSES as readonly string[]).includes(status) ? t(`session.mcp.status.${status as (typeof STATUSES)[number]}`) : status);
 
 const SCOPE_ORDER = ["project", "local", "user", "claudeai", "managed", "enterprise"];
-const SCOPE_LABELS: Record<string, string> = { project: "Project", local: "Local", user: "User", claudeai: "claude.ai", managed: "Managed", enterprise: "Enterprise" };
-export const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
+export const scopeLabel = (scope: string) =>
+  scope === "claudeai" ? "claude.ai" : ["project", "local", "user", "managed", "enterprise"].includes(scope) ? t(`session.mcp.scope.${scope as "project"}`) : scope;
 
 /** Servers by scope ("other" without one), groups in the extension's order then unknown scopes, names sorted; `filter` matches names. */
 export function groupServers(servers: McpServerInfo[], filter = ""): [string, McpServerInfo[]][] {
@@ -35,24 +36,9 @@ export function groupServers(servers: McpServerInfo[], filter = ""): [string, Mc
 }
 
 export type McpAction = "reconnect" | "clearAuth" | "disable" | "authenticate" | "enable";
-export const ACTION_LABEL: Record<McpAction, [label: string, busy: string]> = {
-  reconnect: ["Reconnect", "Reconnecting…"],
-  clearAuth: ["Clear authentication", "Clearing…"],
-  disable: ["Disable", "Disabling…"],
-  authenticate: ["Authenticate", "Authenticating…"],
-  enable: ["Enable", "Enabling…"],
-};
+export const actionLabel = (a: McpAction, busy: boolean) => t(busy ? (`session.mcp.action.${a}Busy` as const) : (`session.mcp.action.${a}` as const));
 /** The error banner when the daemon gives no reason. */
-export const ACTION_ERROR: Record<McpAction | "remove" | "callback" | "add", string> = {
-  reconnect: "Failed to reconnect",
-  clearAuth: "Failed to clear authentication",
-  disable: "Failed to disable server",
-  authenticate: "Authentication failed",
-  enable: "Failed to enable server",
-  remove: "Failed to remove server",
-  callback: "Failed to submit callback URL",
-  add: "Failed to add server",
-};
+export const actionError = (a: McpAction | "remove" | "callback" | "add") => t(`session.mcp.error.${a}`);
 
 const canAuth = (s: McpServerInfo) => ["sse", "http", "claudeai-proxy"].includes(s.config?.type ?? "");
 
@@ -87,56 +73,55 @@ export function errorLine(error: string) {
 
 /** Text of a success banner. */
 export const resultText = {
-  reconnect: (n: string) => `Reconnected to ${n}`,
-  disable: (n: string) => `Disabled ${n}`,
-  enable: (n: string) => `Enabled ${n}`,
-  authenticate: () => "Authenticated successfully",
-  clearAuth: (n: string) => `Cleared authentication for ${n}`,
-  remove: (n: string, scope: string) => `${n} removed from the ${scope} config. Sessions already running still use it until they restart.`,
-  add: (n: string, scope: string) => `${n} saved to the ${scope} config. New sessions will load it.`,
+  reconnect: (name: string) => t("session.mcp.result.reconnect", { name }),
+  disable: (name: string) => t("session.mcp.result.disable", { name }),
+  enable: (name: string) => t("session.mcp.result.enable", { name }),
+  authenticate: () => t("session.mcp.result.authenticate"),
+  clearAuth: (name: string) => t("session.mcp.result.clearAuth", { name }),
+  remove: (name: string, scope: string) => t("session.mcp.result.remove", { name, scope }),
+  add: (name: string, scope: string) => t("session.mcp.result.add", { name, scope }),
 };
 
 export const TRANSPORTS = [
-  { value: "stdio", label: "Local command (stdio)", description: "Starts a local process" },
-  { value: "http", label: "HTTP (remote)", description: "Remote server at a URL" },
-  { value: "sse", label: "SSE (remote, legacy)", description: "Legacy remote transport; use HTTP when possible" },
+  { value: "stdio", get label() { return t("session.mcp.transport.stdio"); }, get description() { return t("session.mcp.transport.stdioHint"); } },
+  { value: "http", get label() { return t("session.mcp.transport.http"); }, get description() { return t("session.mcp.transport.httpHint"); } },
+  { value: "sse", get label() { return t("session.mcp.transport.sse"); }, get description() { return t("session.mcp.transport.sseHint"); } },
 ] as const;
 export type Transport = (typeof TRANSPORTS)[number]["value"];
 export const SCOPES = [
-  { value: "local", label: "Local", description: "Only you, only this project" },
-  { value: "user", label: "User", description: "You, in every project" },
-  { value: "project", label: "Project", description: "Everyone on this project, via .mcp.json" },
+  { value: "local", get label() { return t("session.mcp.scopeOption.local"); }, get description() { return t("session.mcp.scopeOption.localHint"); } },
+  { value: "user", get label() { return t("session.mcp.scopeOption.user"); }, get description() { return t("session.mcp.scopeOption.userHint"); } },
+  { value: "project", get label() { return t("session.mcp.scopeOption.project"); }, get description() { return t("session.mcp.scopeOption.projectHint"); } },
 ] as const satisfies readonly { value: ConfigScope; label: string; description: string }[];
-export const PROJECT_SCOPE_WARNING =
-  "Written to .mcp.json, so everyone who opens this project gets this server. IDE sessions start project servers without asking first. Without an open folder, the file goes to your home directory.";
+export const projectScopeWarning = () => t("session.mcp.projectWarning");
 
 export type AddForm = { name: string; transport: Transport; command: string; args: string; env: string; url: string; headers: string };
 
 /** The add form's values as `mcp.add` takes them, or the first error, with line numbers. */
 export function buildAdd(f: AddForm): { name: string; config: McpAddConfig } | { error: string } {
   const name = f.name.trim();
-  if (name === "") return { error: "Enter a server name." };
-  if (/[^a-zA-Z0-9_-]/.test(name)) return { error: `${name} is not a valid name: use only letters, digits, - and _.` };
+  if (name === "") return { error: t("session.mcp.form.nameEmpty") };
+  if (/[^a-zA-Z0-9_-]/.test(name)) return { error: t("session.mcp.form.nameInvalid", { name }) };
   const lines = (t: string) => t.split("\n").map((l, i) => [l.trim(), i + 1] as const);
   if (f.transport === "stdio") {
     const command = f.command.trim();
-    if (command === "") return { error: "Enter a command." };
+    if (command === "") return { error: t("session.mcp.form.commandEmpty") };
     const env: string[] = [];
     for (const [l, n] of lines(f.env)) {
       if (!l) continue;
       const at = l.indexOf("=");
       const key = at >= 0 ? l.slice(0, at).trim() : "";
-      if (!key) return { error: `Line ${n}: write environment variables as KEY=value.` };
+      if (!key) return { error: t("session.mcp.form.envLine", { line: n }) };
       env.push(`${key}=${l.slice(at + 1).trim()}`);
     }
     return { name, config: { transport: "stdio", command, args: lines(f.args).flatMap(([l]) => (l ? [l] : [])), env } };
   }
   const url = f.url.trim();
-  if (url === "") return { error: "Enter a URL." };
+  if (url === "") return { error: t("session.mcp.form.urlEmpty") };
   const headers: string[] = [];
   for (const [l, n] of lines(f.headers)) {
     if (!l) continue;
-    if (l.indexOf(":") <= 0) return { error: `Line ${n}: write headers as Name: value.` };
+    if (l.indexOf(":") <= 0) return { error: t("session.mcp.form.headerLine", { line: n }) };
     headers.push(l);
   }
   return { name, config: { transport: f.transport, url, headers } };

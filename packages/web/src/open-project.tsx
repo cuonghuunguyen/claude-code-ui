@@ -15,6 +15,7 @@ import { browse, matchFolders } from "./folders.ts";
 import { sepOf, withSep } from "./paths.ts";
 import { isImeKey } from "./ime.ts";
 import { timeAgo } from "./sessions.ts";
+import { t, useT } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
 import { defaultTarget, DOCKER_HINT, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, localIsWindows, saveSide, saveSideFor, SideBadge, sideKind, sideName, type SideKind } from "./sides.tsx";
 
@@ -53,6 +54,7 @@ export function OpenProjectDialog({
   finalFocus?: React.RefObject<HTMLElement | null>;
 }) {
   // A saved side the hub does not list now (a container that is not running) has a row in Settings, not here.
+  const t = useT();
   const sides = listed?.filter((x) => !x.missing);
   const input = useRef<HTMLInputElement>(null);
   // Set when a pick starts: the parent closes the dialog before onPick resolves.
@@ -81,9 +83,9 @@ export function OpenProjectDialog({
           aria-modal="true"
         >
           <div className="flex items-center gap-2 py-2 pr-2 pl-4">
-            <Dialog.Title className="flex-1 font-medium text-[15px] tracking-[-0.13px]">Open project</Dialog.Title>
+            <Dialog.Title className="flex-1 font-medium text-[15px] tracking-[-0.13px]">{t("sidebar.op.title")}</Dialog.Title>
             <Dialog.Close
-              aria-label="Close"
+              aria-label={t("sidebar.close")}
               className="grid size-7 place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11"
             >
               <XIcon className="size-4" />
@@ -132,6 +134,7 @@ function SidePicker({
     const last = loadSide();
     return last && sides.some((x) => x.id === last) ? { kind: sideKind(last), target: last } : { kind: "local" };
   });
+  const t = useT();
   // Browser start value after a switch by a typed path; `n` remounts it.
   const [start, setStart] = useState<{ value?: string; n: number }>({ n: 0 });
   // Started here: ready before the next session list says so.
@@ -225,9 +228,9 @@ function SidePicker({
     if (!win) return null;
     return (
       <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded-md bg-secondary/60 px-3 py-2 text-sm" data-testid="mnt-hint">
-        <span className="min-w-0 flex-1">This is a Windows folder. Its sessions belong to Windows, where the Windows CLI and VS Code see them.</span>
+        <span className="min-w-0 flex-1">{t("sidebar.op.windowsFolder")}</span>
         <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => choose(LOCAL_SIDE, win)} data-testid="open-as-windows">
-          Open {win} on Windows
+          {t("sidebar.op.openOnWindows", { path: win })}
         </Button>
       </div>
     );
@@ -243,9 +246,9 @@ function SidePicker({
   const members = sides.filter((s) => sideKind(s.id) === kind);
   const stateWord = (s: SideInfo) => {
     const p = panels[s.id];
-    return isReady(s) ? undefined : p?.busy || s.state === "starting" ? "Setting up…" : p?.error || s.state === "error" ? "Error" : "Not set up";
+    return isReady(s) ? undefined : p?.busy || s.state === "starting" ? t("sidebar.op.settingUp") : p?.error || s.state === "error" ? t("sidebar.op.error") : t("sidebar.op.notSetUp");
   };
-  const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? "This machine") : k === "wsl" ? "WSL" : "Docker");
+  const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? t("sidebar.op.thisMachine")) : k === "wsl" ? "WSL" : "Docker");
   return (
     <>
       <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
@@ -254,7 +257,7 @@ function SidePicker({
       {kind !== "local" && current && (
         <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
           <Select value={side ?? null} onValueChange={(id) => id && choose(id)} open={targetOpen} onOpenChange={setTargetOpen}>
-            <SelectTrigger ref={targetTrigger} aria-label={kind === "wsl" ? "WSL distro" : "Docker container"} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
+            <SelectTrigger ref={targetTrigger} aria-label={t(kind === "wsl" ? "sidebar.op.wslDistro" : "sidebar.op.dockerContainer")} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
               <span className="truncate">{sideName(current)}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5" onKeyDown={onPopupKey}>
@@ -302,6 +305,7 @@ function SidePicker({
 
 /** One chip per kind (the machine, WSL, Docker). Arrows move the focus between them, Enter or Space picks: moving never sets a side up. */
 function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: SideKind; label: (k: SideKind) => string; onChoose: (k: SideKind) => void }) {
+  const t = useT();
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKeyDown = (e: KeyboardEvent, i: number) => {
     const to = e.key === "ArrowRight" || e.key === "ArrowDown" ? i + 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? i - 1 : e.key === "Home" ? 0 : e.key === "End" ? kinds.length - 1 : undefined;
@@ -310,7 +314,7 @@ function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: Si
     refs.current[(to + kinds.length) % kinds.length]?.focus();
   };
   return (
-    <div role="radiogroup" aria-label="Where to open projects" className="flex shrink-0 gap-1" data-testid="side-chooser">
+    <div role="radiogroup" aria-label={t("sidebar.op.whereToOpen")} className="flex shrink-0 gap-1" data-testid="side-chooser">
       {kinds.map((k, i) => (
         <button
           key={k}
@@ -347,6 +351,7 @@ function ContainerStep({
   isReady: (s: SideInfo) => boolean;
   onPick: (id: string) => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   // The first match is highlighted: with a single container Enter confirms it, it never starts on its own.
   const [at, setAt] = useState(0);
@@ -377,20 +382,20 @@ function ContainerStep({
             aria-expanded
             aria-controls="container-list"
             aria-activedescendant={rows[selected] ? `container-${selected}` : undefined}
-            aria-label="Filter containers; Enter to pick the highlighted one"
+            aria-label={t("sidebar.op.filterContainersAria")}
             autoComplete="off"
             spellCheck={false}
             value={query}
             onChange={(e) => (setQuery(e.target.value), setAt(0))}
             onKeyDown={onKeyDown}
-            placeholder="Filter containers"
+            placeholder={t("sidebar.op.filterContainers")}
             className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:text-base"
             data-testid="container-filter"
           />
         </label>
       </div>
       <div className="flex min-h-30 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
-        <ul id="container-list" role="listbox" aria-label="Running containers" className="flex flex-col gap-px" data-testid="container-list">
+        <ul id="container-list" role="listbox" aria-label={t("sidebar.op.runningContainers")} className="flex flex-col gap-px" data-testid="container-list">
           {rows.map((c, i) => (
             <li
               key={c.id}
@@ -410,7 +415,7 @@ function ContainerStep({
             </li>
           ))}
         </ul>
-        {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">No running container matches</p>}
+        {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t("sidebar.op.noContainer")}</p>}
       </div>
     </>
   );
@@ -418,7 +423,7 @@ function ContainerStep({
 
 /** Recent projects shown while nothing is typed; a typed name shows every match. */
 const RECENT_SHOWN = 5;
-const ago = (ms: number) => ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(ms));
+const ago = (ms: number) => ((time) => (time === "now" ? t("sidebar.op.justNow") : t("sidebar.op.ago", { time })))(timeAgo(ms));
 
 /** `initial`: start value instead of the only root. `onTyped`: true when it took the typed value (another side's path). */
 function Browser({
@@ -441,6 +446,7 @@ function Browser({
   /** Shown above the footer for the typed value. */
   hint?: (value: string) => ReactNode;
 }) {
+  const t = useT();
   const [roots, setRoots] = useState<FsEntry[]>();
   const [value, setValue] = useState(initial ?? "");
   const [entries, setEntries] = useState<FsEntry[]>([]);
@@ -542,20 +548,20 @@ function Browser({
             aria-expanded
             aria-controls="folder-list"
             aria-activedescendant={rows[selected] ? `folder-${selected}` : undefined}
-            aria-label="Folder path; type to filter, Tab to open a folder's subfolders, Enter to pick"
+            aria-label={t("sidebar.op.folderAria")}
             autoComplete="off"
             spellCheck={false}
             value={value}
             onChange={(e) => edit(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Type a folder name"
+            placeholder={t("sidebar.op.folderPlaceholder")}
             className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:text-base"
             data-testid="folder-input"
           />
         </label>
       </div>
       <div className="flex min-h-30 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
-        <ul id="folder-list" role="listbox" aria-label="Recent projects and folders" className="flex flex-col gap-px" data-testid="folder-list">
+        <ul id="folder-list" role="listbox" aria-label={t("sidebar.op.recentAndFolders")} className="flex flex-col gap-px" data-testid="folder-list">
           {rows.map((row, i) => {
             const common = {
               id: `folder-${i}`,
@@ -572,13 +578,13 @@ function Browser({
             );
             return (
               <Fragment key={`${row.recent ? "recent" : "folder"}:${row.path}`}>
-                {i === 0 && row.recent && heading("Recent projects", "recent-label")}
-                {i === recents.length && row.entry && heading(dir ? `Folders in ${projectName(dir)}` : "Allowlisted roots", "folder-list-label")}
+                {i === 0 && row.recent && heading(t("sidebar.op.recentProjects"), "recent-label")}
+                {i === recents.length && row.entry && heading(dir ? t("sidebar.op.foldersIn", { name: projectName(dir) }) : t("sidebar.op.allowedRoots"), "folder-list-label")}
                 {row.recent ? (
                   <li
                     {...common}
                     className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
-                    title={`${row.path}\nClick to add it`}
+                    title={t("sidebar.op.clickToAdd", { path: row.path })}
                     onClick={() => pick(row.path, true)}
                     data-testid="recent-row"
                   >
@@ -587,14 +593,14 @@ function Browser({
                     <SideBadge cwd={row.path} />
                     <span className="min-w-0 flex-1 truncate text-muted-foreground max-md:hidden">{row.path}</span>
                     <span className="shrink-0 text-muted-foreground text-xs">
-                      {row.recent.sessionCount} {row.recent.sessionCount === 1 ? "session" : "sessions"} · {ago(row.recent.lastActivity)}
+                      {t("sidebar.op.sessionCount", { count: row.recent.sessionCount })} · {ago(row.recent.lastActivity)}
                     </span>
                   </li>
                 ) : (
                   <li
                     {...common}
                     className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
-                    title={`${row.path}\nClick to list its subfolders, double click to open`}
+                    title={t("sidebar.op.clickToList", { path: row.path })}
                     onClick={() => descend(row.entry!)}
                     onDoubleClick={() => pick(row.path)}
                     data-testid="folder-row"
@@ -610,7 +616,7 @@ function Browser({
             );
           })}
         </ul>
-        {roots && !rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">No folder matches "{prefix}"</p>}
+        {roots && !rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t("sidebar.op.noFolder", { prefix })}</p>}
       </div>
       {hint?.(value)}
       <div className="flex items-center gap-2 border-t px-4 py-2">
@@ -621,7 +627,7 @@ function Browser({
           {error ? <span className="text-destructive">{error}</span> : <span className="text-muted-foreground">{dir}</span>}
         </p>
         <Button size="sm" disabled={!dir || busy} onClick={() => dir && pick(dir)} data-testid="open-folder" className="max-md:h-11">
-          {dir ? `Open ${projectName(dir)}` : "Open"}
+          {dir ? t("sidebar.op.openNamed", { name: projectName(dir) }) : t("sidebar.op.open")}
         </Button>
       </div>
     </>

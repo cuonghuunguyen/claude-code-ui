@@ -1,6 +1,7 @@
 // Signal only (docs/spec.md "Session view UX"): a run of tool cards folds into one line; prompts, text, errors and pending requests stay.
 import { useSyncExternalStore } from "react";
 import type { TimelineItem, ToolCall } from "./store.ts";
+import { t } from "./i18n.ts";
 
 /** A folded run of tool items; `items` are what it hides, shown again in place when the row is expanded. */
 export type FoldItem = { kind: "fold"; id: string; calls: ToolCall[]; items: TimelineItem[] };
@@ -13,7 +14,7 @@ export function foldLabel(calls: ToolCall[]) {
   const counts = new Map<string, number>();
   for (const c of calls) counts.set(toolName(c.tool), (counts.get(toolName(c.tool)) ?? 0) + 1);
   const tools = [...counts].sort((a, b) => b[1] - a[1]);
-  return [`${calls.length} tool call${calls.length === 1 ? "" : "s"}`, ...tools.map(([t, n]) => `${t} ${n}`)].join(" · ");
+  return [t("session.signal.toolCalls", { count: calls.length }), ...tools.map(([t, n]) => `${t} ${n}`)].join(" · ");
 }
 
 /** Folds every run of finished-or-running tool calls that is not an error, a denial or waiting for a permission answer. */

@@ -1,34 +1,34 @@
 // "Slash commands" dialog logic, same behaviour as the Claude Code VS Code extension, own texts.
 import type { SkillRow, SkillState, SlashCommand } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 export const STATES: SkillState[] = ["on", "name-only", "user-invocable-only", "off"];
-export const STATE_LABEL: Record<SkillState, string> = { on: "On", "name-only": "Name only", "user-invocable-only": "User only", off: "Off" };
+// Getters: the text is read when shown, in the language then current.
+export const STATE_LABEL: Record<SkillState, string> = {
+  get on() { return t("session.skills.state.on"); },
+  get "name-only"() { return t("session.skills.state.nameOnly"); },
+  get "user-invocable-only"() { return t("session.skills.state.userOnly"); },
+  get off() { return t("session.skills.state.off"); },
+};
 export const STATE_HINT: Record<SkillState, string> = {
-  on: "Claude sees it and you can invoke it",
-  "name-only": "Claude sees only its name",
-  "user-invocable-only": "Only you can invoke it; hidden from Claude",
-  off: "Not shown to Claude or in the command list",
+  get on() { return t("session.skills.hint.on"); },
+  get "name-only"() { return t("session.skills.hint.nameOnly"); },
+  get "user-invocable-only"() { return t("session.skills.hint.userOnly"); },
+  get off() { return t("session.skills.hint.off"); },
 };
 /** An unknown state (newer CLI) shows as sent and cycles to On. */
 export const stateLabel = (s: string) => STATE_LABEL[s as SkillState] ?? s;
 export const stateHint = (s: string) => STATE_HINT[s as SkillState] ?? s;
 export const nextState = (s: string): SkillState => STATES[(STATES.indexOf(s as SkillState) + 1) % STATES.length]!;
 
-const HIGHER = "Overridden by a higher-priority setting";
-const LOCKS: Record<string, string> = {
-  plugin: "Controlled by its plugin",
-  author: "Fixed in the skill file",
-  policy: HIGHER,
-  flag: HIGHER,
-  "reserved-name": "This name can't be saved in settings; rename the skill's folder or file to change it",
-};
-export const lockText = (lockedBy: string) => LOCKS[lockedBy] ?? HIGHER;
+export const lockText = (lockedBy: string) =>
+  lockedBy === "plugin" ? t("session.skills.lock.plugin") : lockedBy === "author" ? t("session.skills.lock.author") : lockedBy === "reserved-name" ? t("session.skills.lock.reserved") : t("session.skills.lock.higher");
 
-export const NOTICE_SLOW = "No confirmation from Claude Code in time; this session still has the old state. Retry, or reopen the dialog to check.";
-export const NOTICE_UNCONFIRMED = "Saved. This session still has the old state and may not have reloaded yet; reopen the dialog to check.";
+export const noticeSlow = () => t("session.skills.noticeSlow");
+export const noticeUnconfirmed = () => t("session.skills.noticeUnconfirmed");
 
 export const tokenText = (n: number) => (n < 20 ? "< 20" : `~${n}`);
-export const skillMeta = (s: SkillRow) => `${s.source} · ${tokenText(s.tokens)} tokens`;
+export const skillMeta = (s: SkillRow) => t("session.skills.meta", { source: s.source, tokens: tokenText(s.tokens) });
 
 /** `command`: the picker's command; `skill`: its get_skills_dialog row. Inert rows have no command. */
 export type Row = { id: string; label: string; description: string; command?: SlashCommand; skill?: SkillRow };

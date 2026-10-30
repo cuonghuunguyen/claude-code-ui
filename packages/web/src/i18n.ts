@@ -43,11 +43,11 @@ function loadPref(): LocalePref {
 
 /** The text of `key` in `locale`: plural form by `vars.count`, `{name}` placeholders filled from `vars`. */
 export function translate(locale: string, key: Key, vars?: Vars): string {
-  const m = LOCALES[locale]?.messages[key] ?? en.messages[key];
+  const m: Message | undefined = LOCALES[locale]?.messages[key] ?? en.messages[key];
   // Unreachable through the Key type; a stale key from outside the type shows nothing rather than the raw key.
   if (m === undefined) return "";
   const text = typeof m === "string" ? m : (m[new Intl.PluralRules(locale).select(Number(vars?.count ?? 0))] ?? m.other);
-  return vars ? text.replace(/\{(\w+)\}/g, (all, name: string) => (name in vars ? String(vars[name]) : all)) : text;
+  return vars ? text.replace(/\{(\w+)\}/g, (all: string, name: string) => (name in vars ? String(vars[name]) : all)) : text;
 }
 
 let pref = loadPref();

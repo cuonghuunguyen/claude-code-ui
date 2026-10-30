@@ -3,11 +3,12 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { QueuedPrompt } from "@claude-ui/protocol";
+import { setLocalePref } from "./i18n.ts";
 import { QueueChips } from "./queue-chips.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let unmount = () => {};
-afterEach(() => unmount());
+afterEach(() => (unmount(), setLocalePref("system")));
 
 const item = (id: string, text: string, imageCount = 0): QueuedPrompt => ({ id, text, imageCount });
 
@@ -126,4 +127,13 @@ it("a queued message with a pasted block shows '[Pasted text +K lines]', not the
   const el = await render(<QueueChips items={[item("a", text)]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
   expect(el.textContent).toContain("go[Pasted text +3 lines]");
   expect(el.innerHTML).not.toContain("pasted_content");
+});
+
+it("renders in Vietnamese when the language is vi", async () => {
+  setLocalePref("vi");
+  const el = await render(<QueueChips items={[item("a", "xin chào", 2)]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  expect(el.querySelector("section")!.getAttribute("aria-label")).toBe("Tin nhắn trong hàng đợi");
+  expect(el.textContent).toContain("Hàng đợi · 1");
+  expect(el.textContent).toContain("+2 ảnh");
+  expect(el.querySelector('[aria-label="Xóa: xin chào"]')).not.toBeNull();
 });

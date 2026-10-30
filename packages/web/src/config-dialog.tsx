@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
 import { trapTab } from "./focus-trap.ts";
+import { useT } from "./i18n.ts";
 
 /** The prompt box of the shown tab (session or new-session tab); hidden tabs' boxes have no layout box. */
 // Split view (GH-356): the prompt box of the active split only, never the other split's (focusing it would make that split active). The split has none (permission panel, subagent view): null.
@@ -20,6 +21,7 @@ export const shownPrompt = () => {
 
 /** `busy`: a write runs, Esc and Close do nothing (the extension's dialog stays open while adding or removing). */
 export function ConfigDialog({ title, open, onClose, busy, footer, children, testId }: { title: string; open: boolean; onClose: () => void; busy?: boolean; footer?: ReactNode; children: ReactNode; testId?: string }) {
+  const t = useT();
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && !busy && onClose()}>
       <Dialog.Portal>
@@ -35,7 +37,7 @@ export function ConfigDialog({ title, open, onClose, busy, footer, children, tes
           <div className="flex items-center gap-2 py-2 pr-2 pl-4">
             <Dialog.Title className="flex-1 font-medium text-[15px] tracking-[-0.13px]">{title}</Dialog.Title>
             <Dialog.Close
-              aria-label="Close dialog"
+              aria-label={t("session.configDialog.close")}
               disabled={busy}
               className="grid size-7 place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 max-md:size-11"
             >

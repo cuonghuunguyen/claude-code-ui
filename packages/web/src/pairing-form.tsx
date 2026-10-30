@@ -2,8 +2,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { parsePairing, storeToken } from "./pairing.ts";
+import { useT } from "./i18n.ts";
 
 export function PairingForm({ reload = () => location.reload() }: { reload?: () => void }) {
+  const t = useT();
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -15,7 +17,7 @@ export function PairingForm({ reload = () => location.reload() }: { reload?: () 
   const submit = async (e: { preventDefault(): void }) => {
     e.preventDefault();
     const token = parsePairing(text);
-    if (!token) return setError("That is not a pairing link or token.");
+    if (!token) return setError(t("pairing.invalid"));
     setBusy(true);
     setError(undefined);
     try {
@@ -25,9 +27,9 @@ export function PairingForm({ reload = () => location.reload() }: { reload?: () 
         setText("");
         return reload();
       }
-      setError("This daemon does not accept that token. Copy the link the daemon printed last (the token changes when the config folder changes).");
+      setError(t("pairing.rejected"));
     } catch {
-      setError("Cannot reach the daemon.");
+      setError(t("pairing.unreachable"));
     } finally {
       setBusy(false);
     }
@@ -35,11 +37,11 @@ export function PairingForm({ reload = () => location.reload() }: { reload?: () 
 
   return (
     <div className="m-auto flex w-full max-w-sm flex-col gap-3 p-4 text-center" data-testid="pairing-needed">
-      <p>The daemon rejected this browser: it is not paired.</p>
-      <p className="text-sm text-muted-foreground">Paste the pairing link or token the daemon printed (…/#token=…).</p>
+      <p>{t("pairing.notPaired")}</p>
+      <p className="text-sm text-muted-foreground">{t("pairing.paste")}</p>
       <form onSubmit={submit} className="flex flex-col gap-2 text-left" data-testid="pairing-form">
         <label htmlFor={id} className="text-sm font-medium">
-          Pairing link or token
+          {t("pairing.label")}
         </label>
         <input
           ref={input}
@@ -63,7 +65,7 @@ export function PairingForm({ reload = () => location.reload() }: { reload?: () 
           </p>
         )}
         <Button type="submit" disabled={busy} className="h-11 sm:h-8" data-testid="pairing-submit">
-          Pair
+          {t("pairing.submit")}
         </Button>
       </form>
     </div>

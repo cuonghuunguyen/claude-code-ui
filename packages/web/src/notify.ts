@@ -4,6 +4,7 @@
 import { isAttention, type Event, type SessionListItem, type SessionState } from "@claude-ui/protocol";
 import { requestSummary } from "./focus.ts";
 import { pendingPermission, pendingQuestion, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
+import { t as tr } from "./i18n.ts";
 
 export type CardKind = "permission" | "question" | "finished" | "error";
 /** `requestId`: the request a permission or question card shows. `text`: what a finished or error card says. */
@@ -56,7 +57,7 @@ export function createTracker() {
         if (!live) return [];
         if (part.state === "running") return [{ type: "resume", sessionId }];
         if (prev && isAttention(prev, part) && part.state !== "needs_input")
-          return [part.state === "error" ? { type: "finish", sessionId, kind: "error", text: t.error ?? "The turn ended with an error" } : { type: "finish", sessionId, kind: "finished", text: lastLine(t.text) ?? "Finished" }];
+          return [part.state === "error" ? { type: "finish", sessionId, kind: "error", text: t.error ?? tr("notify.turnError") } : { type: "finish", sessionId, kind: "finished", text: lastLine(t.text) ?? tr("notify.finished") }];
       }
       return [];
     },
@@ -162,20 +163,20 @@ export function visibleCards(cards: Card[], max: number): { shown: Card[]; hidde
 /** "now", "12m", "1h 3m": whole minutes, so it needs to tick once a minute only. */
 export function ageLabel(ms: number) {
   const m = Math.floor(Math.max(0, ms) / 60_000);
-  return m < 1 ? "now" : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  return m < 1 ? tr("notify.age.now") : m < 60 ? tr("notify.age.minutes", { m }) : tr("notify.age.hours", { h: Math.floor(m / 60), m: m % 60 });
 }
 
 /** The sentence the status region says for a new card. */
 export function cardText({ kind, title, body }: { kind: CardKind; title: string; body: string }) {
   switch (kind) {
     case "permission":
-      return `${title} needs permission: ${body}.`;
+      return tr("notify.card.permission", { title, body });
     case "question":
-      return `${title} asks a question: ${body}.`;
+      return tr("notify.card.question", { title, body });
     case "finished":
-      return `${title} finished.`;
+      return tr("notify.card.finished", { title });
     default:
-      return `${title} stopped with an error.`;
+      return tr("notify.card.error", { title });
   }
 }
 

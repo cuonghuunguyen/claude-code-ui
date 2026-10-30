@@ -1,6 +1,7 @@
 // Ask aside while a permission or question panel replaces the prompt box (docs/spec.md "Aside"): a one-line question input.
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useT } from "./i18n.ts";
 
 type Props = {
   onAside: (question: string) => Promise<unknown>;
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export function AsideAsk({ onAside, insert, onInserted }: Props) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
@@ -23,18 +25,18 @@ export function AsideAsk({ onAside, insert, onInserted }: Props) {
   useEffect(() => void (open && input.current?.focus()), [open]);
   const submit = () => {
     const q = text.trim();
-    if (!q) return setError("Type a question");
+    if (!q) return setError(t("session.asideAsk.empty"));
     setError(undefined);
     onAside(q).then(
       () => (setOpen(false), setText("")),
-      (e: Error) => setError(`Aside not opened: ${e.message}`),
+      (e: Error) => setError(t("session.asideAsk.failed", { message: e.message })),
     );
   };
   if (!open)
     return (
       <div className="flex px-1 pb-1">
         <Button type="button" variant="ghost" size="sm" className="max-md:h-11" data-testid="aside-ask-open" onClick={() => setOpen(true)}>
-          Ask aside
+          {t("session.asideAsk.open")}
         </Button>
       </div>
     );
@@ -43,15 +45,15 @@ export function AsideAsk({ onAside, insert, onInserted }: Props) {
       <div className="flex gap-2">
         <input
           ref={input}
-          aria-label="Aside question"
-          placeholder="Ask an aside (read-only side question)…"
+          aria-label={t("session.asideAsk.label")}
+          placeholder={t("session.asideAsk.placeholder")}
           className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm max-md:h-11"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setOpen(false))}
         />
         <Button type="submit" size="sm" className="max-md:h-11">
-          Ask
+          {t("session.asideAsk.submit")}
         </Button>
       </div>
       {error && <p role="alert" className="text-destructive text-xs">{error}</p>}

@@ -6,7 +6,8 @@ import type { SkillRow, SkillsResult, SkillsSetStateResult, SlashCommand } from 
 import type { Request, RequestError } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { choose } from "./commands.ts";
-import { buildRows, lockText, nextState, NOTICE_SLOW, NOTICE_UNCONFIRMED, skillMeta, stateHint, stateLabel, type Row } from "./skills.ts";
+import { buildRows, lockText, nextState, noticeSlow, noticeUnconfirmed, skillMeta, stateHint, stateLabel, type Row } from "./skills.ts";
+import { useT } from "./i18n.ts";
 
 /**
  * `commands`: the shown session's commands (none on the new-session tab: every skill is then an inert row). `onRun`: what
@@ -31,6 +32,7 @@ export function SkillsDialog({
   onRun: (r: ReturnType<typeof choose>) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string>();
@@ -58,7 +60,7 @@ export function SkillsDialog({
     } catch (e) {
       if (n < shown.current) return;
       shown.current = n;
-      setLoadError((e as Error).message || "Failed to load skills");
+      setLoadError((e as Error).message || t("session.skillsDialog.loadFailedShort"));
     } finally {
       if (n === shown.current) setLoading(false);
     }
@@ -87,10 +89,10 @@ export function SkillsDialog({
     try {
       const r = await request<SkillsSetStateResult>({ type: "skills.setState", ...base, name: skill.name, state, ...(skill.handles && { handles: skill.handles }) });
       setSkills(r.skills);
-      if (!r.confirmed) setNotice(NOTICE_UNCONFIRMED);
+      if (!r.confirmed) setNotice(noticeUnconfirmed());
     } catch (e) {
-      if ((e as RequestError).code === "cli_timeout") setNotice(NOTICE_SLOW);
-      else setError((e as Error).message || "Failed to change the skill state");
+      if ((e as RequestError).code === "cli_timeout") setNotice(noticeSlow());
+      else setError((e as Error).message || t("session.skillsDialog.changeFailed"));
       // Back to what the session shows.
       await load();
     } finally {
@@ -102,7 +104,7 @@ export function SkillsDialog({
   const none = !commands.length && !skills.length;
 
   return (
-    <ConfigDialog title="Slash commands" open={open} onClose={onClose} testId="skills-dialog">
+    <ConfigDialog title={t("session.skillsDialog.title")} open={open} onClose={onClose} testId="skills-dialog">
       <label className="relative flex items-center">
         <SearchIcon className="pointer-events-none absolute left-3 size-4 text-faint" aria-hidden />
         <input
@@ -110,20 +112,20 @@ export function SkillsDialog({
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter commands…"
-          aria-label="Filter commands…"
+          placeholder={t("session.skillsDialog.filter")}
+          aria-label={t("session.skillsDialog.filter")}
           autoComplete="off"
           spellCheck={false}
           className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
           data-testid="skills-filter"
         />
       </label>
-      {loadError && <Banner kind="error">Failed to load skills: {loadError}</Banner>}
+      {loadError && <Banner kind="error">{t("session.skillsDialog.loadFailed", { error: loadError })}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       {notice && <Banner kind="warning">{notice}</Banner>}
-      {loading && !!commands.length && <p className="text-muted-foreground text-sm">Loading skills…</p>}
-      {loading && !commands.length && <p className="text-muted-foreground text-sm">Loading commands…</p>}
-      {!loading && !rows.length && <p className="py-6 text-center text-muted-foreground text-sm">{none || !filter.trim() ? "No slash commands available." : "No matching commands."}</p>}
+      {loading && !!commands.length && <p className="text-muted-foreground text-sm">{t("session.skillsDialog.loadingSkills")}</p>}
+      {loading && !commands.length && <p className="text-muted-foreground text-sm">{t("session.skillsDialog.loadingCommands")}</p>}
+      {!loading && !rows.length && <p className="py-6 text-center text-muted-foreground text-sm">{none || !filter.trim() ? t("session.skillsDialog.none") : t("session.skillsDialog.noMatch")}</p>}
       <div className="flex flex-col gap-px" data-testid="skills-list">
         {rows.map((r) => (
           <SkillRowView key={r.id} row={r} saving={saving} onRun={(c) => (onRun(choose(c)), onClose())} onChange={change} />
@@ -134,6 +136,7 @@ export function SkillsDialog({
 }
 
 function SkillRowView({ row, saving, onRun, onChange }: { row: Row; saving?: string; onRun: (c: SlashCommand) => void; onChange: (s: SkillRow) => void }) {
+  useT();
   const { skill, command } = row;
   // The extension shows a skill's source and cost in the description's place; the description is the tooltip.
   const body = (
@@ -160,11 +163,12 @@ function SkillRowView({ row, saving, onRun, onChange }: { row: Row; saving?: str
 }
 
 function StateControl({ skill, label, saving, onChange }: { skill: SkillRow; label: string; saving?: string; onChange: (s: SkillRow) => void }) {
+  const t = useT();
   const text = stateLabel(skill.state);
   if (skill.lockedBy)
     return (
-      <span className="mr-3 shrink-0 text-[13px] text-muted-foreground" title={lockText(skill.lockedBy)} aria-label={`${label}: ${text}, locked. ${lockText(skill.lockedBy)}`} data-testid="skills-lock">
-        {text} · locked
+      <span className="mr-3 shrink-0 text-[13px] text-muted-foreground" title={lockText(skill.lockedBy)} aria-label={t("session.skillsDialog.lockedLabel", { label, state: text, reason: lockText(skill.lockedBy) })} data-testid="skills-lock">
+        {t("session.skillsDialog.locked", { state: text })}
       </span>
     );
   return (
@@ -172,13 +176,13 @@ function StateControl({ skill, label, saving, onChange }: { skill: SkillRow; lab
       type="button"
       className="mr-2 h-8 shrink-0 rounded-md bg-secondary px-2.5 text-[13px] outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 max-md:h-11 max-md:min-w-11"
       data-state={skill.state}
-      title={`${stateHint(skill.state)}. Click to change.`}
+      title={t("session.skillsDialog.stateTitle", { hint: stateHint(skill.state) })}
       aria-label={`${label}: ${text}`}
       disabled={!!saving}
       onClick={() => onChange(skill)}
       data-testid="skills-state"
     >
-      {saving === skill.name ? "Saving…" : text}
+      {saving === skill.name ? t("session.skillsDialog.saving") : text}
     </button>
   );
 }

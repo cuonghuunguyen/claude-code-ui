@@ -8,6 +8,7 @@ import { ArrowDownIcon, DownloadIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { useT } from "../../i18n.ts";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
@@ -76,6 +77,7 @@ export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
+  const t = useT();
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
 
   const handleScrollToBottom = useCallback(() => {
@@ -89,7 +91,7 @@ export const ConversationScrollButton = ({
           "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted pointer-coarse:size-11",
           className
         )}
-        aria-label="Scroll to bottom"
+        aria-label={t("session.ai.scrollBottom")}
         onClick={handleScrollToBottom}
         size="icon"
         type="button"

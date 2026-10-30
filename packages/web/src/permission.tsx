@@ -4,6 +4,7 @@ import type { PermissionUpdate } from "@claude-ui/protocol";
 import { FileDiffIcon, ListTodoIcon, Maximize2Icon, PanelsTopLeftIcon, PencilIcon, ShieldAlertIcon, SquareIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
+import { t as tr, useT } from "./i18n.ts";
 import type { PermissionRequest } from "./store.ts";
 import { InputDiff } from "./tool-card.tsx";
 import { PlanTabContext, ViewerContext } from "./viewer.ts";
@@ -41,7 +42,7 @@ export function ruleLabel(s: PermissionUpdate): string {
     case "removeDirectories":
       return s.directories.join(", ");
     case "setMode":
-      return s.mode === "acceptEdits" ? "all edits this session" : `mode ${s.mode}`;
+      return s.mode === "acceptEdits" ? tr("session.permission.rule.allEdits") : tr("session.permission.rule.mode", { mode: s.mode });
   }
 }
 
@@ -64,6 +65,7 @@ export const TRAY = "@container flex flex-wrap items-center justify-end gap-2 bo
 
 /** OpenCode permission dock: header, hint, content, rule patterns; tray Deny · Allow always · Allow once. */
 export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part: PermissionRequest; onRespond: (a: PermissionAnswer) => void; mode?: ReactNode; /** Stops the turn (Esc). The panel replaces the prompt box, so without it a phone could not (GH-165). */ onStop?: () => void; /** The Focus page (GH-159): a "high" request shows "High tier · always asks" and offers no Always allow; "low" words the rule line as what Always allow saves. Absent: the session's own panel. */ tier?: "low" | "high" }) {
+  const t = useT();
   const [feedback, setFeedback] = useState("");
   const [draft, setDraft] = useState(() => proposed(part));
   const [editing, setEditing] = useState(false);
@@ -78,42 +80,42 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
     onRespond({ decision: "deny", message: feedback.trim() || undefined });
   };
   const always = part.suggestions.length > 0 && tier !== "high";
-  const noLabel = plan !== undefined ? "No, keep planning: tell Claude what to change" : "No, and tell Claude what to do differently";
+  const noLabel = plan !== undefined ? t("session.permission.noKeepPlanningHint") : t("session.permission.noHint");
   return (
-    <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label="Permission request">
+    <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label={t("session.permission.label")}>
       {/* The body scrolls inside the bounded panel; the tray below stays in view (same as the question panel). */}
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-3">
         <div className="flex items-center gap-2">
           <p className="flex min-w-0 flex-1 items-center gap-2 font-medium">
             {plan !== undefined ? <ListTodoIcon className="size-4 shrink-0 text-muted-foreground" /> : <TriangleAlertIcon className="size-4 shrink-0 text-warning" />}
-            {plan !== undefined ? "Ready to code? Claude has written up a plan" : "Permission required"}
+            {plan !== undefined ? t("session.permission.planTitle") : t("session.permission.title")}
           </p>
           {plan && showPlan && (
-            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Open plan in tab" title="Open in tab" data-testid="plan-open-tab" onClick={() => showPlan()}>
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label={t("session.permission.openPlanTab")} title={t("session.permission.openTab")} data-testid="plan-open-tab" onClick={() => showPlan()}>
               <PanelsTopLeftIcon aria-hidden className="size-4" />
             </Button>
           )}
           {plan && openViewer && (
-            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Open plan in popup" title="Open in popup" data-testid="plan-open" onClick={(e) => openViewer({ kind: "plan", plan }, e.currentTarget)}>
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label={t("session.permission.openPlanPopup")} title={t("session.permission.openPopup")} data-testid="plan-open" onClick={(e) => openViewer({ kind: "plan", plan }, e.currentTarget)}>
               <Maximize2Icon aria-hidden className="size-4" />
             </Button>
           )}
           {onStop && (
-            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label="Stop" title="Stop (Esc)" data-testid="permission-stop" onClick={onStop}>
+            <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 pointer-coarse:size-11" aria-label={t("session.permission.stop")} title={t("session.permission.stopEsc")} data-testid="permission-stop" onClick={onStop}>
               <SquareIcon aria-hidden className="size-3 fill-current" />
             </Button>
           )}
         </div>
-        {plan === undefined && <p className="text-muted-foreground">{part.title ?? `Claude wants to use ${part.tool}`}</p>}
+        {plan === undefined && <p className="text-muted-foreground">{part.title ?? t("session.permission.wantsTool", { tool: part.tool })}</p>}
         {tier === "high" && (
           <p className="flex w-fit items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-xs" data-testid="permission-high-tier">
             <ShieldAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
-            High tier · always asks
+            {t("session.permission.highTier")}
           </p>
         )}
         {part.escalated && (
           <p className="text-xs break-words" data-testid="permission-escalated">
-            <span className="font-medium">Escalated by coordinator:</span> {part.reason}
+            <span className="font-medium">{t("session.permission.escalated")}</span> {part.reason}
           </p>
         )}
         {plan !== undefined ? (
@@ -128,7 +130,7 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
             {editing ? (
               <textarea
                 className="max-h-64 min-h-40 rounded-md border bg-transparent p-2 font-mono text-xs pointer-coarse:text-base"
-                aria-label="Proposed new content"
+                aria-label={t("session.permission.proposed")}
                 spellCheck={false}
                 autoFocus
                 value={draft}
@@ -141,14 +143,14 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
             )}
             <Button type="button" variant="ghost" size="sm" className="self-end max-md:h-11 pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
               {editing ? <FileDiffIcon /> : <PencilIcon />}
-              {editing ? "Show diff" : "Edit content"}
+              {editing ? t("session.permission.showDiff") : t("session.permission.editContent")}
             </Button>
           </>
         )}
         {/* Like Claude Code: "Allow always" applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
         {plan === undefined && always && (
           <p className="text-muted-foreground text-xs" data-testid="permission-rules">
-            {tier ? "Always allow saves:" : "Allow always: don't ask again for"} <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
+            {tier ? t("session.permission.alwaysSaves") : t("session.permission.alwaysRule")} <code className="font-mono">{part.suggestions.map(ruleLabel).join(", ")}</code>
           </p>
         )}
         <input
@@ -165,15 +167,15 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
         {/* One group: on a narrow tray the answer buttons wrap together, below the picker. */}
         <div className="ml-auto flex flex-wrap justify-end gap-2">
           <Button type="submit" variant="ghost" className="max-md:h-11 pointer-coarse:h-11">
-            {plan !== undefined ? "No, keep planning" : "Deny"}
+            {plan !== undefined ? t("session.permission.keepPlanning") : t("session.permission.deny")}
           </Button>
           {always && (
             <Button type="button" variant="outline" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow_always", updatedInput })}>
-              {plan !== undefined ? "Yes, and auto-accept edits" : "Allow always"}
+              {plan !== undefined ? t("session.permission.autoAccept") : t("session.permission.allowAlways")}
             </Button>
           )}
           <Button type="button" className="max-md:h-11 pointer-coarse:h-11" onClick={() => onRespond({ decision: "allow", updatedInput })}>
-            {plan !== undefined ? "Yes, manually approve edits" : "Allow once"}
+            {plan !== undefined ? t("session.permission.manualApprove") : t("session.permission.allowOnce")}
           </Button>
         </div>
       </div>
