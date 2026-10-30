@@ -31,6 +31,7 @@ import { ChevronLeftIcon } from "lucide-react";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
+import { LOCALES, setLocalePref, useLocale, useT } from "./i18n.ts";
 import { swatchOf, THEMES, type ThemeId } from "./themes.ts";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
@@ -153,6 +154,33 @@ function Swatch({ id }: { id: ThemeId }) {
   );
 }
 
+/** UI language: System (the browser's) or a shipped catalog, each under its own name; kept per browser. */
+function LanguageRow() {
+  const t = useT();
+  const { pref } = useLocale();
+  const label = (v: string) => (v === "system" ? t("language.system") : (LOCALES[v]?.name ?? v));
+  return (
+    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+      <div className="min-w-0 flex-1">
+        <span id="settings-language-label" className="block text-sm">{t("language.label")}</span>
+        <span id="settings-language-hint" className="block text-muted-foreground text-xs">{t("language.hint")}</span>
+      </div>
+      <Select value={pref} onValueChange={(v) => v && setLocalePref(v)}>
+        <SelectTrigger aria-labelledby="settings-language-label" aria-describedby="settings-language-hint" data-testid="settings-language" className="w-44 max-md:data-[size=default]:h-11">
+          <SelectValue>{label}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {["system", ...Object.keys(LOCALES)].map((v) => (
+            <SelectItem key={v} value={v} data-testid={`settings-language-${v}`} lang={v === "system" ? undefined : v}>
+              {label(v)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
 function AppearanceSection() {
   const id = useColorTheme();
@@ -189,6 +217,7 @@ function AppearanceSection() {
           </SelectContent>
         </Select>
       </div>
+      <LanguageRow />
       {id === "dracula" && !dark && (
         <div data-testid="settings-theme-dracula-warning" className="flex flex-col pb-2">
           <Banner kind="warning">Dracula has no light colors: light mode shows Default.</Banner>

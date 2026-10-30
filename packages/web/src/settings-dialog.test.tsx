@@ -931,3 +931,19 @@ it("Sides group: a row per side with state; the switches send side.prefs; Update
   await act(async () => q("settings-side-update-docker:dev")!.click());
   expect(calls).toHaveLength(n);
 });
+
+it("Appearance (GH-510): Language offers System, English, Tiếng Việt; a pick applies at once and is kept", async () => {
+  localStorage.clear();
+  const { q } = await render();
+  expect(q("settings-language")!.textContent).toContain("System");
+  await act(async () => q("settings-language")!.click());
+  expect([...document.querySelectorAll('[data-testid^="settings-language-"][role=option]')].map((i) => i.textContent)).toEqual(["System", "English", "Tiếng Việt"]);
+  await act(async () => q("settings-language-vi")!.click());
+  expect(document.documentElement.lang).toBe("vi");
+  expect(localStorage.getItem("claude-ui.locale")).toBe("vi");
+  expect(q("settings-language")!.textContent).toContain("Tiếng Việt");
+  expect(document.getElementById("settings-language-label")!.textContent).toBe("Ngôn ngữ");
+  const { setLocalePref } = await import("./i18n.ts");
+  act(() => setLocalePref("system"));
+  expect(document.getElementById("settings-language-label")!.textContent).toBe("Language");
+});
