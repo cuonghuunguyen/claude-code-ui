@@ -97,3 +97,18 @@ Feature: Clean up scan and status cache
     And nothing of the worktree "wt-clean" was deleted
     And I capture "edit refused"
 
+
+  Scenario: Every worktree queued by Clean up shows Removing… at once, not only the one in progress
+    Given the worktree "wt-clean" has 5000 ignored files in many folders
+    And the scratch project has a clean worktree "wt-big"
+    And the worktree "wt-big" has 5000 ignored files in many folders
+    And I open the scratch project
+    When I open Clean up from the menu of the scratch project
+    Then Clean up has finished fetching
+    When I tick the Clean up row "wt-clean"
+    And I tick the Clean up row "wt-big"
+    And I confirm Clean up
+    Then the sidebar rows of "wt-clean" and "wt-big" showed Removing… at the same time
+    And the worktree folder "wt-clean" is gone
+    And the worktree folder "wt-big" is gone
+    And I capture "all queued removing"

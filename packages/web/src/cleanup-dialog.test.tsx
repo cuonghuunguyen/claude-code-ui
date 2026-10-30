@@ -246,6 +246,20 @@ it("the dialog closes during a run, the run continues, onRemoving marks each wor
   expect(onDone).toHaveBeenCalledWith({ removed: ["worktree-safe"], skipped: [], notes: [] });
 });
 
+it("a run marks every queued worktree Removing… at the start, not only the one in progress", async () => {
+  const release: (() => void)[] = [];
+  const { onRemoving } = await open({
+    list: [],
+    status: async (p) => (p === P("work") ? st() : STATUS[p]!),
+    remove: (m) => (m.type === "worktree.remove" ? new Promise((r) => release.push(() => r({}))) : Promise.resolve({})),
+  });
+  await click(confirm());
+  expect(onRemoving.mock.calls).toEqual(expect.arrayContaining([[P("safe"), true], [P("work"), true]]));
+  expect(onRemoving.mock.calls.every(([, on]) => on)).toBe(true);
+  await act(async () => release.shift()!());
+  expect(onRemoving.mock.calls.filter(([, on]) => !on)).toHaveLength(1);
+});
+
 it("a Safe row with ignored files says how many ignored files will be deleted", async () => {
   await open();
   expect(row("wt:/x/ext").textContent).toContain("3 ignored files will be deleted");

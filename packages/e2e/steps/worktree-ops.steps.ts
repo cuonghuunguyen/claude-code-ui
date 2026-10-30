@@ -397,6 +397,14 @@ Then("the row of {string} showed Removing… dimmed before it disappeared", asyn
   expect(tl.slice(i).some((s) => !s.rows.some((r) => r.path === path)), "the row disappeared after").toBe(true);
 });
 
+Then("the sidebar rows of {string} and {string} showed Removing… at the same time", async ({ page, project }, a: string, b: string) => {
+  const paths = [a, b].map((n) => join(project.path, ".claude", "worktrees", n));
+  for (const p of paths) await expect(page.locator(`[data-testid="worktree-row"][data-path="${p}"]`)).toHaveCount(0, { timeout: 60_000 });
+  const tl = await rmTimeline(page);
+  const both = tl.some((s) => paths.every((p) => s.rows.some((r) => r.path === p && r.removing && r.dim)));
+  expect(both, "one moment where both rows showed Removing… dimmed").toBe(true);
+});
+
 Then("a toast reports an ignored files count", async ({ page }) => {
   // 12000 ignored files: the count is capped and shown as "1000+".
   await expect(page.getByText(/Removed wt-big: 1000\+ ignored files deleted/).first()).toBeVisible({ timeout: 60_000 });

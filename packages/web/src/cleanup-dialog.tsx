@@ -128,12 +128,9 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
   async function run() {
     setPhase("run");
     setProgress(0);
-    // Each worktree removal marks its row Removing… in the sidebar.
-    const marked = (m: Parameters<typeof request>[0]) => {
-      if (m.type !== "worktree.remove") return request(m);
-      onRemoving(m.path, true);
-      return request(m).finally(() => onRemoving(m.path, false));
-    };
+    // Every queued worktree shows Removing… in the sidebar from the start; each row clears when its own request ends.
+    for (const r of ticked) if (r.kind === "worktree") onRemoving(r.path, true);
+    const marked = (m: Parameters<typeof request>[0]) => (m.type === "worktree.remove" ? request(m).finally(() => onRemoving(m.path, false)) : request(m));
     const items = cleanupItems(ticked, new Set(ticked.map((r) => r.key)), { deleteBranch }, marked as never);
     const r = await runCleanup(items, setProgress);
     // A worktree ticked (by "Also remove its worktree" or by default) that the filter hides is not removed: say so.
