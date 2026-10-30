@@ -25,6 +25,7 @@ import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactPreview } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { t as tr, useT } from "./i18n.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -37,7 +38,7 @@ const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
   stopped: "output-denied",
 };
 /** Labels that differ from the state's own. */
-const LABEL: Partial<Record<ToolStatus, string>> = { stopped: "Stopped" };
+const label = (status: ToolStatus) => (status === "stopped" ? tr("session.toolCard.stopped") : undefined);
 
 /** Base64 content block of a tool result (Read of an image or PDF): the data is not text, so cards show it as an image or one line. */
 const mediaBlock = (b: unknown) => {
@@ -88,6 +89,7 @@ export function useExpanded(id: string, force = false) {
 /** `awaiting`: the call waits for a permission answer, so the card is held open; except an Edit/Write with a diff,
  *  which stays collapsed because the permission panel shows that diff (GH-86); a click still expands it. */
 export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; result?: ToolResult; awaiting?: boolean; /** An ExitPlanMode call's plan (planOfPart); absent: its `input.plan`. */ plan?: string }) {
+  const t = useT();
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   const artifact = ARTIFACT_TOOLS.has(call.tool);
@@ -101,16 +103,16 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   const toBackground = use(BackgroundShellContext);
   const canBackground = !!toBackground && call.tool === "Bash" && call.status === "running" && call.shell === "foreground";
   const [moving, setMoving] = useState<{ error?: string }>();
-  const decided = call.coordinator && (call.coordinator.decision === "allow" ? "Approved by coordinator" : "Denied by coordinator");
+  const decided = call.coordinator && (call.coordinator.decision === "allow" ? t("session.toolCard.approvedByCoordinator") : t("session.toolCard.deniedByCoordinator"));
   const header = (
     <ToolHeader
       className={target || canBackground ? "min-w-0 flex-1" : undefined}
       type="dynamic-tool"
       toolName={call.tool}
       state={awaiting ? "approval-requested" : STATE[call.status]}
-      statusLabel={awaiting ? undefined : LABEL[call.status]}
+      statusLabel={awaiting ? undefined : label(call.status)}
       // Next to the tool name, which is never truncated like the summary.
-      title={call.editedByUser ? `${call.tool} · edited by you` : decided ? `${call.tool} · ${decided}` : undefined}
+      title={call.editedByUser ? t("session.toolCard.editedByYou", { tool: call.tool }) : decided ? t("session.toolCard.titleDecided", { tool: call.tool, decision: decided }) : undefined}
       summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
       tooltip={path || undefined}
       meta={
@@ -145,7 +147,7 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
       )}
       {canBackground && moving?.error && (
         <p role="alert" data-testid="run-in-background-error" className="px-3 pb-2 text-xs text-destructive">
-          Could not run in background: {moving.error}
+          {t("session.toolCard.backgroundFailed", { error: moving.error })}
         </p>
       )}
       <ToolContent>
@@ -161,10 +163,10 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   );
 }
 
-const openLabel = (t: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
-  if (t.kind === "plan") return "Open plan in popup";
-  const name = t.kind === "file" ? filePath(t.path, cwd).name : t.kind === "diff" ? filePath(field(t.call.input, "file_path"), cwd).name : "";
-  return t.kind === "diff" && stats ? `Open diff of ${name} (+${stats.added} -${stats.removed}) in popup` : t.kind === "file" ? `Open ${name} in file dialog` : `Open ${name} in popup`;
+const openLabel = (target: ViewerTarget, stats: { added: number; removed: number } | undefined, cwd: string) => {
+  if (target.kind === "plan") return tr("session.permission.openPlanPopup");
+  const name = target.kind === "file" ? filePath(target.path, cwd).name : target.kind === "diff" ? filePath(field(target.call.input, "file_path"), cwd).name : "";
+  return target.kind === "diff" && stats ? tr("session.toolCard.openDiff", { name, added: stats.added, removed: stats.removed }) : target.kind === "file" ? tr("session.toolCard.openFile", { name }) : tr("session.toolCard.openPopup", { name });
 };
 
 const OPEN_CLASS =
@@ -172,12 +174,13 @@ const OPEN_CLASS =
 
 /** Run in background (GH-440): always visible while the command runs (a transient action), 44 px below md. */
 export function BackgroundButton({ pending, onClick }: { pending: boolean; onClick: () => void }) {
+  const t = useT();
   const keys = keyText(specOf("shell.background"));
   return (
     <button
       type="button"
-      aria-label="Run in background"
-      title={keys ? `Run in background (${keys})` : "Run in background"}
+      aria-label={t("session.toolCard.background")}
+      title={keys ? t("session.toolCard.backgroundKeys", { keys }) : t("session.toolCard.background")}
       data-testid="run-in-background"
       data-command="shell.background"
       disabled={pending}
@@ -192,8 +195,9 @@ export function BackgroundButton({ pending, onClick }: { pending: boolean; onCli
 
 /** "Open in tab" of the plan card (GH-395): same reveal rules as OpenButton. */
 function PlanTabButton({ onOpen }: { onOpen: () => void }) {
+  const t = useT();
   return (
-    <button type="button" aria-label="Open plan in tab" title="Open in tab" data-testid="plan-open-tab" onClick={onOpen} className={OPEN_CLASS}>
+    <button type="button" aria-label={t("session.permission.openPlanTab")} title={t("session.permission.openTab")} data-testid="plan-open-tab" onClick={onOpen} className={OPEN_CLASS}>
       <PanelsTopLeftIcon aria-hidden className="size-4" />
     </button>
   );
@@ -201,11 +205,12 @@ function PlanTabButton({ onOpen }: { onOpen: () => void }) {
 
 /** Open-in-popup button right of a card header: hover, keyboard focus, open card, always on touch (like the chevron). */
 function OpenButton({ target, onOpen, label }: { target: ViewerTarget; onOpen: OpenViewer; label: string }) {
+  const t = useT();
   return (
     <button
       type="button"
       aria-label={label}
-      title={target.kind === "file" ? "Open in file dialog" : "Open in popup"}
+      title={target.kind === "file" ? t("session.toolCard.openFileTitle") : t("session.permission.openPopup")}
       data-testid="viewer-open"
       onClick={(e) => onOpen(target, e.currentTarget)}
       className={OPEN_CLASS}
@@ -253,6 +258,7 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
 }
 
 export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
+  const t = useT();
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} tail={tail} />;
   switch (call.tool) {
     case "Bash":
@@ -295,7 +301,7 @@ export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
         <div className="space-y-2">
           <div data-testid="search-pattern" className="font-mono text-xs">
             {field(call.input, "pattern")}
-            {scope && <span className="text-muted-foreground"> in {scope}</span>}
+            {scope && <span className="text-muted-foreground"> {t("session.toolCard.searchIn", { scope })}</span>}
           </div>
           {output}
         </div>
@@ -361,9 +367,10 @@ export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
 
 /** A claude.ai artifact link opening in a new tab; any other URL is plain text (a result is not trusted). */
 function ArtifactLink({ url }: { url: string }) {
+  const t = useT();
   if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={`${url} (opens in a new tab)`} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
+    <a href={url} target="_blank" rel="noopener noreferrer" title={t("session.toolCard.opensNewTab", { url })} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
       {url}
     </a>
   );
@@ -373,6 +380,7 @@ function ArtifactLink({ url }: { url: string }) {
  *  (comment text is written by viewers: never markdown or HTML). Result formats are unverified, so nothing is parsed
  *  beyond the claude.ai URL; the result text is always shown when there is no better field. */
 function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult }) {
+  const t = useT();
   const out = text(result?.output);
   const failed = result?.isError === true;
   const output = result && <Lines id={call.id} text={out} error={failed} wrap />;
@@ -399,11 +407,11 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
         {url && <ArtifactLink url={url} />}
         {action === "reply" && (
           <div data-testid="artifact-reply" className="space-y-1">
-            {thread && <div className="text-muted-foreground text-xs">Reply to thread {thread}</div>}
+            {thread && <div className="text-muted-foreground text-xs">{t("session.toolCard.replyThread", { thread })}</div>}
             <p className="whitespace-pre-wrap break-words rounded-md border p-2 text-sm">{field(call.input, "text")}</p>
           </div>
         )}
-        {action === "resolve" && <div className="text-xs">{!result ? `Resolving thread ${thread}…` : resolved ? `Resolved thread ${thread}` : ""}</div>}
+        {action === "resolve" && <div className="text-xs">{!result ? t("session.toolCard.resolving", { thread }) : resolved ? t("session.toolCard.resolved", { thread }) : ""}</div>}
         {output}
       </div>
     );
@@ -490,6 +498,7 @@ const MAX_LINES = 20;
 
 /** Monospace output, cut to MAX_LINES lines until expanded. `plain`: Bash output, ANSI colors and no box of its own. `tail`: the cut keeps the last lines (live shell output). */
 function Lines({ id, text, error, plain = false, wrap = false, tail = false }: { id: string; text: string; error: boolean; plain?: boolean; wrap?: boolean; tail?: boolean }) {
+  const t = useT();
   const { open: all, onOpenChange: setAll } = useExpanded(`lines:${id}`);
   const lines = text.replace(/\n$/, "").split("\n");
   const shown = all ? lines.join("\n") : (tail ? lines.slice(-MAX_LINES) : lines.slice(0, MAX_LINES)).join("\n");
@@ -514,14 +523,12 @@ function Lines({ id, text, error, plain = false, wrap = false, tail = false }: {
       </pre>
       {lines.length > MAX_LINES && (
         <button type="button" className="mt-1 text-muted-foreground text-xs hover:underline" onClick={() => setAll(!all)}>
-          {all ? "Show less" : `Show all ${lines.length} lines`}
+          {all ? t("session.toolCard.showLess") : t("session.toolCard.showAll", { count: lines.length })}
         </button>
       )}
     </div>
   );
 }
-
-const count = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
 
 /** Consecutive read/search calls as one row: "Exploring"/"Explored" and the counts (OpenCode context group). */
 export function ContextGroup({
@@ -533,14 +540,15 @@ export function ContextGroup({
   result: (call: ToolCall) => ToolResult | undefined;
   awaiting?: (call: ToolCall) => boolean;
 }) {
+  const t = useT();
   const failed = calls.some((c) => c.status === "error" || c.status === "denied");
   const busy = calls.some((c) => c.status === "pending" || c.status === "running");
   const reads = calls.filter((c) => c.tool === "Read").length;
-  const counts = [count(reads, "read", "reads"), count(calls.length - reads, "search", "searches")].filter(Boolean).join(", ");
+  const counts = [reads ? t("session.toolCard.reads", { count: reads }) : "", calls.length - reads ? t("session.toolCard.searches", { count: calls.length - reads }) : ""].filter(Boolean).join(", ");
   return (
     <Tool data-testid="context-group" {...useExpanded(`context:${calls[0]!.id}`, calls.some(awaiting))}>
       <CollapsibleTrigger className={toolRowClass}>
-        {busy ? <Shimmer as="span" className="font-medium">Exploring</Shimmer> : <span className="font-medium">Explored</span>}
+        {busy ? <Shimmer as="span" className="font-medium">{t("session.toolCard.exploring")}</Shimmer> : <span className="font-medium">{t("session.toolCard.explored")}</span>}
         <span className="truncate text-muted-foreground">{counts}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {failed && <ToolStatusMark state="output-error" />}
@@ -561,6 +569,7 @@ type Subagent = Extract<Part, { type: "subagent" }>;
 /** A subagent run: header with description and status; `children` is its nested timeline. `awaiting`: a child call waits for a permission answer. */
 /** `onOpen`: opens the run's subagent view (Open icon right of the header). */
 export function SubagentGroup({ part, result, awaiting, onOpen, children }: { part: Subagent; result?: ToolResult; awaiting?: boolean; onOpen?: () => void; children: ReactNode }) {
+  const t = useT();
   return (
     <Tool data-testid="subagent" data-status={part.status} {...useExpanded(part.id, awaiting)}>
       <div className="flex items-center gap-1">
@@ -568,15 +577,15 @@ export function SubagentGroup({ part, result, awaiting, onOpen, children }: { pa
           type="dynamic-tool"
           toolName="Agent"
           state={STATE[part.status]}
-          statusLabel={LABEL[part.status]}
+          statusLabel={label(part.status)}
           summary={part.description}
           className="min-w-0 flex-1"
         />
         {onOpen && (
           <button
             type="button"
-            aria-label={`Open subagent run ${part.description}`}
-            title="Open subagent run"
+            aria-label={t("session.toolCard.openSubagentLabel", { description: part.description })}
+            title={t("session.toolCard.openSubagent")}
             data-testid="subagent-open"
             className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:size-11"
             onClick={onOpen}

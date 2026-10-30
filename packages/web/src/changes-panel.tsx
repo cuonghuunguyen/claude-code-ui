@@ -17,6 +17,7 @@ import { FileIcon } from "./file-icon.tsx";
 import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
 import { pathKey } from "./file-tree-model.ts";
 import { repoDir } from "./repos.ts";
+import { t, useT } from "./i18n.ts";
 import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
 import { eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
@@ -47,7 +48,9 @@ type Row = { path: string; kind: Kind; before?: string; after?: string; error?: 
 export type Kind = "A" | "D" | "M" | "R";
 const SUB_PROBES = 10;
 const SUB_PARALLEL = 4;
-const KIND_TITLE = { A: "Added", D: "Deleted", M: "Modified", R: "Renamed" } as const;
+const KIND_KEY = { A: "files.changes.added", D: "files.changes.deleted", M: "files.changes.modified", R: "files.changes.renamed" } as const;
+const kindTitle = (k: keyof typeof KIND_KEY) => t(KIND_KEY[k]);
+const MODE_KEY = { session: "files.changes.modeSession", uncommitted: "files.changes.modeUncommitted", branch: "files.changes.modeBranch" } as const;
 const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
 
 // Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
@@ -91,7 +94,7 @@ export function ListResizer({
   list,
   width,
   onResize,
-  label = "Resize file list",
+  label,
   testId = "changes-list-resizer",
 }: {
   list: RefObject<HTMLDivElement | null>;
@@ -100,6 +103,7 @@ export function ListResizer({
   label?: string;
   testId?: string;
 }) {
+  useT();
   // 160px up to the panel width less 240px for the diff.
   const clamp = (w: number) => {
     const room = list.current?.parentElement?.clientWidth || Infinity;
@@ -110,7 +114,7 @@ export function ListResizer({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label={label}
+      aria-label={label ?? t("files.changes.resizeList")}
       aria-valuenow={now()}
       tabIndex={0}
       className="-ml-1 w-1 shrink-0 cursor-col-resize touch-none hover:bg-primary/30 focus-visible:bg-primary/30"
@@ -235,6 +239,7 @@ export function ChangesPanel({
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
 }) {
+  useT();
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
   // Same calls and results per path: the previous list, so streamed text does not re-parse every diff.
   const key = fresh.map((c) => `${c.path}\n${c.calls.length}\n${c.results.filter(Boolean).length}`).join("\n");
@@ -310,7 +315,7 @@ export function ChangesPanel({
       (r) => {
         // A reply of an older read (another mode, branch or reload since) is dropped.
         if (!live || seq !== diffSeq.current) return;
-        if (r.diff === null) return known ? setGd({ mode: effective, repo: gitCwd, error: "Not a repository" }) : setGit(false);
+        if (r.diff === null) return known ? setGd({ mode: effective, repo: gitCwd, error: t("files.changes.notRepo") }) : setGit(false);
         setGd({ mode: effective, repo: gitCwd, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);
@@ -521,8 +526,8 @@ export function ChangesPanel({
 
   const label = (r: Row) =>
     r.nested
-      ? `Repository ${relPath(r.path, cwd)}`
-      : `${KIND_TITLE[r.kind]} ${relPath(r.path, cwd)}${r.submodule ? `, submodule${r.dirty ? ", modified content" : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+      ? t("files.changes.repoLabel", { path: relPath(r.path, cwd) })
+      : `${kindTitle(r.kind)} ${relPath(r.path, cwd)}${r.submodule ? `, ${t("files.changes.submodule")}${r.dirty ? `, ${t("files.changes.modifiedContent")}` : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
   const rowIcon = (r: Row) => (r.nested ? <RepoIcon kind="nested" /> : r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />);
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
@@ -578,18 +583,18 @@ export function ChangesPanel({
   const gitRef = refChoice ?? gitDiff?.ref;
   const empty = gitMode
     ? effective === "uncommitted"
-      ? "No uncommitted changes."
-      : `No changes against ${gitRef ? short(gitRef) : "the branch"}.`
+      ? t("files.changes.noUncommitted")
+      : t("files.changes.noAgainst", { ref: gitRef ? short(gitRef) : t("files.changes.theBranch") })
     : scope === "project" && sessionRows.length
-      ? "No changes inside this project."
-      : (emptyText ?? "No changes in this session yet.");
+      ? t("files.changes.noInProject")
+      : (emptyText ?? t("files.changes.noInSession"));
   const message = gitError ? (
     <p role="alert" className="p-3 text-destructive" data-testid="changes-error">
       {gitError}
     </p>
   ) : gitLoading ? (
     <p className="p-3 text-muted-foreground" data-testid="changes-loading">
-      Loading changes…
+      {t("files.changes.loading")}
     </p>
   ) : !rows.length ? (
     <div className="m-auto flex flex-col items-center gap-2 p-4 text-muted-foreground" data-testid="changes-empty">
@@ -600,15 +605,15 @@ export function ChangesPanel({
 
   const modeSelect = (
     <Select value={mode} onValueChange={(v) => v && pick(v as DiffMode)}>
-      <SelectTrigger aria-label="Diff mode" data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 shrink-0 data-[size=default]:h-7")}>
-        <SelectValue>{(v: DiffMode) => DIFF_MODES.find((m) => m.value === v)?.label ?? v}</SelectValue>
+      <SelectTrigger aria-label={t("files.changes.diffMode")} data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 shrink-0 data-[size=default]:h-7")}>
+        <SelectValue>{(v: DiffMode) => t(MODE_KEY[v])}</SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} className="min-w-44">
         {DIFF_MODES.map((m) => (
           <SelectItem key={m.value} value={m.value} disabled={m.git && git === false} data-testid={`diff-mode-${m.value}`} className="max-md:min-h-11">
             <span className="flex flex-col">
-              {m.label}
-              {m.git && git === false && <span className="text-muted-foreground text-xs">Needs a git repository</span>}
+              {t(MODE_KEY[m.value])}
+              {m.git && git === false && <span className="text-muted-foreground text-xs">{t("files.changes.needsGit")}</span>}
             </span>
           </SelectItem>
         ))}
@@ -621,12 +626,12 @@ export function ChangesPanel({
   const branchSelect = effective === "branch" && (
     <Select value={gitRef ?? null} onValueChange={(v) => v && pick("branch", v)} disabled={!branchList.length}>
       <SelectTrigger
-        aria-label="Compare against"
-        title={gitDiff?.base ? `Merge base ${gitDiff.base.slice(0, 8)}` : undefined}
+        aria-label={t("files.changes.compare")}
+        title={gitDiff?.base ? t("files.changes.mergeBase", { sha: gitDiff.base.slice(0, 8) }) : undefined}
         data-testid="diff-branch"
         className={cn("min-w-0", narrow ? "w-full data-[size=default]:h-11" : "w-44 shrink-0 data-[size=default]:h-7")}
       >
-        <SelectValue>{(v: string | null) => (v ? short(v) : "Pick a branch")}</SelectValue>
+        <SelectValue>{(v: string | null) => (v ? short(v) : t("files.changes.pickBranch"))}</SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} className="min-w-44">
         {branchList.map((b) => (
@@ -638,7 +643,7 @@ export function ChangesPanel({
     </Select>
   );
   const scopeGroup = !gitMode && (
-    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Files shown">
+    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={t("files.changes.filesShown")}>
       {(["project", "all"] as const).map((s) => (
         <Button
           key={s}
@@ -649,7 +654,7 @@ export function ChangesPanel({
           onClick={() => chooseScope(s)}
           data-testid={`diff-scope-${s}`}
         >
-          {s === "project" ? "Project" : "All"}
+          {s === "project" ? t("files.changes.project") : t("files.changes.all")}
         </Button>
       ))}
     </div>
@@ -657,19 +662,19 @@ export function ChangesPanel({
   const counts = rows.length > 0 && (
     <>
       <span className="truncate font-medium">
-        {rows.length} Changed {rows.length === 1 ? "file" : "files"}
+        {t("files.changes.count", { count: rows.length })}
       </span>
       {rows.some((r) => r.stats) && <StatsText stats={total} />}
     </>
   );
   const notGit = git === false && mode !== "session" && (
     <p role="status" className="border-b px-3 py-1.5 text-muted-foreground" data-testid="changes-not-git">
-      Not a git repository: showing session changes.
+      {t("files.changes.notGit")}
     </p>
   );
   const hiddenNote = outside > 0 && (
     <span className="text-muted-foreground text-xs" data-testid="scope-hidden">
-      {outside} outside the project hidden
+      {t("files.changes.outsideHidden", { count: outside })}
     </span>
   );
 
@@ -682,15 +687,15 @@ export function ChangesPanel({
             <div className="flex items-center gap-2 max-md:gap-2" data-testid="changes-actions">
               {rows.length > 0 && (
                 <Button size="sm" variant="outline" className="h-11" onClick={() => setExpanded(allExpanded ? {} : Object.fromEntries(shown.map((r) => [r.path, true])))} data-testid="expand-all">
-                  {allExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />} {allExpanded ? "Collapse all" : "Expand all"}
+                  {allExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />} {allExpanded ? t("files.changes.collapseAll") : t("files.changes.expandAll")}
                 </Button>
               )}
               {onPopOut && (
-                <Button size="icon-sm" variant="ghost" className="size-11" onClick={onPopOut} title="Open in popup" aria-label="Open changes in popup" data-testid="changes-popout">
+                <Button size="icon-sm" variant="ghost" className="size-11" onClick={onPopOut} title={t("files.changes.popup")} aria-label={t("files.changes.popupLong")} data-testid="changes-popout">
                   <Maximize2Icon />
                 </Button>
               )}
-              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
+              <Button size="icon-sm" variant="ghost" className="size-11" onClick={() => (setReload((n) => n + 1), onReload?.())} title={t("files.reloadFromDisk")} aria-label={t("files.reloadFromDisk")}>
                 <RotateCwIcon />
               </Button>
             </div>
@@ -717,29 +722,29 @@ export function ChangesPanel({
                 {index + 1}/{shown.length}
               </span>
             )}
-            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(-1)} title="Previous file (←)" aria-label="Previous file">
+            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(-1)} title={t("files.changes.prevTitle")} aria-label={t("files.changes.prev")}>
               <ArrowLeftIcon />
             </Button>
-            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(1)} title="Next file (→)" aria-label="Next file">
+            <Button size="icon-sm" variant="ghost" disabled={!shown.length} onClick={() => cycle(1)} title={t("files.changes.nextTitle")} aria-label={t("files.changes.next")}>
               <ArrowRightIcon />
             </Button>
             {onPopOut && (
-              <Button size="icon-sm" variant="ghost" onClick={onPopOut} title="Open in popup" aria-label="Open changes in popup" data-testid="changes-popout">
+              <Button size="icon-sm" variant="ghost" onClick={onPopOut} title={t("files.changes.popup")} aria-label={t("files.changes.popupLong")} data-testid="changes-popout">
                 <Maximize2Icon />
               </Button>
             )}
-            <Button size="icon-sm" variant="ghost" onClick={() => (setReload((n) => n + 1), onReload?.())} title="Reload from disk" aria-label="Reload from disk">
+            <Button size="icon-sm" variant="ghost" onClick={() => (setReload((n) => n + 1), onReload?.())} title={t("files.reloadFromDisk")} aria-label={t("files.reloadFromDisk")}>
               <RotateCwIcon />
             </Button>
-            <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
+            <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={t("files.diffView")}>
               {(["unified", "split"] as const).map((s) => (
                 <Button
                   key={s}
                   size="icon-sm"
                   variant="ghost"
                   aria-pressed={style === s}
-                  aria-label={s === "unified" ? "Unified diff" : "Split diff"}
-                  title={s === "unified" ? "Unified diff" : "Split diff"}
+                  aria-label={s === "unified" ? t("files.diffUnified") : t("files.diffSplit")}
+                  title={s === "unified" ? t("files.diffUnified") : t("files.diffSplit")}
                   className={cn(style === s && "bg-card shadow-xs hover:bg-card")}
                   onClick={() => choose(s)}
                   data-testid={`diff-${s}`}
@@ -761,7 +766,7 @@ export function ChangesPanel({
       ) : narrow ? (
         // OpenCode's mobile review: an accordion of the files, each diff under its row.
         <div className="min-h-0 flex-1 overflow-auto p-3">
-          <ul className="overflow-hidden rounded-lg border" aria-label="Changed files">
+          <ul className="overflow-hidden rounded-lg border" aria-label={t("files.changes.changedFiles")}>
             {shown.map((r) => {
               const path = r.path;
               const { name, dir } = filePath(path, cwd);
@@ -784,7 +789,7 @@ export function ChangesPanel({
                     </span>
                     {r.submodule && <SubmoduleBadge />}
                     {r.nested && <RepoBadge />}
-                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{KIND_TITLE[r.kind]}</span>}
+                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{kindTitle(r.kind)}</span>}
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
@@ -793,7 +798,7 @@ export function ChangesPanel({
               );
             })}
           </ul>
-          {gitDiff?.truncated && <p className="p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
+          {gitDiff?.truncated && <p className="p-2 text-muted-foreground text-xs">{t("files.changes.listCut")}</p>}
         </div>
       ) : (
         // OpenCode's review file sidebar (240px, 200px in a narrow panel, resizable): filter and folder tree beside the diff.
@@ -805,8 +810,8 @@ export function ChangesPanel({
                 type="search"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter files"
-                aria-label="Filter files"
+                placeholder={t("files.filter")}
+                aria-label={t("files.filter")}
                 className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
                 data-testid="changes-filter"
               />
@@ -817,11 +822,11 @@ export function ChangesPanel({
                 {hiddenNote}
               </div>
             )}
-            {!shown.length && <p className="px-3 py-2 text-muted-foreground">No files match.</p>}
-            <ul className="flex min-h-0 flex-col gap-0.5 overflow-auto p-1" aria-label="Changed files">
+            {!shown.length && <p className="px-3 py-2 text-muted-foreground">{t("files.changes.noMatch")}</p>}
+            <ul className="flex min-h-0 flex-col gap-0.5 overflow-auto p-1" aria-label={t("files.changes.changedFiles")}>
               {branch(tree, 0)}
             </ul>
-            {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">List cut at 3000 files</p>}
+            {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">{t("files.changes.listCut")}</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
           {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
@@ -841,24 +846,27 @@ export function StatsText({ stats }: { stats: Stats }) {
 }
 
 export function SubmoduleBadge() {
+  useT();
   return (
     <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="submodule-badge">
-      submodule
+      {t("files.changes.submodule")}
     </span>
   );
 }
 
 export function RepoBadge() {
+  useT();
   return (
     <span className="shrink-0 rounded bg-secondary px-1 text-[11px] text-muted-foreground" data-testid="repo-badge">
-      repository
+      {t("files.changes.repository")}
     </span>
   );
 }
 
 export function KindBadge({ kind }: { kind: Kind }) {
+  useT();
   return (
-    <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={KIND_TITLE[kind]} data-testid="change-badge">
+    <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={kindTitle(kind)} data-testid="change-badge">
       {kind}
     </span>
   );
@@ -866,6 +874,7 @@ export function KindBadge({ kind }: { kind: Kind }) {
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
 function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
+  useT();
   const { path } = row;
   const dark = useDark();
   const colorTheme = useColorTheme();
@@ -883,14 +892,14 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   const same = files !== undefined && row.before === row.after;
   const sub = row.submodule;
   const nested = row.nested;
-  const dirtyText = row.dirty ? `modified content (${row.dirty} ${row.dirty === 1 ? "file" : "files"})` : "";
+  const dirtyText = row.dirty ? t("files.changes.dirtyText", { count: row.dirty }) : "";
   return (
     <div className={inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col"} data-testid="file-diff" data-diff-style={style}>
       {inline ? (
         !sub && !nested && inDir(path, cwd) && (
           <div className="flex justify-end px-2 pt-1">
             <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
-              <SquareArrowOutUpRightIcon /> Open in editor
+              <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
             </Button>
           </div>
         )
@@ -907,7 +916,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
           {!sub && !nested && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
-              <SquareArrowOutUpRightIcon /> Open in editor
+              <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
             </Button>
           )}
         </div>
@@ -916,13 +925,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
         {sub && (
           <p className="p-2 text-muted-foreground" data-testid="submodule-detail">
             {row.dirtyOnly ? (
-              <>Submodule {relPath(path, cwd)}</>
+              <>{t("files.changes.sub", { path: relPath(path, cwd) })}</>
             ) : sub.from ? (
               <>
-                Submodule {relPath(path, cwd)}: <span className="font-mono">{sub.from.slice(0, 7)}</span> {branchMode ? "at the merge base" : "in HEAD"}
+                {t("files.changes.subAt", { path: relPath(path, cwd) })} <span className="font-mono">{sub.from.slice(0, 7)}</span> {branchMode ? t("files.changes.atMergeBase") : t("files.changes.inHead")}
               </>
             ) : (
-              <>Submodule {relPath(path, cwd)}: added</>
+              <>{t("files.changes.subAdded", { path: relPath(path, cwd) })}</>
             )}
             {dirtyText && (
               <span data-testid="submodule-dirty">
@@ -934,34 +943,34 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
         )}
         {nested && (
           <p className="p-2 text-muted-foreground" data-testid="nested-detail">
-            Nested repository {relPath(path, cwd)}
+            {t("files.changes.nested", { path: relPath(path, cwd) })}
             {nested.branch ? ` (${nested.branch})` : ""}
           </p>
         )}
         {row.repoRel !== undefined && onShowRepo && (
           <div className="px-2 pb-2">
             <Button size="sm" variant="outline" className="max-md:h-11" onClick={() => onShowRepo(row.repoRel!)} data-testid="show-repo-changes">
-              Show changes in {row.repoRel}
+              {t("files.changes.showIn", { rel: row.repoRel })}
             </Button>
           </div>
         )}
         {!sub && !nested && row.error && <p role={row.notice ? "status" : undefined} className={cn("p-2", row.notice ? "text-muted-foreground" : "text-destructive")}>{row.error}</p>}
         {!sub && !nested && !row.error && !row.image && (row.after === undefined || (files && !same && !drawn)) && (
           <p className="p-2 text-muted-foreground" data-testid="diff-loading">
-            Loading diff…
+            {t("files.changes.loadingDiff")}
           </p>
         )}
         {row.image ? (
           <ImageDiff path={path} before={row.image.before} after={row.image.after} split={style === "split"} />
         ) : same ? (
-          <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? "Renamed without changes" : "No content changes") : "No changes against the file before this session."}</p>
+          <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? t("files.changes.renamedOnly") : t("files.changes.noContent")) : t("files.changes.noAgainstBefore")}</p>
         ) : files ? (
           <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
         ) : (
           !row.error &&
           row.after !== undefined && (
             <div className="flex flex-col gap-2">
-              <p className="text-muted-foreground">The file before this session is unknown: each edit is shown.</p>
+              <p className="text-muted-foreground">{t("files.changes.beforeUnknown")}</p>
               {(row.change?.calls ?? []).map((c) => (
                 <InputDiff key={c.id} tool={c.tool} input={c.input} diffStyle={style} fileHeader={false} />
               ))}

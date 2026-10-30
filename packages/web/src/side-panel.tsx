@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckIcon, LoaderCircleIcon, MinusIcon, TriangleAlertIcon } from "lucide-react";
 import { NODE_MIN, NODE_MIN_MAJOR, type SideCheck, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
+import { t, useT } from "./i18n.ts";
 import { ContainerNeeds } from "./container-needs.tsx";
 
 /** What a button asks `side.start` for: a setup mode, or "plain" (a hub without side.check: no setup field). */
@@ -25,75 +26,67 @@ export type PanelState = {
   failed?: RunMode;
 };
 
-const PHASE_TEXT: Record<SidePhase, string> = {
-  downloading: "Downloading Node.js and Claude Code…",
-  packing: "Packing claude-ui…",
-  copying: "Copying into the container…",
-  installing: "Installing (npm, can take minutes)…",
-  starting: "Starting…",
-};
+const phaseText = (p: SidePhase) => t(`app.sidePanel.phase.${p}`);
 
-const verdictText = (v: SideCheck["verdict"], label: string): string =>
-  ({
-    running: "Running.",
-    starting: "Starting…",
-    installed: "claude-ui is installed here.",
-    install: "claude-ui is not installed here yet.",
-    update: "An older claude-ui is installed. Update it to match this one.",
-    blocked: `${label} can't be set up yet.`,
-  })[v];
+const verdictText = (v: SideCheck["verdict"], label: string): string => t(`app.sidePanel.verdict.${v}`, { side: label });
 
 /** The fix per reason, used when the daemon sent no message. */
 function fixText(check: SideCheck, label: string): string | undefined {
   if (check.message) return check.message;
   const f = check.facts;
+  const v = { side: label, min: NODE_MIN, major: NODE_MIN_MAJOR };
   switch (check.reason) {
     case "gone":
-      return `${label} no longer exists. Pick another one.`;
+      return t("app.sidePanel.fix.gone", v);
     case "not_running":
-      return `${label} is not running. Start it, then check again.`;
+      return t("app.sidePanel.fix.notRunning", v);
     case "unreachable":
-      return `${label} cannot be reached. Make sure it works, then check again.`;
+      return t("app.sidePanel.fix.unreachable", v);
     case "no_build":
-      return "claude-ui has no finished build to install. Wait for the build to finish, then check again.";
+      return t("app.sidePanel.fix.noBuild");
     case "package_unreadable":
-      return "claude-ui cannot read its own files to install them. Wait for the build to finish, then check again.";
+      return t("app.sidePanel.fix.packageUnreadable");
     case "node_missing":
-      return `Node.js ${NODE_MIN} or newer is not installed in ${label}. Install it there (for example nvm install ${NODE_MIN_MAJOR}), then check again.`;
+      return t("app.sidePanel.fix.nodeMissing", v);
     case "node_old":
-      return `Node.js ${f.node ?? ""} in ${label} is too old. Install version ${NODE_MIN} or newer, then check again.`;
+      return t("app.sidePanel.fix.nodeOld", { ...v, node: f.node ?? "" });
     case "build_tools_missing":
-      return `Build tools are missing in ${label}: ${missingTools(f.buildTools).join(", ")}. Install them, then check again.`;
+      return t("app.sidePanel.fix.buildToolsMissing", { ...v, tools: missingTools(f.buildTools).join(", ") });
     case "unpack_tools_missing":
-      return `${label} needs tar and gzip to unpack claude-ui. Install them there, then check again.`;
+      return t("app.sidePanel.fix.unpackToolsMissing", v);
     case "no_writable_path":
-      return `${label} has no writable folder. Mount a tmpfs on /tmp, then check again.`;
+      return t("app.sidePanel.fix.noWritablePath", v);
     case "check_failed":
-      return "The check did not finish. Check again.";
+      return t("app.sidePanel.fix.checkFailed");
     default:
       return undefined;
   }
 }
 
-const missingTools = (t?: { make: boolean; python3: boolean; cxx: boolean }) => (t ? ([!t.make && "make", !t.python3 && "python3", !t.cxx && "g++"].filter(Boolean) as string[]) : []);
+const missingTools = (tools?: { make: boolean; python3: boolean; cxx: boolean }) => (tools ? ([!tools.make && "make", !tools.python3 && "python3", !tools.cxx && "g++"].filter(Boolean) as string[]) : []);
 
 type Row = { name: string; value: string; status: "ok" | "missing" | "na" };
 function rowsOf(c: SideCheck, docker = true): Row[] {
   const f = c.facts;
-  const na = (name: string): Row => ({ name, value: "Not checked", status: "na" });
-  if (!f.reachable) return [{ name: "Reachable", value: "No", status: "missing" }, na(`Node.js ${NODE_MIN_MAJOR}+`), na("Build tools"), na("claude-ui for this build")];
+  const na = (name: string): Row => ({ name, value: t("app.sidePanel.row.notChecked"), status: "na" });
+  const reachable = t("app.sidePanel.row.reachable");
+  const node = t("app.sidePanel.row.nodeName", { major: NODE_MIN_MAJOR });
+  const buildTools = t("app.sidePanel.row.buildToolsName");
+  const forBuild = t("app.sidePanel.row.forBuild");
+  if (!f.reachable) return [{ name: reachable, value: t("app.sidePanel.row.no"), status: "missing" }, na(node), na(buildTools), na(forBuild)];
   const tools = missingTools(f.buildTools);
-  const build: Row = f.installed === "current" ? { name: "claude-ui for this build", value: "Installed", status: "ok" } : f.installed === "other" ? { name: "claude-ui for this build", value: "Older build installed", status: "missing" } : { name: "claude-ui for this build", value: "Not installed", status: "missing" };
+  const build: Row = f.installed === "current" ? { name: forBuild, value: t("app.sidePanel.row.installed"), status: "ok" } : f.installed === "other" ? { name: forBuild, value: t("app.sidePanel.row.olderInstalled"), status: "missing" } : { name: forBuild, value: t("app.sidePanel.row.notInstalled"), status: "missing" };
+  const up: Row = { name: reachable, value: t(f.running ? "app.sidePanel.row.yesRunning" : "app.sidePanel.row.yes"), status: "ok" };
   // Docker with the bundle (or a build that runs on its own Node.js): the container's Node.js and build tools do not matter.
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
-    const t = f.target;
-    const target = t ? `${t.arch}, ${t.libc}${t.glibc ? ` ${t.glibc}` : ""}` : "Linux";
-    return [{ name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" }, { name: docker ? "Container" : "Distro", value: f.install?.method === "bundle" ? `${target}: bundle${f.install.parts === "download" ? ", if the host can download the parts" : ""}` : target, status: "ok" }, build];
+    const tg = f.target;
+    const target = tg ? `${tg.arch}, ${tg.libc}${tg.glibc ? ` ${tg.glibc}` : ""}` : "Linux";
+    return [up, { name: t(docker ? "app.sidePanel.row.container" : "app.sidePanel.row.distro"), value: f.install?.method === "bundle" ? t(f.install.parts === "download" ? "app.sidePanel.row.bundleDownload" : "app.sidePanel.row.bundle", { target }) : target, status: "ok" }, build];
   }
   return [
-    { name: "Reachable", value: f.running ? "Yes, running" : "Yes", status: "ok" },
-    f.node === undefined && f.nodeOk === undefined ? na(`Node.js ${NODE_MIN_MAJOR}+`) : f.node && f.nodeOk ? { name: `Node.js ${NODE_MIN_MAJOR}+`, value: f.node, status: "ok" } : { name: `Node.js ${NODE_MIN_MAJOR}+`, value: f.node ? `${f.node} (too old)` : "Not installed", status: "missing" },
-    !f.buildTools ? na("Build tools") : tools.length ? { name: "Build tools", value: `Missing: ${tools.join(", ")}`, status: "missing" } : { name: "Build tools", value: "Found", status: "ok" },
+    up,
+    f.node === undefined && f.nodeOk === undefined ? na(node) : f.node && f.nodeOk ? { name: node, value: f.node, status: "ok" } : { name: node, value: f.node ? t("app.sidePanel.row.tooOld", { node: f.node }) : t("app.sidePanel.row.notInstalled"), status: "missing" },
+    !f.buildTools ? na(buildTools) : tools.length ? { name: buildTools, value: t("app.sidePanel.row.missing", { tools: tools.join(", ") }), status: "missing" } : { name: buildTools, value: t("app.sidePanel.row.found"), status: "ok" },
     build,
   ];
 }
@@ -105,9 +98,9 @@ function rowsOf(c: SideCheck, docker = true): Row[] {
  */
 export function actionOf(check: SideCheck, failed: boolean): { label: string; mode: SideSetup } | undefined {
   const v = check.verdict;
-  if (v === "install") return { label: "Install", mode: "needed" };
-  if (v === "update") return { label: "Update", mode: "needed" };
-  if (v === "installed" && failed) return { label: "Reinstall", mode: "force" };
+  if (v === "install") return { label: t("app.sidePanel.action.install"), mode: "needed" };
+  if (v === "update") return { label: t("app.sidePanel.action.update"), mode: "needed" };
+  if (v === "installed" && failed) return { label: t("app.sidePanel.action.reinstall"), mode: "force" };
   return undefined;
 }
 
@@ -136,20 +129,21 @@ export function SidePanel({
   onRun: (mode: RunMode) => void;
   onCheck: () => void;
 }) {
+  const t = useT();
   const { label } = side;
   const retry = useRef<HTMLButtonElement>(null);
   const region = useRef<HTMLDivElement>(null);
-  const error = state.error ?? (side.state === "error" ? (side.message ?? `${label} is not running.`) : undefined);
+  const error = state.error ?? (side.state === "error" ? (side.message ?? t("app.sidePanel.notRunning", { side: label })) : undefined);
   // Retry sends the mode that failed. An error the dialog did not cause (a stopped container) only starts what is installed.
   const failed = state.failed;
   const inProgress = !!state.busy || side.state === "starting";
   const mode = state.busy?.mode ?? "needed";
   const phase = side.phase ?? (state.check?.verdict === "starting" ? state.check.phase : undefined) ?? (mode === "never" ? "starting" : "installing");
   const docker = side.id.startsWith("docker:");
-  const noun = docker ? "container" : "distro";
+  const noun = t(docker ? "app.sidePanel.noun.container" : "app.sidePanel.noun.distro");
   // Installing from the bundle only unpacks; npm (WSL, or a Docker fallback) can take minutes.
   // An install first looks at the container or distro (which install, which parts): no phase yet.
-  const phaseText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? "Preparing claude-ui…" : phase === "installing" && side.bundle ? `Unpacking claude-ui in the ${noun}…` : PHASE_TEXT[phase];
+  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase);
   // A failed run puts the focus on Retry.
   useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.
@@ -180,13 +174,13 @@ export function SidePanel({
             {error}
           </p>
           <Button size="sm" onClick={() => onRun(failed ?? "never")} className={`shrink-0 ${btn}`} ref={retry} data-testid="side-retry">
-            Retry
+            {t("app.sidePanel.retry")}
           </Button>
         </>
       )}
       {state.checkError && !inProgress && (
         <p className="max-h-[min(8rem,30dvh)] w-full max-w-md shrink-0 select-text overflow-y-auto whitespace-pre-wrap text-destructive [overflow-wrap:anywhere]" role="alert">
-          Could not check {label}: {state.checkError}
+          {t("app.sidePanel.couldNotCheck", { side: label, error: state.checkError })}
         </p>
       )}
       {/* What is happening (checking, progress, an older hub). Errors are alerts of their own, outside this region. */}
@@ -194,18 +188,18 @@ export function SidePanel({
         {inProgress ? (
           <p className="flex flex-wrap items-center justify-center gap-2 text-muted-foreground" data-testid="side-progress">
             <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-            {phaseText}
+            {progressText}
             <Elapsed />
           </p>
         ) : null}
         {inProgress && side.nodeNote ? (
           <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-node-note">
-            The Node.js in the {noun} was not used: {side.nodeNote}. claude-ui installs its own Node.js.
+            {t("app.sidePanel.nodeNote", { noun, note: side.nodeNote })}
           </p>
         ) : null}
         {inProgress && side.fallback ? (
           <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-fallback">
-            Installing with npm in the {noun} because {side.fallback}.
+            {t("app.sidePanel.fallback", { noun, reason: side.fallback })}
           </p>
         ) : null}
         {!inProgress && (
@@ -213,16 +207,16 @@ export function SidePanel({
             {state.checking && (
               <p className="flex items-center gap-2 text-muted-foreground">
                 <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-                Checking {label}…
+                {t("app.sidePanel.checking", { side: label })}
               </p>
             )}
-            {state.legacy && <p className="text-muted-foreground">This version of Claude UI can't check {label}. You can still install it.</p>}
+            {state.legacy && <p className="text-muted-foreground">{t("app.sidePanel.legacy", { side: label })}</p>}
           </>
         )}
       </div>
       {inProgress ? (
         <Button size="sm" disabled aria-busy="true" className={`shrink-0 ${btn}`} data-testid="side-install">
-          {mode === "never" ? "Starting…" : "Installing…"}
+          {mode === "never" ? t("app.sidePanel.starting") : t("app.sidePanel.installing")}
         </Button>
       ) : (
         <>
@@ -242,7 +236,7 @@ export function SidePanel({
                 {fix && <p className="select-text text-muted-foreground [overflow-wrap:anywhere]">{fix}</p>}
                 {check.facts.install?.method === "npm" && check.verdict !== "installed" && check.verdict !== "running" && !fix?.includes("installs with npm") && (
                   <p className="select-text text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-check-npm">
-                    Installs with npm in the {noun}{check.facts.install.reason ? ` because ${check.facts.install.reason}` : ""}.
+                    {check.facts.install.reason ? t("app.sidePanel.npmInstallReason", { noun, reason: check.facts.install.reason }) : t("app.sidePanel.npmInstall", { noun })}
                   </p>
                 )}
               </div>
@@ -252,7 +246,7 @@ export function SidePanel({
             {!state.legacy && (
               // aria-disabled, not disabled: a disabled button loses the keyboard focus, and Check again keeps it while it checks.
               <Button size="sm" variant="outline" aria-disabled={state.checking || undefined} onClick={() => !state.checking && onCheck()} className={`${btn} aria-disabled:opacity-50`} data-testid="side-check-again">
-                Check again
+                {t("app.sidePanel.checkAgain")}
               </Button>
             )}
             {action && !state.checking && (
@@ -262,7 +256,7 @@ export function SidePanel({
             )}
             {state.legacy && (
               <Button size="sm" onClick={() => onRun("plain")} className={btn} data-testid="side-install">
-                Install
+                {t("app.sidePanel.install")}
               </Button>
             )}
           </div>

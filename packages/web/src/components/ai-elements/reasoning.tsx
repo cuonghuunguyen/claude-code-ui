@@ -27,6 +27,7 @@ import {
 import { Streamdown } from "streamdown";
 
 import { Shimmer } from "./shimmer";
+import { t as tr, useT } from "../../i18n.ts";
 
 interface ReasoningContextValue {
   isStreaming: boolean;
@@ -152,12 +153,12 @@ export type ReasoningTriggerProps = ComponentProps<
 
 const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
   if (isStreaming || duration === 0) {
-    return <Shimmer duration={1}>Thinking...</Shimmer>;
+    return <Shimmer duration={1}>{tr("session.ai.thinking")}</Shimmer>;
   }
   if (duration === undefined) {
-    return <p>Thought for a few seconds</p>;
+    return <p>{tr("session.ai.thoughtFewSeconds")}</p>;
   }
-  return <p>Thought for {duration} seconds</p>;
+  return <p>{tr("session.ai.thoughtSeconds", { count: duration })}</p>;
 };
 
 export const ReasoningTrigger = memo(
@@ -167,6 +168,7 @@ export const ReasoningTrigger = memo(
     getThinkingMessage = defaultGetThinkingMessage,
     ...props
   }: ReasoningTriggerProps) => {
+    useT();
     const { isStreaming, isOpen, duration } = useReasoning();
 
     return (

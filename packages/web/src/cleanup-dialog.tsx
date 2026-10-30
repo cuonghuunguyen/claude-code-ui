@@ -8,8 +8,9 @@ import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
 import { cleanupCandidates, cleanupItems, confirmLabel, defaultSelection, filterRows, ignoredText, rowLabel, rowSafety, runCleanup, summaryText, type CleanupResult, type CleanupScope, type Filter, type Row } from "./cleanup.ts";
 import { trapTab } from "./focus-trap.ts";
-import { timeAgo } from "./sessions.ts";
+import { stateName, timeAgo } from "./sessions.ts";
 import { ARCHIVE_DAYS, daysLabel } from "./sidebar-menus.ts";
+import { t, useT } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
 
 type FetchState = { state: "fetching" } | { state: "done"; at: number } | { state: "failed"; reason: string };
@@ -36,9 +37,10 @@ export function CleanupDialog(p: Props) {
   );
 }
 
-const describe = (scope: CleanupScope) => (scope.kind === "all" ? "All projects" : scope.kind === "project" ? projectName(scope.cwd) : `Workers of “${scope.title}”`);
+const describe = (scope: CleanupScope) => (scope.kind === "all" ? t("sidebar.cl.allProjects") : scope.kind === "project" ? projectName(scope.cwd) : t("sidebar.cl.workersOf", { title: scope.title }));
 
 function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemoving }: Props & { scope: CleanupScope }) {
+  const t = useT();
   const id = useId();
   const cands = useMemo(() => cleanupCandidates(scope, list, worktrees, state), []); // eslint-disable-line react-hooks/exhaustive-deps -- frozen while open
   const [status, setStatus] = useState<Record<string, WorktreeStatusResult | { error: string }>>({});
@@ -92,8 +94,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
 
   useEffect(() => {
     if (!fetched) return;
-    const t = setInterval(() => setClock(Date.now()), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, [fetched]);
 
   const rows: Row[] = useMemo(
@@ -136,7 +138,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
     // A worktree ticked (by "Also remove its worktree" or by default) that the filter hides is not removed: say so.
     for (const w of ticked) {
       const wt = w.kind === "worker" && w.worktree ? rows.find((x) => x.kind === "worktree" && x.path === w.worktree) : undefined;
-      if (wt && isOn(wt) && !visible.includes(wt)) r.notes.push(`Worktree ${rowLabel(wt)} kept: hidden by the filter`);
+      if (wt && isOn(wt) && !visible.includes(wt)) r.notes.push(t("sidebar.cl.hiddenKept", { name: rowLabel(wt) }));
     }
     setResult(r);
     setPhase("done");
@@ -144,8 +146,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
   }
 
   const sections = [
-    { title: "Worktrees", rows: visible.filter((r) => r.kind === "worktree") },
-    { title: "Workers", rows: visible.filter((r) => r.kind === "worker") },
+    { id: "worktrees", title: t("sidebar.cl.worktrees"), rows: visible.filter((r) => r.kind === "worktree") },
+    { id: "workers", title: t("sidebar.cl.workers"), rows: visible.filter((r) => r.kind === "worker") },
   ];
   const total = rows.length;
 
@@ -159,13 +161,13 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
         aria-modal="true"
       >
         <div className="flex flex-col gap-0.5 px-4 pt-4 pb-2">
-          <Dialog.Title className="font-medium text-[15px] tracking-[-0.13px]">Clean up</Dialog.Title>
+          <Dialog.Title className="font-medium text-[15px] tracking-[-0.13px]">{t("sidebar.cl.title")}</Dialog.Title>
           <Dialog.Description className="text-muted-foreground text-sm">{describe(scope)}</Dialog.Description>
           {repos.map((repo) => {
             const f = fetches[repo];
             if (!f) return null;
             const secs = f.state === "done" ? Math.max(0, Math.round((clock - f.at) / 1000)) : 0;
-            const text = f.state === "fetching" ? "Fetching…" : f.state === "done" ? `Fetched ${secs < 60 ? `${secs} s` : timeAgo(f.at, clock)} ago` : `Fetch failed: ${f.reason} — results may be out of date`;
+            const text = f.state === "fetching" ? t("sidebar.cl.fetching") : f.state === "done" ? t("sidebar.cl.fetched", { time: secs < 60 ? `${secs} s` : timeAgo(f.at, clock) }) : t("sidebar.cl.fetchFailed", { reason: f.reason });
             return (
               <p key={repo} role="status" data-testid="cleanup-fetch" className={cn("text-xs", f.state === "failed" ? "text-destructive" : "text-muted-foreground")}>
                 {repos.length > 1 ? `${projectName(repo)}: ` : ""}
@@ -190,8 +192,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
             )}
             {result.notes.length > 0 && (
               <ul className="flex flex-col gap-1 text-muted-foreground text-sm">
-                {result.notes.map((t, i) => (
-                  <li key={i}>{t}</li>
+                {result.notes.map((note, i) => (
+                  <li key={i}>{note}</li>
                 ))}
               </ul>
             )}
@@ -201,16 +203,16 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
             {total > 0 && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-2 text-sm">
                 <label className="flex items-center gap-2 max-md:min-h-11">
-                  <span>Older than</span>
+                  <span>{t("sidebar.cl.olderThan")}</span>
                   <select
-                    aria-label="Older than"
+                    aria-label={t("sidebar.cl.olderThan")}
                     data-testid="cleanup-older"
                     disabled={busy}
                     value={filter.olderThan}
                     onChange={(e) => setFilter((f) => ({ ...f, olderThan: Number(e.target.value) as Filter["olderThan"] }))}
                     className="h-8 rounded-md border border-border bg-background px-2 max-md:h-11"
                   >
-                    <option value={0}>Any</option>
+                    <option value={0}>{t("sidebar.cl.any")}</option>
                     {ARCHIVE_DAYS.map((d) => (
                       <option key={d} value={d}>
                         {daysLabel(d)}
@@ -220,16 +222,16 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
                 </label>
                 <label className="flex items-center gap-2 max-md:min-h-11">
                   <input type="checkbox" data-testid="cleanup-only-safe" disabled={busy} checked={filter.onlySafe} onChange={(e) => setFilter((f) => ({ ...f, onlySafe: e.target.checked }))} />
-                  <span>Only safe</span>
+                  <span>{t("sidebar.cl.onlySafe")}</span>
                 </label>
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
-              {total === 0 && <p className="py-4 text-muted-foreground text-sm">Nothing to clean up</p>}
+              {total === 0 && <p className="py-4 text-muted-foreground text-sm">{t("sidebar.cl.nothing")}</p>}
               {sections.map(
                 (sec) =>
                   sec.rows.length > 0 && (
-                    <section key={sec.title} className="mb-2">
+                    <section key={sec.id} className="mb-2">
                       <h3 className="py-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">{sec.title}</h3>
                       <ul className="flex flex-col">
                         {sec.rows.map((r) => (
@@ -253,31 +255,31 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
                     </section>
                   ),
               )}
-              {total > 0 && visible.length === 0 && <p className="py-4 text-muted-foreground text-sm">No row matches the filter</p>}
+              {total > 0 && visible.length === 0 && <p className="py-4 text-muted-foreground text-sm">{t("sidebar.cl.noRow")}</p>}
             </div>
           </>
         )}
         <div className="flex flex-col gap-2 border-border border-t px-4 py-3">
           {busy && (
             <p role="status" className="text-sm">
-              Removing {Math.min(progress + 1, n)} of {n}…
+              {t("sidebar.cl.removingProgress", { current: Math.min(progress + 1, n), total: n })}
             </p>
           )}
           {phase === "pick" && m > 0 && (
             <label className="flex items-start gap-2 text-sm max-md:min-h-11">
               <input type="checkbox" data-testid="cleanup-ack" className="mt-1" checked={ack === m} onChange={(e) => setAck(e.target.checked ? m : undefined)} />
-              <span>Discard uncommitted files and unpushed commits in {m} {m === 1 ? "worktree" : "worktrees"}</span>
+              <span>{t("sidebar.cl.ack", { count: m })}</span>
             </label>
           )}
           <div className="flex justify-end gap-2">
             {phase === "done" ? (
               <Button ref={closeRef} onClick={onClose} className="max-md:h-11" data-testid="cleanup-close">
-                Close
+                {t("sidebar.close")}
               </Button>
             ) : (
               <>
                 <Button variant="ghost" onClick={onClose} className="max-md:h-11" data-testid="cleanup-cancel">
-                  {busy ? "Close" : "Cancel"}
+                  {t(busy ? "sidebar.close" : "sidebar.cancel")}
                 </Button>
                 <Button variant="destructive" disabled={busy || n === 0 || !acked} onClick={() => void run()} className="max-md:h-11" data-testid="cleanup-confirm">
                   {confirmLabel(n, m)}
@@ -307,20 +309,21 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
   deleteBranch: boolean;
   setDeleteBranch: (on: boolean) => void;
 }) {
+  const t = useT();
   const { safety, reason, cached } = rowSafety(r);
-  const label = (s: string, why?: string) => (s === "safe" ? "Safe" : s === "has_work" ? `Has work: ${why}` : s === "blocked" ? `Blocked: ${why}` : "Checking…");
-  const text = cached ? `${label(cached.safety, cached.reason)} · Checking…` : label(safety, reason);
+  const label = (s: string, why?: string) => (s === "safe" ? t("sidebar.cl.safe") : s === "has_work" ? t("sidebar.cl.hasWork", { why: why ?? "" }) : s === "blocked" ? t("sidebar.cl.blockedWhy", { why: why ?? "" }) : t("sidebar.cl.checking"));
+  const text = cached ? t("sidebar.cl.checkingAgain", { label: label(cached.safety, cached.reason) }) : label(safety, reason);
   const checkedAt = r.kind === "worktree" ? (r.status ?? r.cached)?.checkedAt : undefined;
   const act = r.kind === "worker" ? r.lastActivity : Math.max(r.lastActivity ?? 0, r.status?.headTime ?? 0) || undefined;
   const meta = [
-    r.kind === "worktree" ? `${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}` : undefined,
+    r.kind === "worktree" ? t("sidebar.op.sessionCount", { count: r.sessions }) : undefined,
     act ? timeAgo(act, now) : undefined,
-    checkedAt && now - checkedAt > 5000 ? `checked ${timeAgo(checkedAt, now)}` : undefined,
-    r.kind === "worktree" && r.status && r.status.ignored === undefined ? "ignored files: checked at removal" : undefined,
-    r.kind === "worktree" && r.status?.ignored ? `${ignoredText(r.status.ignored)} will be deleted` : undefined,
-    r.kind === "worktree" && r.status?.upstreamGone ? "remote branch deleted" : undefined,
+    checkedAt && now - checkedAt > 5000 ? t("sidebar.cl.checkedAgo", { time: timeAgo(checkedAt, now) }) : undefined,
+    r.kind === "worktree" && r.status && r.status.ignored === undefined ? t("sidebar.cl.ignoredAtRemoval") : undefined,
+    r.kind === "worktree" && r.status?.ignored ? t("sidebar.cl.willDelete", { ignored: ignoredText(r.status.ignored) }) : undefined,
+    r.kind === "worktree" && r.status?.upstreamGone ? t("sidebar.cl.remoteGone") : undefined,
     safety === "safe" ? reason : undefined,
-    r.kind === "worker" ? r.state : r.outsideRoots ? "outside roots" : r.locked ? "locked" : r.status ? (r.status.safety === "has_work" ? "has work" : "clean") : undefined,
+    r.kind === "worker" ? stateName(r.state) : r.outsideRoots ? t("sidebar.cl.outsideRoots") : r.locked ? t("sidebar.cl.lockedShort") : r.status ? t(r.status.safety === "has_work" ? "sidebar.cl.hasWorkShort" : "sidebar.cl.clean") : undefined,
   ].filter(Boolean);
   const wt = r.kind === "worker" && r.worktree ? rows.find((x) => x.kind === "worktree" && x.path === r.worktree) : undefined;
   const wtHidden = !!wt && !shown(wt);
@@ -342,7 +345,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2">
             <span className="truncate text-sm">{rowLabel(r)}</span>
-            {r.kind === "worktree" && r.external && <Badge variant="outline">External</Badge>}
+            {r.kind === "worktree" && r.external && <Badge variant="outline">{t("sidebar.cl.external")}</Badge>}
             <Badge variant={BADGE[safety]} id={`${ids}-safety`} data-testid="cleanup-badge">
               {text}
             </Badge>
@@ -353,13 +356,13 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
       {keptBranch && on && (
         <label className={cn("ml-6 flex items-center gap-2 text-sm max-md:min-h-11")}>
           <input type="checkbox" disabled={busy} checked={deleteBranch} onChange={(e) => setDeleteBranch(e.target.checked)} data-testid="cleanup-delete-branch" />
-          <span>Also delete branch {r.branch}</span>
+          <span>{t("sidebar.cl.alsoDeleteBranch", { name: r.branch ?? "" })}</span>
         </label>
       )}
       {wt && (
         <label className="ml-6 flex items-center gap-2 text-sm max-md:min-h-11">
           <input type="checkbox" disabled={busy || !wtOk} checked={isOn(wt)} onChange={(e) => set(wt.key, e.target.checked)} data-testid="cleanup-also-worktree" />
-          <span>Also remove its worktree{wtHidden && <span className="text-muted-foreground"> (hidden by the filter)</span>}</span>
+          <span>{t("sidebar.cl.alsoRemoveWt")}{wtHidden && <span className="text-muted-foreground">{t("sidebar.cl.hiddenByFilter")}</span>}</span>
         </label>
       )}
     </li>

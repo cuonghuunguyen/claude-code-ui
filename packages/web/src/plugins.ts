@@ -1,5 +1,6 @@
 // Manage Plugins dialog logic and texts, same behaviour as the Claude Code VS Code extension (own texts) (docs/spec.md "Config dialogs: plugins").
 import type { AvailablePlugin, ConfigScope, MarketplaceInfo, McpServerInfo, PluginUpdateFailure } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 /** `name` of `name@marketplace`. */
 /** The sessions whose last plugin reload failed, after a `config.changed`: one that reloaded replaces the set (a success clears the banner); `undefined`: no reload ran. */
@@ -31,9 +32,9 @@ export function marketplaceText(m: MarketplaceInfo) {
     case "url":
       return `URL: ${m.url}`;
     case "directory":
-      return `Directory: ${m.path}`;
+      return t("session.plugins.marketplaceDirectory", { path: m.path ?? "" });
     case "file":
-      return `File: ${m.path}`;
+      return t("session.plugins.marketplaceFile", { path: m.path ?? "" });
     case "npm":
       return `npm: ${m.package}`;
     default:
@@ -51,53 +52,55 @@ export function marketplaceLink(m: MarketplaceInfo) {
 /** Chip of a plugin's MCP server: its status row by `name` or `plugin:<plugin>:<server>`, and the tooltip. */
 export function chipOf(pluginId: string, server: string, servers: McpServerInfo[]) {
   const s = servers.find((x) => x.name === server || x.name === `plugin:${pluginName(pluginId)}:${server}`);
-  return { status: s?.status ?? "unknown", title: s ? `${server}: ${s.status}${s.error ? ` - ${s.error}` : ""}` : `${server}: not loaded` };
+  return { status: s?.status ?? "unknown", title: s ? (s.error ? t("session.plugins.chipError", { server, status: s.status, error: s.error }) : t("session.plugins.chip", { server, status: s.status })) : t("session.plugins.chipNotLoaded", { server }) };
 }
 
 /** Notice after an update that needed no reload (the CLI's result line). */
 export function updateNotice(pluginId: string, message: string) {
   const p = pluginName(pluginId);
-  if (message.startsWith("Skipped")) return `${p} kept its version: another plugin depends on it.`;
-  if (/ — version shown may be stale\.$/.test(message)) return `${p} looks up to date, but the marketplace could not be reached to confirm.`;
-  return `${p} is up to date.`;
+  if (message.startsWith("Skipped")) return t("session.plugins.noticeSkipped", { plugin: p });
+  if (/ — version shown may be stale\.$/.test(message)) return t("session.plugins.noticeStale", { plugin: p });
+  return t("session.plugins.noticeUpToDate", { plugin: p });
 }
 
 export type FailureAction = "retry" | "enableAndUpdate" | "refreshList" | "refreshMarketplace" | "copy";
 /** Update failure dialog per kind: title, message, actions (first = primary) and close label. */
 export function failureDialog(kind: PluginUpdateFailure, pluginId: string): { title: string; message: string; actions: { label: string; action: FailureAction }[]; close: string } {
   const p = pluginName(pluginId);
-  const retry = { label: "Try again", action: "retry" as const };
-  const copy = { label: "Copy error", action: "copy" as const };
+  const retry = { label: t("session.plugins.failure.retry"), action: "retry" as const };
+  const copy = { label: t("session.plugins.failure.copy"), action: "copy" as const };
+  const cancel = t("session.plugins.failure.cancel");
+  const ok = t("session.plugins.failure.ok");
+  const plugin = p;
   switch (kind) {
     case "timeout":
-      return { title: `${p} update timed out`, message: "The update did not complete in time.", actions: [retry], close: "Cancel" };
+      return { title: t("session.plugins.failure.timeoutTitle", { plugin }), message: t("session.plugins.failure.timeoutMessage"), actions: [retry], close: cancel };
     case "policy":
-      return { title: `Updating ${p} is not allowed`, message: "A policy from your organization prevents this update.", actions: [], close: "OK" };
+      return { title: t("session.plugins.failure.policyTitle", { plugin }), message: t("session.plugins.failure.policyMessage"), actions: [], close: ok };
     case "disabled":
-      return { title: `${p} is disabled`, message: "Enable it first, then update.", actions: [{ label: "Enable and update", action: "enableAndUpdate" }], close: "Cancel" };
+      return { title: t("session.plugins.failure.disabledTitle", { plugin }), message: t("session.plugins.failure.disabledMessage"), actions: [{ label: t("session.plugins.failure.enableAndUpdate"), action: "enableAndUpdate" }], close: cancel };
     case "needs_consent":
-      return { title: `${p} would run a command on your machine to install`, message: "Approving that is not supported in this UI yet.", actions: [], close: "OK" };
+      return { title: t("session.plugins.failure.consentTitle", { plugin }), message: t("session.plugins.failure.consentMessage"), actions: [], close: ok };
     case "not_installed":
-      return { title: `${p} is not installed anymore`, message: "The plugin list is stale.", actions: [{ label: "Reload list", action: "refreshList" }], close: "Cancel" };
+      return { title: t("session.plugins.failure.notInstalledTitle", { plugin }), message: t("session.plugins.failure.notInstalledMessage"), actions: [{ label: t("session.plugins.failure.reloadList"), action: "refreshList" }], close: cancel };
     case "not_found":
       return {
-        title: `${marketplaceOf(pluginId)} (local copy) has no ${p}`,
-        message: "Update the marketplace and retry.",
-        actions: [{ label: "Update marketplace and retry", action: "refreshMarketplace" }],
-        close: "Cancel",
+        title: t("session.plugins.failure.notFoundTitle", { marketplace: marketplaceOf(pluginId), plugin }),
+        message: t("session.plugins.failure.notFoundMessage"),
+        actions: [{ label: t("session.plugins.failure.updateMarketplace"), action: "refreshMarketplace" }],
+        close: cancel,
       };
     case "network":
-      return { title: `Could not update ${p}`, message: "The marketplace is unreachable.", actions: [retry, copy], close: "Cancel" };
+      return { title: t("session.plugins.failure.otherTitle", { plugin }), message: t("session.plugins.failure.networkMessage"), actions: [retry, copy], close: cancel };
     default:
-      return { title: `Could not update ${p}`, message: "The update stopped before it finished.", actions: [retry, copy], close: "Cancel" };
+      return { title: t("session.plugins.failure.otherTitle", { plugin }), message: t("session.plugins.failure.otherMessage"), actions: [retry, copy], close: cancel };
   }
 }
 
-export const TRUST_WARNING =
-  "Install, update and use only plugins you trust. Plugins can bring MCP servers, files and other software that Anthropic does not review, and their behaviour can change at any time.";
+export const trustWarning = () => t("session.plugins.trustWarning");
 
 export const INSTALL_SCOPES: { scope: ConfigScope; label: string; description: string }[] = [
-  { scope: "user", label: "Install for you", description: "You, in every project" },
-  { scope: "project", label: "Install for this project", description: "Everyone on this project" },
-  { scope: "local", label: "Install locally", description: "Only you, only this project" },
+  { scope: "user", get label() { return t("session.plugins.scope.user"); }, get description() { return t("session.plugins.scope.userHint"); } },
+  { scope: "project", get label() { return t("session.plugins.scope.project"); }, get description() { return t("session.plugins.scope.projectHint"); } },
+  { scope: "local", get label() { return t("session.plugins.scope.local"); }, get description() { return t("session.plugins.scope.localHint"); } },
 ];

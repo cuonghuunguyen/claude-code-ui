@@ -1,8 +1,10 @@
 // What an image a snapshot or page left out shows while it loads and when the load failed (GH-274).
 import { cn } from "@/lib/utils";
+import { useT } from "./i18n.ts";
 
 /** A box of fixed size, so the layout does not jump when the image arrives: "Loading image", or the failure notice with Retry. */
 export function MediaPlaceholder({ failed, retry, label, className }: { failed: boolean; retry: () => void; label: string; className: string }) {
+  const t = useT();
   return (
     <div
       data-testid="media-placeholder"
@@ -13,18 +15,18 @@ export function MediaPlaceholder({ failed, retry, label, className }: { failed: 
     >
       {failed ? (
         <>
-          <span role="alert">Image could not be loaded</span>
+          <span role="alert">{t("files.media.failed")}</span>
           <button
             type="button"
-            aria-label={`Retry loading ${label}`}
+            aria-label={t("files.media.retryLoading", { label })}
             onClick={retry}
             className="min-h-11 rounded-md border bg-background px-3 text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring md:min-h-7"
           >
-            Retry
+            {t("files.retry")}
           </button>
         </>
       ) : (
-        <span>Loading image</span>
+        <span>{t("files.media.loading")}</span>
       )}
     </div>
   );

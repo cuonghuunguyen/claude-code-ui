@@ -6,6 +6,7 @@ import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { FsMediaResult, FsReadResult, FsWriteResult } from "@claude-ui/protocol";
 import type { connect, ConnectionStatus, RequestError } from "./client.ts";
+import { t as tr } from "./i18n.ts";
 import { baseName, inDir } from "./paths.ts";
 import { diskChanged, dropTabs, goneTab, isDirty, isMarkdown, mediaKind, movedPath, moveTabs, opened, openedMedia, pin, placeTab, readFailure, reload, restoredTab, saveBase, saved, type Tab } from "./files.ts";
 import { loadSaved, toSaved, writeSaved, type EditorStorage, type SavedDrafts, type SavedTab } from "./editor-persist.ts";
@@ -224,7 +225,7 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
       } catch (e) {
         if ((e as Error).message !== "disconnected") pending.delete(path);
         if ((e as Error).message === "disconnected") {
-          return void set((s) => ({ ...s, error: "Not connected" }));
+          return void set((s) => ({ ...s, error: tr("files.notConnected") }));
         }
         const f = readFailure(e as RequestError);
         if (seq !== openSeq && preview) return;
@@ -273,7 +274,7 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
 
   function close(path: string) {
     const t = state.tabs[path];
-    if (t && isDirty(t) && !confirm(`Discard unsaved changes to ${baseName(path)}?`)) return;
+    if (t && isDirty(t) && !confirm(tr("files.discardConfirm", { name: baseName(path) }))) return;
     setTabs(({ [path]: _, ...rest }) => rest);
     prune();
   }

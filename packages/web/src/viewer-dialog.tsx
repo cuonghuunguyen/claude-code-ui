@@ -17,6 +17,7 @@ import { readFailure, mediaKind } from "./files.ts";
 import { CodeEditor } from "./files-panel.tsx";
 import { shownPrompt } from "./config-dialog.tsx";
 import { trapTab } from "./focus-trap.ts";
+import { t, useT } from "./i18n.ts";
 import { MediaView } from "./media-view.tsx";
 import { inDir, relPath } from "./paths.ts";
 import type { SessionView } from "./store.ts";
@@ -29,7 +30,7 @@ type PopupTarget = Exclude<ViewerTarget, { kind: "file" }>;
 type Client = ReturnType<typeof connect>;
 const noop = () => {};
 
-const title = (t: PopupTarget, cwd: string) => (t.kind === "diff" ? relPath(callPath(t.call), cwd) : t.kind === "plan" ? "Plan" : "Changes");
+const title = (target: PopupTarget, cwd: string) => (target.kind === "diff" ? relPath(callPath(target.call), cwd) : target.kind === "plan" ? t("files.viewer.plan") : t("files.viewer.changes"));
 
 /** `opener`: the element focused when the popup opened; focus returns to it on close, else to the prompt box. */
 export function ViewerDialog({
@@ -111,9 +112,10 @@ function Header({ text, children }: { text: string; children?: React.ReactNode }
 
 /** The X of a dialog header. */
 export function DialogClose() {
+  const t = useT();
   return (
     <Dialog.Close
-      aria-label="Close"
+      aria-label={t("files.close")}
       data-testid="viewer-close"
       className="grid size-7 shrink-0 place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 pointer-coarse:size-11"
     >
@@ -123,6 +125,7 @@ export function DialogClose() {
 }
 
 function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
+  const t = useT();
   const text = title(target, cwd);
   switch (target.kind) {
     case "diff":
@@ -131,7 +134,7 @@ function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules
       return (
         <>
           <Header text={text} />
-          <div tabIndex={0} aria-label="Plan" data-testid="viewer-plan" className="min-h-0 flex-1 overflow-auto px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+          <div tabIndex={0} aria-label={t("files.viewer.plan")} data-testid="viewer-plan" className="min-h-0 flex-1 overflow-auto px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
             <MessageResponse>{target.plan}</MessageResponse>
           </div>
         </>
@@ -145,7 +148,7 @@ function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules
               <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
             </div>
           ) : (
-            <p className="p-4 text-muted-foreground text-sm">No session.</p>
+            <p className="p-4 text-muted-foreground text-sm">{t("files.viewer.noSession")}</p>
           )}
         </>
       );
@@ -158,15 +161,16 @@ type HeaderFn = (extra: React.ReactNode) => React.ReactNode;
 
 /** Header buttons: the file in the Files tab (editable, with the tree), at `line` when the viewer shows one; and as a main-area tab (GH-399). */
 function OpenInFiles({ path, line, onOpen, onTab, cwd }: { path: string; line?: number; onOpen?: (path: string, line?: number) => void; onTab?: (path: string) => void; cwd: string }) {
+  const t = useT();
   if (!onOpen) return null;
   return (
     <>
       {onTab && inDir(path, cwd) && (
-        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onTab(path)} title="Open in tab" aria-label="Open in tab" data-testid="viewer-open-tab">
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onTab(path)} title={t("files.openInTab")} aria-label={t("files.openInTab")} data-testid="viewer-open-tab">
           <ExternalLinkIcon />
         </Button>
       )}
-      <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onOpen(path, line)} title="Open in Files tab" aria-label="Open in Files tab" data-testid="viewer-open-editor">
+      <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => onOpen(path, line)} title={t("files.viewer.openInFiles")} aria-label={t("files.viewer.openInFiles")} data-testid="viewer-open-editor">
         <SquareArrowOutUpRightIcon />
       </Button>
     </>
@@ -175,6 +179,7 @@ function OpenInFiles({ path, line, onOpen, onTab, cwd }: { path: string; line?: 
 
 /** The file read-only: CodeMirror, or the media viewer for images, SVG, video and audio. A snapshot at open; Reload re-reads it. */
 function FileBody({ client, cwd, path, line, header, controls, onOpenInEditor, onOpenInTab }: { client: Client; cwd: string; path: string; line?: number; header: HeaderFn; controls?: React.ReactNode; onOpenInEditor?: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
+  const t = useT();
   const [reload, setReload] = useState(0);
   const [loaded, setLoaded] = useState<Loaded>();
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -198,7 +203,7 @@ function FileBody({ client, cwd, path, line, header, controls, onOpenInEditor, o
     };
   }, [client, path, reload]);
   const reloadButton = (
-    <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title="Reload from disk" aria-label="Reload from disk">
+    <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setReload((n) => n + 1)} title={t("files.reloadFromDisk")} aria-label={t("files.reloadFromDisk")}>
       <RotateCwIcon />
     </Button>
   );
@@ -213,7 +218,7 @@ function FileBody({ client, cwd, path, line, header, controls, onOpenInEditor, o
       )}
       {!loaded ? (
         <p className="p-4 text-muted-foreground text-sm" role="status" data-testid="viewer-loading">
-          Loading file…
+          {t("files.loadingFile")}
         </p>
       ) : loaded.kind === "error" ? (
         <p role={loaded.notice ? "status" : "alert"} className="p-4 text-muted-foreground text-sm" data-testid="viewer-error">
@@ -230,12 +235,13 @@ function FileBody({ client, cwd, path, line, header, controls, onOpenInEditor, o
 
 /** The call's diff; a switch shows the current file instead. */
 function DiffBody({ client, cwd, call, header, onOpenInEditor, onOpenInTab }: { client: Client; cwd: string; call: Extract<ViewerTarget, { kind: "diff" }>["call"]; header: HeaderFn; onOpenInEditor?: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
+  const t = useT();
   const [show, setShow] = useState<"diff" | "file">("diff");
   const [chosen, setChosen] = useState<DiffStyle>(loadStyle);
   const narrow = useNarrow();
   const style: DiffStyle = narrow ? "unified" : chosen;
   const switcher = (
-    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="View">
+    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={t("files.viewer.view")}>
       {(["diff", "file"] as const).map((s) => (
         <Button
           key={s}
@@ -246,21 +252,21 @@ function DiffBody({ client, cwd, call, header, onOpenInEditor, onOpenInTab }: { 
           onClick={() => setShow(s)}
           data-testid={`viewer-show-${s}`}
         >
-          {s === "diff" ? "Diff" : "File"}
+          {s === "diff" ? t("files.viewer.diff") : t("files.viewer.file")}
         </Button>
       ))}
     </div>
   );
   const styles = show === "diff" && !narrow && (
-    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label="Diff view">
+    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={t("files.diffView")}>
       {(["unified", "split"] as const).map((s) => (
         <Button
           key={s}
           size="icon-sm"
           variant="ghost"
           aria-pressed={style === s}
-          aria-label={s === "unified" ? "Unified diff" : "Split diff"}
-          title={s === "unified" ? "Unified diff" : "Split diff"}
+          aria-label={s === "unified" ? t("files.diffUnified") : t("files.diffSplit")}
+          title={s === "unified" ? t("files.diffUnified") : t("files.diffSplit")}
           className={cn(style === s && "bg-card shadow-xs hover:bg-card")}
           onClick={() => (setChosen(s), saveStyle(s))}
           data-testid={`viewer-diff-${s}`}
@@ -280,7 +286,7 @@ function DiffBody({ client, cwd, call, header, onOpenInEditor, onOpenInTab }: { 
           <OpenInFiles path={callPath(call)} onOpen={onOpenInEditor} onTab={onOpenInTab} cwd={cwd} />
         </>,
       )}
-      <div tabIndex={0} aria-label="Diff" className="min-h-0 flex-1 overflow-auto p-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+      <div tabIndex={0} aria-label={t("files.viewer.diff")} className="min-h-0 flex-1 overflow-auto p-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
         <InputDiff tool={call.tool} input={call.input} diffStyle={style} />
       </div>
     </>

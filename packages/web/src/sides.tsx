@@ -1,6 +1,7 @@
 // Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro or a Docker container.
 import { createContext, use } from "react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
+import { t, useT } from "./i18n.ts";
 
 /**
  * Side label of a cwd (`Windows`, `WSL: Ubuntu`, `Docker: dev`) and its short form for narrow rows (`Win`, `WSL` or the distro
@@ -41,9 +42,9 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
 export type SideStatus = { text: string; action?: "retry" | "update" };
 export function sideStatus(side: SideInfo | undefined): SideStatus | undefined {
   if (!side || side.id === LOCAL_SIDE || side.state === "ready") return undefined;
-  if (side.state === "starting") return { text: "Starting…" };
-  if (side.state === "error") return { text: side.message ?? "Could not start", action: "retry" };
-  return side.update ? { text: "Needs an update", action: "update" } : { text: "Not running" };
+  if (side.state === "starting") return { text: t("side.starting") };
+  if (side.state === "error") return { text: side.message ?? t("side.couldNotStart"), action: "retry" };
+  return side.update ? { text: t("side.needsUpdate"), action: "update" } : { text: t("side.notRunning") };
 }
 
 /** The side of a cwd (as SideInfo) and the start action of its status line. */
@@ -51,6 +52,7 @@ export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefin
 
 /** Status line under a project of a side that is not ready (Starting…, the error with Retry, Needs an update with Update). */
 export function SideStatusLine({ cwd }: { cwd: string }) {
+  const tr = useT();
   const { of, act } = use(SideState);
   const side = of(cwd);
   const st = sideStatus(side);
@@ -60,7 +62,7 @@ export function SideStatusLine({ cwd }: { cwd: string }) {
       <span className="min-w-0 break-words">{st.text}</span>
       {st.action && (
         <button type="button" onClick={() => act(side.id, st.action === "update" ? "needed" : undefined)} className="h-6 shrink-0 rounded-md border px-2 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="sidebar-side-action">
-          {st.action === "update" ? "Update" : "Retry"}
+          {st.action === "update" ? tr("side.update") : tr("side.retry")}
         </button>
       )}
     </p>
@@ -98,8 +100,12 @@ export const kindsOf = (sides: SideInfo[], docker?: DockerState): SideKind[] =>
   (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));
 /** What the Docker tab says when there is no container to list (the engine is not running, or runs nothing). */
 export const DOCKER_HINT: Record<"down" | "empty", string> = {
-  down: "Docker is not running. Start Docker, then reopen this dialog.",
-  empty: "No running containers. Start one, then reopen this dialog.",
+  get down() {
+    return t("side.dockerDown");
+  },
+  get empty() {
+    return t("side.dockerEmpty");
+  },
 };
 /**
  * The side a kind opens on: the remembered one when still listed; for WSL else the first ready distro, else the first; for

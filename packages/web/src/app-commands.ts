@@ -1,11 +1,12 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
 import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
-import type { PaletteItem } from "./palette.tsx";
-import { HOME_LABEL, PANE_LABEL, type Area, type DockArea } from "./layout.ts";
+import { grp, type PaletteItem } from "./palette.tsx";
+import { type Area, type DockArea } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
 import { specOf } from "./keymap.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
-import { timeAgo } from "./sessions.ts";
+import { displayTitle, timeAgo } from "./sessions.ts";
+import { t } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
 import { EFFORT_LABEL, MODE_LABEL, effortOptions } from "./toolbar.tsx";
 
@@ -133,7 +134,7 @@ export type CommandContext = {
 
 const RECENT_SESSIONS = 5;
 
-const firstLine = (t: string) => t.trim().split("\n")[0]!.slice(0, 80) || "(image)";
+const firstLine = (text: string) => text.trim().split("\n")[0]!.slice(0, 80) || t("app.cmd.image");
 
 export function appCommands(c: CommandContext): PaletteItem[] {
   const s = c.session;
@@ -143,91 +144,91 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const go = (id: string) => (c.selectTab(id), c.focusPrompt(id));
   const efforts = s ? effortOptions(c.models, s.model) : [];
   // The shortcut's title and its current binding come from the registry (shortcuts.ts, keymap.ts).
-  const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, group: "Commands", title, keys: specOf(id), run, searchOnly });
-  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, group: "Commands", title, keys, page: { placeholder, items } });
+  const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys: specOf(id), run, searchOnly });
+  const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys, page: { placeholder, items } });
   const items: (PaletteItem | false | undefined)[] = [
-    cmd("session.new", "New session", c.newSession),
-    c.newWorktree && cmd("worktree.new", "New worktree…", c.newWorktree),
-    c.cleanUp && cmd("cleanup.open", "Clean up worktrees and workers…", c.cleanUp),
-    c.canQuickOpen && cmd("file.open", "Open file", c.quickOpen),
-    c.tabs.length > 1 && cmd("tab.next", "Next tab", () => go(step(1))),
-    c.tabs.length > 1 && cmd("tab.prev", "Previous tab", () => go(step(-1))),
-    at >= 0 && cmd("tab.close", "Close tab", () => c.closeTab(c.activeId!)),
-    c.closeGroup && cmd("tab.closeGroup", "Close tab group", c.closeGroup),
-    c.closeOthers && cmd("tab.closeOthers", "Close other tabs", c.closeOthers),
-    c.closeRight && cmd("tab.closeRight", "Close tabs to the right", c.closeRight),
-    c.closeAll && cmd("tab.closeAll", "Close all tabs", c.closeAll),
+    cmd("session.new", t("app.cmd.sessionNew"), c.newSession),
+    c.newWorktree && cmd("worktree.new", t("app.cmd.worktreeNew"), c.newWorktree),
+    c.cleanUp && cmd("cleanup.open", t("app.cmd.cleanupOpen"), c.cleanUp),
+    c.canQuickOpen && cmd("file.open", t("app.cmd.fileOpen"), c.quickOpen),
+    c.tabs.length > 1 && cmd("tab.next", t("app.cmd.tabNext"), () => go(step(1))),
+    c.tabs.length > 1 && cmd("tab.prev", t("app.cmd.tabPrev"), () => go(step(-1))),
+    at >= 0 && cmd("tab.close", t("app.cmd.tabClose"), () => c.closeTab(c.activeId!)),
+    c.closeGroup && cmd("tab.closeGroup", t("app.cmd.tabCloseGroup"), c.closeGroup),
+    c.closeOthers && cmd("tab.closeOthers", t("app.cmd.tabCloseOthers"), c.closeOthers),
+    c.closeRight && cmd("tab.closeRight", t("app.cmd.tabCloseRight"), c.closeRight),
+    c.closeAll && cmd("tab.closeAll", t("app.cmd.tabCloseAll"), c.closeAll),
     c.tabCleanup &&
       c.cleanUpTabs &&
       page(
         "tab.cleanup",
-        "Clean up tabs…",
-        "Close which tabs?",
-        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, group: c.tabCleanup!.kept.text || "Rules", title: i.label, meta: `${i.count} ${i.count === 1 ? "tab" : "tabs"}`, disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
+        t("app.cmd.tabCleanup"),
+        t("app.cmd.closeWhich"),
+        c.tabCleanup.items.map((i) => ({ id: `cleanup:${i.rule}`, groupId: "cleanup", group: c.tabCleanup!.kept.text || t("app.cmd.rules"), title: i.label, meta: t("app.cmd.tabCount", { count: i.count }), disabled: i.count === 0, run: () => c.cleanUpTabs!(i.rule) })),
       ),
     ...(c.tabCleanup && c.cleanUpTabs ? c.tabCleanup.items.map((i) => cmd(`tab.cleanup.${i.rule}`, i.label, () => c.cleanUpTabs!(i.rule), true)) : []),
-    c.togglePin && cmd("tab.pin", c.pinned ? "Unpin tab" : "Pin tab", c.togglePin),
-    c.dockSession && cmd("session.dock.side", "Move session to side panel", () => c.dockSession!("side")),
-    c.dockSession && cmd("session.dock.bottom", "Move session to bottom panel", () => c.dockSession!("bottom")),
-    c.splitRight && cmd("split.right", "Split right", c.splitRight),
-    c.splitDown && cmd("split.down", "Split down", c.splitDown),
-    c.splitNext && cmd("split.next", "Focus next split", c.splitNext),
-    c.splitPrev && cmd("split.prev", "Focus previous split", c.splitPrev),
-    c.joinSplits && cmd("split.join", "Join splits", c.joinSplits),
-    c.canReopen && cmd("tab.reopen", "Reopen closed tab", c.reopenTab),
+    c.togglePin && cmd("tab.pin", t(c.pinned ? "app.cmd.unpin" : "app.cmd.pin"), c.togglePin),
+    c.dockSession && cmd("session.dock.side", t("app.cmd.sessionDockSide"), () => c.dockSession!("side")),
+    c.dockSession && cmd("session.dock.bottom", t("app.cmd.sessionDockBottom"), () => c.dockSession!("bottom")),
+    c.splitRight && cmd("split.right", t("app.cmd.splitRight"), c.splitRight),
+    c.splitDown && cmd("split.down", t("app.cmd.splitDown"), c.splitDown),
+    c.splitNext && cmd("split.next", t("app.cmd.splitNext"), c.splitNext),
+    c.splitPrev && cmd("split.prev", t("app.cmd.splitPrev"), c.splitPrev),
+    c.joinSplits && cmd("split.join", t("app.cmd.splitJoin"), c.joinSplits),
+    c.canReopen && cmd("tab.reopen", t("app.cmd.tabReopen"), c.reopenTab),
     // Tab N: only for tabs that exist; found by typing "go to tab".
-    ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, `Go to tab ${i + 1}`, () => go(c.tabs[i]!), true)),
-    c.tabs.length > 0 && cmd("tab.gotoLast", "Go to last tab", () => go(c.tabs.at(-1)!), true),
-    cmd("shortcuts.open", "Keyboard shortcuts", c.openShortcuts),
-    c.openFocus && cmd("focus.open", "Open Focus", c.openFocus),
-    c.nextWaiting && cmd("focus.next", "Next waiting request", c.nextWaiting),
-    c.focusNotifications && cmd("notifications.focus", "Go to notifications", c.focusNotifications),
-    cmd("settings.open", "Open settings", c.openSettings),
-    cmd("guide.start", "Show guide", c.startGuide),
-    cmd("tips.reset", "Reset shortcut tips", c.resetKeyTips),
-    cmd("sidebar.toggle", "Toggle sidebar", c.toggleSidebar),
-    c.panels && cmd("panel.toggle", "Toggle side panel", c.toggleSidePanel),
-    c.panels && cmd("filetree.toggle", "Toggle file tree", c.toggleFileTree),
-    c.panels && cmd("pane.files", "Show files", () => c.showPane("files")),
-    c.panels && cmd("pane.changes", "Show changes", () => c.showPane("changes")),
-    c.panels && c.isGit && cmd("pane.graph", "Show git graph", () => c.showPane("graph")),
-    s && !s.draft && c.viewChanges && cmd("viewer.changes", "View changes in popup", c.viewChanges),
-    s && !s.draft && c.viewPlan && cmd("viewer.plan", "View plan", c.viewPlan),
-    c.showPlan && cmd("plan.show", "Show plan", c.showPlan),
-    c.showArtifacts && cmd("artifacts.show", "Show artifacts", c.showArtifacts),
-    c.openFileTab && cmd("file.openInTab", "Open in tab", c.openFileTab),
-    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal", "artifacts"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, `Move ${PANE_LABEL[k].toLowerCase()} to ${HOME_LABEL[to].toLowerCase()}`, () => c.moveKind!(k, to))) : [])) : []),
-    c.panels && cmd("terminal.toggle", "Toggle terminal", c.toggleTerminal),
-    cmd("signal.toggle", "Toggle signal only", c.toggleSignalOnly),
-    c.toggleKeepAwake && cmd("awake.toggle", "Toggle keep screen awake", c.toggleKeepAwake),
-    c.panels && cmd("terminal.new", "New terminal", c.newTerminal),
-    cmd("layout.reset", "Reset layout", c.resetLayout),
-    c.panels && cmd("panel.flip", c.side === "left" ? "Move side panel to right" : "Move side panel to left", c.flipSide),
-    (s || c.splitPrompt) && cmd("prompt.focus", "Focus prompt", () => c.focusPrompt()),
-    c.askAside && cmd("aside.ask", "Ask aside", c.askAside),
+    ...Array.from({ length: Math.min(8, c.tabs.length) }, (_, i) => cmd(`tab.goto${i + 1}`, t("app.cmd.gotoTab", { n: i + 1 }), () => go(c.tabs[i]!), true)),
+    c.tabs.length > 0 && cmd("tab.gotoLast", t("app.cmd.tabGotoLast"), () => go(c.tabs.at(-1)!), true),
+    cmd("shortcuts.open", t("app.cmd.shortcutsOpen"), c.openShortcuts),
+    c.openFocus && cmd("focus.open", t("app.cmd.focusOpen"), c.openFocus),
+    c.nextWaiting && cmd("focus.next", t("app.cmd.focusNext"), c.nextWaiting),
+    c.focusNotifications && cmd("notifications.focus", t("app.cmd.notificationsFocus"), c.focusNotifications),
+    cmd("settings.open", t("app.cmd.settingsOpen"), c.openSettings),
+    cmd("guide.start", t("app.cmd.guideStart"), c.startGuide),
+    cmd("tips.reset", t("app.cmd.tipsReset"), c.resetKeyTips),
+    cmd("sidebar.toggle", t("app.cmd.sidebarToggle"), c.toggleSidebar),
+    c.panels && cmd("panel.toggle", t("app.cmd.panelToggle"), c.toggleSidePanel),
+    c.panels && cmd("filetree.toggle", t("app.cmd.filetreeToggle"), c.toggleFileTree),
+    c.panels && cmd("pane.files", t("app.cmd.paneFiles"), () => c.showPane("files")),
+    c.panels && cmd("pane.changes", t("app.cmd.paneChanges"), () => c.showPane("changes")),
+    c.panels && c.isGit && cmd("pane.graph", t("app.cmd.paneGraph"), () => c.showPane("graph")),
+    s && !s.draft && c.viewChanges && cmd("viewer.changes", t("app.cmd.viewerChanges"), c.viewChanges),
+    s && !s.draft && c.viewPlan && cmd("viewer.plan", t("app.cmd.viewerPlan"), c.viewPlan),
+    c.showPlan && cmd("plan.show", t("app.cmd.planShow"), c.showPlan),
+    c.showArtifacts && cmd("artifacts.show", t("app.cmd.artifactsShow"), c.showArtifacts),
+    c.openFileTab && cmd("file.openInTab", t("app.cmd.fileOpenInTab"), c.openFileTab),
+    ...(c.moveKind && c.homes ? (["plan", "files", "graph", "terminal", "artifacts"] as const).flatMap((k) => (c.homes![k] && (k !== "graph" || c.isGit) ? (["main", "side", "bottom"] as const).filter((to) => to !== c.homes![k]).map((to) => cmd(`${k}.move.${to}`, t("app.cmd.move", { pane: t(`app.cmd.pane.${k}`), home: t(`app.cmd.home.${to}`) }), () => c.moveKind!(k, to))) : [])) : []),
+    c.panels && cmd("terminal.toggle", t("app.cmd.terminalToggle"), c.toggleTerminal),
+    cmd("signal.toggle", t("app.cmd.signalToggle"), c.toggleSignalOnly),
+    c.toggleKeepAwake && cmd("awake.toggle", t("app.cmd.awakeToggle"), c.toggleKeepAwake),
+    c.panels && cmd("terminal.new", t("app.cmd.terminalNew"), c.newTerminal),
+    cmd("layout.reset", t("app.cmd.layoutReset"), c.resetLayout),
+    c.panels && cmd("panel.flip", t(c.side === "left" ? "app.cmd.flipRight" : "app.cmd.flipLeft"), c.flipSide),
+    (s || c.splitPrompt) && cmd("prompt.focus", t("app.cmd.promptFocus"), () => c.focusPrompt()),
+    c.askAside && cmd("aside.ask", t("app.cmd.asideAsk"), c.askAside),
     s &&
       c.models.length > 0 &&
       page(
         "model.choose",
-        "Change model",
-        "Choose model",
-        c.models.map((m) => ({ id: `model:${m.value}`, group: "Models", title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
+        t("app.cmd.changeModel"),
+        t("app.cmd.chooseModel"),
+        c.models.map((m) => ({ id: `model:${m.value}`, ...grp("app.cmd.groupModels"), title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
       ),
     s &&
       efforts.length > 0 &&
       page(
         "effort.choose",
-        "Change thinking effort",
-        "Choose thinking effort",
-        efforts.map((e) => ({ id: `effort:${e}`, group: "Thinking effort", title: EFFORT_LABEL[e], checked: e === s.effort, run: () => c.setEffort(e) })),
+        t("app.cmd.changeEffort"),
+        t("app.cmd.chooseEffort"),
+        efforts.map((e) => ({ id: `effort:${e}`, ...grp("app.cmd.groupEffort"), title: t(EFFORT_LABEL[e]), checked: e === s.effort, run: () => c.setEffort(e) })),
       ),
     s &&
       s.modes.length > 0 &&
       page(
         "mode.choose",
-        "Change permission mode",
-        "Choose permission mode",
-        s.modes.map((m) => ({ id: `mode:${m}`, group: "Permission mode", title: MODE_LABEL[m].label, checked: m === s.mode, run: () => c.setMode(m) })),
+        t("app.cmd.changeMode"),
+        t("app.cmd.chooseMode"),
+        s.modes.map((m) => ({ id: `mode:${m}`, ...grp("app.cmd.groupMode"), title: t(MODE_LABEL[m].label), checked: m === s.mode, run: () => c.setMode(m) })),
         // Shown only: Shift+Tab in the prompt box cycles the mode (SessionPane).
         "shift+tab",
       ),
@@ -237,29 +238,29 @@ export function appCommands(c: CommandContext): PaletteItem[] {
       s.prompts.length > 0 &&
       page(
         "rewind",
-        "Rewind",
-        "Rewind to before which message?",
-        [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, group: "Messages, newest first", title: firstLine(p.text), run: () => c.rewind(p.id) })),
+        t("app.cmd.rewind"),
+        t("app.cmd.rewindWhich"),
+        [...s.prompts].reverse().map((p) => ({ id: `rewind:${p.id}`, ...grp("app.cmd.groupNewest"), title: firstLine(p.text), run: () => c.rewind(p.id) })),
       ),
-    s?.running && { ...cmd("session.stop", "Stop", c.stop), keys: "escape" },
-    c.runInBackground && cmd("shell.background", "Run in background", c.runInBackground),
-    c.openShells && { id: "shells.open", group: "Session", keys: specOf("shells.open"), title: "Background shells", description: "List, view and kill background shells (/tasks)", run: c.openShells },
+    s?.running && { ...cmd("session.stop", t("app.cmd.sessionStop"), c.stop), keys: "escape" },
+    c.runInBackground && cmd("shell.background", t("app.cmd.shellBackground"), c.runInBackground),
+    c.openShells && { id: "shells.open", ...grp("app.cmd.groupSession"), keys: specOf("shells.open"), title: t("app.cmd.shells"), description: t("app.cmd.shellsDesc"), run: c.openShells },
     // The extension's command menu section "Customize".
-    c.openMcp && { id: "mcp.open", group: "Customize", keys: specOf("mcp.open"), title: "MCP servers", description: "Configure Model Context Protocol servers", run: c.openMcp },
-    c.openSkills && { id: "skills.open", group: "Customize", keys: specOf("skills.open"), title: "Slash commands", description: "Browse slash commands", run: c.openSkills },
-    c.openPlugins && { id: "plugins.open", group: "Customize", keys: specOf("plugins.open"), title: "Manage plugins", description: "Install, enable, or disable plugins", run: c.openPlugins },
+    c.openMcp && { id: "mcp.open", ...grp("app.cmd.groupCustomize"), keys: specOf("mcp.open"), title: t("app.cmd.mcp"), description: t("app.cmd.mcpDesc"), run: c.openMcp },
+    c.openSkills && { id: "skills.open", ...grp("app.cmd.groupCustomize"), keys: specOf("skills.open"), title: t("app.cmd.skills"), description: t("app.cmd.skillsDesc"), run: c.openSkills },
+    c.openPlugins && { id: "plugins.open", ...grp("app.cmd.groupCustomize"), keys: specOf("plugins.open"), title: t("app.cmd.plugins"), description: t("app.cmd.pluginsDesc"), run: c.openPlugins },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]
       .sort((a, b) => b.lastActivity - a.lastActivity)
       .map((x, i) => ({
         id: `session:${x.id}`,
-        group: "Sessions",
-        title: x.title || "Untitled",
+        ...grp("app.palette.groupSessions"),
+        title: displayTitle(x.title) || t("app.palette.untitled"),
         description: projectName(x.cwd),
         cwd: x.cwd,
         open: c.openIds.includes(x.id),
         // OpenCode's palette: "Just now", "2m ago".
-        meta: ((t) => (t === "now" ? "Just now" : `${t} ago`))(timeAgo(x.lastActivity)),
+        meta: ((ago) => (ago === t("common.time.now") ? t("app.cmd.justNow") : t("app.cmd.ago", { time: ago })))(timeAgo(x.lastActivity)),
         searchOnly: i >= RECENT_SESSIONS,
         run: () => go(x.id),
       })),

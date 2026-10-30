@@ -1,6 +1,11 @@
 // Sidebar helpers for the session list (docs/spec.md "Layout").
-import type { SessionListItem, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
+import type { SessionListItem, SessionState, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
 import { projectName } from "./tabs.ts";
+import { t, type Key } from "./i18n.ts";
+
+const STATE_KEY = { running: "sidebar.state.running", idle: "sidebar.state.idle", needs_input: "sidebar.state.needs_input", error: "sidebar.state.error", closed: "sidebar.state.closed" } as const satisfies Record<SessionState, Key>;
+/** A session state in words. */
+export const stateName = (st: SessionState) => t(STATE_KEY[st]);
 
 /** `idle`: sessions the "Show only active sessions" setting hides from the row (activeOnly). */
 export type WorktreeRow = Worktree & { sessions: SessionListItem[]; idle?: number };
@@ -42,9 +47,9 @@ export function keepsBranch(list: Worktree[] | undefined, path: string, st?: Pic
 
 /** Remove worktree confirmation text (Claude Code CLI wording). `keepsBranch`: the branch is not a Created branch and stays. `mergedInto`: its commits are already in that base (squash or rebase merged), so they are not lost. */
 export function removeWorktreeText({ uncommitted, commits, branch, mergedInto }: Pick<WorktreeStatusResult, "uncommitted" | "commits" | "branch" | "mergedInto">, o: { keepsBranch?: boolean } = {}) {
-  const lost = [uncommitted && `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}`, !mergedInto && commits && `${commits} ${commits === 1 ? "commit" : "commits"}`].filter(Boolean);
-  const text = lost.length ? `You have ${lost.join(" and ")} on ${branch}. All will be lost if you remove.` : mergedInto ? `Its changes are already in ${mergedInto} (squash/rebase merged).` : "Clean up the worktree directory.";
-  return o.keepsBranch ? `${text} Branch ${branch} stays.` : text;
+  const lost = [uncommitted && t("sidebar.wt.uncommitted", { count: uncommitted }), !mergedInto && commits && t("sidebar.wt.commits", { count: commits })].filter(Boolean);
+  const text = lost.length ? t("sidebar.wt.lost", { lost: lost.join(t("sidebar.wt.and")), branch }) : mergedInto ? t("sidebar.wt.merged", { base: mergedInto }) : t("sidebar.wt.clean");
+  return o.keepsBranch ? `${text} ${t("sidebar.wt.branchStays", { branch })}` : text;
 }
 
 /** "<project> · <branch>" for a cwd that is a linked worktree of an added project's repository; undefined otherwise (main checkout, non-git, unknown). */
@@ -201,23 +206,23 @@ export function byDay(sessions: SessionListItem[], now = Date.now()) {
   const day = (ms: number) => new Date(ms).toDateString();
   const today = day(now);
   const yesterday = day(new Date(now).setDate(new Date(now).getDate() - 1));
-  const groups: Record<"Today" | "Yesterday" | "Older", SessionListItem[]> = { Today: [], Yesterday: [], Older: [] };
+  const groups: Record<"today" | "yesterday" | "older", SessionListItem[]> = { today: [], yesterday: [], older: [] };
   for (const s of sessions) {
     const d = day(s.lastActivity);
-    groups[d === today ? "Today" : d === yesterday ? "Yesterday" : "Older"].push(s);
+    groups[d === today ? "today" : d === yesterday ? "yesterday" : "older"].push(s);
   }
-  const lone = !groups.Today.length && !groups.Yesterday.length;
-  return Object.entries(groups)
+  const lone = !groups.today.length && !groups.yesterday.length;
+  return (Object.entries(groups) as [keyof typeof groups, SessionListItem[]][])
     .filter(([, list]) => list.length)
-    .map(([title, list]) => ({ title: lone ? "Recent sessions" : title, sessions: list }));
+    .map(([day, list]) => ({ title: t(lone ? "sidebar.day.recent" : `sidebar.day.${day}`), sessions: list }));
 }
 
 export function timeAgo(ms: number, now = Date.now()) {
   const m = Math.floor((now - ms) / 60_000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
-  if (m < 1440) return `${Math.floor(m / 60)}h`;
-  return `${Math.floor(m / 1440)}d`;
+  if (m < 1) return t("common.time.now");
+  if (m < 60) return t("common.time.minutes", { n: m });
+  if (m < 1440) return t("common.time.hours", { n: Math.floor(m / 60) });
+  return t("common.time.days", { n: Math.floor(m / 1440) });
 }
 
 const KEY = "claude-ui.collapsed";
@@ -354,3 +359,6 @@ export function saveSidebarView(view: SidebarView) {
     // Storage blocked: the settings still apply to this page.
   }
 }
+
+/** The daemon's placeholder titles ("New session", "Untitled") in the app language; any other title as is. */
+export const displayTitle = (raw: string) => (raw === "Untitled" ? t("app.palette.untitled") : raw === "New session" ? t("app.main.newSession") : raw);

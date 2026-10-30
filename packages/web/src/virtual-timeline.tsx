@@ -2,6 +2,7 @@ import { elementScroll, measureElement, observeElementRect, useVirtualizer } fro
 import { ArrowDownIcon, LoaderCircleIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { markAppScroll } from "./scroll-rest.ts";
+import { useT } from "./i18n.ts";
 
 /** Scrolling down to this distance from the end returns to the bottom (follow output, no scroll button). */
 const END_THRESHOLD = 80;
@@ -76,6 +77,7 @@ export function VirtualTimeline<T>({
   onReachTop?: (user?: boolean) => void;
   loadingOlder?: boolean;
 }) {
+  const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Pinned: follows new output. Any scroll up away from the end leaves (OpenCode); scrolling down near the end returns.
   // Own state from scroll events, not the virtualizer's followOnAppend: that misses appends that arrive before the
@@ -247,7 +249,7 @@ export function VirtualTimeline<T>({
         <div role="status" aria-live="polite" data-testid="loading-older" className="pointer-events-none absolute inset-x-0 top-2 z-20 flex justify-center">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-background/90 px-3 py-1 text-muted-foreground text-xs shadow-raised ring-[0.5px] ring-foreground/15">
             <LoaderCircleIcon aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />
-            Loading earlier messages…
+            {t("session.timeline.loadingEarlier")}
           </span>
         </div>
       )}
@@ -256,7 +258,7 @@ export function VirtualTimeline<T>({
           <div className="mx-auto w-full max-w-[800px] px-4 2xl:max-w-[1000px]">
             <button
               type="button"
-              aria-label={`Go to message: ${stickyItem.label.slice(0, 100)}`}
+              aria-label={t("session.timeline.goToMessage", { text: stickyItem.label.slice(0, 100) })}
               data-testid="sticky-message"
               className="pointer-events-auto block w-full cursor-pointer rounded-b-lg bg-background px-3 py-2 text-left text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-info max-md:min-h-11 pointer-coarse:min-h-11"
               onClick={() => {
@@ -275,8 +277,8 @@ export function VirtualTimeline<T>({
       {/* OpenCode "Jump to latest": 32x28 raised button 32px above the bottom (44px on touch screens), fades and scales in. */}
       <button
         type="button"
-        aria-label="Jump to latest"
-        title="Jump to latest"
+        aria-label={t("session.timeline.jumpLatest")}
+        title={t("session.timeline.jumpLatest")}
         data-testid="scroll-to-bottom"
         inert={pinned}
         className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised ring-[0.5px] ring-foreground/15 outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}

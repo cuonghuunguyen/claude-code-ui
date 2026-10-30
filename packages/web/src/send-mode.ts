@@ -1,10 +1,11 @@
 // What Enter does while Claude works (docs/spec.md "Queued messages"): steer the running turn or queue the message. Per browser, like the other Settings.
 import { useSyncExternalStore } from "react";
+import { t } from "./i18n.ts";
 
 export type SendMode = "steer" | "queue";
 export const SEND_MODES: { value: SendMode; label: string }[] = [
-  { value: "steer", label: "Steers the turn" },
-  { value: "queue", label: "Queues the message" },
+  { value: "steer", get label() { return t("settings.sendMode.steer"); } },
+  { value: "queue", get label() { return t("settings.sendMode.queue"); } },
 ];
 
 const KEY = "claude-ui.sendMode";

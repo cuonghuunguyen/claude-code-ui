@@ -12,6 +12,7 @@ import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { leavesTerminal, specOf } from "./keymap.ts";
 import { withKey } from "./shortcuts.ts";
+import { useT } from "./i18n.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useColorTheme, useDark } from "./theme.ts";
 import { terminalTheme } from "./themes.ts";
@@ -76,6 +77,7 @@ export function TerminalPanel({
   onEnsured?: () => void;
   onTerminals?: (n: number) => void;
 }) {
+  const tr = useT();
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
@@ -194,7 +196,7 @@ export function TerminalPanel({
       {/* WAI-ARIA tabs like tabs-bar.tsx: one tab in the Tab order; arrows, Home and End select and focus. */}
       {/* OpenCode terminal-panel-v2: tabs bar 52px, tab text 14px/500. */}
       <div className="flex h-13 shrink-0 items-center gap-1 border-b px-2 font-[500] text-[14px]">
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Terminals" onKeyDown={onTabKey}>
+        <div className="flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label={tr("files.terminal.list")} onKeyDown={onTabKey}>
           {terminals.map((t) => (
             <div
               key={t.id}
@@ -211,7 +213,7 @@ export function TerminalPanel({
                 {t.title}
               </button>
               <IconButton
-                label={`Close ${t.title}`}
+                label={tr("files.terminal.close", { title: t.title })}
                 className="size-6 [&_svg]:size-3"
                 onClick={() => {
                   remove(t.id);
@@ -223,7 +225,7 @@ export function TerminalPanel({
             </div>
           ))}
         </div>
-        <IconButton label={withKey("New terminal", specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
+        <IconButton label={withKey(tr("files.terminal.new"), specOf("terminal.new"))} onClick={() => void create()} testId="terminal-new">
           <PlusIcon />
         </IconButton>
       </div>

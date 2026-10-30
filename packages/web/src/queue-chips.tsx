@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpIcon, PencilIcon, XIcon } from "lucide-react";
 import type { QueuedPrompt } from "@claude-ui/protocol";
+import { dateFormat, t as tr, useT } from "./i18n.ts";
 import { summarizePasted } from "./pasted-text.ts";
 
 type Held = { reason: "usage_limit" | "not_live"; until?: number };
@@ -11,9 +12,9 @@ const BTN =
   "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info pointer-coarse:size-11 max-md:size-11 [&_svg]:size-4";
 
 export function heldText(held: Held): string {
-  if (held.reason === "not_live") return "Paused: the session stopped with an error";
-  if (held.until === undefined) return "Paused until you send a message (usage limit)";
-  return `Paused until ${new Date(held.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (usage limit)`;
+  if (held.reason === "not_live") return tr("session.queue.notLive");
+  if (held.until === undefined) return tr("session.queue.pausedUntilSend");
+  return tr("session.queue.pausedUntil", { time: dateFormat({ hour: "2-digit", minute: "2-digit" }).format(new Date(held.until)) });
 }
 
 export function QueueChips({
@@ -35,6 +36,7 @@ export function QueueChips({
   /** Focus has nowhere to go: the last chip was removed by its own button. */
   onEmpty?: () => void;
 }) {
+  const t = useT();
   const list = useRef<HTMLUListElement>(null);
   // After Send now or Delete the button is gone: focus the same button of the next row, else the previous one, else the caller.
   const focusAfter = useRef<{ action: Action; index: number }>(undefined);
@@ -54,10 +56,10 @@ export function QueueChips({
   };
   return (
     // OpenCode composer dock anatomy (as the external-turn dock): rounded-xl, hairline border, layer-01 background.
-    <section aria-label="Queued messages" data-testid="queue-chips" className="flex w-full min-w-0 flex-col gap-1 rounded-xl border-[0.5px] bg-muted px-2 py-2 text-sm">
-      <h2 className="px-2 text-muted-foreground text-xs">Queued · {items.length}</h2>
+    <section aria-label={t("session.queue.label")} data-testid="queue-chips" className="flex w-full min-w-0 flex-col gap-1 rounded-xl border-[0.5px] bg-muted px-2 py-2 text-sm">
+      <h2 className="px-2 text-muted-foreground text-xs">{t("session.queue.heading", { count: items.length })}</h2>
       <span role="status" className="sr-only">
-        {items.length} queued
+        {t("session.queue.status", { count: items.length })}
       </span>
       <ul ref={list} className={`flex min-w-0 flex-col ${items.length > 3 ? "max-h-40 overflow-y-auto" : ""}`}>
         {items.map((item, i) => {
@@ -74,27 +76,27 @@ export function QueueChips({
               <span className={`min-w-0 flex-1 truncate ${item.bash ? "font-mono" : "px-2"}`} title={shown}>
                 {shown}
               </span>
-              {item.imageCount > 0 && <span className="shrink-0 rounded-md bg-secondary px-1.5 text-muted-foreground text-xs">+{item.imageCount} {item.imageCount === 1 ? "image" : "images"}</span>}
+              {item.imageCount > 0 && <span className="shrink-0 rounded-md bg-secondary px-1.5 text-muted-foreground text-xs">+{t("session.queue.images", { count: item.imageCount })}</span>}
               <button
                 type="button"
                 data-action="send"
                 className={`${BTN} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
-                aria-label={`Send now: ${label}`}
+                aria-label={t("session.queue.sendNowLabel", { label })}
                 aria-disabled={waits || undefined}
-                title={waits ? bashWait : item.bash ? "Run now" : "Send now (steer)"}
+                title={waits ? bashWait : item.bash ? t("session.queue.runNow") : t("session.queue.sendNow")}
                 onClick={() => !waits && run("send", i, item.id)}
               >
                 <ArrowUpIcon aria-hidden />
               </button>
-              <button type="button" data-action="edit" className={BTN} aria-label={`Edit: ${label}`} title="Edit (back into the prompt box)" onClick={() => run("edit", i, item.id)}>
+              <button type="button" data-action="edit" className={BTN} aria-label={t("session.queue.editLabel", { label })} title={t("session.queue.edit")} onClick={() => run("edit", i, item.id)}>
                 <PencilIcon aria-hidden />
               </button>
-              <button type="button" data-action="delete" className={BTN} aria-label={`Delete: ${label}`} title="Delete" onClick={() => run("delete", i, item.id)}>
+              <button type="button" data-action="delete" className={BTN} aria-label={t("session.queue.deleteLabel", { label })} title={t("session.queue.delete")} onClick={() => run("delete", i, item.id)}>
                 <XIcon aria-hidden />
               </button>
               {item.error && (
                 <p role="alert" className="basis-full px-2 pb-1 text-destructive text-xs">
-                  Not run: {item.error}
+                  {t("session.queue.notRun", { error: item.error })}
                 </p>
               )}
             </li>

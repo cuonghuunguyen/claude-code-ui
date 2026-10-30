@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useKeyContextMenu } from "./context-menu-key.ts";
 import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
+import { useT } from "./i18n.ts";
 
 export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed" | "cleanup-workers";
 
@@ -27,37 +28,38 @@ export const ITEM =
 export function Items({ kind, target, onAction }: { kind: "menu" | "context"; target: ActionTarget; onAction: (a: SessionAction) => void }) {
   const Item = kind === "menu" ? Menu.Item : ContextMenu.Item;
   const Separator = kind === "menu" ? Menu.Separator : ContextMenu.Separator;
+  const t = useT();
   return (
     <>
       <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction("rename")} data-testid="action-rename">
-        Rename
+        {t("sidebar.action.rename")}
       </Item>
       <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction(target.archived ? "unarchive" : "archive")} data-testid="action-archive">
-        {target.archived ? "Unarchive" : "Archive"}
+        {t(target.archived ? "sidebar.action.unarchive" : "sidebar.action.archive")}
       </Item>
       {(target.copyId || target.tab) && <Separator className="-mx-1 my-1 h-px bg-border" />}
       {target.copyId && (
         <Item className={ITEM} onClick={() => onAction("copy-id")} data-testid="action-copy-id">
-          Copy session ID
+          {t("sidebar.action.copySessionId")}
         </Item>
       )}
       {target.tab && (
         <Item className={ITEM} onClick={() => onAction("close-tab")} data-testid="action-close-tab">
-          Close tab
+          {t("sidebar.action.closeTab")}
         </Item>
       )}
       {target.coordinator && (
         <>
           <Separator className="-mx-1 my-1 h-px bg-border" />
           <Item className={ITEM} disabled={!target.coordinator.finished} onClick={() => onAction("close-finished")} data-testid="action-close-finished">
-            Close finished workers ({target.coordinator.finished})
+            {t("sidebar.action.closeFinished", { count: target.coordinator.finished })}
           </Item>
           <Item className={cn(ITEM, "text-destructive")} disabled={!target.coordinator.closed} onClick={() => onAction("remove-closed")} data-testid="action-remove-closed">
-            Remove closed workers… ({target.coordinator.closed})
+            {t("sidebar.action.removeClosed", { count: target.coordinator.closed })}
           </Item>
           {target.coordinator.cleanUp && (
             <Item className={ITEM} onClick={() => onAction("cleanup-workers")} data-testid="action-cleanup">
-              Clean up workers…
+              {t("sidebar.action.cleanUpWorkers")}
             </Item>
           )}
         </>
@@ -66,15 +68,15 @@ export function Items({ kind, target, onAction }: { kind: "menu" | "context"; ta
       {target.worker ? (
         <>
           <Item className={ITEM} disabled={target.worker.closed} onClick={() => onAction("close-worker")} data-testid="action-close-worker">
-            {target.worker.closed ? "Close worker (closed)" : "Close worker"}
+            {t(target.worker.closed ? "sidebar.action.closeWorkerClosed" : "sidebar.action.closeWorker")}
           </Item>
           <Item className={cn(ITEM, "text-destructive")} disabled={target.busy} onClick={() => onAction("remove-worker")} data-testid="action-remove-worker">
-            {target.busy ? "Remove worker… (close it first)" : "Remove worker…"}
+            {t(target.busy ? "sidebar.action.removeWorkerFirst" : "sidebar.action.removeWorker")}
           </Item>
         </>
       ) : (
         <Item className={cn(ITEM, "text-destructive")} disabled={target.busy} onClick={() => onAction("delete")} data-testid="action-delete">
-          {target.busy ? "Delete… (stop it first)" : "Delete…"}
+          {t(target.busy ? "sidebar.action.deleteFirst" : "sidebar.action.delete")}
         </Item>
       )}
     </>
@@ -83,11 +85,12 @@ export function Items({ kind, target, onAction }: { kind: "menu" | "context"; ta
 
 /** `...` button that opens the session menu. Revealed on row hover or focus; always shown on touch screens. */
 export function SessionMenu({ target, onAction, className }: { target: ActionTarget; onAction: (a: SessionAction) => void; className?: string }) {
+  const t = useT();
   return (
     <Menu.Root>
       <Menu.Trigger
-        aria-label={`Actions for ${target.title}`}
-        title="Actions"
+        aria-label={t("sidebar.actionsFor", { name: target.title })}
+        title={t("sidebar.actions")}
         className={cn(
           "grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 [&_svg]:size-4",
           className,
@@ -130,14 +133,15 @@ const RENAME_GRACE_MS = 500;
 /** Inline title editor: Enter or blur saves, Escape cancels (`undefined`). An empty or unchanged title is a cancel. */
 /** `fromMenu`: opened by a menu item, whose closing returns the focus (a blur right away is that, not the user); a double-click edit ends on any blur. */
 export function RenameInput({ title, onDone, className, fromMenu }: { title: string; onDone: (title: string | undefined) => void; className?: string; fromMenu?: boolean }) {
+  const t = useT();
   const [value, setValue] = useState(title);
   // Enter unmounts the input, whose blur would then save a second time.
   const done = useRef(false);
   const mountedAt = useRef(performance.now());
-  const finish = (t: string | undefined) => {
+  const finish = (text: string | undefined) => {
     if (done.current) return;
     done.current = true;
-    const v = t?.trim();
+    const v = text?.trim();
     onDone(v && v !== title ? v : undefined);
   };
   return (
@@ -160,7 +164,7 @@ export function RenameInput({ title, onDone, className, fromMenu }: { title: str
         }
         finish(value);
       }}
-      aria-label="Session title"
+      aria-label={t("sidebar.sessionTitle")}
       maxLength={200}
       className={cn("h-6 min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground text-sm outline-none ring-2 ring-ring max-md:h-9", className)}
       data-testid="rename-input"
@@ -169,12 +173,13 @@ export function RenameInput({ title, onDone, className, fromMenu }: { title: str
 }
 
 export function DeleteDialog({ title, onConfirm, onCancel }: { title?: string; onConfirm: () => void; onCancel: () => void }) {
+  const t = useT();
   return (
     <ConfirmDialog
       open={title !== undefined}
-      title="Delete session?"
-      description={`“${title ?? ""}” and its transcript are removed for good. The terminal CLI loses it too.`}
-      confirm="Delete"
+      title={t("sidebar.deleteSession.title")}
+      description={t("sidebar.deleteSession.body", { title: title ?? "" })}
+      confirm={t("sidebar.delete")}
       destructive
       onConfirm={onConfirm}
       onCancel={onCancel}
@@ -214,6 +219,7 @@ export function ConfirmDialog({
   /** Where focus goes on close (Base UI finalFocus); default: the trigger. */
   finalFocus?: () => HTMLElement | boolean | null;
 }) {
+  const t = useT();
   return (
     <AlertDialog.Root open={open} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialog.Portal>
@@ -231,7 +237,7 @@ export function ConfirmDialog({
           {children}
           <div className="flex justify-end gap-2">
             <AlertDialog.Close render={<Button variant="ghost" className="cursor-pointer max-md:h-11" />} data-testid={`${testId}-cancel`}>
-              Cancel
+              {t("sidebar.cancel")}
             </AlertDialog.Close>
             {!hideConfirm && (
               <Button variant={destructive ? "destructive" : "default"} className="cursor-pointer max-md:h-11" onClick={onConfirm} disabled={confirmDisabled} data-testid={`${testId}-confirm`}>

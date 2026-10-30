@@ -9,6 +9,7 @@ import { addCard, ageLabel, createTracker, dismissSession, inlineActions, reconc
 import type { SessionView } from "./store.ts";
 import { ProjectAvatar } from "./tabs-bar.tsx";
 import { TOAST_CARD } from "./toast.tsx";
+import { useT, type Key } from "./i18n.ts";
 
 const FINISHED_MS = 8000;
 /** The daemon's FINISH_DELAY_MS: running, idle, running again inside a tool loop never shows "finished". */
@@ -127,11 +128,11 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
 }
 
 const KIND = {
-  permission: { label: "Needs permission", Icon: TriangleAlertIcon, color: "text-warning" },
-  question: { label: "Question", Icon: MessageCircleQuestionIcon, color: "text-warning" },
-  finished: { label: "Finished", Icon: CircleCheckIcon, color: "text-success" },
-  error: { label: "Stopped with an error", Icon: CircleXIcon, color: "text-destructive" },
-} as const;
+  permission: { label: "notifications.kind.permission", Icon: TriangleAlertIcon, color: "text-warning" },
+  question: { label: "notifications.kind.question", Icon: MessageCircleQuestionIcon, color: "text-warning" },
+  finished: { label: "notifications.kind.finished", Icon: CircleCheckIcon, color: "text-success" },
+  error: { label: "notifications.kind.error", Icon: CircleXIcon, color: "text-destructive" },
+} as const satisfies Record<string, { label: Key; Icon: unknown; color: string }>;
 
 const FOCUS_RING = "outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info";
 const ACT = "max-sm:h-11 pointer-coarse:h-11";
@@ -156,6 +157,7 @@ type Props = {
 };
 
 export function NotificationStack({ items, now, focusTick, hidden, onRespond, onOpenFocus, onOpenSession, onDismiss, onOpenAll, restoreFocus }: Props) {
+  const tr = useT();
   const phone = usePhone();
   const { shown, hiddenWaiting } = visibleCards(items.map((i) => i.card), phone ? 1 : MAX_CARDS);
   const byCard = new Map(items.map((i) => [i.card, i]));
@@ -278,7 +280,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
   return (
     <section
       ref={region}
-      aria-label="Notifications"
+      aria-label={tr("notifications.region")}
       data-testid="notifications"
       className="pointer-events-none flex flex-col gap-2 max-sm:fixed max-sm:inset-x-4 max-sm:top-20 max-sm:z-1000 sm:flex-col-reverse"
       onKeyDown={onKeyDown}
@@ -318,7 +320,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
               <time className="shrink-0 text-[11px] text-muted-foreground leading-4 tabular-nums">{ageLabel(now - card.since)}</time>
               <button
                 type="button"
-                aria-label={`Dismiss notification for ${title}`}
+                aria-label={tr("notifications.dismiss", { title })}
                 onClick={(e) => (handOver(e.currentTarget.closest("article")!), onDismiss(card.sessionId))}
                 className={`flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-m-3 pointer-coarse:size-11 max-sm:-m-3 max-sm:size-11 ${FOCUS_RING}`}
               >
@@ -327,11 +329,11 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
             </div>
             <p id={`${id}-k`} className={`flex items-center gap-1.5 text-xs leading-4 font-medium ${kind.color}`}>
               <kind.Icon aria-hidden className="size-3.5 shrink-0" />
-              <span>{d.escalated ? `${kind.label} · escalated` : kind.label}</span>
+              <span>{d.escalated ? tr("notifications.escalated", { kind: tr(kind.label) }) : tr(kind.label)}</span>
               {d.kind === "permission" && !d.tier && !d.escalated && (
                 <span className="ml-1 inline-flex items-center gap-1 rounded-sm bg-secondary px-1.5 text-[11px] text-muted-foreground">
                   <LockIcon aria-hidden className="size-3" />
-                  High tier
+                  {tr("notifications.highTier")}
                 </span>
               )}
             </p>
@@ -345,34 +347,34 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
                 d.body
               )}
             </p>
-            {d.escalated && d.reason && <p className="line-clamp-2 text-[11px] text-muted-foreground leading-4">Escalated by coordinator: {d.reason}</p>}
-            {d.extra > 0 && <p className="text-[11px] text-muted-foreground leading-4">+{d.extra} more request{d.extra === 1 ? "" : "s"} in this session</p>}
-            {lowEdit && <p className="text-[11px] text-muted-foreground leading-4">Review the change in Focus.</p>}
+            {d.escalated && d.reason && <p className="line-clamp-2 text-[11px] text-muted-foreground leading-4">{tr("notifications.escalatedBy", { reason: d.reason })}</p>}
+            {d.extra > 0 && <p className="text-[11px] text-muted-foreground leading-4">{tr("notifications.more", { count: d.extra })}</p>}
+            {lowEdit && <p className="text-[11px] text-muted-foreground leading-4">{tr("notifications.reviewInFocus")}</p>}
             {failed[card.sessionId] && (
               <p role="alert" className="text-[11px] text-destructive leading-4">
-                Not sent: {failed[card.sessionId]}
+                {tr("notifications.notSent", { error: failed[card.sessionId] })}
               </p>
             )}
             <div key={d.requestId ?? card.kind} className="mt-0.5 flex flex-wrap items-center gap-2">
               {answer && (
                 <>
-                  <Button key="allow" type="button" size="sm" data-action aria-label={`Allow once: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "allow", e.currentTarget.closest("article")!)}>
-                    Allow once
+                  <Button key="allow" type="button" size="sm" data-action aria-label={tr("notifications.allowOnceLabel", { what: named, title })} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "allow", e.currentTarget.closest("article")!)}>
+                    {tr("notifications.allowOnce")}
                   </Button>
-                  <Button key="deny" type="button" size="sm" variant="secondary" data-action aria-label={`Deny: ${named} in ${title}`} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "deny", e.currentTarget.closest("article")!)}>
-                    Deny
+                  <Button key="deny" type="button" size="sm" variant="secondary" data-action aria-label={tr("notifications.denyLabel", { what: named, title })} aria-disabled={busy} className={ACT} onClick={(e) => void respond(card, d.requestId, "deny", e.currentTarget.closest("article")!)}>
+                    {tr("notifications.deny")}
                   </Button>
                   <span className="flex-1" />
                 </>
               )}
               {(d.kind === "permission" || d.kind === "question") && (
-                <Button key="focus" type="button" size="sm" variant={answer ? "ghost" : "default"} data-action data-open-focus aria-label={`Open in Focus: ${title}`} className={ACT} onClick={() => (onOpenFocus(card))}>
-                  Open in Focus
+                <Button key="focus" type="button" size="sm" variant={answer ? "ghost" : "default"} data-action data-open-focus aria-label={tr("notifications.openFocusLabel", { title })} className={ACT} onClick={() => (onOpenFocus(card))}>
+                  {tr("notifications.openFocus")}
                 </Button>
               )}
               {!answer && (
-                <Button key="session" type="button" size="sm" variant={d.kind === "permission" || d.kind === "question" ? "ghost" : "secondary"} data-action aria-label={`Open session: ${title}`} className={ACT} onClick={() => onOpenSession(card)}>
-                  Open session
+                <Button key="session" type="button" size="sm" variant={d.kind === "permission" || d.kind === "question" ? "ghost" : "secondary"} data-action aria-label={tr("notifications.openSessionLabel", { title })} className={ACT} onClick={() => onOpenSession(card)}>
+                  {tr("notifications.openSession")}
                 </Button>
               )}
             </div>
@@ -386,7 +388,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
           onClick={onOpenAll}
           className={`${TOAST_CARD} min-h-11 cursor-pointer py-2 text-left text-[13px] font-medium hover:bg-accent max-sm:w-full sm:min-h-8 sm:py-1.5 ${FOCUS_RING}`}
         >
-          +{hiddenWaiting} more need you · Open Focus
+          {tr("notifications.moreWaiting", { count: hiddenWaiting })}
         </button>
       )}
     </section>

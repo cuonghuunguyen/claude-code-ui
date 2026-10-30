@@ -51,6 +51,7 @@ async function render({ sides, docker, failGet = false, tokenReset = false, grou
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
   prompt.setAttribute("aria-label", "Prompt");
+  prompt.setAttribute("data-prompt", "");
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   document.body.append(el, prompt);
   let bump = () => {};
@@ -930,4 +931,38 @@ it("Sides group: a row per side with state; the switches send side.prefs; Update
   const n = calls.length;
   await act(async () => q("settings-side-update-docker:dev")!.click());
   expect(calls).toHaveLength(n);
+});
+
+it("Appearance (GH-510): Language offers System, English, Tiếng Việt; a pick applies at once and is kept", async () => {
+  localStorage.clear();
+  const { q } = await render();
+  expect(q("settings-language")!.textContent).toContain("System");
+  await act(async () => q("settings-language")!.click());
+  expect([...document.querySelectorAll('[data-testid^="settings-language-"][role=option]')].map((i) => i.textContent)).toEqual(["System", "English", "Tiếng Việt"]);
+  await act(async () => q("settings-language-vi")!.click());
+  expect(document.documentElement.lang).toBe("vi");
+  expect(localStorage.getItem("claude-ui.locale")).toBe("vi");
+  expect(q("settings-language")!.textContent).toContain("Tiếng Việt");
+  expect(document.getElementById("settings-language-label")!.textContent).toBe("Ngôn ngữ");
+  const { setLocalePref } = await import("./i18n.ts");
+  act(() => setLocalePref("system"));
+  expect(document.getElementById("settings-language-label")!.textContent).toBe("Language");
+});
+
+it("renders Vietnamese: group list, daemon rows with their hints, and select labels", async () => {
+  const { setLocalePref } = await import("./i18n.ts");
+  act(() => setLocalePref("vi"));
+  try {
+    const { q, pick } = await render();
+    expect(q("settings-groups")!.textContent).toContain("Giao diện");
+    await pick("orchestration");
+    expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Số worker tối đa mỗi cây");
+    expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Bật điều phối");
+    expect(document.getElementById("settings-orchestration-enabled-hint")?.textContent).toContain("Mọi phiên có thể khởi động");
+    await pick("general");
+    expect(q("settings-dialog")!.textContent).toContain("Chỉ tín hiệu");
+    expect(q("settings-send-mode")!.textContent).toContain("Điều hướng lượt");
+  } finally {
+    act(() => setLocalePref("system"));
+  }
 });

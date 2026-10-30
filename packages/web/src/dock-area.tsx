@@ -5,6 +5,7 @@ import { EllipsisIcon } from "lucide-react";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
+import { useT } from "./i18n.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import { STATUS_LABEL, TabIcon, type TabInfo, status, useTouchPrimary } from "./tabs-bar.tsx";
 
@@ -155,6 +156,7 @@ export function DockHeader({
   // rendered. The menu's own return runs when its popup unmounts, which can be in the move's commit (the tab's context menu, or an
   // area that empties), before the moved tab exists; its fallback (the trigger, else an earlier focused element such as the
   // prompt box) would win over the moved tab.
+  const t = useT();
   const moved = useRef(false);
   const finalFocus = () => !moved.current;
   const move = (p: PaneId) => ((moved.current = true), onMove(p, other));
@@ -211,7 +213,7 @@ export function DockHeader({
                 data-pane-tab={p}
                 data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
               >
-                {p}
+                {t(`app.dock.tab.${p}`)}
                 {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
               </Button>
             </ContextMenu.Trigger>
@@ -219,61 +221,61 @@ export function DockHeader({
               <ContextMenu.Positioner className="z-50">
                 <ContextMenu.Popup ref={ctxKb.popup} className={POPUP} finalFocus={finalFocus}>
                   <ContextMenu.Item className={ITEM} onClick={() => move(p)} data-testid="pane-move">
-                    Move to {AREA_LABEL[other].toLowerCase()}
+                    {t("app.dock.moveTo", { area: AREA_LABEL[other].toLowerCase() })}
                   </ContextMenu.Item>
                   {canMain(p) && (
                     <ContextMenu.Item className={ITEM} onClick={() => moveTo(p, "main")} data-testid="pane-move-main">
-                      Move to main area
+                      {t("app.dock.moveToMain")}
                     </ContextMenu.Item>
                   )}
                   <ContextMenu.Item className={ITEM} onClick={onReset} data-testid="pane-reset">
-                    Reset layout
+                    {t("app.dock.reset")}
                   </ContextMenu.Item>
                 </ContextMenu.Popup>
               </ContextMenu.Positioner>
             </ContextMenu.Portal>
           </ContextMenu.Root>
         ))}
-        {sessions?.map((t) => {
-          const label = STATUS_LABEL[status(t.id, t)];
+        {sessions?.map((tab) => {
+          const label = STATUS_LABEL[status(tab.id, tab)];
           return (
-            <ContextMenu.Root key={t.id} {...opening(ctxKb.root)}>
+            <ContextMenu.Root key={tab.id} {...opening(ctxKb.root)}>
               <ContextMenu.Trigger className="contents">
                 <Button
                   size="sm"
-                  variant={t.id === activeSession ? "secondary" : "ghost"}
+                  variant={tab.id === activeSession ? "secondary" : "ghost"}
                   className="pointer-coarse:h-11 max-w-48 shrink-0"
                   draggable={!coarse}
                   onDragStart={(e) => {
-                    e.dataTransfer.setData(DOCKED_DRAG_TYPE, t.id);
+                    e.dataTransfer.setData(DOCKED_DRAG_TYPE, tab.id);
                     e.dataTransfer.effectAllowed = "move";
-                    onDragDocked?.(t.id);
+                    onDragDocked?.(tab.id);
                   }}
                   onDragEnd={() => (onDragDocked?.(undefined), onDropAt(undefined))}
                   {...ctxKb.trigger}
                   role="tab"
-                  aria-selected={t.id === activeSession}
-                  onClick={() => onSelectSession?.(t.id)}
+                  aria-selected={tab.id === activeSession}
+                  onClick={() => onSelectSession?.(tab.id)}
                   data-testid="docked-tab"
-                  data-docked-tab={t.id}
-                  title={t.title}
+                  data-docked-tab={tab.id}
+                  title={tab.title}
                 >
-                  <TabIcon s={status(t.id, t)} cwd={t.cwd} />
-                  <span className="truncate">{t.title}</span>
+                  <TabIcon s={status(tab.id, tab)} cwd={tab.cwd} />
+                  <span className="truncate">{tab.title}</span>
                   {label && <span className="sr-only">{label}</span>}
                 </Button>
               </ContextMenu.Trigger>
               <ContextMenu.Portal>
                 <ContextMenu.Positioner className="z-50">
                   <ContextMenu.Popup ref={ctxKb.popup} className={POPUP} finalFocus={finalFocus}>
-                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(t.id, other === "side" ? "moveSide" : "moveBottom"))} data-testid="docked-move">
-                      Move to {AREA_LABEL[other].toLowerCase()}
+                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(tab.id, other === "side" ? "moveSide" : "moveBottom"))} data-testid="docked-move">
+                      {t("app.dock.moveTo", { area: AREA_LABEL[other].toLowerCase() })}
                     </ContextMenu.Item>
-                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(t.id, "main"))} data-testid="docked-move-main">
-                      Move to main area
+                    <ContextMenu.Item className={ITEM} onClick={() => ((moved.current = true), onSessionCommand?.(tab.id, "main"))} data-testid="docked-move-main">
+                      {t("app.dock.moveToMain")}
                     </ContextMenu.Item>
-                    <ContextMenu.Item className={ITEM} onClick={() => onSessionCommand?.(t.id, "close")} data-testid="docked-close">
-                      Close tab
+                    <ContextMenu.Item className={ITEM} onClick={() => onSessionCommand?.(tab.id, "close")} data-testid="docked-close">
+                      {t("app.dock.closeTab")}
                     </ContextMenu.Item>
                   </ContextMenu.Popup>
                 </ContextMenu.Positioner>
@@ -285,7 +287,7 @@ export function DockHeader({
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {extra}
         <Menu.Root {...opening(menuKb.root)}>
-          <Menu.Trigger aria-label={`${AREA_LABEL[area]} actions`} title={`${AREA_LABEL[area]} actions`} className={MENU_BUTTON} data-testid={`dock-menu-${area}`}>
+          <Menu.Trigger aria-label={t("app.dock.actions", { area: AREA_LABEL[area] })} title={t("app.dock.actions", { area: AREA_LABEL[area] })} className={MENU_BUTTON} data-testid={`dock-menu-${area}`}>
             <EllipsisIcon aria-hidden />
           </Menu.Trigger>
           <Menu.Portal>
@@ -293,21 +295,21 @@ export function DockHeader({
               <Menu.Popup ref={menuKb.popup} className={POPUP} finalFocus={finalFocus}>
                 {active && (
                   <Menu.Item className={ITEM} onClick={() => move(active)} data-testid="dock-move">
-                    Move {PANE_LABEL[active]} to {AREA_LABEL[other].toLowerCase()}
+                    {t("app.dock.movePane", { pane: PANE_LABEL[active], area: AREA_LABEL[other].toLowerCase() })}
                   </Menu.Item>
                 )}
                 {active && canMain(active) && (
                   <Menu.Item className={ITEM} onClick={() => moveTo(active, "main")} data-testid="dock-move-main">
-                    Move {PANE_LABEL[active]} to main area
+                    {t("app.dock.movePaneMain", { pane: PANE_LABEL[active] })}
                   </Menu.Item>
                 )}
                 {area === "side" && onFlipSide && (
                   <Menu.Item className={ITEM} onClick={onFlipSide} data-testid="dock-side-flip">
-                    Move side panel to {side === "left" ? "right" : "left"}
+                    {t(side === "left" ? "app.cmd.flipRight" : "app.cmd.flipLeft")}
                   </Menu.Item>
                 )}
                 <Menu.Item className={ITEM} onClick={onReset} data-testid="dock-reset">
-                  Reset layout
+                  {t("app.dock.reset")}
                 </Menu.Item>
               </Menu.Popup>
             </Menu.Positioner>

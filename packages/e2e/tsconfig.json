@@ -1,1 +1,1 @@
-{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["node"] }, "include": ["steps", "support", "test", "playwright.config.ts"] }
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["node", "vite/client"] }, "include": ["steps", "support", "test", "playwright.config.ts"] }

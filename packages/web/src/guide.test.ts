@@ -13,6 +13,7 @@ describe("first-use snapshot", () => {
   it("is fresh with no keys, or only the token and the theme", () => {
     expect(takeFirstUseSnapshot(store({}))).toBe(true);
     expect(takeFirstUseSnapshot(store({ "claude-ui.token": "t", "claude-ui.theme": "dark" }))).toBe(true);
+    expect(takeFirstUseSnapshot(store({ "claude-ui.colorTheme": "nord", "claude-ui.locale": "vi" }))).toBe(true);
     expect(wasFreshBrowser()).toBe(true);
   });
   it("is not fresh with any other claude-ui key", () => {

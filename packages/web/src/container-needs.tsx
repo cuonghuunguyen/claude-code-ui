@@ -3,6 +3,7 @@
 // no bundle): the container installs claude-ui itself.
 import { CheckIcon, XIcon } from "lucide-react";
 import { NODE_MIN, type SideCheck } from "@claude-ui/protocol";
+import { t, useT } from "./i18n.ts";
 
 /** One item; `ok`: found (true), not found (false), not known (undefined: no check yet or not checkable). `optional`: a missing one is no problem. */
 export type NeedItem = { name: string; ok?: boolean; optional?: boolean };
@@ -11,17 +12,17 @@ export type Needs = { method: "bundle" | "npm"; reason?: string; needed: NeedIte
 /** The items for the path the check says the container will use (no check: the bundle path). */
 export function needsOf(check?: SideCheck): Needs {
   const f = check?.facts;
-  const t = f?.tools;
+  const tools0 = f?.tools;
   const method = f?.install?.method ?? "bundle";
-  const writable = { name: "A writable /tmp, /dev/shm or home folder", ok: f?.writable ? f.writable.length > 0 : undefined };
-  const git = { name: "git, for the Git panel (optional)", ok: t?.git, optional: true };
+  const writable = { name: t("sidebar.needs.writable"), ok: f?.writable ? f.writable.length > 0 : undefined };
+  const git = { name: t("sidebar.needs.git"), ok: tools0?.git, optional: true };
   if (method === "bundle")
     return {
       method,
       needed: [
-        { name: "sh, tar and gzip", ok: t ? t.tar && t.gzip : undefined },
-        { name: "Linux on x86_64 or arm64 with glibc 2.28+ and libstdc++", ok: f?.install ? true : undefined },
-        { name: `Node.js ${NODE_MIN} or newer (used when present, not required)`, ok: f ? !!f.nodeOk : undefined, optional: true },
+        { name: t("sidebar.needs.shell"), ok: tools0 ? tools0.tar && tools0.gzip : undefined },
+        { name: t("sidebar.needs.linux"), ok: f?.install ? true : undefined },
+        { name: t("sidebar.needs.nodeOptional", { min: NODE_MIN }), ok: f ? !!f.nodeOk : undefined, optional: true },
         writable,
         git,
       ],
@@ -31,10 +32,10 @@ export function needsOf(check?: SideCheck): Needs {
     method,
     reason: f?.install?.reason,
     needed: [
-      { name: `Node.js ${NODE_MIN} or newer`, ok: f ? (f.node ? f.nodeOk : false) : undefined },
-      { name: "npm", ok: t?.npm },
-      { name: "Network access to the npm registry", ok: f?.network },
-      { name: "Build tools (make, python3, g++)", ok: tools },
+      { name: t("sidebar.needs.node", { min: NODE_MIN }), ok: f ? (f.node ? f.nodeOk : false) : undefined },
+      { name: t("sidebar.needs.npm"), ok: tools0?.npm },
+      { name: t("sidebar.needs.network"), ok: f?.network },
+      { name: t("sidebar.needs.build"), ok: tools },
       writable,
       git,
     ],
@@ -42,26 +43,28 @@ export function needsOf(check?: SideCheck): Needs {
 }
 
 function Mark({ ok, optional }: { ok?: boolean; optional?: boolean }) {
+  const t = useT();
   if (ok === undefined) return <span className="size-4 shrink-0" aria-hidden />;
   const tone = ok ? "text-success" : optional ? "text-muted-foreground" : "text-destructive";
   const Icon = ok ? CheckIcon : XIcon;
   return (
     <>
       <Icon className={`size-4 shrink-0 self-center ${tone}`} aria-hidden />
-      <span className="sr-only">{ok ? "found:" : "not found:"}</span>
+      <span className="sr-only">{t(ok ? "sidebar.needs.found" : "sidebar.needs.notFound")}</span>
     </>
   );
 }
 
 export function ContainerNeeds({ check }: { check?: SideCheck }) {
+  const t = useT();
   const n = needsOf(check);
   return (
     <details className="w-full max-w-md shrink-0 rounded-md border border-border text-left text-sm" data-testid="container-needs">
-      <summary className="cursor-pointer select-none px-3 py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:py-3">What this container needs</summary>
+      <summary className="cursor-pointer select-none px-3 py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:py-3">{t("sidebar.needs.summary")}</summary>
       <div className="flex flex-col gap-3 border-t border-border px-3 py-3">
         {n.method === "npm" && (
           <p className="text-muted-foreground" data-testid="needs-path">
-            {`Claude UI installs with npm inside this container${n.reason ? ` because ${n.reason}` : ""}.`}
+            {n.reason ? t("sidebar.needs.npmPathReason", { reason: n.reason }) : t("sidebar.needs.npmPath")}
           </p>
         )}
         <ul className="flex flex-col gap-1" data-testid="needs-needed">

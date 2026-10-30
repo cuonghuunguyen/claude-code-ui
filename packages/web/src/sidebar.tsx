@@ -9,7 +9,7 @@ import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protoco
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -17,6 +17,7 @@ import { ITEM, POPUP, RenameInput, SessionContextMenu, SessionMenu, type ActionT
 import { CHECK_ITEM, RowContextMenu, RowMenu, Tick } from "./sidebar-menus.tsx";
 import { groupEntries, groupSessions, idleTargets, workerCounts, workerEntries } from "./sidebar-menus.ts";
 import { useKeyContextMenu } from "./context-menu-key.ts";
+import { t, useT } from "./i18n.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
@@ -28,8 +29,8 @@ function StateIcon({ state }: { state: SessionState }) {
   return null;
 }
 
-const STATE_LABEL: Partial<Record<SessionState, string>> = { running: "running", needs_input: "needs input" };
-const WORKER_STATE: Record<SessionState, string> = { running: "running", idle: "idle", needs_input: "needs input", error: "error", closed: "closed" };
+/** Only running and needs input get a label next to the title. */
+const stateLabel = (st: SessionState) => (st === "running" || st === "needs_input" ? stateName(st) : undefined);
 /** Left padding by depth: project group, worktree row or workers of a group, workers of a worktree row. */
 const PAD = ["pl-7", "pl-12", "pl-17"] as const;
 type Depth = 0 | 1 | 2;
@@ -37,14 +38,14 @@ type Depth = 0 | 1 | 2;
 /** The empty-list text for a search: names the project of an `@project=` token. */
 function emptySearch(query: string, archived: boolean, projects: string[]) {
   const { project, text } = parseSessionQuery(query);
-  const kind = archived ? "archived session" : "session";
-  if (!project) return `No ${kind} title, project or branch matches "${text}".`;
-  if (!projects.some((p) => projectName(p).toLowerCase() === project.toLowerCase())) return `No project named "${project}".`;
-  return text ? `No ${kind} in ${project} matches "${text}".` : `No ${kind} in ${project}.`;
+  if (!project) return t(archived ? "sidebar.noMatchArchived" : "sidebar.noMatchSession", { text });
+  if (!projects.some((p) => projectName(p).toLowerCase() === project.toLowerCase())) return t("sidebar.noProjectNamed", { project });
+  return text ? t(archived ? "sidebar.noInProjectMatchArchived" : "sidebar.noInProjectMatch", { project, text }) : t(archived ? "sidebar.noInProjectArchived" : "sidebar.noInProject", { project });
 }
 
 /** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, grouping, project order; below md also Expand all / Collapse all. */
 function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
+  const t = useT();
   const check = (label: string, on: boolean, set: (on: boolean) => void, testId: string) => (
     <Menu.CheckboxItem className={CHECK_ITEM} checked={on} onCheckedChange={set} data-testid={testId}>
       <Tick on={on} />
@@ -53,7 +54,7 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
   );
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label="Sidebar options" title="Sidebar options" className={ICON_BUTTON} data-testid="sidebar-options">
+      <Menu.Trigger aria-label={t("sidebar.options")} title={t("sidebar.options")} className={ICON_BUTTON} data-testid="sidebar-options">
         <EllipsisVerticalIcon aria-hidden />
       </Menu.Trigger>
       <Menu.Portal>
@@ -62,45 +63,45 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
             {narrow && (
               <>
                 <Menu.Item className={ITEM} disabled={!!treeHint} onClick={onExpand} data-testid="sidebar-menu-expand-all">
-                  Expand all{treeHint}
+                  {t("sidebar.expandAll")}{treeHint}
                 </Menu.Item>
                 <Menu.Item className={ITEM} disabled={!!treeHint} onClick={onCollapse} data-testid="sidebar-menu-collapse-all">
-                  Collapse all{treeHint}
+                  {t("sidebar.collapseAll")}{treeHint}
                 </Menu.Item>
                 <Menu.Separator className="my-1 h-px bg-border" />
               </>
             )}
             <Menu.Group>
-              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Behavior</Menu.GroupLabel>
-              {check("Always select active session", view.alwaysSelect, (alwaysSelect) => onView({ alwaysSelect }), "sidebar-opt-always-select")}
+              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">{t("sidebar.behavior")}</Menu.GroupLabel>
+              {check(t("sidebar.alwaysSelect"), view.alwaysSelect, (alwaysSelect) => onView({ alwaysSelect }), "sidebar-opt-always-select")}
             </Menu.Group>
             <Menu.Separator className="my-1 h-px bg-border" />
             <Menu.Group>
-              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Show</Menu.GroupLabel>
-              {check("Archived sessions", archived, onArchived, "sidebar-opt-archived")}
-              {check("Day headers", view.dayHeaders, (dayHeaders) => onView({ dayHeaders }), "sidebar-opt-day-headers")}
-              {check("Only active sessions", view.onlyActive, (onlyActive) => onView({ onlyActive }), "sidebar-opt-only-active")}
+              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">{t("sidebar.show")}</Menu.GroupLabel>
+              {check(t("sidebar.archivedSessions"), archived, onArchived, "sidebar-opt-archived")}
+              {check(t("sidebar.dayHeaders"), view.dayHeaders, (dayHeaders) => onView({ dayHeaders }), "sidebar-opt-day-headers")}
+              {check(t("sidebar.onlyActive"), view.onlyActive, (onlyActive) => onView({ onlyActive }), "sidebar-opt-only-active")}
             </Menu.Group>
             <Menu.Separator className="my-1 h-px bg-border" />
             <Menu.Group>
-              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Group by</Menu.GroupLabel>
+              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">{t("sidebar.groupBy")}</Menu.GroupLabel>
               <Menu.RadioGroup value={view.layout} onValueChange={(layout) => onView({ layout: layout as SidebarView["layout"] })}>
                 {(["default", "classic"] as const).map((v) => (
                   <Menu.RadioItem key={v} value={v} className={CHECK_ITEM} closeOnClick data-testid={`sidebar-opt-group-${v === "default" ? "worktree" : "project"}`}>
                     <Tick on={view.layout === v} />
-                    {v === "default" ? "Worktree" : "Project"}
+                    {t(v === "default" ? "sidebar.worktree" : "sidebar.project")}
                   </Menu.RadioItem>
                 ))}
               </Menu.RadioGroup>
             </Menu.Group>
             <Menu.Separator className="my-1 h-px bg-border" />
             <Menu.Group>
-              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Sort projects</Menu.GroupLabel>
+              <Menu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">{t("sidebar.sortProjects")}</Menu.GroupLabel>
               <Menu.RadioGroup value={view.sort} onValueChange={(sort) => onView({ sort: sort as SidebarView["sort"] })}>
                 {(["recent", "name"] as const).map((v) => (
                   <Menu.RadioItem key={v} value={v} className={CHECK_ITEM} closeOnClick data-testid={`sidebar-opt-sort-${v}`}>
                     <Tick on={view.sort === v} />
-                    {v === "recent" ? "Recent activity" : "Name"}
+                    {t(v === "recent" ? "sidebar.recentActivity" : "sidebar.name")}
                   </Menu.RadioItem>
                 ))}
               </Menu.RadioGroup>
@@ -187,6 +188,7 @@ export function SessionList({
   /** Archive idle sessions older than `days` in `where` (a project or worktree name); the app confirms first. */
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
+  const t = useT();
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
   // Stable for the memo rows: a tab switch re-renders only the two rows whose active mark changes.
@@ -283,7 +285,7 @@ export function SessionList({
       copyPath: onCopy && (() => onCopy(g.cwd, "path")),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
-      tail: { id: `${prefix}remove`, label: "Remove from list (files stay)", onSelect: () => onRemove(g.cwd) },
+      tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(g.cwd) },
     });
   const isBusy = (r: WorktreeRow) => !!(r.removing || removing?.(r.path));
   /** Menu of a worktree row. */
@@ -292,7 +294,7 @@ export function SessionList({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => onCopy(r.path, "path")),
-      tail: onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: "Delete worktree…", onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
+      tail: onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: t("sidebar.menu.deleteWorktree"), onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
     });
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
@@ -427,18 +429,18 @@ export function SessionList({
                       <button
                         className={cn("flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground text-xs outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 pointer-coarse:h-11", PAD[depth + 1])}
                         aria-expanded={isOpen(k)}
-                        aria-label={`${ws.length === 1 ? "1 worker" : `${ws.length} workers`} of ${s.title}${needs ? ", needs input" : ""}`}
+                        aria-label={`${t("sidebar.workersOf", { count: ws.length, title: displayTitle(s.title) })}${needs ? `, ${t("sidebar.state.needs_input")}` : ""}`}
                         onClick={() => toggle(k)}
                         data-testid="worker-group-toggle"
                         data-needs-input={needs || undefined}
                       >
                         <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint transition-transform motion-reduce:transition-none", isOpen(k) && "rotate-90")} aria-hidden />
                         <UsersIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
-                        <span>{ws.length === 1 ? "1 worker" : `${ws.length} workers`}</span>
+                        <span>{t("sidebar.workers", { count: ws.length })}</span>
                         {needs && (
                           <>
                             <CircleAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
-                            <span className="text-warning">needs input</span>
+                            <span className="text-warning">{t("sidebar.state.needs_input")}</span>
                           </>
                         )}
                       </button>
@@ -460,36 +462,36 @@ export function SessionList({
             focusId.current = hidden.id;
             setLimits((l) => ({ ...l, [key]: (l[key] ?? SHOWN) + MORE }));
           }}
-          aria-label={`Load more sessions in ${name}`}
+          aria-label={t("sidebar.loadMoreIn", { name })}
           data-testid="load-more"
         >
-          Load more
+          {t("sidebar.loadMore")}
         </button>
       ),
     ];
   };
-  const emptyText = filtering ? "No active sessions" : "No sessions yet";
-  const treeHint = searching ? " (clear the search first)" : "";
+  const emptyText = t(filtering ? "sidebar.noActiveSessions" : "sidebar.noSessionsYet");
+  const treeHint = searching ? t("sidebar.clearSearchFirst") : "";
   const header = (
     <div className="flex h-7 items-center pl-1.5 max-md:h-11">
-      <h2 className="min-w-0 flex-1 truncate font-medium text-muted-foreground text-sm">Projects</h2>
+      <h2 className="min-w-0 flex-1 truncate font-medium text-muted-foreground text-sm">{t("sidebar.projects")}</h2>
       <div className="flex shrink-0 items-center gap-0.5">
-        <IconButton label="Open project" onClick={onOpenProject} testId="open-project">
+        <IconButton label={t("sidebar.openProject")} onClick={onOpenProject} testId="open-project">
           <FolderPlusIcon />
         </IconButton>
         {!!projects.length && (
           <>
             {!view.alwaysSelect && (
-              <IconButton label={`Select active session${known ? "" : " (no active session in the list)"}`} disabled={!known} onClick={() => revealActive(true)} testId="sidebar-select-active">
+              <IconButton label={t(known ? "sidebar.selectActive" : "sidebar.selectActiveNone")} disabled={!known} onClick={() => revealActive(true)} testId="sidebar-select-active">
                 <LocateFixedIcon />
               </IconButton>
             )}
             {!narrow && (
               <>
-                <IconButton label={`Expand all${treeHint}`} disabled={searching} onClick={expandAll} testId="sidebar-expand-all">
+                <IconButton label={`${t("sidebar.expandAll")}${treeHint}`} disabled={searching} onClick={expandAll} testId="sidebar-expand-all">
                   <ChevronsUpDownIcon />
                 </IconButton>
-                <IconButton label={`Collapse all${treeHint}`} disabled={searching} onClick={collapseAll} testId="sidebar-collapse-all">
+                <IconButton label={`${t("sidebar.collapseAll")}${treeHint}`} disabled={searching} onClick={collapseAll} testId="sidebar-collapse-all">
                   <ChevronsDownUpIcon />
                 </IconButton>
               </>
@@ -504,9 +506,9 @@ export function SessionList({
     return (
       <div className="flex flex-col gap-2">
         {header}
-        <p className="px-1.5 text-muted-foreground text-sm">No projects yet. Add a project folder to start a session in it.</p>
+        <p className="px-1.5 text-muted-foreground text-sm">{t("sidebar.noProjects")}</p>
         <Button variant="secondary" size="sm" className="mx-1.5 self-start max-md:h-11" onClick={onOpenProject} data-testid="empty-open-project">
-          <FolderPlusIcon /> Add project
+          <FolderPlusIcon /> {t("sidebar.addProject")}
         </Button>
       </div>
     );
@@ -521,14 +523,14 @@ export function SessionList({
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search sessions"
-            aria-label="Search sessions by title, project or branch (@project=name for one project)"
+            placeholder={t("sidebar.searchSessions")}
+            aria-label={t("sidebar.searchSessionsAria")}
             className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
             data-testid="session-search"
           />
         </label>
         <IconButton
-          label={archived ? "Show sessions" : "Show archived sessions"}
+          label={t(archived ? "sidebar.showSessions" : "sidebar.showArchived")}
           pressed={archived}
           onClick={() => setArchived(!archived)}
           testId="archived-filter"
@@ -538,16 +540,16 @@ export function SessionList({
       </div>
       {filtering && (
         <p className="flex items-center gap-2 px-1.5 text-muted-foreground text-xs max-md:min-h-11" data-testid="active-only-chip">
-          <span>Active only · {filtered!.idleTotal} idle hidden</span>
+          <span>{t("sidebar.activeOnlyChip", { count: filtered!.idleTotal })}</span>
           <button type="button" className="cursor-pointer rounded text-foreground underline outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:px-2" onClick={() => setView({ onlyActive: false })} data-testid="active-only-show-all">
-            Show all
+            {t("sidebar.showAll")}
           </button>
         </p>
       )}
-      <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label="Sessions" data-testid="session-list" ref={listRef}>
+      <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label={t("sidebar.sessions")} data-testid="session-list" ref={listRef}>
         {archived && !!groups.length && (
           <p className="px-1.5 text-muted-foreground text-xs" data-testid="archived-caption">
-            Archived sessions
+            {t("sidebar.archivedSessions")}
           </p>
         )}
         {!groups.length && (
@@ -555,10 +557,10 @@ export function SessionList({
             {query.trim()
               ? emptySearch(query, archived, projects)
               : archived
-                ? "No archived sessions."
+                ? t("sidebar.noArchived")
                 : filtering
-                  ? "No active sessions. Show all lists the idle ones."
-                : "All sessions are archived."}
+                  ? t("sidebar.noActiveShowAll")
+                : t("sidebar.allArchived")}
           </p>
         )}
         {groups.map((g) => {
@@ -578,23 +580,23 @@ export function SessionList({
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
                   <SideBadge cwd={g.cwd} short />
-                  {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">+{g.idle} idle</span>}
+                  {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">{t("sidebar.idleCount", { count: g.idle })}</span>}
                   <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
                 <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
                   {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
-                    <IconButton label={`Create worktree in ${projectName(g.cwd)} (Shift+click: new worktree with a generated name)`} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
+                    <IconButton label={t("sidebar.createWorktreeIn", { name: projectName(g.cwd) })} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
                       <GitBranchPlusIcon />
                     </IconButton>
                   )}
-                  <IconButton label={`New session in ${projectName(g.cwd)}`} onClick={() => onNew(g.cwd)} testId="project-new-session" className="size-6">
+                  <IconButton label={t("sidebar.newSessionIn", { name: projectName(g.cwd) })} onClick={() => onNew(g.cwd)} testId="project-new-session" className="size-6">
                     <SquarePenIcon />
                   </IconButton>
                   {narrow ? (
                     <RowMenu label={projectName(g.cwd)} testId="project-menu" entries={groupMenu(g, "project-menu-")} />
                   ) : (
-                    <IconButton label={`Remove ${projectName(g.cwd)} from the list (files stay)`} onClick={() => onRemove(g.cwd)} testId="project-remove" className="size-6">
+                    <IconButton label={t("sidebar.removeNamedFromList", { name: projectName(g.cwd) })} onClick={() => onRemove(g.cwd)} testId="project-remove" className="size-6">
                       <XIcon />
                     </IconButton>
                   )}
@@ -607,7 +609,7 @@ export function SessionList({
               {open &&
                 g.worktrees.map((r) => {
                   const rowOpen = isOpen(rowKey(r.path));
-                  const kind = r.main ? "local" : "worktree";
+                  const kind = t(r.main ? "sidebar.kindLocal" : "sidebar.kindWorktree");
                   const branch = r.branch ?? lastSegment(r.path);
                   // Below md: only what follows the last "/" (the ticket part of "user/GH-1-fix"); the full name is the aria label and tooltip.
                   // Two rows of the project with the same tail (alice/fix, bob/fix) keep the full branch; counted on all its rows, not just the searched ones.
@@ -624,18 +626,18 @@ export function SessionList({
                           className="flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26"
                           aria-expanded={rowOpen}
                           onClick={() => toggle(rowKey(r.path))}
-                          aria-label={narrow ? `${label}${r.outsideRoots ? " (outside the allowed roots)" : ""}` : undefined}
-                          title={`${narrow ? `${label}\n` : ""}${r.outsideRoots ? `${r.path}: Outside the allowed roots (--roots)` : r.path}`}
+                          aria-label={narrow ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
+                          title={`${narrow ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
                           data-testid="worktree-toggle"
                         >
                           {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                           <span className="min-w-0 truncate font-medium">{narrow ? shortBranch : label}</span>
                           {busy && (
                             <span className="shrink-0 text-xs" data-testid="worktree-removing">
-                              Removing…
+                              {t("sidebar.removing")}
                             </span>
                           )}
-                          {!narrow && r.outsideRoots && <span className="sr-only">(outside the allowed roots)</span>}
+                          {!narrow && r.outsideRoots && <span className="sr-only">{t("sidebar.outsideRoots")}</span>}
                           <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />
                         </button>
                         {/* Touch has no tooltip: outside the roots a lock takes New session's place (same slot, so the chevrons stay in one column). */}
@@ -647,7 +649,7 @@ export function SessionList({
                           </span>
                         ) : (
                           <span className="absolute inset-y-0 right-0.5 flex items-center opacity-100 transition-opacity group-focus-within/worktree:opacity-100 group-hover/worktree:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
-                            <IconButton label={`New session in ${label}`} onClick={() => onNew(r.path)} disabled={busy} testId="worktree-new-session" className="size-6">
+                            <IconButton label={t("sidebar.newSessionIn", { name: label })} onClick={() => onNew(r.path)} disabled={busy} testId="worktree-new-session" className="size-6">
                               <SquarePenIcon />
                             </IconButton>
                             {narrow ? (
@@ -655,7 +657,7 @@ export function SessionList({
                             ) : (
                               onRemoveWorktree &&
                               removableWorktree(worktrees?.[g.cwd] ?? [], r) && (
-                                <IconButton label={`Remove ${label}`} onClick={() => onRemoveWorktree(g.cwd, r.path)} disabled={busy} onWarm={onWarmWorktree && (() => onWarmWorktree(g.cwd, r.path))} testId="worktree-remove" className="size-6">
+                                <IconButton label={t("sidebar.removeNamed", { name: label })} onClick={() => onRemoveWorktree(g.cwd, r.path)} disabled={busy} onWarm={onWarmWorktree && (() => onWarmWorktree(g.cwd, r.path))} testId="worktree-remove" className="size-6">
                                   <Trash2Icon />
                                 </IconButton>
                               )
@@ -730,9 +732,10 @@ const SessionRow = memo(function SessionRow({
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
-  const label = STATE_LABEL[st];
+  const t = useT();
+  const label = stateLabel(st);
   // Classic: every state reads as text (workers already do).
-  const stateText = classic && !workerName ? WORKER_STATE[st] : undefined;
+  const stateText = classic && !workerName ? stateName(st) : undefined;
   const target: ActionTarget = {
     title: s.title,
     archived: s.archived,
@@ -747,7 +750,7 @@ const SessionRow = memo(function SessionRow({
   if (renaming)
     return (
       <li className={cn("flex h-8 items-center pr-1.5 max-md:h-11", PAD[depth])}>
-        <RenameInput title={s.title} onDone={(t) => onRenamed(s.id, t)} fromMenu={menuRename} />
+        <RenameInput title={s.title} onDone={(text) => onRenamed(s.id, text)} fromMenu={menuRename} />
       </li>
     );
   return (
@@ -764,19 +767,19 @@ const SessionRow = memo(function SessionRow({
           )}
           aria-current={active ? "page" : undefined}
           data-worker={workerName}
-          aria-label={(workerName ? [workerName, "worker", WORKER_STATE[st], place, unread && "unread"] : [s.title, stateText ?? label, branch && `branch ${branch}`, unread && "unread"]).filter(Boolean).join(", ")}
+          aria-label={(workerName ? [workerName, t("sidebar.worker"), stateName(st), place, unread && t("sidebar.unread")] : [displayTitle(s.title), stateText ?? label, branch && t("sidebar.branchNamed", { branch }), unread && t("sidebar.unread")]).filter(Boolean).join(", ")}
           onClick={() => onOpen(s.id)}
-          title={workerName ? `${s.title}\n${s.cwd}` : stateText ? `${s.title} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${s.title} (${label})` : s.title}
+          title={workerName ? `${displayTitle(s.title)}\n${s.cwd}` : stateText ? `${displayTitle(s.title)} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${displayTitle(s.title)} (${label})` : displayTitle(s.title)}
         >
           {workerName ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate font-medium text-foreground">{workerName}</span>
-              <span className="truncate text-muted-foreground text-xs">{`${place} · ${WORKER_STATE[st]}`}</span>
+              <span className="truncate text-muted-foreground text-xs">{`${place} · ${stateName(st)}`}</span>
             </span>
           ) : stateText ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="flex min-w-0 items-baseline gap-1.5">
-                {loading ? <TitleSkeleton title={s.title} className="h-3.5 w-28" /> : <span className="min-w-0 truncate font-medium text-foreground">{s.title}</span>}
+                {loading ? <TitleSkeleton title={s.title} className="h-3.5 w-28" /> : <span className="min-w-0 truncate font-medium text-foreground">{displayTitle(s.title)}</span>}
                 {branch && <span className="min-w-0 shrink-[2] truncate text-muted-foreground text-xs" data-testid="session-branch">{branch}</span>}
               </span>
               <span className="truncate text-muted-foreground text-xs" data-testid="session-state">{stateText}</span>
@@ -784,7 +787,7 @@ const SessionRow = memo(function SessionRow({
           ) : loading ? (
             <TitleSkeleton title={s.title} className="h-3.5 w-28" />
           ) : (
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{s.title}</span>
+            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{displayTitle(s.title)}</span>
           )}
           {unread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
           <StateIcon state={st} />

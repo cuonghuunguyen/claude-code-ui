@@ -3,6 +3,7 @@ import type { TodoItem } from "@claude-ui/protocol";
 import { parseDiffFromFile } from "@pierre/diffs";
 import type { ToolCall } from "./store.ts";
 import { isWinPath, relPath } from "./paths.ts";
+import { t } from "./i18n.ts";
 
 /** Read/search tools; consecutive calls merge into one context group. */
 export const CONTEXT_TOOLS = new Set(["Read", "Grep", "Glob"]);
@@ -30,7 +31,7 @@ export function todoItems(input: unknown): TodoItem[] {
 }
 
 /** "3 of 10 todos completed", shared by the todo dock and the TodoWrite card. */
-export const todoSummary = (items: TodoItem[]) => `${items.filter((i) => i.status === "completed").length} of ${items.length} todos completed`;
+export const todoSummary = (items: TodoItem[]) => t("session.tools.todoSummary", { done: items.filter((i) => i.status === "completed").length, total: items.length });
 
 /** File name and directory for a card header; the directory relative to `cwd` when the file is inside it. */
 export function filePath(path: string, cwd: string) {
@@ -42,11 +43,11 @@ export function filePath(path: string, cwd: string) {
 /** Line range of a Read call, from the numbered result lines if any, else from offset/limit. */
 export function readRange(input: unknown, output?: unknown): string {
   const nums = typeof output === "string" ? [...output.matchAll(/^\s*(\d+)[\t→]/gm)].map((m) => Number(m[1])) : [];
-  if (nums.length > 0) return `lines ${nums[0]}–${nums.at(-1)}`;
+  if (nums.length > 0) return t("session.tools.lines", { from: nums[0]!, to: nums.at(-1)! });
   const { offset, limit } = (input ?? {}) as { offset?: unknown; limit?: unknown };
   const start = typeof offset === "number" ? offset : 1;
-  if (typeof limit === "number") return `lines ${start}–${start + limit - 1}`;
-  return typeof offset === "number" ? `from line ${start}` : "";
+  if (typeof limit === "number") return t("session.tools.lines", { from: start, to: start + limit - 1 });
+  return typeof offset === "number" ? t("session.tools.fromLine", { line: start }) : "";
 }
 
 type FileContents = { name: string; contents: string };
@@ -100,9 +101,9 @@ export function artifactSummary(tool: string, input: unknown): string {
     if (title) return title.split("\n")[0]!;
     const file = str("file_path");
     if (file) return file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
-    if (Array.isArray(i.file_paths)) return `Artifact upload (${i.file_paths.length} files)`;
-    if (str("from_url")) return "Artifact copy";
-    if (str("type_url")) return "Artifact from type";
+    if (Array.isArray(i.file_paths)) return t("session.tools.artifactUpload", { count: i.file_paths.length });
+    if (str("from_url")) return t("session.tools.artifactCopy");
+    if (str("type_url")) return t("session.tools.artifactFromType");
     return "";
   }
   const verb = cap(action.replace(/_/g, " "));

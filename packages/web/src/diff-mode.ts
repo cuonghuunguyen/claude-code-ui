@@ -1,12 +1,13 @@
 // Changes tab view modes (docs/spec.md "Layout"): what the panel diffs (session changes, uncommitted work, work against a branch),
 // the session scope filter and the default mode of Settings. All per browser, like the tab grouping.
 import { useSyncExternalStore } from "react";
+import { t } from "./i18n.ts";
 
 export type DiffMode = "session" | "uncommitted" | "branch";
 export const DIFF_MODES: { value: DiffMode; label: string; git: boolean }[] = [
-  { value: "session", label: "Session changes", git: false },
-  { value: "uncommitted", label: "Uncommitted", git: true },
-  { value: "branch", label: "Against branch", git: true },
+  { value: "session", get label() { return t("settings.diffMode.session"); }, git: false },
+  { value: "uncommitted", get label() { return t("settings.diffMode.uncommitted"); }, git: true },
+  { value: "branch", get label() { return t("settings.diffMode.branch"); }, git: true },
 ];
 export type DiffScope = "project" | "all";
 

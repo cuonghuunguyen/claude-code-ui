@@ -1,13 +1,20 @@
 // The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks (each file marked by its own repository), a filter field and keyboard navigation.
 import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { fileNameError, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
+import { fileNameProblem, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
 import { createLimiter, gitRows } from "./git-changes.ts";
+import { t, useT, type Key } from "./i18n.ts";
+
+/** Why `name` cannot be a file name, in the UI language. */
+const nameProblemText = (name: string, windows: boolean) => {
+  const p = fileNameProblem(name, windows);
+  return p && t(`common.fileName.${p}` as Key, { name: name.split(".")[0] });
+};
 import { isImeKey } from "./ime.ts";
 import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
 import { setRepoChoice, type RepoList } from "./repo-choice.ts";
@@ -29,12 +36,12 @@ export type FileTreeHandle = {
 
 export type OpenOptions = { focusEditor?: boolean; pinned?: boolean };
 
-const MARK_STYLE: Record<Mark, { text: string; label: string }> = {
-  M: { text: "text-info", label: "modified" },
-  R: { text: "text-info", label: "renamed" },
-  A: { text: "text-success", label: "added" },
-  U: { text: "text-success", label: "untracked" },
-  D: { text: "text-destructive", label: "deleted" },
+const MARK_STYLE: Record<Mark, { text: string; label: () => string }> = {
+  M: { text: "text-info", label: () => t("files.mark.modified") },
+  R: { text: "text-info", label: () => t("files.mark.renamed") },
+  A: { text: "text-success", label: () => t("files.mark.added") },
+  U: { text: "text-success", label: () => t("files.mark.untracked") },
+  D: { text: "text-destructive", label: () => t("files.mark.deleted") },
 };
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };
 
@@ -55,21 +62,19 @@ function NameMessage({ text, depth }: { text: string; depth: number }) {
   );
 }
 
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
 type DeleteAsk = { entry: FsEntry; dirty: number; counting: boolean; count?: FsDeleteResult; countError?: string };
 
 /** What the Delete dialog says: for good, no trash; the count of a folder; open files with unsaved edits. */
 function deleteText(d: DeleteAsk) {
-  const tail = "deleted for good. It does not go to the trash.";
+  const tail = t("files.tree.deleteTail");
   let text: string;
-  if (!d.entry.isDir) text = `The file is ${tail}`;
-  else if (d.counting) text = "Counting items…";
-  else if (d.countError !== undefined) text = `The items could not be counted (${d.countError}). The folder and everything in it are ${tail}`;
-  else if (d.count?.more) text = `The folder and more than 10 000 items in it are ${tail}`;
-  else if (d.count && d.count.files + d.count.folders === 0) text = `The empty folder is ${tail}`;
-  else text = `The folder and the ${plural(d.count?.files ?? 0, "file")} and ${plural(d.count?.folders ?? 0, "folder")} in it are ${tail}`;
-  if (d.dirty) text += ` ${d.dirty === 1 ? "1 open file has" : `${d.dirty} open files have`} unsaved changes; ${d.dirty === 1 ? "it stays" : "they stay"} open.`;
+  if (!d.entry.isDir) text = t("files.tree.deleteFile", { tail });
+  else if (d.counting) text = t("files.tree.counting");
+  else if (d.countError !== undefined) text = t("files.tree.deleteCountError", { error: d.countError, tail });
+  else if (d.count?.more) text = t("files.tree.deleteMore", { tail });
+  else if (d.count && d.count.files + d.count.folders === 0) text = t("files.tree.deleteEmpty", { tail });
+  else text = t("files.tree.deleteFolder", { files: t("files.tree.nFiles", { count: d.count?.files ?? 0 }), folders: t("files.tree.nFolders", { count: d.count?.folders ?? 0 }), tail });
+  if (d.dirty) text += ` ${t("files.tree.deleteDirty", { count: d.dirty })}`;
   return text;
 }
 
@@ -109,7 +114,7 @@ function NameInput({
   const ref = useRef<HTMLInputElement>(null);
   const finished = useRef(false);
   const name = value.trim();
-  const problem = name === initial ? undefined : (fileNameError(name, windows) ?? (taken(name) ? opErrorText("exists", "", name) : undefined));
+  const problem = name === initial ? undefined : (nameProblemText(name, windows) ?? (taken(name) ? opErrorText("exists", "", name) : undefined));
   const message = problem ?? error;
   useEffect(() => onMessage(message), [message]);
   useEffect(() => () => onMessage(undefined), []);
@@ -227,6 +232,7 @@ export function FileTree({
   /** Told whether the filter field has a query (the tree then shows results). */
   onFilter?: (active: boolean) => void;
 }) {
+  const tr = useT();
   const [model, setModel] = useState<{ dirs: Record<string, DirState>; expanded: ReadonlySet<string> }>({ dirs: {}, expanded: new Set() });
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -621,8 +627,8 @@ export function FileTree({
         <input
           type="search"
           value={query}
-          placeholder="Filter files"
-          aria-label="Filter files"
+          placeholder={tr("files.filter")}
+          aria-label={tr("files.filter")}
           aria-controls="file-tree-rows"
           data-testid="tree-filter"
           className={`h-7 w-full rounded-md border bg-background px-2 text-base outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring md:text-xs ${coarse}`}
@@ -638,7 +644,7 @@ export function FileTree({
           <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{opError}</span>
           <button
             type="button"
-            aria-label="Dismiss"
+            aria-label={tr("files.dismiss")}
             className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring max-md:size-11"
             onClick={() => setOpError(undefined)}
           >
@@ -653,7 +659,7 @@ export function FileTree({
         onTouchStartCapture={(e) => captureTarget(e.target)}
         onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
       >
-      <div role="tree" id="file-tree-rows" aria-label="Files" ref={root} onKeyDown={onKeyDown}>
+      <div role="tree" id="file-tree-rows" aria-label={tr("files.title")} ref={root} onKeyDown={onKeyDown}>
         {rows.map((r, i) => {
           const pad = { paddingLeft: `${8 + r.depth * 12}px` };
           if (r.kind === "status")
@@ -664,7 +670,7 @@ export function FileTree({
             );
           if (r.kind === "input") {
             const e = r.editing;
-            const where = e.dir === cwd ? "the project" : relPath(e.dir, cwd);
+            const where = e.dir === cwd ? tr("files.tree.theProject") : relPath(e.dir, cwd);
             return (
               <Fragment key="new-input">
                 <div role="none" className={`flex h-7 w-full items-center gap-1 pr-2 ${coarse}`} style={{ paddingLeft: `${8 + r.depth * 12}px` }}>
@@ -673,7 +679,7 @@ export function FileTree({
                   <NameInput
                     initial=""
                     select={[0, 0]}
-                    label={`New ${e.isDir ? "folder" : "file"} name in ${where}`}
+                    label={tr(e.isDir ? "files.tree.newFolderName" : "files.tree.newFileName", { where })}
                     windows={windows}
                     taken={taken(e.dir)}
                     error={nameError}
@@ -732,7 +738,7 @@ export function FileTree({
                 <NameInput
                   initial={entry.name}
                   select={nameSelection(entry.name, entry.isDir)}
-                  label={`Rename ${entry.name}`}
+                  label={tr("files.tree.rename", { name: entry.name })}
                   windows={windows}
                   taken={taken(r.parent, entry.name)}
                   error={nameError}
@@ -756,13 +762,13 @@ export function FileTree({
                   <span className={`ml-auto w-4 shrink-0 text-center font-semibold text-[11px] ${MARK_STYLE[mark].text}`} data-testid="git-mark" aria-hidden>
                     {mark}
                   </span>
-                  <span className="sr-only">, {MARK_STYLE[mark].label}</span>
+                  <span className="sr-only">, {MARK_STYLE[mark].label()}</span>
                 </>
               )}
               {dirMark && (
                 <>
                   <span className={`ml-auto size-1.5 shrink-0 rounded-full bg-current ${DIR_STYLE[dirMark]}`} data-testid="git-mark" aria-hidden />
-                  <span className="sr-only">, contains changes</span>
+                  <span className="sr-only">, {tr("files.tree.containsChanges")}</span>
                 </>
               )}
             </div>
@@ -773,10 +779,10 @@ export function FileTree({
       </div>
       {q && found?.query === q && found.paths.length === 0 && (
         <p className="px-2 py-1 text-muted-foreground" role="status">
-          No matching files.
+          {tr("files.tree.noMatch")}
         </p>
       )}
-      {q && found?.query === q && found.paths.length >= 50 && <p className="px-2 py-1 text-muted-foreground">First 50 matches.</p>}
+      {q && found?.query === q && found.paths.length >= 50 && <p className="px-2 py-1 text-muted-foreground">{tr("files.tree.first50")}</p>}
       <div className="min-h-6 flex-1" data-testid="tree-empty-space" />
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -814,9 +820,9 @@ export function FileTree({
       </ContextMenu.Root>
       <ConfirmDialog
         open={!!del}
-        title={`Delete “${del?.entry.name ?? ""}”?`}
+        title={tr("files.tree.deleteTitle", { name: del?.entry.name ?? "" })}
         description={del ? deleteText(del) : ""}
-        confirm="Delete"
+        confirm={tr("files.tree.deleteConfirm")}
         destructive
         confirmDisabled={!!del?.counting}
         onConfirm={() => void confirmDelete()}

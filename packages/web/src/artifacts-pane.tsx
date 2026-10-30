@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useContainerWidth } from "@/lib/use-container-width";
 import { ArtifactConnectedContext, ArtifactFrame, ArtifactPreviewContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { sessionArtifacts, type ArtifactRow } from "./artifacts.ts";
+import { useT } from "./i18n.ts";
 import { timeAgo } from "./sessions.ts";
 import type { SessionView } from "./store.ts";
 import { isClaudeUrl } from "./tools.ts";
@@ -56,6 +57,7 @@ const empty = (text: string, testId?: string) => (
 );
 
 export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, load, connected, onOpenTab, requestOlder, failed, hidden }: Props) {
+  const t = useT();
   const rows = useMemo(() => (view ? sessionArtifacts(view) : []), [view?.parts, view?.aux]);
   const want = !!view?.older && !view.auxArtifacts;
   useEffect(() => {
@@ -64,8 +66,8 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
   const box = useRef<HTMLDivElement>(null);
   const width = useContainerWidth(box);
   const current = useSyncExternalStore(subscribe, () => picked.get(owner));
-  if (!view) return failed ? empty("Could not load this session.", "artifacts-failed") : empty("Loading artifacts…");
-  if (!rows.length) return empty("No artifacts in this session yet.", "artifacts-empty");
+  if (!view) return failed ? empty(t("files.artifacts.failed"), "artifacts-failed") : empty(t("files.artifacts.loading"));
+  if (!rows.length) return empty(t("files.artifacts.empty"), "artifacts-empty");
   const wide = width === undefined || width >= WIDE;
   const at = Math.max(0, rows.findIndex((r) => r.partId === current?.partId));
   const sel = rows[at]!;
@@ -93,13 +95,13 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
       ))}
     </div>
   );
-  const open = openButton(sel, onOpenTab);
+  const open = openButton(sel, onOpenTab, t);
   const preview = (
     <div data-testid="artifacts-preview" className="flex min-h-0 min-w-0 flex-1 flex-col gap-1 p-2">
       {!wide && (
         <Button type="button" variant="outline" size="sm" className="max-md:h-11 w-fit" onClick={() => selectArtifact(owner, sel.partId)}>
           <ChevronLeftIcon aria-hidden className="size-4" />
-          All artifacts
+          {t("files.artifacts.all")}
         </Button>
       )}
       {sel.previewable ? hidden ? null : (
@@ -110,9 +112,9 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
         </ArtifactConnectedContext>
       ) : (
         <div className="space-y-2 text-sm">
-          <p className="text-muted-foreground">No local preview</p>
+          <p className="text-muted-foreground">{t("files.artifacts.noPreview")}</p>
           {sel.url && isClaudeUrl(sel.url) && (
-            <a href={sel.url} target="_blank" rel="noopener noreferrer" title={`${sel.url} (opens in a new tab)`} className="inline-flex min-h-11 items-center break-all underline md:min-h-0">
+            <a href={sel.url} target="_blank" rel="noopener noreferrer" title={t("files.artifacts.opensInNewTab", { url: sel.url })} className="inline-flex min-h-11 items-center break-all underline md:min-h-0">
               {sel.url}
             </a>
           )}
@@ -137,10 +139,10 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
 });
 
 /** The "Open in tab" button of a previewable row. */
-function openButton(row: ArtifactRow, onOpenTab: (partId: string) => void) {
+function openButton(row: ArtifactRow, onOpenTab: (partId: string) => void, t: ReturnType<typeof useT>) {
   return row.previewable ? (
     <Button type="button" variant="outline" size="sm" className="max-md:h-11" onClick={() => onOpenTab(row.partId)}>
-      Open in tab
+      {t("files.openInTab")}
     </Button>
   ) : undefined;
 }

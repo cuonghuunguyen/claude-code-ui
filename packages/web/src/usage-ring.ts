@@ -1,12 +1,13 @@
 // Which plan usage window the titlebar ring shows (docs/spec.md "Plan usage meter"): per browser, like the other Settings.
 import { useSyncExternalStore } from "react";
 import type { PlanWindow } from "@claude-ui/protocol";
+import { t } from "./i18n.ts";
 
 export type UsageRing = "highest" | "session" | "weekly";
 export const USAGE_RINGS: { value: UsageRing; label: string }[] = [
-  { value: "highest", label: "Highest usage" },
-  { value: "session", label: "Session (5 h)" },
-  { value: "weekly", label: "Weekly" },
+  { value: "highest", get label() { return t("settings.usageRing.highest"); } },
+  { value: "session", get label() { return t("settings.usageRing.session"); } },
+  { value: "weekly", get label() { return t("settings.usageRing.weekly"); } },
 ];
 /** The window kind each choice shows (the daemon's `kind`, never the label). */
 const KIND: Record<Exclude<UsageRing, "highest">, string> = { session: "session", weekly: "weekly_all" };

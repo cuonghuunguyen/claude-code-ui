@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { AtSignIcon, SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FileIcon } from "./file-icon.tsx";
+import { t, useT } from "./i18n.ts";
 import { isImeKey } from "./ime.ts";
 
 const mod = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
-export const quickOpenLabel = `Search files (${mod}P)`;
+export const quickOpenLabel = () => t("app.quickOpen.searchKey", { key: `${mod}P` });
 
 /** Paths are relative to the session cwd, best first. Enter opens the active file (Alt+Enter or a middle click: as a tab); Ctrl/Cmd+Enter or a row's @ button inserts `@path`.
  * Not `connected`, it says so and searches once the daemon is back; a failed search offers Retry (button or Enter). */
@@ -26,6 +27,7 @@ export function QuickOpen({
   onOpenTab?: (path: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<{ query: string; paths: string[]; error?: string }>();
   const [active, setActive] = useState(0);
@@ -37,11 +39,11 @@ export function QuickOpen({
 
   useEffect(() => input.current?.focus(), []);
   useEffect(() => {
-    if (!connected) return setFound({ query, paths: [], error: "Not connected to the daemon. Search resumes when it reconnects." });
+    if (!connected) return setFound({ query, paths: [], error: t("app.quickOpen.notConnected") });
     let current = true;
     onSearch(query)
       .then((p) => current && (setFound({ query, paths: p }), setActive(0)))
-      .catch((err: Error) => current && setFound({ query, paths: [], error: `Search failed: ${err.message}` }));
+      .catch((err: Error) => current && setFound({ query, paths: [], error: t("app.quickOpen.failed", { message: err.message }) }));
     return () => void (current = false);
   }, [query, connected, attempt]);
   const canRetry = connected && !!found?.error;
@@ -79,7 +81,7 @@ export function QuickOpen({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Quick open"
+        aria-label={t("app.quickOpen.title")}
         className="relative flex max-h-[min(100dvh-96px,480px)] self-start min-h-70 w-full max-w-160 flex-col rounded-2xl border bg-popover text-popover-foreground shadow-floating"
         data-testid="quick-open"
         // The search box is the only focus stop: a click elsewhere in the dialog leaves focus there.
@@ -94,8 +96,8 @@ export function QuickOpen({
               aria-expanded="true"
               aria-controls="quick-open-list"
               aria-activedescendant={paths.length ? `quick-open-${active}` : undefined}
-              aria-label="Search files"
-              placeholder="Search files"
+              aria-label={t("app.quickOpen.search")}
+              placeholder={t("app.quickOpen.search")}
               autoComplete="off"
               spellCheck={false}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground max-md:text-base"
@@ -107,17 +109,17 @@ export function QuickOpen({
         </div>
         {!found || !paths.length ? (
           <div className="flex min-h-30 flex-1 flex-col items-center justify-center gap-2 px-3 text-center text-muted-foreground" role="status">
-            <p>{found ? (found.error ?? "No files found") : "Searching…"}</p>
+            <p>{found ? (found.error ?? t("app.quickOpen.none")) : t("app.quickOpen.searching")}</p>
             {canRetry && (
               <Button variant="outline" size="sm" className="pointer-coarse:h-11" onClick={retry}>
-                Retry
+                {t("app.quickOpen.retry")}
               </Button>
             )}
           </div>
         ) : (
           <ul id="quick-open-list" role="listbox" aria-labelledby="quick-open-group" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-1.5 pt-1.5 pb-2">
             <li id="quick-open-group" role="presentation" className="my-1.5 shrink-0 px-3 leading-4 font-normal text-muted-foreground">
-              Files
+              {t("app.quickOpen.files")}
             </li>
             {paths.map((p, i) => {
               const slash = p.lastIndexOf("/");
@@ -146,8 +148,8 @@ export function QuickOpen({
                   <button
                     type="button"
                     tabIndex={-1}
-                    aria-label={`Insert @${p} in the prompt`}
-                    title={`Insert @${p} in the prompt (${mod}Enter)`}
+                    aria-label={t("app.quickOpen.insert", { path: p })}
+                    title={t("app.quickOpen.insertKey", { path: p, key: `${mod}Enter` })}
                     className="grid size-7 shrink-0 place-items-center rounded-sm text-faint opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100 group-aria-selected:opacity-100 pointer-coarse:size-11 pointer-coarse:opacity-100"
                     onClick={(e) => (e.stopPropagation(), onMention(p))}
                     data-testid="quick-open-mention"

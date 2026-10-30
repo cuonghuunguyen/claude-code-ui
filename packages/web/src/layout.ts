@@ -1,5 +1,6 @@
 // Pane layout per browser (docs/spec.md "Layout"): which dock area holds each pane on wide screens, their order and the side panel's side; plus the pane last selected per dock area (GH-381).
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { t } from "./i18n.ts";
 
 export type PaneId = "changes" | "files" | "graph" | "terminal" | "plan" | "artifacts";
 export type DockArea = "side" | "bottom";
@@ -10,17 +11,53 @@ export type Layout = { side: DockSide; areas: Record<Area, PaneId[]> };
 
 /** Also the order of the narrow pane switcher. */
 export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal", "plan", "artifacts"];
-export const PANE_LABEL: Record<PaneId, string> = { changes: "Changes", files: "Files", graph: "Git graph", terminal: "Terminal", plan: "Plan", artifacts: "Artifacts" };
-export const AREA_LABEL: Record<DockArea, string> = { side: "Side panel", bottom: "Bottom panel" };
-export const HOME_LABEL: Record<Area, string> = { side: "Side panel", bottom: "Bottom panel", main: "Main area" };
+export const PANE_LABEL: Record<PaneId, string> = {
+  get changes() {
+    return t("app.layout.pane.changes");
+  },
+  get files() {
+    return t("app.layout.pane.files");
+  },
+  get graph() {
+    return t("app.layout.pane.graph");
+  },
+  get terminal() {
+    return t("app.layout.pane.terminal");
+  },
+  get plan() {
+    return t("app.layout.pane.plan");
+  },
+  get artifacts() {
+    return t("app.layout.pane.artifacts");
+  },
+};
+export const AREA_LABEL: Record<DockArea, string> = {
+  get side() {
+    return t("app.layout.area.side");
+  },
+  get bottom() {
+    return t("app.layout.area.bottom");
+  },
+};
+export const HOME_LABEL: Record<Area, string> = {
+  get side() {
+    return t("app.layout.area.side");
+  },
+  get bottom() {
+    return t("app.layout.area.bottom");
+  },
+  get main() {
+    return t("app.layout.area.main");
+  },
+};
 export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan", "artifacts"], bottom: ["terminal"], main: [] } };
 /** Panes that may have the main area as their home (Changes never). */
 export const MAIN_KINDS: PaneId[] = ["plan", "artifacts", "files", "graph", "terminal"];
 export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
 export const TERMINAL_DOCKS: { value: Area; label: string }[] = [
-  { value: "bottom", label: "Bottom" },
-  { value: "side", label: "Side panel" },
-  { value: "main", label: "Main area" },
+  { value: "bottom", get label() { return t("app.layout.dockBottom"); } },
+  { value: "side", get label() { return t("app.layout.area.side"); } },
+  { value: "main", get label() { return t("app.layout.area.main"); } },
 ];
 
 const LAYOUT_KEY = "claude-ui.layout";

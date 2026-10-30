@@ -1,6 +1,7 @@
 import type { ArtifactPreviewResult } from "@claude-ui/protocol";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { t, useT } from "./i18n.ts";
 
 /** Asks the daemon for the preview URL of an Artifact publish part (artifact.preview). */
 export type ArtifactPreviewLoader = (partId: string) => Promise<ArtifactPreviewResult>;
@@ -20,7 +21,7 @@ type State = "idle" | "loading" | { url: string; n: number; unavailable: string[
 const btn = "min-h-11 md:min-h-0";
 
 /** "2 supporting files not loaded: a.css, b.js": the first three names, then an ellipsis. */
-const notLoaded = (names: string[]) => `${names.length} supporting ${names.length === 1 ? "file" : "files"} not loaded: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}`;
+const notLoaded = (names: string[]) => t("files.artifact.notLoaded", { count: names.length, names: names.slice(0, 3).join(", ") + (names.length > 3 ? ", …" : "") });
 
 /** The preview URL of one view of a part (GH-400): requested on mount, after a reconnect (down then up, when it has a URL or its request was cut) and on `reload`. Each view owns its URL. */
 export function useArtifactUrl(partId: string): { state: State; reload: () => void } {
@@ -35,7 +36,7 @@ export function useArtifactUrl(partId: string): { state: State; reload: () => vo
     setState("loading");
     load(partId).then(
       (r) => mine === run.current && setState({ url: r.url, n: ++frame.current, unavailable: r.unavailable ?? [], title: r.title }),
-      (e: { code?: string; message?: string }) => mine === run.current && setState({ error: `Preview not available: ${e?.code === "not_found" ? "file is gone" : (e?.message ?? "unknown error")}`, retry: e?.message === "disconnected" }),
+      (e: { code?: string; message?: string }) => mine === run.current && setState({ error: t("files.artifact.unavailable", { reason: e?.code === "not_found" ? t("files.artifact.gone") : (e?.message ?? t("files.artifact.unknownError")) }), retry: e?.message === "disconnected" }),
     );
   };
   useEffect(() => {
@@ -56,6 +57,7 @@ export function useArtifactUrl(partId: string): { state: State; reload: () => vo
 
 /** The page of a part in a sandboxed iframe (no same-origin, scripts only, the daemon's CSP allows no network) under a toolbar: `actions`, then Reload. `fill`: the iframe takes the height of its flex parent (a tab). `onTitle`: the title of the daemon's reply. */
 export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partId: string; title: string; fill?: boolean; actions?: ReactNode; onTitle?: (title: string) => void }): ReactNode {
+  const t = useT();
   const load = use(ArtifactPreviewContext);
   const { state, reload } = useArtifactUrl(partId);
   const replied = typeof state === "object" && "url" in state ? state : undefined;
@@ -69,14 +71,14 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
       <div className="flex flex-wrap items-center gap-2">
         {actions}
         <Button variant="outline" size="sm" className={btn} onClick={reload}>
-          Reload
+          {t("files.artifact.reload")}
         </Button>
       </div>
-      <p className="text-muted-foreground text-xs">Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.</p>
+      <p className="text-muted-foreground text-xs">{t("files.artifact.offlineNote")}</p>
       {replied && replied.unavailable.length > 0 && <p className="text-muted-foreground text-xs break-all">{notLoaded(replied.unavailable)}</p>}
       {state === "loading" && (
         <p aria-live="polite" className="text-muted-foreground text-xs">
-          Loading preview…
+          {t("files.artifact.loading")}
         </p>
       )}
       {typeof state === "object" && "error" in state && (
@@ -88,7 +90,7 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
         <iframe
           key={replied.n}
           data-testid="artifact-preview"
-          title={`Preview: ${title}`}
+          title={t("files.artifact.frameTitle", { title })}
           src={replied.url}
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
@@ -102,6 +104,7 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
 
 /** Collapsed "Show preview" of a local Artifact page (and "Open in tab" when a tab can open); open: an ArtifactFrame. */
 export function ArtifactPreview({ partId, title }: { partId: string; title: string }): ReactNode {
+  const t = useT();
   const load = use(ArtifactPreviewContext);
   const toTab = use(ArtifactTabContext);
   const own = useRef(new Set<string>()); // without a provider (a bare card): this card only
@@ -110,14 +113,14 @@ export function ArtifactPreview({ partId, title }: { partId: string; title: stri
   if (!load) return null;
   const tab = toTab && (
     <Button variant="outline" size="sm" className={btn} onClick={() => toTab(partId)}>
-      Open in tab
+      {t("files.openInTab")}
     </Button>
   );
   if (!open)
     return (
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" className={btn} aria-expanded={false} data-testid="artifact-preview-toggle" onClick={() => (opened.add(partId), setOpen(true))}>
-          Show preview
+          {t("files.artifact.show")}
         </Button>
         {tab}
       </div>
@@ -129,7 +132,7 @@ export function ArtifactPreview({ partId, title }: { partId: string; title: stri
       actions={
         <>
           <Button variant="outline" size="sm" className={btn} aria-expanded={true} onClick={() => (opened.delete(partId), setOpen(false))}>
-            Hide preview
+            {t("files.artifact.hide")}
           </Button>
           {tab}
         </>

@@ -21,6 +21,7 @@ import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
 import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
+import { t as tt, useT } from "./i18n.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -49,10 +50,22 @@ export type TabStatus = "new" | "running" | "needs_input" | "unread" | "idle";
 export const status = (id: string, t: TabInfo): TabStatus =>
   id === NEW_TAB ? "new" : t.state === "running" ? "running" : t.state === "needs_input" ? "needs_input" : t.unread ? "unread" : "idle";
 
-export const STATUS_LABEL: Record<TabStatus, string> = { new: "", running: "running", needs_input: "needs input", unread: "unread", idle: "" };
+export const STATUS_LABEL: Record<TabStatus, string> = {
+  new: "",
+  get running() {
+    return tt("app.tabs.status.running");
+  },
+  get needs_input() {
+    return tt("app.tabs.status.needsInput");
+  },
+  get unread() {
+    return tt("app.tabs.status.unread");
+  },
+  idle: "",
+};
 
 /** The states only the session header showed (GH-165): error and closed, noted in the switcher below md where the header row is gone. */
-const stateNote = (t: TabInfo) => (t.state === "error" || t.state === "closed" ? t.state : "");
+const stateNote = (t: TabInfo) => (t.state === "error" ? tt("app.tabs.state.error") : t.state === "closed" ? tt("app.tabs.state.closed") : "");
 
 /** Avatar colors of the known projects (avatarColors), so no two of them look the same. */
 export const AvatarColors = createContext(new Map<string, AvatarColor>());
@@ -196,6 +209,7 @@ export function TabsBar({
   onAction: (id: string, a: SessionAction) => void;
   onRenamed: (id: string, title: string | undefined) => void;
 }) {
+  const tr = useT();
   const keyOf = (id: string) => {
     const t = info(id);
     return t.group ?? t.cwd ?? "";
@@ -381,14 +395,14 @@ export function TabsBar({
       data-drop-target={drop?.active && drop.over ? "" : undefined}
     >
       {onHome && (
-        <IconButton className={`w-9! max-md:hidden ${QUIET_PRESSED}`} label="Toggle sidebar" onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
+        <IconButton className={`w-9! max-md:hidden ${QUIET_PRESSED}`} label={tr("app.tabs.toggleSidebar")} onClick={onHome} pressed={home} testId="tab-home" command="sidebar.toggle">
           <PanelLeftIcon />
         </IconButton>
       )}
       <div
         ref={strip}
         role="tablist"
-        aria-label="Open sessions"
+        aria-label={tr("app.tabs.openSessions")}
         className="hidden min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] md:flex [&::-webkit-scrollbar]:hidden"
         data-testid="tab-strip"
         // A vertical wheel scrolls the strip sideways, like a browser tab strip.
@@ -458,7 +472,7 @@ export function TabsBar({
           >
             <SelectTrigger
               ref={trigger.ref}
-              aria-label="Switch tab"
+              aria-label={tr("app.tabs.switchTab")}
               data-testid="tab-switcher"
               // touch-action none: a touch that starts here is never a browser scroll (no pull-to-refresh, no rubber band, no double-tap zoom), and the vertical swipe is ours.
               className={`${GHOST} max-md:h-11! min-w-0 flex-1 touch-none overflow-hidden bg-secondary! px-1.5 font-medium text-foreground`}
@@ -466,7 +480,7 @@ export function TabsBar({
             >
               {activeId === FOCUS_TAB ? <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden /> : active && activeId ? <TabIcon s={status(activeId, active)} cwd={active.cwd} kind={active.kind} /> : null}
               <span ref={trigger.title} className="flex min-w-0 flex-col text-left">
-                <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? "Focus" : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? "Open tabs")}</span>
+                <span className="truncate" data-slot="tab-switcher-title">{activeId === FOCUS_TAB ? tr("app.tabs.focus") : active?.titleLoading ? <TitleSkeleton title={active.title} /> : (active?.title ?? tr("app.tabs.openTabs"))}</span>
                 {active && place(active) && <span className="truncate font-normal text-muted-foreground text-xs leading-4" data-slot="tab-switcher-place">{place(active)}</span>}
               </span>
               {focus && focus.count > 0 && <span className="ml-auto flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums" data-testid="focus-badge"><CircleAlertIcon className="size-3" aria-hidden />{focus.count}</span>}
@@ -477,9 +491,9 @@ export function TabsBar({
                 <SelectItem value={FOCUS_TAB} className={ROW}>
                   <CrosshairIcon className="size-4 shrink-0 text-faint" aria-hidden />
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate">Focus</span>
+                    <span className="truncate">{tr("app.tabs.focus")}</span>
                   </span>
-                  {focus.count > 0 && <span className="text-muted-foreground text-xs leading-none">{focus.count} waiting</span>}
+                  {focus.count > 0 && <span className="text-muted-foreground text-xs leading-none">{tr("app.tabs.waiting", { count: focus.count })}</span>}
                 </SelectItem>
               )}
               {given.map((id) => {
@@ -501,9 +515,9 @@ export function TabsBar({
         </div>
       )}
       {activeId && activeId !== FOCUS_TAB && (
-        <PhoneClose label={`Close ${active?.title ?? "tab"}`} onClose={() => onClose(activeId)} cleanup={cleanupMenu && onCleanup && (() => cleanupMenu())} onCleanup={cleanUp} />
+        <PhoneClose label={tr("app.tabs.closeTab", { title: active?.title ?? tr("app.tabs.closeTabFallback") })} onClose={() => onClose(activeId)} cleanup={cleanupMenu && onCleanup && (() => cleanupMenu())} onCleanup={cleanUp} />
       )}
-      <IconButton label="New session" onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
+      <IconButton label={tr("app.tabs.newSession")} onClick={onNew} testId="tab-new" command="session.new" ref={newButton}>
         <PlusIcon />
       </IconButton>
     </div>
@@ -534,10 +548,11 @@ function CleanupItems({ menu: read, onRun }: { menu: () => CleanupMenu; onRun: (
 
 /** Clean up group (GH-378): Close idle tabs on this group's tabs; disabled when none would close. */
 function GroupCleanup({ X, count: read, onRun }: { X: typeof ContextMenu.Item; count: () => number; onRun: () => void }) {
+  const tr = useT();
   const count = read();
   return (
     <X className={ITEM} disabled={count === 0} data-testid="tab-group-cleanup" onClick={onRun}>
-      <span className="flex-1">Clean up group</span>
+      <span className="flex-1">{tr("app.tabs.cleanupGroup")}</span>
       <span className="ml-4 text-muted-foreground tabular-nums">{count}</span>
     </X>
   );
@@ -548,13 +563,14 @@ type GroupActionProps = { X: ItemC; cleanupCount?: () => number; onCleanup?: () 
 
 /** Move group left / right (chip context menus). */
 function GroupMoveItems({ X, move }: { X: ItemC; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void } }) {
+  const tr = useT();
   return (
     <>
       <X className={ITEM} disabled={!move.left} onClick={() => move.by(-1)}>
-        Move group left
+        {tr("app.tabs.moveGroupLeft")}
       </X>
       <X className={ITEM} disabled={!move.right} onClick={() => move.by(1)}>
-        Move group right
+        {tr("app.tabs.moveGroupRight")}
       </X>
     </>
   );
@@ -562,16 +578,17 @@ function GroupMoveItems({ X, move }: { X: ItemC; move: { left: boolean; right: b
 
 /** Clean up group, Close other groups, Close group: the group actions of every chip menu that has them (GH-359, GH-378). */
 function GroupActionItems({ X, cleanupCount, onCleanup, onCloseOthers, canCloseOthers, onCloseGroup }: GroupActionProps) {
+  const tr = useT();
   return (
     <>
       {onCleanup && <GroupCleanup X={X} count={cleanupCount ?? (() => 0)} onRun={onCleanup} />}
       {onCloseOthers && (
         <X className={ITEM} disabled={!canCloseOthers} data-testid="tab-group-close-others" onClick={onCloseOthers}>
-          Close other groups
+          {tr("app.tabs.closeOtherGroups")}
         </X>
       )}
       <X className={ITEM} data-testid="tab-group-close" onClick={onCloseGroup}>
-        Close group
+        {tr("app.tabs.closeGroup")}
       </X>
     </>
   );
@@ -601,6 +618,7 @@ function keepMenuOpenAfterRelease(): () => void {
 
 /** Phone close button (below md): a tap closes the active tab; a long press or right click opens the Clean up tabs items. */
 function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onClose: () => void; cleanup?: () => CleanupMenu; onCleanup: (rule: CleanupRule) => void }) {
+  const tr = useT();
   // After a long press opened the menu, the release fires a click: ignored until the next pointerdown, however long the press was held.
   const afterMenu = useRef(false);
   // Base UI closes the menu on the release of a long press (its mouseup rule, then the compat mousedown / click that the touch release produces land outside the popup).
@@ -621,7 +639,7 @@ function PhoneClose({ label, onClose, cleanup, onCleanup }: { label: string; onC
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]")} data-testid="tab-cleanup-menu">
             <ContextMenu.Group>
-              <ContextMenu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">Clean up tabs</ContextMenu.GroupLabel>
+              <ContextMenu.GroupLabel className="px-2 py-1 text-muted-foreground text-xs">{tr("app.tabs.cleanupTabs")}</ContextMenu.GroupLabel>
               <CleanupItems menu={cleanup} onRun={onCleanup} />
             </ContextMenu.Group>
           </ContextMenu.Popup>
@@ -656,6 +674,7 @@ type RowView = { stage: "idle" | "drag" | "settle" | "out" | "collapse"; offset:
  * Touch and pen only; `touch-action: pan-y` leaves the list's vertical scroll to the browser, the horizontal move is ours (swipe.ts).
  */
 function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefObject<number>; onClose: (id: string) => void; children: ReactNode }) {
+  const tr = useT();
   const [view, setView] = useState<RowView>({ stage: "idle", offset: 0, width: 0, height: 0, sign: -1 });
   const state = useRef<SwipeState>({ phase: "idle" });
   const cfg = useRef(ROW_SWIPE);
@@ -729,7 +748,7 @@ function SwipeRow({ id, swiped, onClose, children }: { id: string; swiped: RefOb
       {reveal && (
         <div aria-hidden className={cn("absolute inset-0 flex items-center gap-1.5 bg-destructive/10 px-4 font-medium text-destructive text-sm", view.sign < 0 ? "justify-end" : "justify-start")}>
           <XIcon className="size-4" />
-          Close
+          {tr("app.tabs.closeShort")}
         </div>
       )}
       <SelectItem
@@ -868,6 +887,7 @@ function useTriggerSwipe(order: string[], activeId: string | undefined, onSelect
 
 /** The pinned Focus tab: first in the strip, a count of the sessions waiting for the user (a shape and a number, not only a color). */
 function FocusTab({ active, count, focusable, onSelect }: { active: boolean; count: number; focusable: boolean; onSelect: () => void }) {
+  const tr = useT();
   return (
     <div
       className={cn("relative flex h-7 shrink-0 items-center rounded-md transition-colors", active ? "bg-secondary" : "hover:bg-secondary/70")}
@@ -880,12 +900,12 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
         data-command="focus.open"
         aria-selected={active}
         tabIndex={focusable ? 0 : -1}
-        aria-label={count ? `Focus, ${count} ${count === 1 ? "session needs" : "sessions need"} input` : "Focus"}
+        aria-label={count ? tr("app.tabs.focusNeeds", { count }) : tr("app.tabs.focus")}
         className={cn("flex h-full cursor-pointer items-center gap-1.5 rounded-md px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset", active ? "text-foreground" : "text-muted-foreground")}
         onClick={onSelect}
       >
         <CrosshairIcon className="size-4 shrink-0" aria-hidden />
-        <span className="leading-4">Focus</span>
+        <span className="leading-4">{tr("app.tabs.focus")}</span>
         {count > 0 && (
           <span className="flex items-center gap-1 rounded-full bg-warning px-1.5 text-background text-xs tabular-nums leading-4" data-testid="focus-badge" aria-hidden>
             <CircleAlertIcon className="size-3" aria-hidden />
@@ -901,6 +921,7 @@ type TabRowsProps = { activeId?: string; onSelect: (id: string) => void; onClose
 
 /** The tab rows of a group chip menu (compact dropdown and chip context menu): a select item and a close item per tab (GH-277). */
 function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) => TabInfo; rows: TabRowsProps }) {
+  const tr = useT();
   // The focused close item is about to unmount: focus goes to the next row's close item, else the previous one's, else Close group (non-compact context menu only).
   // After the row left the list (setTimeout), as in SwitcherRow: earlier leaves the list's highlight index off by one.
   const close = (id: string, e: { currentTarget: HTMLElement }) => {
@@ -935,7 +956,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
           {label && <span className="text-muted-foreground text-xs leading-none">{label}</span>}
         </Menu.Item>
         <Menu.Item
-          aria-label={`Close ${t.title}`}
+          aria-label={tr("app.tabs.closeTab", { title: t.title })}
           closeOnClick={false}
           data-menu-close={id}
           data-testid="tab-group-tab-close"
@@ -951,6 +972,7 @@ function GroupTabRows({ ids, info, rows }: { ids: string[]; info: (id: string) =
 
 /** Group header: project color, name, tab count; a collapsed group shows its most urgent tab state. */
 function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, onCloseGroup, onCloseOthers, canCloseOthers, cleanupCount, onCleanup, move, rows, compact }: { cleanupCount?: () => number; onCleanup?: () => void; onCloseGroup: () => void; onCloseOthers?: () => void; canCloseOthers: boolean; move: { left: boolean; right: boolean; by: (by: -1 | 1) => void }; rows: TabRowsProps; compact: boolean; onMoveTo: (from: string, to: string) => void; cwd: string; ids: string[]; hiddenIds: string[]; info: (id: string) => TabInfo; collapsed: boolean; onToggle: () => void }) {
+  const tr = useT();
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
   const states = hiddenIds.map((id) => status(id, info(id)));
@@ -966,7 +988,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const coarse = useTouchPrimary();
   const props = {
     "aria-describedby": pathId,
-    "aria-label": `${name}${sub ? ` (${sub})` : ""}, ${ids.length} ${ids.length === 1 ? "tab" : "tabs"}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
+    "aria-label": `${tr("app.tabs.groupLabel", { name: `${name}${sub ? ` (${sub})` : ""}`, count: ids.length })}${urgent ? `, ${STATUS_LABEL[urgent]}` : ""}`,
     "data-group-chip": cwd,
     "data-testid": "tab-group-chip",
     className: "flex h-6 max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-[color-mix(in_oklab,var(--av)_18%,var(--background))] px-1.5 font-medium text-foreground text-xs shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--av)_60%,transparent)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -1065,7 +1087,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-80")} data-testid="tab-group-menu">
             <ContextMenu.Item className={ITEM} onClick={onToggle}>
-              {collapsed ? "Expand group" : "Collapse group"}
+              {collapsed ? tr("app.tabs.expandGroup") : tr("app.tabs.collapseGroup")}
             </ContextMenu.Item>
             <GroupMoveItems X={ContextMenu.Item} move={move} />
             <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
@@ -1155,6 +1177,7 @@ function Tab({
   onRenamed: (title: string | undefined) => void;
   onDragTab?: (id?: string) => void;
 }) {
+  const tr = useT();
   const s = status(id, t);
   const session = id !== NEW_TAB && !t.kind;
   const dragOver = (e: DragEvent) => {
@@ -1210,7 +1233,7 @@ function Tab({
         data-testid="tab"
         data-tab-id={id}
         data-state={s}
-        title={[STATUS_LABEL[s] ? `${t.title} (${STATUS_LABEL[s]})` : t.title, t.worktree, t.path ?? t.cwd].filter(Boolean).join("\n")}
+        title={[STATUS_LABEL[s] ? tr("app.tabs.withStatus", { title: t.title, status: STATUS_LABEL[s] }) : t.title, t.worktree, t.path ?? t.cwd].filter(Boolean).join("\n")}
       >
         {renaming ? (
           <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
@@ -1223,7 +1246,7 @@ function Tab({
             role="tab"
             aria-selected={active}
             tabIndex={focusable ? 0 : -1}
-            aria-label={pinned || splitDir || STATUS_LABEL[s] ? [t.title, pinned && "pinned", splitDir && !splitHidden && `shown in split ${splitN ?? 2}`, STATUS_LABEL[s]].filter(Boolean).join(", ") + (splitHidden ? " (hidden: not enough room)" : "") : undefined}
+            aria-label={pinned || splitDir || STATUS_LABEL[s] ? [t.title, pinned && tr("app.tabs.pinned"), splitDir && !splitHidden && tr("app.tabs.splitShown", { n: splitN ?? 2 }), STATUS_LABEL[s]].filter(Boolean).join(", ") + (splitHidden ? tr("app.tabs.hiddenNoRoom") : "") : undefined}
             className={cn(
               "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               pinned ? "justify-center px-0" : "pr-7 pl-1.5",
@@ -1241,7 +1264,7 @@ function Tab({
         )}
         {!renaming && !pinned && (
           <button
-            aria-label={`Close ${t.title}`}
+            aria-label={tr("app.tabs.closeTab", { title: t.title })}
             // Out of the Tab order (roving tabindex); Delete on the tab closes it.
             tabIndex={-1}
             className={cn(
@@ -1279,7 +1302,7 @@ function Tab({
                   {sec[0]!.id === "close" && cleanup && onCleanup && (
                     <ContextMenu.SubmenuRoot>
                       <ContextMenu.SubmenuTrigger className={ITEM} data-testid="tab-menu-cleanup">
-                        <span className="flex-1">Clean up tabs</span>
+                        <span className="flex-1">{tr("app.tabs.cleanupTabs")}</span>
                         <ChevronRightIcon className="ml-4 size-3.5" aria-hidden />
                       </ContextMenu.SubmenuTrigger>
                       <ContextMenu.Portal>

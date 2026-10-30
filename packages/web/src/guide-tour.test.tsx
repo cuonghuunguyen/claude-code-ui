@@ -239,6 +239,7 @@ it("with nothing focused at the start the focus goes to the shown prompt box at 
   (document.activeElement as HTMLElement).blur();
   const prompt = document.createElement("textarea");
   prompt.setAttribute("aria-label", "Prompt");
+  prompt.setAttribute("data-prompt", "");
   Object.defineProperty(prompt, "offsetParent", { get: () => document.body });
   app.append(prompt);
   await show();

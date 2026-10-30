@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { OAUTH_UNAVAILABLE, PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
+import { PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
+import { t } from "./i18n.ts";
+
+const OAUTH_UNAVAILABLE = t("app.plan.oauthUnavailable");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

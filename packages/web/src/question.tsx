@@ -3,6 +3,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import type { Question } from "@claude-ui/protocol";
 import { CircleCheckIcon, CircleHelpIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "./i18n.ts";
 import { DOCK, TRAY } from "./permission.tsx";
 import type { QuestionRequest } from "./store.ts";
 
@@ -18,6 +19,7 @@ export function answerText(q: Question, { chosen, other }: Choice): string {
 
 /** OpenCode question dock: one question per page, option cards, tray Dismiss · Back · Next / Submit. `onDismiss`: Claude Code's Esc (stops the turn). */
 export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>) => void; onDismiss?: () => void; mode?: ReactNode }) {
+  const t = useT();
   const [choices, setChoices] = useState<Choice[]>(() => part.questions.map(() => ({ chosen: [] })));
   const [page, setPage] = useState(0);
   const answers = part.questions.map((q, i) => answerText(q, choices[i]!));
@@ -36,26 +38,26 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
   const card = (selected: boolean) =>
     `flex cursor-pointer items-start gap-3 rounded-md border bg-muted py-2 pr-2 pl-2.5 hover:bg-card ${selected ? "ring-2 ring-foreground" : ""}`;
   return (
-    <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" aria-label="Question">
+    <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" aria-label={t("session.question.label")}>
       {/* The scroller is a div: a fieldset does not scroll reliably everywhere. The tray below stays in view. */}
       <div className="min-h-0 overflow-y-auto overscroll-contain">
       {part.escalated && (
         <p className="flex items-start gap-2 px-3 pt-3 text-xs" data-testid="question-escalated">
           <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
           <span className="min-w-0 break-words">
-            <span className="font-medium">Escalated by coordinator:</span> {part.reason}
+            <span className="font-medium">{t("session.permission.escalated")}</span> {part.reason}
           </span>
         </p>
       )}
       <fieldset key={q.question} className="flex flex-col gap-2 p-3">
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
           <span className="rounded bg-secondary px-1.5 py-0.5 text-secondary-foreground">{q.header}</span>
-          {page + 1} of {part.questions.length} questions
+          {t("session.question.page", { page: page + 1, total: part.questions.length })}
         </p>
         <legend className="contents">
           <span className="font-medium">{q.question}</span>
         </legend>
-        <p className="text-muted-foreground text-xs">{q.multiSelect ? "Select all answers that apply" : "Select one answer"}</p>
+        <p className="text-muted-foreground text-xs">{q.multiSelect ? t("session.question.selectMany") : t("session.question.selectOne")}</p>
         {q.options.map((o) => (
           <label key={o.label} className={card(c.chosen.includes(o.label))}>
             <input type={type} name={q.question} className="mt-1" checked={c.chosen.includes(o.label)} onChange={() => toggle(o.label)} />
@@ -74,11 +76,11 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             onChange={() => set(page, q.multiSelect ? { ...c, other: c.other === undefined ? "" : undefined } : { chosen: [], other: c.other ?? "" })}
           />
           <span className="flex min-w-0 flex-1 flex-col gap-1">
-            Type your own answer
+            {t("session.question.own")}
             <input
               className="min-w-0 rounded-md border bg-transparent px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:text-base"
-              aria-label={`Other answer to: ${q.question}`}
-              placeholder="Type your answer..."
+              aria-label={t("session.question.otherLabel", { question: q.question })}
+              placeholder={t("session.question.otherPlaceholder")}
               value={c.other ?? ""}
               // Typing chooses Other; for a single-select question it replaces the chosen option.
               onChange={(e) => set(page, q.multiSelect ? { ...c, other: e.target.value } : { chosen: [], other: e.target.value })}
@@ -91,18 +93,18 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
       <div className={TRAY}>
         {mode && <span className="min-w-0">{mode}</span>}
         {onDismiss && (
-          <Button type="button" variant="ghost" className="mr-auto" title="Dismiss (Esc): stops the turn" onClick={onDismiss}>
-            Dismiss
+          <Button type="button" variant="ghost" className="mr-auto" title={t("session.question.dismissHint")} onClick={onDismiss}>
+            {t("session.question.dismiss")}
           </Button>
         )}
         <div className="ml-auto flex gap-2">
           {page > 0 && (
             <Button type="button" variant="outline" onClick={() => setPage(page - 1)}>
-              Back
+              {t("session.question.back")}
             </Button>
           )}
           <Button type="submit" variant={last ? "default" : "outline"} disabled={last ? answers.some((a) => !a) : !answers[page]}>
-            {last ? "Submit" : "Next"}
+            {last ? t("session.question.submit") : t("session.question.next")}
           </Button>
         </div>
       </div>
@@ -111,15 +113,16 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
 }
 
 export function QuestionMarker({ part }: { part: QuestionRequest }) {
+  const t = useT();
   const [label, Icon, className] = !part.settled
-    ? ["Waiting for an answer", CircleHelpIcon, "text-info"]
+    ? [t("session.question.waiting"), CircleHelpIcon, "text-info"]
     : part.answers
       ? [part.questions.map((q) => `${q.header}: ${part.answers![q.question] ?? ""}`).join(" · "), CircleCheckIcon, "text-success"]
-      : ["Cancelled", CircleXIcon, "text-muted-foreground"];
+      : [t("session.question.cancelled"), CircleXIcon, "text-muted-foreground"];
   return (
     <div className="flex min-w-0 items-center gap-2 text-muted-foreground text-xs" data-testid="question-marker" data-settled={part.settled}>
       <Icon className={`size-4 shrink-0 ${className}`} />
-      <span className="shrink-0">Question ·{part.settled && part.answers && part.by === "coordinator" ? " Answered by coordinator ·" : ""}</span>
+      <span className="shrink-0">{part.settled && part.answers && part.by === "coordinator" ? t("session.question.markerCoordinator") : t("session.question.marker")}</span>
       <span className="min-w-0 truncate">{label}</span>
     </div>
   );

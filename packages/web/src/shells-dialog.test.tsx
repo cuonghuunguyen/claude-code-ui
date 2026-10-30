@@ -3,6 +3,7 @@ import type { Part, ShellOutputResult } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { setLocalePref } from "./i18n.ts";
 import { ShellsDialog } from "./shells-dialog.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
@@ -135,4 +136,15 @@ it("a ! shell shows the card's output without a request; Kill sends its part id 
   await click(q("shell-kill"));
   await click(q("shell-kill-confirm"));
   expect(kill).toHaveBeenCalledWith("b1");
+});
+
+it("renders Vietnamese when the language is Vietnamese", async () => {
+  setLocalePref("vi");
+  try {
+    await render(view(bash("a", { command: "npm run dev" }, "running")));
+    expect(document.body.textContent).toContain("Shell nền");
+    expect(q("shell-row")?.textContent).toContain("Đang chạy");
+  } finally {
+    setLocalePref("system");
+  }
 });

@@ -7,6 +7,7 @@ import type { EditorStore } from "./editor-store.ts";
 import { shownPrompt } from "./config-dialog.tsx";
 import { FilesPanel } from "./files-panel.tsx";
 import { trapTab } from "./focus-trap.ts";
+import { useT } from "./i18n.ts";
 import { DialogClose } from "./viewer-dialog.tsx";
 import type { RepoList } from "./repo-choice.ts";
 
@@ -58,6 +59,7 @@ export function FileDialog({
   /** A path that is a file tab already: the caller closes the dialog and focuses that tab. */
   onItem?: (path: string) => void;
 }) {
+  const t = useT();
   // App clears the opener with the dialog, and Base UI asks finalFocus after that render.
   const lastOpener = useRef(opener);
   if (open) lastOpener.current = opener;
@@ -84,7 +86,7 @@ export function FileDialog({
           onKeyDown={trapTab}
           // App shortcuts and Esc (stop turn) skip while an aria-modal dialog shows; Base UI does not set it.
           aria-modal="true"
-          aria-label="Files"
+          aria-label={t("files.title")}
           data-testid="file-dialog"
           className="fixed inset-0 z-50 m-auto flex h-[min(100dvh-32px,90dvh)] w-[min(100vw-32px,1200px)] flex-col overflow-hidden rounded-2xl border bg-card text-foreground shadow-floating outline-none max-sm:h-dvh max-sm:w-full max-sm:rounded-none"
         >

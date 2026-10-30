@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ArrowUpIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
+import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
 import type { SendMode } from "./send-mode.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,16 +13,23 @@ import type { Totals } from "./status-bar.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
-export const MODE_LABEL: Record<PermissionMode, { label: string; short: string; Icon: typeof ShieldIcon }> = {
-  default: { label: "Ask before edits", short: "Ask", Icon: ShieldIcon },
-  acceptEdits: { label: "Edit automatically", short: "Edits", Icon: FilePenIcon },
-  plan: { label: "Plan mode", short: "Plan", Icon: ListTodoIcon },
-  bypassPermissions: { label: "Bypass permissions", short: "Bypass", Icon: ShieldAlertIcon },
-  auto: { label: "Auto mode", short: "Auto", Icon: ShieldCheckIcon },
-  dontAsk: { label: "Don't ask (deny unapproved)", short: "Don't ask", Icon: ShieldBanIcon },
+export const MODE_LABEL: Record<PermissionMode, { label: Key; short: Key; Icon: typeof ShieldIcon }> = {
+  default: { label: "app.toolbar.mode.default", short: "app.toolbar.modeShort.default", Icon: ShieldIcon },
+  acceptEdits: { label: "app.toolbar.mode.acceptEdits", short: "app.toolbar.modeShort.acceptEdits", Icon: FilePenIcon },
+  plan: { label: "app.toolbar.mode.plan", short: "app.toolbar.modeShort.plan", Icon: ListTodoIcon },
+  bypassPermissions: { label: "app.toolbar.mode.bypassPermissions", short: "app.toolbar.modeShort.bypassPermissions", Icon: ShieldAlertIcon },
+  auto: { label: "app.toolbar.mode.auto", short: "app.toolbar.modeShort.auto", Icon: ShieldCheckIcon },
+  dontAsk: { label: "app.toolbar.mode.dontAsk", short: "app.toolbar.modeShort.dontAsk", Icon: ShieldBanIcon },
 };
 
-export const EFFORT_LABEL: Record<Effort, string> = { default: "Default", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+export const EFFORT_LABEL: Record<Effort, Key> = {
+  default: "app.toolbar.effort.default",
+  low: "app.toolbar.effort.low",
+  medium: "app.toolbar.effort.medium",
+  high: "app.toolbar.effort.high",
+  xhigh: "app.toolbar.effort.xhigh",
+  max: "app.toolbar.effort.max",
+};
 
 /** Shift+Tab: the next mode in Claude Code's order, wrapping around. Don't ask is only chosen from the picker: a silently denying mode must not be entered by accident. */
 export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
@@ -32,7 +40,7 @@ export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
 /** "Default (recommended)" -> "Default model": the picker label on a phone, where the toolbar has no room for the note. Only that note goes; one that names the model (a context size) stays. "Default" alone would read like the effort chooser beside it. */
 export const shortModel = (name: string) => {
   const short = name.replace(/\s*\(recommended\)\s*$/i, "") || name;
-  return short === "Default" ? "Default model" : short;
+  return short === "Default" ? t("app.toolbar.defaultModel") : short;
 };
 
 /** The model's effort levels plus "default"; none when the model does not support effort (the chooser is hidden). */
@@ -110,16 +118,17 @@ export function Chooser<T extends string>({
 
 /** Permission mode chooser: in the prompt toolbar and in the tray of the permission and question panels (GH-145). */
 export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortcut = true }: { mode: PermissionMode; modes: PermissionMode[]; onMode: (mode: PermissionMode) => void; className?: string; /** Shift+Tab cycles the mode only in the prompt textarea: the panels pass false. */ shortcut?: boolean }) {
+  const t = useT();
   const all = modes.includes(mode) ? modes : [mode, ...modes];
   const Mode = MODE_LABEL[mode].Icon;
   return (
     <Chooser
-      label={shortcut ? "Permission mode (Shift+Tab)" : "Permission mode"}
+      label={shortcut ? t("app.toolbar.permissionModeKey") : t("app.toolbar.permissionMode")}
       testId="mode-select"
       value={mode}
       onChange={onMode}
       icon={<Mode className="size-4" />}
-      items={all.map((m) => ({ value: m, label: MODE_LABEL[m].label, trigger: <span><span className="@2xl:hidden">{MODE_LABEL[m].short}</span><span className="hidden @2xl:inline">{MODE_LABEL[m].label}</span></span> }))}
+      items={all.map((m) => ({ value: m, label: t(MODE_LABEL[m].label), trigger: <span><span className="@2xl:hidden">{t(MODE_LABEL[m].short)}</span><span className="hidden @2xl:inline">{t(MODE_LABEL[m].label)}</span></span> }))}
       className={className}
     />
   );
@@ -156,6 +165,7 @@ export function PromptToolbar(props: {
   /** The focused send button became disabled (stopped or sent from the keyboard, disconnected): focus goes back to the prompt box. */
   onFocusLost: () => void;
 }) {
+  const t = useT();
   const file = useRef<HTMLInputElement>(null);
   // Keep the current value selectable while the list loads or if it is not in the list.
   const models = props.models.some((m) => m.value === props.model) ? props.models : [{ value: props.model, displayName: props.model, description: "" }, ...props.models];
@@ -181,8 +191,8 @@ export function PromptToolbar(props: {
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2 max-sm:flex-nowrap">
         <button
           type="button"
-          aria-label="Add images and files"
-          title="Add images and files"
+          aria-label={t("app.toolbar.attach")}
+          title={t("app.toolbar.attach")}
           data-testid="attach"
           className={`${GHOST} flex w-7 shrink-0 items-center justify-center px-0! pointer-coarse:w-11`}
           onClick={() => file.current?.click()}
@@ -207,7 +217,7 @@ export function PromptToolbar(props: {
         ) : (
           <>
             <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} />
-            <Chooser label="Model" testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
+            <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
           </>
         )}
@@ -222,7 +232,8 @@ export function PromptToolbar(props: {
 }
 
 function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { efforts: Effort[]; effort: Effort; onEffort: (e: Effort) => void; className?: string }) {
-  return <Chooser label="Thinking effort" testId="effort-select" value={effort} onChange={onEffort} icon={<BrainIcon className="size-4" />} items={efforts.map((e) => ({ value: e, label: EFFORT_LABEL[e] }))} className={className} />;
+  const t = useT();
+  return <Chooser label={t("app.toolbar.thinkingEffort")} testId="effort-select" value={effort} onChange={onEffort} icon={<BrainIcon className="size-4" />} items={efforts.map((e) => ({ value: e, label: t(EFFORT_LABEL[e]) }))} className={className} />;
 }
 
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
@@ -230,11 +241,12 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
   efforts: Effort[]; effort: Effort; modelItems: { value: string; label: string; description?: string; trigger?: ReactNode }[];
 }) {
+  const t = useT();
   const Mode = MODE_LABEL[mode].Icon;
   const name = models.find((m) => m.value === model)?.displayName ?? model;
-  const visible = `${MODE_LABEL[mode].short} · ${shortModel(name)}`;
+  const visible = `${t(MODE_LABEL[mode].short)} · ${shortModel(name)}`;
   // The name starts with the visible text (WCAG 2.5.3), then lists every setting the chip opens.
-  const label = `${visible}, session settings: ${MODE_LABEL[mode].label}, ${name}${efforts.length ? `, effort ${EFFORT_LABEL[effort]}` : ""}`;
+  const label = `${t("app.toolbar.sessionSettingsLabel", { visible, mode: t(MODE_LABEL[mode].label), model: name })}${efforts.length ? t("app.toolbar.sessionSettingsEffort", { effort: t(EFFORT_LABEL[effort]) }) : ""}`;
   const wide = "w-full max-w-none justify-start max-sm:h-11!";
   return (
     <Popover.Root>
@@ -246,11 +258,11 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
         <Popover.Positioner side="top" align="start" sideOffset={6} className="z-50">
           <Popover.Popup
             data-testid="session-settings-popup"
-            aria-label="Session settings"
+            aria-label={t("app.toolbar.sessionSettings")}
             className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
-            <Chooser label="Model" testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
+            <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}
           </Popover.Popup>
         </Popover.Positioner>
@@ -269,11 +281,12 @@ export function sendHint({ steer, canQueue, queue, shell }: { steer: boolean; ca
   if (!steer || !canQueue) return "";
   const alt = keyText("alt+enter");
   const enter = keyText("enter");
-  if (shell) return `${enter} queue the command`;
-  return queue ? `${enter} queue · ${alt} steer` : `${enter} steer · ${alt} queue`;
+  if (shell) return t("app.toolbar.hintQueueCommand", { enter });
+  return t(queue ? "app.toolbar.hintQueueSteer" : "app.toolbar.hintSteerQueue", { enter, alt });
 }
 
 function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shell, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; shell?: boolean; onStop: () => void; onFocusLost: () => void }) {
+  const t = useT();
   const ref = useRef<HTMLButtonElement>(null);
   const disabled = state === "disconnected" || (state === "idle" && !hasInput);
   // Chrome blurs a focused button the moment it is disabled, inside React's commit: React drops the event (native listener) and the
@@ -293,13 +306,13 @@ function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shel
   const steer = busy && hasInput;
   // Steering and queueing are both the "send" while busy; queue only when the box can queue and the setting says so.
   const queue = steer && !!onQueue && sendMode === "queue";
-  const verb = queue ? "Queue" : "Steer";
+  const verb = queue ? t("app.toolbar.queue") : t("app.toolbar.steer");
   const [label, key] =
     state === "disconnected"
-      ? ["Disconnected from the daemon", ""]
+      ? [t("app.toolbar.disconnected"), ""]
       : state === "idle"
-        ? ["Send", " (Enter)"]
-        : [`${state === "running" ? "Claude is working" : "Claude needs your input"}. ${steer ? verb : "Stop"}`, steer ? " (Enter)" : " (Esc)"];
+        ? [t("app.toolbar.send"), " (Enter)"]
+        : [t(state === "running" ? "app.toolbar.working" : "app.toolbar.needsInput", { action: steer ? verb : t("app.toolbar.stop") }), steer ? " (Enter)" : " (Esc)"];
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : queue ? ListPlusIcon : ArrowUpIcon;
   // The hint above the button: Enter does the setting's mode, Alt+Enter the other (only when the box can queue).
   const hint = sendHint({ steer, canQueue: !!onQueue, queue, shell });
@@ -327,7 +340,7 @@ function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shel
     <>
     {/* Steering or queueing: the send button is that action, so Stop (Esc, which a phone has not) gets its own button (GH-165). */}
     {steer && (
-      <button type="button" aria-label="Stop" title="Stop (Esc)" data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
+      <button type="button" aria-label={t("app.toolbar.stop")} title={t("app.toolbar.stopKey")} data-testid="toolbar-stop" className={`${SEND_BASE} bg-secondary text-secondary-foreground`} onClick={onStop}>
         <SquareIcon aria-hidden className="size-2.5 fill-current" />
       </button>
     )}

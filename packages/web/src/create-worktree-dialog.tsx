@@ -11,6 +11,7 @@ import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { baseOptions, branchesWithKey, branchKind, branchWithKey, checkoutRef, pasteOf, filterBranches, folderOf, saveSource, SOURCES, storedSource, type Source } from "./create-worktree.ts";
 import { isImeKey } from "./ime.ts";
 import { projectName } from "./tabs.ts";
+import { useT } from "./i18n.ts";
 
 type Props = {
   /** The project whose repository gets the worktree; the modal shows while set. */
@@ -32,6 +33,7 @@ const SEARCH_DELAY = 300;
 type Create = { branch: string; base?: string } | { checkout: string };
 
 function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & { project: string }) {
+  const t = useT();
   const ask = useRef(request);
   ask.current = request;
   const [picked, setPicked] = useState<Source | undefined>(storedSource);
@@ -79,25 +81,25 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     if (source !== "ticket" || !jira?.ready) return;
     let live = true;
     setSearching(true);
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       // A pull request link: the ticket its branch names.
       const paste = pasteOf(query);
       const text =
         paste.kind === "pr"
           ? ask.current<PullRequestBranchesResult>({ type: "worktree.pr", cwd: project, url: paste.url }).then((r) => {
               const key = r.branches.map(jiraKeyInBranch).find(Boolean);
-              if (!key) throw new Error(r.branches.length ? `The branch of pull request #${r.number} (${r.branches.join(", ")}) names no ticket key` : `No branch of origin is at the head of pull request #${r.number}`);
+              if (!key) throw new Error(r.branches.length ? t("sidebar.cw.prNoTicket", { number: r.number, branches: r.branches.join(", ") }) : t("sidebar.cw.prNoBranch", { number: r.number }));
               return key;
             })
           : Promise.resolve(query.trim());
-      text.then((t) => ask.current<JiraSearchResult>({ type: "jira.search", ...(t && { text: t }) })).then(
+      text.then((q) => ask.current<JiraSearchResult>({ type: "jira.search", ...(q && { text: q }) })).then(
         (r) => live && (setTickets(r.tickets), setTicketError(undefined)),
         (e: Error) => live && (setTickets(undefined), setTicketError(e.message)),
       ).finally(() => live && setSearching(false));
     }, query ? SEARCH_DELAY : 0);
     return () => {
       live = false;
-      clearTimeout(t);
+      clearTimeout(timer);
     };
   }, [source, jira?.ready, query, project]);
 
@@ -108,7 +110,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     if (!prUrl) return;
     let live = true;
     setPr({ url: prUrl });
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       ask.current<PullRequestBranchesResult>({ type: "worktree.pr", cwd: project, url: prUrl }).then(
         (result) => live && setPr({ url: prUrl, result }),
         (e: Error) => live && setPr({ url: prUrl, error: e.message }),
@@ -116,7 +118,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     }, SEARCH_DELAY);
     return () => {
       live = false;
-      clearTimeout(t);
+      clearTimeout(timer);
     };
   }, [prUrl, project]);
 
@@ -134,9 +136,9 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     choose(SOURCES[to]!.id, true);
   };
 
-  const pickTicket = (t: JiraTicket) => {
-    setTicket(t);
-    setTicketText(ticketBranchName(jira?.template || "{type}/{key}-{summary}", t));
+  const pickTicket = (tk: JiraTicket) => {
+    setTicket(tk);
+    setTicketText(ticketBranchName(jira?.template || "{type}/{key}-{summary}", tk));
     setError(undefined);
   };
   const newBranch = source === "name" ? normalizeBranchName(name) : source === "ticket" && ticket ? normalizeBranchName(ticketText, { keep: ticket.key }) : "";
@@ -176,15 +178,15 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     : prNow.error
       ? { error: true, text: prNow.error }
       : !prNow.result
-        ? { error: false, text: "Looking up the pull request on origin…" }
+        ? { error: false, text: t("sidebar.cw.prLooking") }
         : !prNow.result.branches.length
-          ? { error: false, text: `No branch of origin is at the head of pull request #${prNow.result.number}: merged and deleted, or pushed over.` }
-          : { error: false, text: `Pull request #${prNow.result.number}: ${prNow.result.branches.join(", ")}${prNow.result.branches.some((b) => !branches?.some((r) => r.name === b)) ? " (not fetched yet: wait for the fetch from origin)" : ""}` };
+          ? { error: false, text: t("sidebar.cw.prGone", { number: prNow.result.number }) }
+          : { error: false, text: `${t("sidebar.cw.prBranches", { number: prNow.result.number, branches: prNow.result.branches.join(", ") })}${prNow.result.branches.some((b) => !branches?.some((r) => r.name === b)) ? t("sidebar.cw.prNotFetched") : ""}` };
   const options = useMemo(() => baseOptions(branches ?? []), [branches]);
-  const baseLabel = (v: string | null) => (v ? (options.find((o) => o.value === v)?.label ?? v) : `Default (${defaultBase ?? "…"})`);
+  const baseLabel = (v: string | null) => (v ? (options.find((o) => o.value === v)?.label ?? v) : t("sidebar.cw.baseDefault", { base: defaultBase ?? "…" }));
   const basePicker = (
     <div className="flex flex-col gap-1 text-sm">
-      <span id="create-worktree-base-label">Base</span>
+      <span id="create-worktree-base-label">{t("sidebar.cw.base")}</span>
       <Select value={base} onValueChange={(v) => setBase(v ?? "")}>
         <SelectTrigger aria-labelledby="create-worktree-base-label" className="w-full min-w-0 data-[size=default]:h-8 max-md:data-[size=default]:h-11" data-testid="create-worktree-base">
           <SelectValue className="min-w-0 truncate">{baseLabel}</SelectValue>
@@ -199,19 +201,21 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       </Select>
     </div>
   );
+  // A path, not a word of a language.
+  const folderPath = shownBranch ? `.claude/worktrees/${checkoutFolder(shownBranch)}` : "—";
   const result = (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-md bg-secondary/50 px-3 py-2 text-xs" data-testid="create-worktree-result">
-      <dt className="text-muted-foreground">Branch</dt>
+      <dt className="text-muted-foreground">{t("sidebar.cw.branch")}</dt>
       <dd className="min-w-0 break-all font-mono" data-testid="create-worktree-branch">{shownBranch || "—"}</dd>
-      <dt className="text-muted-foreground">Folder</dt>
-      <dd className="min-w-0 break-all font-mono" data-testid="create-worktree-folder">{shownBranch ? `.claude/worktrees/${checkoutFolder(shownBranch)}` : "—"}</dd>
+      <dt className="text-muted-foreground">{t("sidebar.cw.folder")}</dt>
+      <dd className="min-w-0 break-all font-mono" data-testid="create-worktree-folder">{folderPath}</dd>
     </dl>
   );
   const hint = (nameProblem ?? checkoutProblem) && <p className="text-destructive text-xs" role="alert" data-testid="create-worktree-problem">{nameProblem ?? checkoutProblem}</p>;
 
   return (
     <ConfigDialog
-      title="Create worktree"
+      title={t("sidebar.cw.title")}
       open
       onClose={onClose}
       busy={creating}
@@ -220,16 +224,16 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         <>
           <span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{projectName(project)}</span>
           <Button variant="ghost" className="cursor-pointer max-md:h-11" onClick={onClose} disabled={creating} data-testid="create-worktree-cancel">
-            Cancel
+            {t("sidebar.cancel")}
           </Button>
           <Button className="cursor-pointer max-md:h-11" onClick={() => void create()} disabled={!plan || creating} data-testid="create-worktree-confirm">
             {creating && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}
-            {source === "branch" ? "Check out" : "Create"}
+            {t(source === "branch" ? "sidebar.cw.checkOut" : "sidebar.cw.create")}
           </Button>
         </>
       }
     >
-      <div role="tablist" aria-label="Branch source" onKeyDown={onTabKey} className="flex gap-1 rounded-lg bg-secondary/50 p-1" data-testid="create-worktree-sources">
+      <div role="tablist" aria-label={t("sidebar.cw.sourceAria")} onKeyDown={onTabKey} className="flex gap-1 rounded-lg bg-secondary/50 p-1" data-testid="create-worktree-sources">
         {SOURCES.map((s) => (
           <button
             key={s.id}
@@ -244,7 +248,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
             className={cn("h-7 flex-1 rounded-md text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11", s.id === source ? "bg-background font-medium text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
             data-testid={`create-worktree-tab-${s.id}`}
           >
-            {s.title}
+            {t(s.title)}
           </button>
         ))}
       </div>
@@ -252,9 +256,9 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         {source === "name" && (
           <>
             <label className="flex flex-col gap-1 text-sm">
-              Name
-              <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={enter} placeholder="e.g. Fix login" maxLength={200} autoFocus className={INPUT} data-testid="create-worktree-name" />
-              <span className="text-muted-foreground text-xs">Lowercase letters, digits, . _ - and /; other characters become -.</span>
+              {t("sidebar.cw.name")}
+              <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={enter} placeholder={t("sidebar.cw.namePlaceholder")} maxLength={200} autoFocus className={INPUT} data-testid="create-worktree-name" />
+              <span className="text-muted-foreground text-xs">{t("sidebar.cw.nameHelp")}</span>
             </label>
             {basePicker}
             {result}
@@ -263,17 +267,17 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         )}
         {source === "branch" && (
           <>
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter, or paste a pull request or ticket link" aria-label="Filter branches" autoFocus className={INPUT} data-testid="create-worktree-filter" />
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("sidebar.cw.filterPlaceholder")} aria-label={t("sidebar.cw.filterAria")} autoFocus className={INPUT} data-testid="create-worktree-filter" />
             {prNote && (
               <p role={prNote.error ? "alert" : "status"} className={cn("text-xs", prNote.error ? "text-destructive" : "text-muted-foreground")} data-testid="create-worktree-pr">
                 {prNote.text}
               </p>
             )}
-            {fetching && <p className="text-muted-foreground text-xs" data-testid="create-worktree-fetching">Fetching from origin…</p>}
-            {fetchError && <p className="text-muted-foreground text-xs" data-testid="create-worktree-offline">Could not fetch from origin; showing the branches known locally.</p>}
-            <div role="listbox" aria-label="Branches" className="flex max-h-60 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-branches">
-              {!branches && <p className="px-3 py-2 text-muted-foreground text-sm">Loading…</p>}
-              {branches && !shownRows.length && !(prNow && !prNow.result) && <p className="px-3 py-2 text-muted-foreground text-sm">No branches</p>}
+            {fetching && <p className="text-muted-foreground text-xs" data-testid="create-worktree-fetching">{t("sidebar.cw.fetching")}</p>}
+            {fetchError && <p className="text-muted-foreground text-xs" data-testid="create-worktree-offline">{t("sidebar.cw.offline")}</p>}
+            <div role="listbox" aria-label={t("sidebar.cw.branches")} className="flex max-h-60 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-branches">
+              {!branches && <p className="px-3 py-2 text-muted-foreground text-sm">{t("sidebar.cw.loading")}</p>}
+              {branches && !shownRows.length && !(prNow && !prNow.result) && <p className="px-3 py-2 text-muted-foreground text-sm">{t("sidebar.cw.noBranches")}</p>}
               {shownRows.map((b) => (
                 <button
                   key={b.name}
@@ -288,7 +292,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
                   data-name={b.name}
                 >
                   <span className="min-w-12 flex-1 truncate font-mono">{b.name}</span>
-                  <span className="min-w-0 max-w-[55%] truncate text-muted-foreground text-xs" title={b.worktree}>{b.worktree ? `in worktree ${folderOf(b.worktree)}` : branchKind(b)}</span>
+                  <span className="min-w-0 max-w-[55%] truncate text-muted-foreground text-xs" title={b.worktree}>{b.worktree ? t("sidebar.cw.inWorktree", { name: folderOf(b.worktree) }) : branchKind(b)}</span>
                 </button>
               ))}
             </div>
@@ -298,54 +302,53 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         )}
         {source === "ticket" &&
           (!jira ? (
-            <p className="text-muted-foreground text-sm">Loading…</p>
+            <p className="text-muted-foreground text-sm">{t("sidebar.cw.loading")}</p>
           ) : !jira.ready ? (
             <p className="text-sm" data-testid="create-worktree-no-jira">
-              Jira is not set up.{" "}
+              {t("sidebar.cw.noJira")}{" "}
               <button type="button" onClick={onJiraSettings} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="create-worktree-jira-settings">
-                Open Settings › Jira
+                {t("sidebar.cw.openJira")}
               </button>
             </p>
           ) : (
             <>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Key, text, ticket or pull request link" aria-label="Search tickets" autoFocus className={INPUT} data-testid="create-worktree-ticket-search" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("sidebar.cw.ticketPlaceholder")} aria-label={t("sidebar.cw.searchTickets")} autoFocus className={INPUT} data-testid="create-worktree-ticket-search" />
               {ticketError && <Banner kind="error">{ticketError}</Banner>}
-              <div role="listbox" aria-label="Tickets" className="flex max-h-48 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-tickets">
-                {searching && !tickets && <p className="px-3 py-2 text-muted-foreground text-sm">Searching…</p>}
-                {tickets && !tickets.length && <p className="px-3 py-2 text-muted-foreground text-sm">{query.trim() ? "No tickets found" : jira.filter ? "No tickets match the Ticket filter" : "No open tickets assigned to you"}</p>}
-                {tickets?.map((t) => (
+              <div role="listbox" aria-label={t("sidebar.cw.tickets")} className="flex max-h-48 flex-col overflow-y-auto rounded-md border" data-testid="create-worktree-tickets">
+                {searching && !tickets && <p className="px-3 py-2 text-muted-foreground text-sm">{t("sidebar.cw.searching")}</p>}
+                {tickets && !tickets.length && <p className="px-3 py-2 text-muted-foreground text-sm">{t(query.trim() ? "sidebar.cw.noTickets" : jira.filter ? "sidebar.cw.noTicketsFilter" : "sidebar.cw.noTicketsOpen")}</p>}
+                {tickets?.map((tk) => (
                   <button
-                    key={t.key}
+                    key={tk.key}
                     type="button"
                     role="option"
-                    aria-selected={t.key === ticket?.key}
-                    onClick={() => pickTicket(t)}
-                    className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-left text-sm outline-none focus-visible:bg-accent max-md:min-h-11", t.key === ticket?.key ? "bg-accent" : "hover:bg-accent/60")}
+                    aria-selected={tk.key === ticket?.key}
+                    onClick={() => pickTicket(tk)}
+                    className={cn("flex min-h-8 items-center gap-2 px-3 py-1 text-left text-sm outline-none focus-visible:bg-accent max-md:min-h-11", tk.key === ticket?.key ? "bg-accent" : "hover:bg-accent/60")}
                     data-testid="create-worktree-ticket-row"
-                    data-key={t.key}
+                    data-key={tk.key}
                   >
-                    <span className="shrink-0 font-mono text-xs">{t.key}</span>
-                    <span className="shrink-0 text-muted-foreground text-xs max-sm:hidden">{t.type}</span>
-                    <span className="min-w-0 flex-1 truncate">{t.summary}</span>
-                    <span className="shrink-0 text-muted-foreground text-xs">{t.status}</span>
+                    <span className="shrink-0 font-mono text-xs">{tk.key}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs max-sm:hidden">{tk.type}</span>
+                    <span className="min-w-0 flex-1 truncate">{tk.summary}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs">{tk.status}</span>
                   </button>
                 ))}
               </div>
               {ticket && (
                 <>
                   <label className="flex flex-col gap-1 text-sm">
-                    Branch name
+                    {t("sidebar.cw.branchName")}
                     <input value={ticketText} onChange={(e) => setTicketText(e.target.value)} onKeyDown={enter} maxLength={200} className={INPUT} data-testid="create-worktree-ticket-branch" />
                   </label>
                   {existing && (
                     <div className="flex flex-wrap items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm" data-testid="create-worktree-existing">
                       <span className="min-w-0 flex-1">
-                        Branch <span className="break-all font-mono">{existing.name}</span> already has {ticket.key}
-                        {existing.worktree ? ` (in worktree ${folderOf(existing.worktree)})` : ""}.
+                        {t("sidebar.cw.existing", { name: existing.name, key: ticket.key, where: existing.worktree ? t("sidebar.cw.existingWhere", { name: folderOf(existing.worktree) }) : "" })}
                       </span>
                       {!existing.worktree && (
                         <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={creating} onClick={() => void create({ checkout: checkoutRef(existing) })} data-testid="create-worktree-checkout-existing">
-                          Check out {existing.name}
+                          {t("sidebar.cw.checkOutNamed", { name: existing.name })}
                         </Button>
                       )}
                     </div>

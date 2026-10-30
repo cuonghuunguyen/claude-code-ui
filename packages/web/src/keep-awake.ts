@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { shownState, type SessionView } from "./store.ts";
+import { t } from "./i18n.ts";
 
 export type KeepAwakeSetting = { on: boolean; onlyRunning: boolean };
 /** off: setting off · held: lock held · idle: on, "only while running" is set and nothing runs · hidden: on, the page is not visible · pending: on and wanted, the lock is on its way or was dropped and is asked for again · refused: the browser rejected the request · unsupported: no API here. */
@@ -61,7 +62,7 @@ export const useKeepAwakeSetting = (): KeepAwakeSetting => useSyncExternalStore(
 export const wakeLockSupported = (nav: Navigator = navigator, win: Window = window): boolean => !!win.isSecureContext && typeof nav.wakeLock?.request === "function";
 
 /** Why the feature is missing here: an insecure page (plain http on a LAN address) or a browser without the API. */
-export const wakeLockReason = (win: Window = window): string => (win.isSecureContext ? "not supported by this browser" : "needs HTTPS or localhost");
+export const wakeLockReason = (win: Window = window): string => (win.isSecureContext ? t("awake.reasonUnsupported") : t("awake.reasonHttps"));
 
 type Doc = Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
 

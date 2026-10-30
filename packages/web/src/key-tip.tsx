@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { Toast } from "./toast.tsx";
 import { useKeymap } from "./keymap.ts";
 import { keyText, shortcutById } from "./shortcuts.ts";
+import { shortcutTitle } from "./shortcut-titles.ts";
 import { recordClick, setKeyTipsOn, useKeyTipsOn } from "./key-tips.ts";
 import { Switch } from "./plugins-dialog.tsx";
+import { useT } from "./i18n.ts";
 
 /** The command a click counts for, or undefined: a mouse click (not touch, pen or keyboard) on an enabled [data-command] in the registry. */
 export function clickedCommand(e: MouseEvent, lastPointer: string | undefined): string | undefined {
@@ -32,6 +34,7 @@ function useModalOpen() {
 }
 
 export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; onAssign: (id: string) => void; onTurnedOff: () => void }) {
+  const t = useT();
   const on = useKeyTipsOn();
   const specOf = useKeymap();
   const [tip, setTip] = useState<{ n: number; id: string }>();
@@ -52,7 +55,7 @@ export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; on
   const shown = !!tip && !hidden && !modal;
   const s = tip && shortcutById(tip.id);
   const spec = tip && specOf(tip.id);
-  const text = !tip || !s ? "" : spec ? `${s.title}: ${keyText(spec)}` : `${s.title} has no shortcut.`;
+  const text = !tip || !s ? "" : spec ? `${shortcutTitle(s.id)}: ${keyText(spec)}` : t("keyTip.noShortcut", { title: shortcutTitle(s.id) });
   // The polite live region is always mounted and gets its text after mount: screen readers announce a change, not a region created with its text.
   const [said, setSaid] = useState("");
   useEffect(() => setSaid(shown ? text : ""), [shown, text, tip?.n]);
@@ -63,9 +66,9 @@ export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; on
     <>
       {live}
       {spec ? (
-        <Toast key={tip.n} message={text} action={{ label: "Turn off tips", onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} bigTargets silent />
+        <Toast key={tip.n} message={text} action={{ label: t("keyTip.turnOff"), onClick: () => (setKeyTipsOn(false), onTurnedOff()) }} onClose={close} bigTargets silent />
       ) : (
-        <Toast key={tip.n} message={text} action={{ label: "Assign a shortcut…", onClick: () => onAssign(tip.id) }} onClose={close} bigTargets silent />
+        <Toast key={tip.n} message={text} action={{ label: t("keyTip.assign"), onClick: () => onAssign(tip.id) }} onClose={close} bigTargets silent />
       )}
     </>
   );
@@ -73,16 +76,17 @@ export function KeyTips({ hidden, onAssign, onTurnedOff }: { hidden: boolean; on
 
 /** Settings › Keyboard row. */
 export function KeyTipsRow() {
+  const t = useT();
   const on = useKeyTipsOn();
   return (
     <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
       <div className="min-w-0 flex-1">
-        <span className="block text-sm">Show shortcut tips</span>
+        <span className="block text-sm">{t("keyTip.label")}</span>
         <span id="settings-key-tips-hint" className="block text-muted-foreground text-xs">
-          After the 2nd, 5th and 10th click on a button, a tip shows its shortcut or offers to assign one. Not on touch screens. Kept in this browser.
+          {t("keyTip.hint")}
         </span>
       </div>
-      <Switch on={on} label="Show shortcut tips" held={false} onToggle={setKeyTipsOn} title="Show shortcut tips" describedBy="settings-key-tips-hint" testId="settings-key-tips" />
+      <Switch on={on} label={t("keyTip.label")} held={false} onToggle={setKeyTipsOn} title={t("keyTip.label")} describedBy="settings-key-tips-hint" testId="settings-key-tips" />
     </div>
   );
 }

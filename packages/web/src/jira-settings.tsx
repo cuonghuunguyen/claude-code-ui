@@ -7,6 +7,7 @@ import { LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
 import { isImeKey } from "./ime.ts";
+import { useT } from "./i18n.ts";
 
 type Props = {
   jira: Settings["jira"];
@@ -25,6 +26,7 @@ const INPUT = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-n
 const ROW = "flex flex-col gap-1 border-t py-2";
 
 export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request, onResult, onError }: Props) {
+  const t = useT();
   const [draft, setDraft] = useState<Partial<Record<"url" | "email" | "template" | "jql", string>>>({});
   const [replacing, setReplacing] = useState(false);
   const [token, setToken] = useState("");
@@ -59,7 +61,7 @@ export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request,
       </span>
       {k === "url" && jiraUrlProblem(jira.url) && (
         <span role="alert" className="text-destructive text-xs" data-testid="settings-jira-url-error">
-          {jiraUrlProblem(jira.url)}
+          {t("common.jira.httpsRule")}
         </span>
       )}
     </label>
@@ -83,7 +85,7 @@ export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request,
     setTest(undefined);
     try {
       const r = await request<{ user: string }>({ type: "jira.test" });
-      setTest({ ok: true, text: `Connected as ${r.user}` });
+      setTest({ ok: true, text: t("jira.connectedAs", { user: r.user }) });
     } catch (e) {
       setTest({ ok: false, text: (e as Error).message });
     } finally {
@@ -96,22 +98,22 @@ export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request,
       <h3 id="settings-jira" className="pb-1 font-medium text-[13px] text-muted-foreground">
         Jira
       </h3>
-      {field("url", "Jira URL", "Cloud: https://<site>.atlassian.net. Data Center or Server: the https address of your Jira. Changing the host clears the token.", { type: "url", placeholder: "https://acme.atlassian.net" })}
-      {cloud && field("email", "Email", "Your Atlassian account email (Jira Cloud only).", { type: "email" })}
+      {field("url", t("jira.url"), t("jira.urlHint"), { type: "url", placeholder: "https://acme.atlassian.net" })}
+      {cloud && field("email", t("jira.email"), t("jira.emailHint"), { type: "email" })}
       <div className={ROW}>
         <span id="settings-jira-token-label" className="text-sm">
-          {cloud ? "API token" : "Personal access token"}
+          {cloud ? t("jira.apiToken") : t("jira.pat")}
         </span>
         {tokenSet && !replacing ? (
           <div className="flex flex-wrap items-center gap-2">
             <span className="flex-1 text-sm" data-testid="settings-jira-token-set">
-              Token set
+              {t("jira.tokenSet")}
             </span>
             <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={busy} onClick={() => setReplacing(true)} data-testid="settings-jira-token-replace">
-              Replace
+              {t("jira.replace")}
             </Button>
             <Button variant="destructive" size="sm" className="cursor-pointer max-md:h-11" disabled={busy} onClick={() => void setTokenTo(null)} data-testid="settings-jira-token-clear">
-              Clear
+              {t("jira.clear")}
             </Button>
           </div>
         ) : (
@@ -128,30 +130,30 @@ export function JiraSection({ jira, tokenSet, tokenReset, saving, save, request,
               data-testid="settings-jira-token"
             />
             <Button size="sm" className="cursor-pointer max-md:h-11" disabled={busy || !token.trim()} onClick={() => void setTokenTo(token.trim())} data-testid="settings-jira-token-save">
-              Save
+              {t("jira.save")}
             </Button>
             {replacing && (
               <Button variant="ghost" size="sm" className="cursor-pointer max-md:h-11" onClick={() => (setReplacing(false), setToken(""))} data-testid="settings-jira-token-cancel">
-                Cancel
+                {t("jira.cancel")}
               </Button>
             )}
           </div>
         )}
         {tokenReset && !tokenSet && (
           <span role="status" className="text-xs" data-testid="settings-jira-token-reset">
-            Your saved token was cleared by a security update. Enter it again.
+            {t("jira.tokenReset")}
           </span>
         )}
         <span id="settings-jira-token-hint" className="text-muted-foreground text-xs">
-          {cloud ? "Create one at id.atlassian.com › Security › API tokens." : "Create one in Jira › Profile › Personal Access Tokens."} Saved on the daemon's computer only, never shown again.
+          {t("jira.tokenHint", { create: cloud ? t("jira.createCloud") : t("jira.createServer") })}
         </span>
       </div>
-      {field("template", "Branch template", "{type}: bugfix for a Bug, feature for a Story, Task or New Feature, else empty. {key}: the ticket key. {summary}: the summary, shortened.")}
-      {field("jql", "Ticket filter (JQL)", "The tickets the Create worktree modal lists, e.g. project = ABC AND statusCategory != Done. Typed text searches inside it. Empty: your open tickets.", { placeholder: MY_OPEN_JQL })}
+      {field("template", t("jira.template"), t("jira.templateHint"))}
+      {field("jql", t("jira.jql"), t("jira.jqlHint"), { placeholder: MY_OPEN_JQL })}
       <div className="flex flex-wrap items-center gap-2 border-t py-2">
         <Button variant="outline" size="sm" className="cursor-pointer max-md:h-11" disabled={busy || !jira.url || !tokenSet} onClick={() => void testConnection()} data-testid="settings-jira-test">
           {busy && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}
-          Test connection
+          {t("jira.test")}
         </Button>
         {test && (
           <span role={test.ok ? "status" : "alert"} className={`min-w-0 flex-1 text-sm ${test.ok ? "" : "text-destructive"}`} data-testid="settings-jira-test-result">

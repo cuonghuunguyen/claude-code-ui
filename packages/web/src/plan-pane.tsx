@@ -5,6 +5,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import type { SessionView } from "./store.ts";
 import { latestPlan, planWaiting } from "./viewer.ts";
+import { useT } from "./i18n.ts";
 
 type Props = {
   view: SessionView | undefined;
@@ -17,19 +18,20 @@ type Props = {
 
 /** The approval itself stays in the session: this pane only points to it. */
 export const PlanPane = memo(function PlanPane({ view, label, onGoToRequest, failed }: Props) {
+  const t = useT();
   if (!view)
     return failed ? (
       <p className="m-auto text-muted-foreground text-sm" data-testid="plan-failed">
-        Could not load this session.
+        {t("session.planPane.failed")}
       </p>
     ) : (
-      <p className="m-auto text-muted-foreground text-sm">Loading plan…</p>
+      <p className="m-auto text-muted-foreground text-sm">{t("session.planPane.loading")}</p>
     );
   const plan = latestPlan(view);
   if (!plan)
     return (
       <p className="m-auto text-muted-foreground text-sm" data-testid="plan-empty">
-        No plan in this session yet.
+        {t("session.planPane.empty")}
       </p>
     );
   return (
@@ -37,9 +39,9 @@ export const PlanPane = memo(function PlanPane({ view, label, onGoToRequest, fai
       {planWaiting(view) && (
         <div role="status" data-testid="plan-waiting" className="flex flex-wrap items-center gap-2 border-b bg-muted px-3 py-2 text-sm">
           <CircleAlertIcon aria-hidden className="size-4 shrink-0 text-warning" />
-          <span className="min-w-0 flex-1">Waiting for your answer</span>
+          <span className="min-w-0 flex-1">{t("session.planPane.waiting")}</span>
           <Button type="button" size="sm" variant="outline" className="max-md:h-11 pointer-coarse:h-11" data-testid="plan-go-to-request" onClick={onGoToRequest}>
-            Go to request
+            {t("session.planPane.goTo")}
           </Button>
         </div>
       )}

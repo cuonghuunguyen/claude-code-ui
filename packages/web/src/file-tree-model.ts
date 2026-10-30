@@ -1,6 +1,7 @@
 // The file tree as data (docs/spec.md "Layout", Side panel): visible rows, keyboard moves, type-ahead and git marks. No React.
 import type { FsEntry, GitRepo } from "@claude-ui/protocol";
 import type { GitRow } from "./git-changes.ts";
+import { t } from "./i18n.ts";
 import { baseName, inDir, isWinPath, joinPath, repoDir } from "./paths.ts";
 
 export type DirState = FsEntry[] | { error: string } | "loading";
@@ -234,8 +235,9 @@ export function repoOfPath(path: string, list: GitRepo[], cwd: string): GitRepo 
 
 /** The accessible label and tooltip of a repository folder's icon. */
 export function repoIconText(repo: GitRepo, name: string): { label: string; title: string } {
-  const kind = repo.kind === "submodule" ? "submodule" : "repository";
-  const out = repo.outsideRoots ? " outside the allowed folders" : "";
-  const label = `${repo.kind === "submodule" ? "Submodule" : "Repository"} ${name}${repo.branch ? `, branch ${repo.branch}` : ""}${out && `,${out}`}`;
-  return { label, title: `${repo.branch ? `${repo.branch} · ` : ""}${kind}${out && ` ·${out}`}` };
+  const sub = repo.kind === "submodule";
+  const kind = t(sub ? "files.repo.submodule" : "files.repo.repository");
+  const out = repo.outsideRoots ? t("files.repo.outside") : "";
+  const label = `${kind} ${name}${repo.branch ? `, ${t("files.repo.branch", { branch: repo.branch })}` : ""}${out && `, ${out}`}`;
+  return { label, title: `${repo.branch ? `${repo.branch} · ` : ""}${kind.toLowerCase()}${out && ` · ${out}`}` };
 }

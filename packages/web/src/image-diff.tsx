@@ -3,13 +3,15 @@ import { useState } from "react";
 import type { FsMediaResult } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
 import { fileSize } from "./files.ts";
+import { useT } from "./i18n.ts";
 import { baseName } from "./paths.ts";
 
 /** One side: its media, or the notice why it cannot be shown. */
 export type ImagePane = { media?: FsMediaResult; error?: string; notice?: boolean };
 
 export function ImageDiff({ path, before, after, split }: { path: string; before?: ImagePane; after?: ImagePane; split: boolean }) {
-  const panes = [before && (["before", "Before", before] as const), after && (["after", "After", after] as const)].filter(Boolean) as (readonly ["before" | "after", string, ImagePane])[];
+  const t = useT();
+  const panes = [before && (["before", t("files.imageDiff.before"), before] as const), after && (["after", t("files.imageDiff.after"), after] as const)].filter(Boolean) as (readonly ["before" | "after", string, ImagePane])[];
   return (
     <div className={cn("grid gap-2 p-2", split && panes.length === 2 ? "grid-cols-2" : "grid-cols-1")} data-testid="image-diff">
       {panes.map(([id, label, p]) => (
@@ -20,6 +22,7 @@ export function ImageDiff({ path, before, after, split }: { path: string; before
 }
 
 function Pane({ id, label, path, pane }: { id: string; label: string; path: string; pane: ImagePane }) {
+  const t = useT();
   const [failed, setFailed] = useState<string>();
   const [dims, setDims] = useState<[number, number]>();
   const url = pane.media?.url;
@@ -41,14 +44,14 @@ function Pane({ id, label, path, pane }: { id: string; label: string; path: stri
           </p>
         ) : failed === url ? (
           <p role="status" className="text-muted-foreground">
-            Unable to load image.
+            {t("files.imageDiff.unable")}
           </p>
         ) : (
           url && (
             <img
               key={url}
               src={url}
-              alt={`${baseName(path)} (${label.toLowerCase()})`}
+              alt={t("files.imageDiff.alt", { name: baseName(path), label: label.toLowerCase() })}
               onLoad={(e) => setDims([e.currentTarget.naturalWidth, e.currentTarget.naturalHeight])}
               onError={() => setFailed(url)}
               className="max-h-[60vh] max-w-full rounded border bg-background object-contain"

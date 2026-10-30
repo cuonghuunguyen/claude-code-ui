@@ -3,6 +3,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { ChevronRightIcon, EyeIcon, FileTextIcon, XIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { trapTab } from "./focus-trap.ts";
+import { t as tr, useT } from "./i18n.ts";
 import { newlineCount, type Pastes, pasteRefs } from "./pasted-text.ts";
 
 const BTN =
@@ -11,14 +12,15 @@ const PRE = "m-0 overflow-auto whitespace-pre-wrap font-mono text-xs [overflow-w
 
 const lines = (body: string) => {
   const k = newlineCount(body);
-  return k === 0 ? "" : ` · ${k} lines`;
+  return k === 0 ? "" : tr("session.pasted.lines", { count: k });
 };
 
 function PasteViewer({ id, body }: { id: number; body: string }) {
-  const title = `Pasted text #${id}${lines(body)}`;
+  const t = useT();
+  const title = `${t("session.pasted.title", { id })}${lines(body)}`;
   return (
     <Dialog.Root>
-      <Dialog.Trigger aria-label={`View pasted text #${id}`} className={BTN}>
+      <Dialog.Trigger aria-label={t("session.pasted.view", { id })} className={BTN}>
         <EyeIcon />
       </Dialog.Trigger>
       <Dialog.Portal>
@@ -32,7 +34,7 @@ function PasteViewer({ id, body }: { id: number; body: string }) {
         >
           <div className="flex items-center justify-between gap-2">
             <Dialog.Title className="font-medium text-sm">{title}</Dialog.Title>
-            <Dialog.Close aria-label="Close pasted text" className={BTN}>
+            <Dialog.Close aria-label={t("session.pasted.close")} className={BTN}>
               <XIcon />
             </Dialog.Close>
           </div>
@@ -45,6 +47,7 @@ function PasteViewer({ id, body }: { id: number; body: string }) {
 
 /** One chip per token present in `text`, in text order. */
 export function PasteChips({ text, pastes, onRemove }: { text: string; pastes: Pastes; onRemove: (id: number) => void }) {
+  const t = useT();
   const ids = pasteRefs(text)
     .map((r) => r.id)
     .filter((id, i, all) => pastes[id] !== undefined && all.indexOf(id) === i);
@@ -54,9 +57,9 @@ export function PasteChips({ text, pastes, onRemove }: { text: string; pastes: P
       {ids.map((id) => (
         <div key={id} data-testid="paste-chip" className="flex min-w-0 items-center gap-1 rounded-md bg-secondary pl-2 text-xs">
           <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">{`Pasted text #${id}${lines(pastes[id])}`}</span>
+          <span className="truncate">{`${t("session.pasted.title", { id })}${lines(pastes[id])}`}</span>
           <PasteViewer id={id} body={pastes[id]} />
-          <button type="button" aria-label={`Remove pasted text #${id}`} className={BTN} onClick={() => onRemove(id)}>
+          <button type="button" aria-label={t("session.pasted.remove", { id })} className={BTN} onClick={() => onRemove(id)}>
             <XIcon />
           </button>
         </div>
@@ -77,6 +80,7 @@ export function pastedBlockId(text: string, index: number): string {
 
 /** A pasted block inside a user message: collapsed, expands on click. `id`: pastedBlockId of the message and the block index. */
 export function PastedBlock({ body, id }: { body: string; id: string }) {
+  const t = useT();
   return (
     <Collapsible defaultOpen={expanded.has(id)} onOpenChange={(open) => void (open ? expanded.add(id) : expanded.delete(id))} className="my-1 w-full min-w-0 rounded-md border-[0.5px] bg-secondary text-sm">
       <CollapsibleTrigger
@@ -85,7 +89,7 @@ export function PastedBlock({ body, id }: { body: string; id: string }) {
       >
         <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90" />
         <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span>{`Pasted text${lines(body)}`}</span>
+        <span>{`${t("session.pasted.titleNoId")}${lines(body)}`}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre data-testid="pasted-block-body" className={`${PRE} max-h-96 border-t px-2 py-1.5`}>
