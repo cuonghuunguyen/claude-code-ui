@@ -32,6 +32,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Fixed
 
+- Themes: text, borders and controls meet contrast in every theme, light and dark ([#468](https://github.com/cuonghuunguyen/claude-code-ui/issues/468)).
 - Jira token: bound to the host it was saved for, cleared on a host change, never sent over http, kept out of the log ([#451](https://github.com/cuonghuunguyen/claude-code-ui/issues/451), [#487](https://github.com/cuonghuunguyen/claude-code-ui/issues/487)).
 - Create worktree: long ticket summaries and branch folders over 64 characters, `fix-123` read as a ticket key, a stale branch list replacing the fetched one, deletion of your own `worktree-*` branch ([#452](https://github.com/cuonghuunguyen/claude-code-ui/issues/452), [#453](https://github.com/cuonghuunguyen/claude-code-ui/issues/453), [#460](https://github.com/cuonghuunguyen/claude-code-ui/issues/460), [#486](https://github.com/cuonghuunguyen/claude-code-ui/issues/486)).
 - Background shell output shows after `/clear` ([#496](https://github.com/cuonghuunguyen/claude-code-ui/issues/496)); subagent Bash cards keep Run in background ([#492](https://github.com/cuonghuunguyen/claude-code-ui/issues/492)).
