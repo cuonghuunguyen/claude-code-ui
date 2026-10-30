@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { KEYS, SURFACE, swatchOf, terminalTheme, themeCss, THEMES, tokensOf } from "./themes.ts";
 
 const HEX = /^#[0-9a-f]{6}$/;
+const lum = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+const ratio = (a: string, b: string) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
 const dracula = THEMES.find((t) => t.id === "dracula")!;
 const catppuccin = THEMES.find((t) => t.id === "catppuccin")!;
 
@@ -92,8 +94,6 @@ describe("terminalTheme", () => {
   });
 
   // 3:1 on the terminal background for every ANSI colour. The one intentional exception: black on dark themes is the side surface (dark by definition of ANSI black).
-  const lum = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i]!, 0);
-  const ratio = (a: string, b: string) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
   it.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("%s %s: all 16 ANSI colors reach 3:1 on the terminal background", (id, mode) => {
     const t = terminalTheme(id, mode);
     for (const [name, c] of Object.entries(t).filter(([k]) => !["foreground", "background", "cursor", "selectionBackground"].includes(k))) {
@@ -118,5 +118,20 @@ describe("swatchOf", () => {
     expect(swatchOf("catppuccin")).toEqual([catppuccin.light!.card, catppuccin.dark!.card]);
     expect(swatchOf("dracula")).toEqual([SURFACE.light.bg, dracula.dark!.card]);
     expect(swatchOf("default")).toEqual([SURFACE.light.bg, SURFACE.dark.bg]);
+  });
+});
+
+describe("palette contrast", () => {
+  // Active tab / chip surface (side) must stand off the bar (bg); text needs 4.5:1 with a margin; title text must read above subtitle text.
+  it.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("%s %s", (id, mode) => {
+    const p = THEMES.find((t) => t.id === id)![mode]!;
+    expect(ratio(p.side, p.bg), "side on bg").toBeGreaterThanOrEqual(1.1);
+    expect(lum(p.side) < lum(p.bg), "light side darker than bg, dark side lighter").toBe(mode === "light");
+    for (const s of ["bg", "card", "side"] as const) {
+      expect(ratio(p.fg, p[s]), `fg on ${s}`).toBeGreaterThanOrEqual(4.7);
+      expect(ratio(p.muted, p[s]), `muted on ${s}`).toBeGreaterThanOrEqual(4.7);
+    }
+    expect(ratio(p.fg, p.card) / ratio(p.muted, p.card), "fg above muted").toBeGreaterThanOrEqual(1.25);
+    expect(ratio(p.pfg, p.primary), "pfg on primary").toBeGreaterThanOrEqual(4.7);
   });
 });
