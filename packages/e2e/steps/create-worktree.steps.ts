@@ -5,6 +5,7 @@ import { expect, type Page } from "@playwright/test";
 import { fakeJira } from "../support/fake-jira.ts";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
 import { sendPrompt } from "../support/flow.ts";
+import { openSettings } from "../support/ui.ts";
 import { daemonConfigDir, runDir } from "../support/paths.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
@@ -13,18 +14,8 @@ const row = (page: Page, path: string) => page.locator(`[data-testid="group-togg
 const worktreeDir = (project: string, folder: string) => join(project, ".claude", "worktrees", folder);
 const TOKEN = "e2e-jira-token";
 
-// The Settings button of the sidebar (a drawer on a phone); Control+, is not the shortcut on macOS.
 async function openJiraSettings(page: Page) {
-  const drawer = page.getByTestId("open-drawer");
-  const settings = page.getByTestId("open-settings").last(); // the drawer copy on a phone
-  if (await drawer.isVisible()) {
-    // The drawer slides in: click Settings inside the retry so a click during the slide is repeated; open the drawer only when it is shut.
-    await expect(async () => {
-      const shut = await expect(settings).toBeInViewport({ timeout: 300 }).then(() => false, () => true);
-      if (shut) await drawer.click();
-      await settings.click({ timeout: 2000 });
-    }).toPass({ timeout: 20_000 });
-  } else await settings.click();
+  await openSettings(page); // Control+, is not the shortcut on macOS
   await page.getByTestId("settings-group-jira").click();
 }
 

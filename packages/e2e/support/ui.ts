@@ -20,3 +20,16 @@ export async function waitConnected(page: Page): Promise<void> {
   await expect(page.getByTestId("connection-status").first()).toHaveText(/^\s*connected\s*$/, { timeout: RECONNECT_MS });
   await expect(page.getByTestId("pairing-needed")).toHaveCount(0);
 }
+
+/** Clicks the sidebar Settings button; on a phone it sits in a drawer that slides in, so the click retries until it lands. */
+export async function openSettings(page: Page): Promise<void> {
+  const drawer = page.getByTestId("open-drawer");
+  const settings = page.getByTestId("open-settings").last(); // the drawer copy on a phone
+  if (!(await drawer.isVisible())) return settings.click();
+  // Open the drawer only when it is shut; a click during the slide is repeated.
+  await expect(async () => {
+    const shut = await expect(settings).toBeInViewport({ timeout: 300 }).then(() => false, () => true);
+    if (shut) await drawer.click();
+    await settings.click({ timeout: 2000 });
+  }).toPass({ timeout: 20_000 });
+}

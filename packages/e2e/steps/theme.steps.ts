@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
+import { openSettings } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
 // GH-468 theme picker. Written, not run (release rule): selectors for the diff and the terminal are unverified against a live page.
@@ -9,12 +10,6 @@ const rgb = (hex: string) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i
 const token = (page: Page, name: string) => page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
 /** CSS may write #fff for #ffffff. */
 const long = (hex: string) => (/^#[0-9a-f]{3}$/i.test(hex) ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex).toLowerCase();
-
-async function openSettings(page: Page): Promise<void> {
-  const drawer = page.getByTestId("open-drawer");
-  if (await drawer.isVisible()) await drawer.click();
-  await page.getByTestId("open-settings").last().click(); // the drawer copy on a phone
-}
 
 /** Titlebar (or drawer) theme button cycles System, Light, Dark: click until its label names the mode. */
 async function setMode(page: Page, mode: string): Promise<void> {
