@@ -17,6 +17,14 @@ The **Changes** pane shows what changed, as diffs, file by file.
 
 3. Click a file in the list, or use <kbd>←</kbd> / <kbd>→</kbd> for the previous or next file.
 
+## Repositories
+
+A project folder can hold several repositories: nested ones, or submodules. In the git modes, the **repository selector** in the toolbar shows the selected one (name and branch). It opens a tree: the project's own repository, its submodules, then the nested repositories. Pick one to see its changes. The choice is kept per project in this browser and is shared with the [Git graph](git-graph).
+
+- A project folder that is not a repository itself but holds some still gets the git modes.
+- A submodule with other commits than recorded shows a **submodule** badge instead of a text diff. One with uncommitted changes shows "modified content (N files)". An embedded repository folder shows a **repository** row. **Show changes in** *path* on these rows switches the selector.
+- Which repositories are found follows the settings in [Settings › Git](../reference/settings#git).
+
 ## Good to know
 
 - **Uncommitted** and **Against branch** need a git repository.

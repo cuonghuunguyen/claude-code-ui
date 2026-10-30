@@ -65,6 +65,7 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 | Next waiting request | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>↓</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>↓</kbd> |
 | Focus prompt | <kbd>Ctrl</kbd>+<kbd>L</kbd> | <kbd>⌃</kbd> <kbd>L</kbd> |
 | Change model | <kbd>Ctrl</kbd>+<kbd>'</kbd> | <kbd>⌘</kbd> <kbd>'</kbd> |
+| Run in background | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 
 ## Prefix key
 

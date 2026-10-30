@@ -107,6 +107,8 @@ export default defineConfig({
           { text: "Permissions & modes", link: "/features/permissions" },
           { text: "Reading a session", link: "/features/timeline" },
           { text: "Usage & context", link: "/features/usage" },
+          { text: "Ask an aside (/btw)", link: "/features/aside" },
+          { text: "Background shells", link: "/features/background-shells" },
         ],
       },
       {

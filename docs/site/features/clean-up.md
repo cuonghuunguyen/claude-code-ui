@@ -23,5 +23,7 @@ To close the idle tabs of one group, right-click its group chip and pick **Clean
 
 - Active, pinned, running and unread tabs, and tabs with an unsent draft, are always kept. Closing a tab does not stop its session.
 - Removing a worktree with work needs an extra tick: **Discard uncommitted files and unpushed commits**. A merged branch can be deleted with it (**Also delete branch**, off by default).
+- The scan is fast, and it does not slow the status bar. A branch that was squash-merged counts as merged, so its worktree is **Safe**. The status of a worktree is cached for display; removing always checks again.
+- Removing a worktree runs in the background: every queued row shows **Removing…**.
 - Any linked worktree inside your roots can be removed, also one made by hand or by another tool. A locked or symlinked one is **Blocked**.
 - A worktree tagged **External** is not in `.claude/worktrees` and is not ticked for you.
