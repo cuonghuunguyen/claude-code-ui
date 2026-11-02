@@ -229,6 +229,7 @@ export function ConfirmDialog({
           onKeyDown={trapTab}
           finalFocus={finalFocus}
           data-testid={`${testId}-dialog`}
+          aria-modal="true" // GH-517: Base UI sets none; shake to locate stays quiet behind it
         >
           <div className="flex flex-col gap-1">
             <AlertDialog.Title className="break-words font-medium text-[15px] tracking-[-0.13px] [overflow-wrap:anywhere]">{title}</AlertDialog.Title>

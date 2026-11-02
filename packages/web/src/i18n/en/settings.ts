@@ -82,6 +82,8 @@ export default {
   "settings.tabs.compactNeedsGrouping": "Needs a tab grouping",
   "settings.tabs.compactHint": "Show each group as one chip; open its tabs from the chip.",
   "settings.tabs.autoClose": "Auto-close idle tabs after",
+  "settings.tabs.shake": "Shake mouse to locate the active session",
+  "settings.tabs.shakeHint": "A quick left-right shake of the mouse scrolls to the active tab and session and outlines them. Kept in this browser.",
   "settings.tabs.autoCloseHint": "Closes idle tabs not used for this long. Never pinned, running, unread or with a draft. Sessions keep running. Kept in this browser.",
   "settings.changes.title": "Changes",
   "settings.changes.mode": "Default diff view",

@@ -84,6 +84,8 @@ export default {
   "settings.tabs.compactNeedsGrouping": "Cần chọn cách nhóm tab",
   "settings.tabs.compactHint": "Hiện mỗi nhóm thành một chip; mở các tab của nhóm từ chip.",
   "settings.tabs.autoClose": "Tự đóng tab rảnh sau",
+  "settings.tabs.shake": "Lắc chuột để tìm phiên đang hoạt động",
+  "settings.tabs.shakeHint": "Lắc nhanh chuột sang trái phải để cuộn tới tab và phiên đang hoạt động và viền sáng chúng. Lưu trong trình duyệt này.",
   "settings.tabs.autoCloseHint": "Đóng tab rảnh không dùng trong khoảng thời gian này. Không bao giờ đóng tab đã ghim, đang chạy, chưa đọc hoặc có bản nháp. Phiên vẫn tiếp tục chạy. Lưu trong trình duyệt này.",
   "settings.changes.title": "Thay đổi",
   "settings.changes.mode": "Chế độ diff mặc định",
