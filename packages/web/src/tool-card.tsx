@@ -23,7 +23,7 @@ import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
-import { ArtifactPreview } from "./artifact-preview.tsx";
+import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
 
@@ -365,12 +365,14 @@ export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
   );
 }
 
+const LINK = "inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0";
+
 /** A claude.ai artifact link opening in a new tab; any other URL is plain text (a result is not trusted). */
 function ArtifactLink({ url }: { url: string }) {
   const t = useT();
   if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={t("session.toolCard.opensNewTab", { url })} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
+    <a href={url} target="_blank" rel="noopener noreferrer" title={t("session.toolCard.opensNewTab", { url })} className={LINK}>
       {url}
     </a>
   );
@@ -386,6 +388,7 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
   const output = result && <Lines id={call.id} text={out} error={failed} wrap />;
   const action = field(call.input, "action") || (call.tool === "Artifact" ? "publish" : "");
   const url = field(call.input, "url");
+  const [previewOpen, setPreviewOpen] = usePreviewOpen(call.id);
   if (call.tool === "ArtifactData") {
     const data = (call.input as Record<string, unknown> | null)?.data ?? (call.input as Record<string, unknown> | null)?.writes;
     return (
@@ -427,13 +430,13 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
         <div data-testid="artifact-publish" className="space-y-1">
           {title && <div className="font-medium text-sm">{title}</div>}
           {description && <p className="whitespace-pre-wrap text-muted-foreground text-xs">{description}</p>}
-          {link && <ArtifactLink url={link} />}
+          {link && (artifactPreviewable(call) ? <ArtifactLinkMenu url={link} partId={call.id} onPreview={() => setPreviewOpen(true)} className={LINK} /> : <ArtifactLink url={link} />)}
           {file && (
             <div title={file} className="break-all font-mono text-muted-foreground text-xs">
               {file}
             </div>
           )}
-          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={artifactTitle(call) || file} />}
+          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={artifactTitle(call) || file} open={previewOpen} onOpenChange={setPreviewOpen} />}
         </div>
         {output}
       </div>

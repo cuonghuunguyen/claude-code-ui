@@ -274,6 +274,33 @@ it("the changes pane tab shows the changed file count, like OpenCode's Files Cha
   expect(el.querySelector("[data-testid=pane-changes]")!.textContent).toBe("changes");
 });
 
+it("GH-512 PaneTabs overflows into the more menu at phone width; the selected tab stays", async () => {
+  const RO = globalThis.ResizeObserver;
+  const ow = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+  const cw = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as never;
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 60 });
+  Object.defineProperty(Element.prototype, "clientWidth", { configurable: true, get: () => 358 });
+  try {
+    const onChange = vi.fn();
+    await act(async () => root.render(<PaneTabs panes={["session", "changes", "files", "graph", "terminal", "artifacts"]} value="artifacts" onChange={onChange} />));
+    const tabs = [...el.querySelectorAll<HTMLElement>("[role=tab]")].map((t) => t.dataset.testid);
+    expect(tabs).toContain("pane-artifacts");
+    expect(tabs.length).toBeLessThan(6);
+    await act(async () => el.querySelector<HTMLElement>("[data-testid=pane-overflow]")!.click());
+    await act(async () => document.querySelector<HTMLElement>('[role=menuitem][data-testid=pane-terminal]')!.click());
+    expect(onChange).toHaveBeenCalledWith("terminal");
+  } finally {
+    globalThis.ResizeObserver = RO;
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", ow!);
+    Object.defineProperty(Element.prototype, "clientWidth", cw!);
+  }
+});
+
 it("each file has one header: path relative to cwd, +N -N, Open in editor; the library's own file header is off", async () => {
   const client = fakeClient({ "/p/src/a.ts": "a = 2\nb\n" });
   await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/src/a.ts", "a = 1", "a = 2"), original("e1", "a = 1\nb\n")])} cwd="/p" onOpen={() => {}} />));

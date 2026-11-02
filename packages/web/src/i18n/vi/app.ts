@@ -318,6 +318,7 @@ export default {
   "app.dock.reset": "Đặt lại bố cục",
   "app.dock.closeTab": "Đóng tab",
   "app.dock.actions": "Thao tác của {area}",
+  "app.dock.morePanes": "Thêm {count} khung",
   "app.dock.movePane": "Chuyển {pane} sang {area}",
   "app.dock.movePaneMain": "Chuyển {pane} sang vùng chính",
   "app.dock.tab.session": "phiên",

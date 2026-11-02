@@ -76,3 +76,42 @@ Feature: Artifacts pane (GH-176)
     Then the Artifacts pane lists 3 rows in the order "chart.html, notes.md, report.html"
     And the Artifacts pane previews the page with the heading "Report page"
     And I capture "artifacts-pane-daemon-restart"
+
+  # GH-512
+  Scenario: Artifacts tab is reachable in a crowded side panel
+    Given the scratch project is a git repository with two commits
+    And a session of 12 turns that published report.html, chart.html, notes.md and chart.html again
+    And the viewport is 1440x900
+    When I narrow the side panel to its minimum
+    Then the side panel shows the more panes button
+    And the side panel lists the Artifacts tab
+    When I open the Artifacts pane from the side panel
+    Then the Artifacts pane lists 3 rows in the order "chart.html, notes.md, report.html"
+    And the Artifacts tab is a selected tab in view in the side panel
+    And only the Artifacts tab is selected in the side panel
+    And I capture "artifacts-pane-crowded"
+
+  Scenario: Only the Artifacts tab is selected while its list shows
+    Given a session of 12 turns that published report.html, chart.html, notes.md and chart.html again
+    And the viewport is 1440x900
+    When I open the Artifacts pane
+    Then the Artifacts pane lists 3 rows in the order "chart.html, notes.md, report.html"
+    And only the Artifacts tab is selected in the side panel
+    And I capture "artifacts-pane-selected-tab"
+
+  Scenario: Artifacts in the main area opens as a main area tab
+    Given a session of 12 turns that published report.html, chart.html, notes.md and chart.html again
+    And the viewport is 1440x900
+    When I move the Artifacts pane to the main area from its tab menu
+    Then there is one Artifacts tab in the main area
+    And the Artifacts tab in the main area is selected
+    And I capture "artifacts-pane-main-tab"
+
+  Scenario: Phone: pane tabs fit 390 px and every pane is reachable
+    Given the scratch project is a git repository with two commits
+    And a session of 12 turns that published report.html, chart.html, notes.md and chart.html again
+    And the viewport is 390x844
+    Then the page has no horizontal scroll
+    And every pane of "session, changes, files, graph, terminal, artifacts" is reachable on the phone
+    And the page has no horizontal scroll
+    And I capture "pane-tabs-phone"

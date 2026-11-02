@@ -29,12 +29,14 @@ const answer = (id: string): Part => ({ type: "assistant_text", id, text: `answe
 const snapshot: Snapshot = { heads: [], attentionSeq: 0, page: { parts: [user("u3"), answer("a3")], older: { before: "u3", pos: 30 } }, aux: [] };
 
 let reopen: () => void = () => {};
+let setStatus: (s: string) => void = () => {};
 const replies: Record<string, (m: { [k: string]: unknown }) => unknown> = {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     reopen = () => opts.onOpen?.();
+    setStatus = (s) => opts.onStatus?.(s);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {
       request: async (m: { type: string }) => (sent.push(m), (replies[m.type] ?? (() => ({})))(m)),
@@ -186,4 +188,43 @@ it("GH-176 session.artifacts is asked once with the cursor; a publish older than
   const asked = sent.filter((m) => m.type === "session.artifacts");
   expect(asked).toEqual([{ type: "session.artifacts", sessionId: ID, logEpoch: "e1", before: "u3" }]);
   expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
+});
+
+
+it("GH-512 Artifacts in the main area, no artifacts tab open: a cut session.artifacts is asked again after reconnect", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: ["artifacts"] } }));
+  const old = { type: "tool_call", id: "old", toolUseId: "old", tool: "Artifact", input: { file_path: "/p/demo/old.html" }, status: "done", endedAt: 1 };
+  let down = true;
+  replies["session.artifacts"] = () => (down ? Promise.reject(new Error("disconnected")) : { parts: [{ part: old, pos: 5 }] });
+  replies["session.page"] = () => new Promise(() => {});
+  await mount();
+  const wait = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(document.querySelectorAll("[data-pane-tab-body^='artifacts']").length).toBe(0);
+  const before = sent.filter((m) => m.type === "session.artifacts").length;
+  expect(before).toBeGreaterThan(0);
+  down = false;
+  replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session });
+  await act(async () => setStatus("reconnecting"));
+  await act(async () => setStatus("connected"));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(sent.filter((m) => m.type === "session.artifacts").length).toBeGreaterThan(before);
+  localStorage.removeItem("claude-ui.layout");
+});
+
+it("GH-512 a cut session.edits is asked again after reconnect", async () => {
+  let down = true;
+  replies["session.edits"] = () => (down ? Promise.reject(new Error("disconnected")) : { parts: [] });
+  replies["session.page"] = () => new Promise(() => {});
+  await mount();
+  const wait = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+  for (let i = 0; i < 4; i++) await wait();
+  const before = sent.filter((m) => m.type === "session.edits").length;
+  expect(before).toBeGreaterThan(0);
+  down = false;
+  replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session });
+  await act(async () => setStatus("reconnecting"));
+  await act(async () => setStatus("connected"));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(sent.filter((m) => m.type === "session.edits").length).toBeGreaterThan(before);
 });

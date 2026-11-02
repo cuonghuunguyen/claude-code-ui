@@ -316,6 +316,7 @@ export default {
   "app.dock.reset": "Reset layout",
   "app.dock.closeTab": "Close tab",
   "app.dock.actions": "{area} actions",
+  "app.dock.morePanes": { one: "{count} more pane", other: "{count} more panes" },
   "app.dock.movePane": "Move {pane} to {area}",
   "app.dock.movePaneMain": "Move {pane} to main area",
   "app.dock.tab.session": "session",

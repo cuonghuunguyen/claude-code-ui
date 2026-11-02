@@ -59,7 +59,8 @@ import { connect, type ConnectionStatus, type Request, type RequestError } from 
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
-import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { OverflowTabs } from "./overflow-tabs.tsx";
+import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, ArtifactUrlContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { ArtifactTab } from "./artifact-tab.tsx";
 import { ArtifactsPane, forgetArtifactSelection, selectArtifact } from "./artifacts-pane.tsx";
 import { sessionArtifacts } from "./artifacts.ts";
@@ -2045,7 +2046,7 @@ export function App() {
   // The changes panel needs the Edit/Write calls of the unloaded region: asked once per session (the cursor moves, aux keeps them).
   useEffect(() => {
     const v = panelView;
-    if (!panelTarget?.sessionId || !v || !v.older || v.auxEdits || !v.logEpoch) return;
+    if (status !== "connected" || !panelTarget?.sessionId || !v || !v.older || v.auxEdits || !v.logEpoch) return;
     const { before } = v.older;
     const epoch = v.logEpoch;
     const id = panelTarget.sessionId;
@@ -2056,7 +2057,7 @@ export function App() {
       (r) => setViews((vs) => (vs[id]?.logEpoch === epoch ? { ...vs, [id]: withEdits(vs[id]!, before, r.parts) } : vs)),
       () => editsAsked.current.delete(key),
     );
-  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch]);
+  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch, status]); // status: a request cut by a connection drop is asked again once it is back
   // The Artifacts pane needs the Artifact publishes of the unloaded region (GH-176): asked once per boundary, by the effect for the shown session and by the pane for its own.
   const requestArtifacts = useCallback((id: string) => {
     const v = viewsRef.current[id];
@@ -2072,8 +2073,8 @@ export function App() {
     );
   }, []);
   useEffect(() => {
-    if (panelTarget?.sessionId) requestArtifacts(panelTarget.sessionId);
-  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxArtifacts, panelView?.logEpoch, requestArtifacts]);
+    if (status === "connected" && panelTarget?.sessionId) requestArtifacts(panelTarget.sessionId);
+  }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxArtifacts, panelView?.logEpoch, requestArtifacts, status]);
   const panelHasArtifacts = useMemo(() => !!panelView && sessionArtifacts(panelView).length > 0, [panelView?.parts, panelView?.aux]);
   const artifactLoad = (owner: string) => (partId: string) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: owner, partId });
   const panelPlan = useMemo(() => (panelView ? latestPlan(panelView) : undefined), [panelView?.parts, panelView?.aux]);
@@ -3593,7 +3594,7 @@ export function App() {
           ) : (
             <>
               {shown && (
-                <div className="flex items-center gap-1 lg:hidden">
+                <div className="flex min-w-0 items-center gap-1 lg:hidden">
                   <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : []), ...(panelHasArtifacts ? (["artifacts"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
@@ -4142,25 +4143,25 @@ type Pane = "session" | PaneId;
 /** `changes`: the changed file count, shown on the changes tab like OpenCode's "Files Changed N". */
 export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[]; value: Pane; onChange: (p: Pane) => void; changes?: number }) {
   const tr = useT();
+  const command = (p: Pane) => (p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined);
+  const count = (p: Pane) => p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>;
   return (
-    <div className="flex gap-1 pointer-coarse:gap-2" role="tablist" aria-label={tr("app.main.panes")}>
-      {panes.map((p) => (
-        <Button
-          key={p}
-          size="sm"
-          variant={p === value ? "secondary" : "ghost"}
-          className="pointer-coarse:h-11"
-          role="tab"
-          aria-selected={p === value}
-          onClick={() => onChange(p)}
-          data-testid={`pane-${p}`}
-          data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
-        >
-          {tr(`app.dock.tab.${p}`)}
-          {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
-        </Button>
-      ))}
-    </div>
+    <OverflowTabs
+      keys={panes}
+      selected={value}
+      label={tr("app.main.panes")}
+      className="pointer-coarse:gap-2"
+      renderTab={(k) => {
+        const p = k as Pane;
+        return (
+          <Button key={p} size="sm" variant={p === value ? "secondary" : "ghost"} className="pointer-coarse:h-11" role="tab" aria-selected={p === value} onClick={() => onChange(p)} data-testid={`pane-${p}`} data-overflow-key={p} data-command={command(p)}>
+            {tr(`app.dock.tab.${p}`)}
+            {count(p)}
+          </Button>
+        );
+      }}
+      menuItem={(k) => ({ label: <>{tr(`app.dock.tab.${k as Pane}`)}{count(k as Pane)}</>, onSelect: () => onChange(k as Pane), testId: `pane-${k}`, command: command(k as Pane) })}
+    />
   );
 }
 
@@ -4827,6 +4828,7 @@ export function SessionPane({
   const [dockFocused, setDockFocused] = useState(false);
   const agentCtx = useMemo(() => ({ links, onOpenSession }), [links, onOpenSession]);
   const [artifactOpened] = useState(() => new Set<string>()); // the card previews this session shows (ArtifactOpenedContext)
+  const artifactUrls = useMemo(() => new Map(sessionArtifacts(view).flatMap((r) => (r.url && r.previewable ? [[r.url, r.partId] as const] : []))), [view.parts, view.aux]);
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
 
   return (
@@ -4835,6 +4837,7 @@ export function SessionPane({
     <ArtifactConnectedContext value={connected}>
     <ArtifactOpenedContext value={artifactOpened}>
     <ArtifactTabContext value={onArtifactTab}>
+    <ArtifactUrlContext value={artifactUrls}>
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
     <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
@@ -5066,6 +5069,7 @@ export function SessionPane({
     </BackgroundShellContext>
     </OpenRunContext>
     </CwdContext>
+    </ArtifactUrlContext>
     </ArtifactTabContext>
     </ArtifactOpenedContext>
     </ArtifactConnectedContext>
