@@ -72,7 +72,6 @@ export function PaneSlot({ host }: { host: HTMLElement }) {
   return <div className="contents" ref={(n) => void (n && host.parentNode !== n && n.appendChild(host))} />;
 }
 
-
 /** Wide screens only (below lg the panes are the pane switcher). `extra`: area buttons left of the menu. */
 export function DockHeader({
   area,

@@ -190,7 +190,9 @@ it("GH-176 session.artifacts is asked once with the cursor; a publish older than
   expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
 });
 
-it("GH-512 a session.artifacts request cut by a connection drop is asked again once the connection is back", async () => {
+
+it("GH-512 Artifacts in the main area, no artifacts tab open: a cut session.artifacts is asked again after reconnect", async () => {
+  localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "right", areas: { side: ["files", "changes", "graph", "plan"], bottom: ["terminal"], main: ["artifacts"] } }));
   const old = { type: "tool_call", id: "old", toolUseId: "old", tool: "Artifact", input: { file_path: "/p/demo/old.html" }, status: "done", endedAt: 1 };
   let down = true;
   replies["session.artifacts"] = () => (down ? Promise.reject(new Error("disconnected")) : { parts: [{ part: old, pos: 5 }] });
@@ -198,15 +200,31 @@ it("GH-512 a session.artifacts request cut by a connection drop is asked again o
   await mount();
   const wait = () => act(async () => new Promise((r) => setTimeout(r, 30)));
   for (let i = 0; i < 4; i++) await wait();
-  expect(sent.some((m) => m.type === "session.artifacts")).toBe(true);
-  expect(document.querySelector('[data-testid="pane-artifacts"]')).toBeNull();
+  expect(document.querySelectorAll("[data-pane-tab-body^='artifacts']").length).toBe(0);
   const before = sent.filter((m) => m.type === "session.artifacts").length;
+  expect(before).toBeGreaterThan(0);
   down = false;
-  // Same epoch: the server resumes the view without a snapshot, so nothing else changes the effect's deps.
   replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session });
   await act(async () => setStatus("reconnecting"));
   await act(async () => setStatus("connected"));
   for (let i = 0; i < 4; i++) await wait();
   expect(sent.filter((m) => m.type === "session.artifacts").length).toBeGreaterThan(before);
-  expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
+  localStorage.removeItem("claude-ui.layout");
+});
+
+it("GH-512 a cut session.edits is asked again after reconnect", async () => {
+  let down = true;
+  replies["session.edits"] = () => (down ? Promise.reject(new Error("disconnected")) : { parts: [] });
+  replies["session.page"] = () => new Promise(() => {});
+  await mount();
+  const wait = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+  for (let i = 0; i < 4; i++) await wait();
+  const before = sent.filter((m) => m.type === "session.edits").length;
+  expect(before).toBeGreaterThan(0);
+  down = false;
+  replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session });
+  await act(async () => setStatus("reconnecting"));
+  await act(async () => setStatus("connected"));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(sent.filter((m) => m.type === "session.edits").length).toBeGreaterThan(before);
 });

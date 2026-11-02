@@ -80,8 +80,8 @@ export function OverflowTabs({
       {hidden.length > 0 && (
         <Menu.Root {...kb.root}>
           <Menu.Trigger
-            aria-label={t("app.dock.morePanes", { count: hidden.length })}
-            title={t("app.dock.morePanes", { count: hidden.length })}
+            aria-label={moreText(hidden.length)}
+            title={moreText(hidden.length)}
             className={MENU_BUTTON}
             data-testid={testId}
             {...kb.trigger}

@@ -70,7 +70,7 @@ it("Open in tab calls the ArtifactTabContext with the part id", async () => {
   expect(tab).toHaveBeenCalledWith("p1");
 });
 
-it("Escape and choosing an item return the focus to the link", async () => {
+it("Escape returns the focus to the link", async () => {
   await card(() => {});
   link().focus();
   click({ detail: 0 });
