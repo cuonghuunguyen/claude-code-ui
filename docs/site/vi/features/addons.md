@@ -78,7 +78,7 @@ Sự kiện từ claude-ui: `init {addon, view, role, session, theme, mode}`, `t
 
 ## Giao diện màu {#themes}
 
-Giao diện màu có bảng `light` và `dark`; chế độ thiếu hoặc không đủ sẽ không được đưa ra (như Dracula không có light). Bảng màu có đủ các khóa sau, mỗi khóa là màu `#rrggbb`: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. Giao diện hiện trong **Cài đặt › Giao diện** sau các giao diện có sẵn, chỉ khi addon của nó đang bật. Nếu bạn tắt addon khi giao diện của nó đang chọn, giao diện mặc định hiện ra đến khi bạn chọn cái khác. Diff và terminal giữ màu mặc định với giao diện của addon.
+Giao diện màu có bảng `light` và `dark`; bạn có thể bỏ một chế độ (như Dracula không có light), nhưng chế độ đã khai báo phải đầy đủ: cài addon có bảng màu thiếu khóa hoặc không phải `#rrggbb` sẽ thất bại và nêu khóa còn thiếu. Bảng màu có đủ các khóa sau, mỗi khóa là màu `#rrggbb`: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. Giao diện hiện trong **Cài đặt › Giao diện** sau các giao diện có sẵn, chỉ khi addon của nó đang bật. Nếu bạn tắt addon khi giao diện của nó đang chọn, giao diện mặc định hiện ra đến khi bạn chọn cái khác. Diff và terminal giữ màu mặc định với giao diện của addon.
 
 ## Pane, băng và lệnh {#views}
 

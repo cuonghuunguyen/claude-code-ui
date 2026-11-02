@@ -78,7 +78,7 @@ Events from claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.
 
 ## Themes {#themes}
 
-A theme has a `light` and a `dark` palette; a mode that is missing or incomplete is not offered (like Dracula, which has no light). A palette has all of these keys, each a `#rrggbb` colour: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. The theme appears in **Settings › Appearance** after the built-in ones, only while its addon is enabled. If you turn the addon off while its theme is picked, the default look shows until you pick another. Diffs and the terminal keep the default colours for an addon theme.
+A theme has a `light` and a `dark` palette; you may leave a mode out (like Dracula, which has no light), but a mode you give must be complete: installing an addon with an incomplete or non-`#rrggbb` palette fails and names the missing key. A palette has all of these keys, each a `#rrggbb` colour: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. The theme appears in **Settings › Appearance** after the built-in ones, only while its addon is enabled. If you turn the addon off while its theme is picked, the default look shows until you pick another. Diffs and the terminal keep the default colours for an addon theme.
 
 ## Panes, band and commands {#views}
 
