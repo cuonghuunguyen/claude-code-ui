@@ -21,9 +21,10 @@ export const TOOL_STATUS: Record<string, string> = { running: "running", finishe
  */
 export async function pickPane(page: Page, id: string, scope?: Locator): Promise<void> {
   const root = scope ?? page;
-  const tab = root.getByTestId(`pane-${id}`).first();
-  if (await tab.count() && (await tab.evaluate((n) => n.matches('[role="tab"]')))) return void (await tab.click());
-  await root.getByTestId("pane-overflow").first().click();
+  // :visible — a phone also has the desktop side panel's tabs in the DOM (display: none).
+  const tab = root.locator(`[role="tab"][data-testid="pane-${id}"]:visible`).first();
+  if (await tab.count()) return void (await tab.click());
+  await root.locator('[data-testid="pane-overflow"]:visible').first().click();
   await page.getByRole("menuitem").and(page.getByTestId(`pane-${id}`)).click();
 }
 

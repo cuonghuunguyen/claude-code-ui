@@ -16,7 +16,7 @@ export function projectsDirOf(configDir: string | undefined, run: string): strin
 /** The project folder name of a cwd: every non-alphanumeric character becomes "-" (the Claude CLI's rule). */
 export const slugOf = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 
-export type FakePublish = { sessionId: string; cwd: string; file: string; title: string; url: string; /** The daemon's CLAUDE_CONFIG_DIR, inside `run`. */ configDir: string; run: string };
+export type FakePublish = { sessionId: string; cwd: string; file: string; title: string; url: string; /** GH-512: a final assistant text (markdown) after the publish. */ reply?: string; /** The daemon's CLAUDE_CONFIG_DIR, inside `run`. */ configDir: string; run: string };
 
 /** Writes the transcript; returns its path. Remove it with rmSync when the scenario ends. */
 export function writePublishTranscript(p: FakePublish): string {
@@ -27,11 +27,12 @@ export function writePublishTranscript(p: FakePublish): string {
   const base = { isSidechain: false, userType: "external", cwd, sessionId: p.sessionId, version: "2.0.0" };
   const ids = ["a", "b", "c"].map((k, i) => `${k.repeat(8)}-0000-4000-8000-${String(i).padStart(12, "0")}`);
   const call = "toolu_fake_publish";
-  const rows = [
+  const rows: object[] = [
     { ...base, parentUuid: null, type: "user", uuid: ids[0], timestamp: at(0), message: { role: "user", content: "Publish the dashboard" } },
     { ...base, parentUuid: ids[0], type: "assistant", uuid: ids[1], timestamp: at(1), message: { id: "msg_fake_publish", type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "tool_use", id: call, name: "Artifact", input: { file_path: p.file, title: p.title } }], stop_reason: "tool_use" } },
     { ...base, parentUuid: ids[1], type: "user", uuid: ids[2], timestamp: at(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: call, content: `Published ${p.file} at ${p.url} (Version 1)` }] } },
   ];
+  if (p.reply) rows.push({ ...base, parentUuid: ids[2], type: "assistant", uuid: "dddddddd-0000-4000-8000-000000000003", timestamp: at(3), message: { id: "msg_fake_reply", type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "text", text: p.reply }], stop_reason: "end_turn" } });
   const file = join(dir, `${p.sessionId}.jsonl`);
   writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
   return file;

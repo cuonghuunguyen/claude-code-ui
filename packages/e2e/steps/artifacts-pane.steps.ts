@@ -171,3 +171,54 @@ Then("the Artifacts pane shows the preview and the All artifacts button", async 
   await expect(pane(page).getByRole("button", { name: "All artifacts", exact: true })).toBeVisible();
   await expect(pane(page).locator("iframe")).toBeVisible({ timeout: 30_000 });
 });
+
+// GH-512
+const side = (page: Page): Locator => page.getByTestId("side-panel");
+const sideTab = (page: Page, id: string): Locator => side(page).getByTestId(`pane-${id}`).and(page.locator('[role="tab"]'));
+
+When("I narrow the side panel to its minimum", async ({ page }) => {
+  await page.getByRole("separator", { name: /resize side panel/i }).focus();
+  for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("separator", { name: /resize side panel/i })).toHaveAttribute("aria-valuenow", "280");
+});
+
+Then("the side panel shows the more panes button", async ({ page }) => {
+  await expect(side(page).getByTestId("pane-overflow")).toBeVisible();
+});
+
+When("I open the Artifacts pane from the side panel", async ({ page }) => {
+  await pickPane(page, "artifacts", side(page));
+  await expect(pane(page)).toBeVisible();
+});
+
+Then("the Artifacts tab is a selected tab in view in the side panel", async ({ page }) => {
+  await expect(sideTab(page, "artifacts")).toBeInViewport();
+  await expect(sideTab(page, "artifacts")).toHaveAttribute("aria-selected", "true");
+});
+
+Then("only the Artifacts tab is selected in the side panel", async ({ page }) => {
+  const sel = await side(page).locator('[role="tab"][aria-selected="true"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  // Tab colours fade in 150 ms: a capture right after the click shows the old tab still highlighted (GH-512 observation); wait for the fade.
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
+  expect(sel).toEqual(["pane-artifacts"]);
+});
+
+Then("the Artifacts tab in the main area is selected", async ({ page }) => {
+  await expect(artifactsTabs(page).locator('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+});
+
+Then("every pane of {string} is reachable on the phone", async ({ page }, list: string) => {
+  const report: string[] = [];
+  for (const id of list.split(", ")) {
+    const tab = page.locator(`[role="tab"][data-testid="pane-${id}"]:visible`).first();
+    const inRow = (await tab.count()) > 0 && (await tab.evaluate((n) => { const r = n.getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; }));
+    await pickPane(page, id);
+    const shown = page.locator(`[role="tab"][data-testid="pane-${id}"]:visible`).first();
+    await expect(shown).toBeInViewport();
+    await expect(shown).toHaveAttribute("aria-selected", "true");
+    const m = await page.evaluate(() => ({ inner: window.innerWidth, root: document.documentElement.scrollWidth }));
+    expect(m.root).toBe(m.inner);
+    report.push(`${id}:${inRow ? "tab" : "menu"}`);
+  }
+  console.log("phone pane reach:", report.join(" "));
+});
