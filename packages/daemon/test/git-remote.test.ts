@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitLog, gitRefs } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { endProcessTrees } from "../src/git-runner.ts";
-import { FETCH_ARGS, gitBranch, gitFetch, gitPull, gitPush, localRemotePath, redactUrls, remoteConfig, tidy } from "../src/git-remote.ts";
+import { BATCH_SSH } from "../src/git-runner.ts";
+import { checkedOutOf, FETCH_ARGS, gitBranch, gitFetch, gitPull, gitPush, localRemotePath, redactUrls, remoteConfig, remoteEnv, tidy } from "../src/git-remote.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 const posix = process.platform !== "win32";
@@ -277,10 +278,6 @@ describe("gitFetch process control", () => {
     await p;
   });
 
-  it("refuses a WSL project with a clear message", async () => {
-    await expect(gitFetch("\\\\wsl$\\Ubuntu\\home\\u\\p", { allowed: () => true })).rejects.toMatchObject({ code: "bad_request", message: "Fetch is not supported for WSL projects yet" });
-  });
-
   it("the lock is free after a failed fetch and after a runner that rejects", async () => {
     const { a, inside } = remoteRepo();
     setGitRunner((o) => (o.args.includes("fetch") ? Promise.reject(Object.assign(new Error("boom"), { stderr: "fatal: nope" })) : threadRunner(o)));
@@ -409,7 +406,7 @@ describe("remote operations per repository (GH-391)", () => {
     const ref = "refs/heads/main";
     const info = await gitBranch(f.sup, ref, { allowed: f.inside });
     expect(info?.pull).toContain("--no-recurse-submodules");
-    await gitPull(f.sup, { ref, local: info!.local, argv: info!.pull!, allowed: f.inside });
+    await gitPull(f.sup, { ref, local: info!.local, argv: info!.pull!, tracking: info!.upstreamHash, allowed: f.inside });
     expect(run(f.sup, "rev-parse", "HEAD")).toBe(f.supTip);
     expect(run(f.sub, "rev-parse", "HEAD")).toBe(f.libC1);
     expect(f.tracking(f.sub)).toBe(f.libC1);
@@ -438,7 +435,7 @@ describe("remote operations per repository (GH-391)", () => {
     run(f.sub, "config", "branch.main.remote", "origin");
     run(f.sub, "config", "branch.main.merge", ref);
     const info = await gitBranch(f.sub, ref, { allowed: f.inside });
-    if (info?.push) await expect(gitPush(f.sub, { ref, local: info.local, argv: info.push, allowed: f.inside })).rejects.toMatchObject({ code: "remote_not_allowed" });
+    if (info?.push) await expect(gitPush(f.sub, { ref, local: info.local, argv: info.push, tracking: info.trackingHash, allowed: f.inside })).rejects.toMatchObject({ code: "remote_not_allowed" });
     expect(info?.push).toBeTruthy();
   });
 
@@ -466,11 +463,33 @@ describe("remote operations per repository (GH-391)", () => {
 
   const WSL = "\\\\wsl$\\Ubuntu\\home\\u\\p\\libs\\lib";
   it.each([
-    ["gitFetch", () => gitFetch(WSL, { allowed: () => true })],
-    ["gitBranch", () => gitBranch(WSL, "refs/heads/main", { allowed: () => true })],
-    ["gitPush", () => gitPush(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => true })],
-    ["gitPull", () => gitPull(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => true })],
-  ])("%s of a nested WSL repository is refused", async (_n, call) => {
-    await expect(call()).rejects.toMatchObject({ code: "bad_request", message: expect.stringMatching(/not supported for WSL projects/) });
+    ["gitFetch", () => gitFetch(WSL, { allowed: () => false })],
+    ["gitBranch", () => gitBranch(WSL, "refs/heads/main", { allowed: () => false })],
+    ["gitPush", () => gitPush(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => false })],
+    ["gitPull", () => gitPull(WSL, { ref: "refs/heads/main", local: "a".repeat(40), argv: [], allowed: () => false })],
+  ])("%s of a WSL repository is not refused: it goes on to the repository check", async (_n, call) => {
+    // Nothing is allowed, so nothing can run; the old WSL refusal must be gone (the lookup answers null or cwd_not_allowed).
+    const msg = await call().then(() => "", (e: Error) => e.message);
+    expect(msg).not.toMatch(/WSL/);
+  });
+});
+
+describe("WSL repositories (GH-309)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("remoteEnv of a WSL repository uses BatchMode even with a Windows GIT_SSH_COMMAND; its own core.sshCommand turns it off", async () => {
+    vi.stubEnv("GIT_SSH_COMMAND", "C:\\Windows\\System32\\OpenSSH\\ssh.exe");
+    const unc = "\\\\wsl$\\Ubuntu\\home\\u\\p";
+    expect((await remoteEnv(unc, "")).GIT_SSH_COMMAND).toBe(BATCH_SSH);
+    expect((await remoteEnv(unc, "ssh -i k")).GIT_SSH_COMMAND).not.toBe(BATCH_SSH);
+    expect((await remoteEnv(tmpdir(), "")).GIT_SSH_COMMAND).not.toBe(BATCH_SSH);
+  });
+  it("checkedOutOf maps a WSL repository's POSIX work tree to the \\wsl$ form", () => {
+    const top = "\\\\wsl$\\Ubuntu\\home\\me\\repo";
+    expect(checkedOutOf("/home/me/repo", top)).toBe("here");
+    expect(checkedOutOf("/home/me/wt", top)).toBe("\\\\wsl$\\Ubuntu\\home\\me\\wt");
+    expect(checkedOutOf("/mnt/c/wt", top)).toBe("C:\\wt");
+    expect(checkedOutOf("", top)).toBeUndefined();
+    expect(checkedOutOf("/x/a", "/x/a")).toBe("here");
+    expect(checkedOutOf("/x/b", "/x/a")).toBe(normalize("/x/b"));
   });
 });

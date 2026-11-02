@@ -73,7 +73,7 @@ type Req = { type: string; cwd?: string; skip?: number; hash?: string; path?: st
 let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: null } });
 const MAIN_ARGV = "refs/heads/main:refs/heads/main";
 const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
-  ref: "refs/heads/main", local: hash(3), checkedOut: "here", remote: "origin", remoteRef: "refs/heads/main", tracking: "refs/remotes/origin/main", trackingHash: hash(2), upstream: "origin/main", ahead: 1, behind: 1,
+  ref: "refs/heads/main", local: hash(3), checkedOut: "here", remote: "origin", remoteRef: "refs/heads/main", tracking: "refs/remotes/origin/main", trackingHash: hash(2), upstreamHash: hash(2), upstream: "origin/main", ahead: 1, behind: 1,
   push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"], ...o,
 });
 let branchInfo: (ref: string) => GitBranchInfo = () => infoMain();
@@ -362,6 +362,16 @@ it("detached HEAD at a branch commit: the branch chip is green, HEAD is its own 
   const chips = [...el.querySelectorAll("[data-testid=commit-ref]")];
   expect(chips.find((c) => c.textContent === "main")!.className).toContain("text-ref-local");
   expect(chips.find((c) => c.textContent === "HEAD")!.className).toContain("text-ref-head");
+});
+
+it("a detached HEAD chip offers no Push or Pull, only Fetch", async () => {
+  const all = history(3);
+  all[0]!.refs = ["HEAD"];
+  const c = fake(all);
+  await mount(c);
+  await menuAt([...el.querySelectorAll("[data-testid=commit-ref]")].find((x) => x.textContent === "HEAD")!);
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
 });
 
 it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
@@ -885,7 +895,7 @@ it("Force push asks first: the dialog shows the exact command; Cancel runs nothi
   c.sent.length = 0;
   await act(async () => byId("git-force-push-confirm").click());
   await flush();
-  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().forcePush, lease: hash(2) }]);
+  expect(c.sent.filter((m) => m.type === "git.push")).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().forcePush, lease: hash(2), tracking: hash(2) }]);
   expect(c.sent.at(-1)).toMatchObject({ type: "git.log", skip: 0, fresh: true });
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Pushed main");
 });
@@ -903,7 +913,7 @@ it("Push and Pull confirm with the exact command too; Pull sends git.pull", asyn
   expect(byId("git-command").textContent).toBe("git pull --no-rebase --ff-only origin refs/heads/main");
   await act(async () => byId("git-pull-confirm").click());
   await flush();
-  expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull }]);
+  expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull, tracking: hash(2) }]);
   expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
 });
 
@@ -957,7 +967,7 @@ it("Push (plain) sends the plain push argv, not the force one, and no lease", as
   await act(async () => byId("git-push-confirm").click());
   await flush();
   const sent = c.sent.filter((m) => m.type === "git.push");
-  expect(sent).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().push }]);
+  expect(sent).toEqual([{ type: "git.push", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().push, tracking: hash(2) }]);
   expect(sent[0]).not.toHaveProperty("lease");
   expect(JSON.stringify(sent[0])).not.toContain("force-with-lease");
 });

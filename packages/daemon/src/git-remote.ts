@@ -44,7 +44,8 @@ export function tidy(text: string, max: number): string {
 
 /** Env of every remote operation: no prompt of any kind (credentials come from the user's helpers and ssh-agent only). */
 export async function remoteEnv(top: string, sshCommand: string): Promise<NodeJS.ProcessEnv> {
-  const ownSsh = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH || sshCommand;
+  // A WSL repository's git never sees the Windows ssh variables (`wslEnv`); only its own core.sshCommand counts.
+  const ownSsh = (wslPathOf(top) ? "" : process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || sshCommand;
   return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
 }
 
@@ -143,14 +144,11 @@ async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCom
   const defaultRemote = tracked["branch.main.remote"] ?? tracked["branch.master.remote"] ?? (names.has("origin") ? "origin" : undefined);
   return { names, sshCommand, ...(defaultRemote && { defaultRemote }) };
 }
-const WSL_REFUSED = "Fetch, push and pull are not supported for WSL projects yet";
 
 export type RemoteOptions = { allowed: (p: string) => boolean; platform?: string };
 
 /** `git fetch --all` in the repository of `cwd`; null outside a work tree. `defaultRemote`: `git fetch --prune <remote of the default branch>` only (Clean up). */
 export async function gitFetch(cwd: string, o: RemoteOptions & { defaultRemote?: boolean }): Promise<RemoteResult | null> {
-  // The WSL runners (side, wsl.exe) cannot end a timed-out fetch's ssh child, so its lock could not be trusted.
-  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", "Fetch is not supported for WSL projects yet");
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return exclusive(top, async () => {
@@ -179,6 +177,14 @@ const RS = "\x1e";
 const US = "\x1f";
 const sameDir = (a: string, b: string) => real(a) === real(b);
 
+/** "here", the other work tree's path in the platform's form, or undefined; a WSL repository's git prints POSIX paths. */
+export function checkedOutOf(worktree: string, top: string): string | undefined {
+  if (!worktree) return undefined;
+  const w = wslPathOf(top);
+  const p = w && worktree.startsWith("/") ? wslHostPath(w.root, worktree) : worktree;
+  return sameDir(p, top) ? "here" : normalize(p);
+}
+
 /** Everything the menu shows and the exact argv of each action, re-read from git. */
 async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
   const f = (...fields: string[]) => `--format=${fields.join(`%1f`)}%1e`;
@@ -194,8 +200,10 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
   }
   const info: GitBranchInfo = { ref, local: localHash };
   // git prints `C:/x/y` on Windows: shown in the platform's own form, like every other path.
-  if (worktree) info.checkedOut = sameDir(worktree, top) ? "here" : normalize(worktree);
+  const co = checkedOutOf(worktree, top);
+  if (co) info.checkedOut = co;
   if (upstream) info.upstream = upstream.replace(/^refs\/(heads|remotes)\//, "");
+  if (upstream.startsWith("refs/remotes/") && remoteRefs.has(upstream)) info.upstreamHash = remoteRefs.get(upstream);
   const only = remotes.size === 1 ? [...remotes][0] : undefined;
   const remote = [pushRemote, upRemote !== "." ? upRemote : "", only, remotes.has("origin") ? "origin" : undefined].find((r) => r && remotes.has(r));
   const why: NonNullable<GitBranchInfo["why"]> = {};
@@ -235,7 +243,6 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
 
 /** Menu data of a local branch; null outside a work tree. */
 export async function gitBranch(cwd: string, ref: string, o: RemoteOptions): Promise<GitBranchResult["branch"]> {
-  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
   const r = branchRef(ref);
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
@@ -244,12 +251,12 @@ export async function gitBranch(cwd: string, ref: string, o: RemoteOptions): Pro
 }
 
 /** `argv`: the command the dialog showed; the daemon runs only what it computes again to the same words. */
-type Write = { ref: string; local: string; argv: string[]; lease?: string } & RemoteOptions;
+type Write = { ref: string; local: string; argv: string[]; lease?: string; tracking?: string } & RemoteOptions;
 async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<RemoteResult | null> {
-  if (wslPathOf(cwd)) throw new WorktreeError("bad_request", WSL_REFUSED);
   const ref = branchRef(o.ref);
   if (!hex(o.local)) throw new WorktreeError("bad_request", "Bad commit");
   if (o.lease !== undefined && !hex(o.lease)) throw new WorktreeError("bad_request", "Bad lease");
+  if (o.tracking !== undefined && !hex(o.tracking)) throw new WorktreeError("bad_request", "Bad tracking");
   if (!Array.isArray(o.argv) || o.argv.length > 64 || !o.argv.every((a) => typeof a === "string")) throw new WorktreeError("bad_request", "Missing command");
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
@@ -259,6 +266,9 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
     const info = await branchInfo(top, ref, env, names);
     const x = ref.slice(11);
     if (o.local !== info.local) throw new WorktreeError("stale", `${x} moved since the menu opened: reopen it`);
+    const shown = verb === "push" ? info.trackingHash : info.upstreamHash;
+    const shownRef = verb === "push" ? info.tracking?.replace(/^refs\/remotes\//, "") : info.upstream;
+    if (o.tracking !== shown) throw new WorktreeError("stale", `${shownRef ?? "The remote branch"} moved since the menu opened: reopen it`);
     let argv: string[];
     let remote: string | undefined;
     if (verb === "push") {

@@ -67,6 +67,24 @@ describe("wsl-git runner", () => {
   });
 });
 
+describe("killTree runs (GH-309)", () => {
+  const ready = (d: string) => (d.toLowerCase() === "ubuntu" ? "wsl:Ubuntu" : undefined);
+  const call = { cwd: UNC, args: ["fetch"], env: {}, killTree: true, timeout: 5000 } as GitRunOptions;
+  it("go only through the side and keep killTree", async () => {
+    const local = vi.fn(async () => out);
+    const sideRun = vi.fn(async () => out);
+    await wslGitRunner({ local, side: ready, sideRun })(call);
+    expect(sideRun).toHaveBeenCalledWith("wsl:Ubuntu", expect.objectContaining({ killTree: true }));
+    expect(local).not.toHaveBeenCalled();
+  });
+  it("without a ready side, or when it is gone, fail with the side message and never start wsl.exe", async () => {
+    const local = vi.fn(async () => out);
+    await expect(wslGitRunner({ local, side: () => undefined, sideRun: vi.fn() })(call)).rejects.toMatchObject({ message: expect.stringMatching(/WSL side of ubuntu is not running/i), stderr: expect.stringMatching(/WSL side of ubuntu is not running/i) });
+    await expect(wslGitRunner({ local, side: ready, sideRun: async () => Promise.reject(new SideGone("x", false)) })(call)).rejects.toMatchObject({ message: expect.stringMatching(/WSL side of ubuntu/i) });
+    expect(local).not.toHaveBeenCalled();
+  });
+});
+
 describe("wslEnv remote switches", () => {
   it("forwards the no-prompt switches and only our BatchMode ssh command", async () => {
     const { wslEnv } = await import("../src/wsl-git.ts");

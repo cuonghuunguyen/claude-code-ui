@@ -101,7 +101,12 @@ export function wslGitRunner(o: WslGitOptions): GitRunner {
     } catch (e) {
       return Promise.reject(e);
     }
-    const viaExe = () => o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) });
+    // A remote operation must die with its whole process group on timeout; only the side can do that inside the distro.
+    const sideNeeded = () => {
+      const m = `The WSL side of ${w.distro} is not running; fetch, push and pull need it. Retry when it is ready (Settings › Sides).`;
+      return Object.assign(new Error(m), { stderr: m, stdout: Buffer.alloc(0) });
+    };
+    const viaExe = () => (r.killTree ? Promise.reject(sideNeeded()) : o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) }));
     const id = o.side?.(w.distro);
     if (!id || !o.sideRun) return viaExe();
     return o.sideRun(id, { ...r, cwd: w.posix, args, env }).catch((e) => (e instanceof SideGone && (!e.sent || r.idempotent) ? viaExe() : Promise.reject(e)));

@@ -1127,6 +1127,8 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope", argv: [] })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5, argv: [] })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [1] })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.branch", cwd: webRoot, ref: 7 })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.branch", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });

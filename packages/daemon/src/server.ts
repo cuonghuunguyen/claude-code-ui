@@ -2187,9 +2187,9 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           try {
             if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });
-            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
+            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease)) || (msg.tracking !== undefined && !isHash(msg.tracking))) return fail("bad_request", "ref, local, lease, tracking and argv must be a branch, full commit hashes and the shown command");
             // Output and URLs are never logged.
-            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, allowed: inside });
+            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, tracking: msg.tracking, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, tracking: msg.tracking, allowed: inside });
             markRepoStale(cwd);
             return reply({ remote });
           } catch (e) {
