@@ -888,3 +888,19 @@ it("GH-392 an outsideRoots repository folder has the icon but no repository menu
   await closeMenu();
   t.unmount();
 });
+
+it("GH-525 the focused folder row keeps a selected background (not the hover one) and it moves with focus", async () => {
+  const t = setup();
+  await t.render();
+  const src = t.row("/p/src");
+  await act(async () => src.focus());
+  await act(async () => src.click());
+  expect(src.className).toContain("bg-secondary");
+  expect(src.className).not.toContain(" bg-muted");
+  await act(async () => t.row("/p/README.md").focus());
+  expect(t.row("/p/src").className).not.toContain("bg-secondary");
+  expect(t.row("/p/README.md").className).toContain("bg-secondary");
+  await t.key(t.row("/p/README.md"), "ArrowDown");
+  expect(t.row("/p/README.md").className).not.toContain("bg-secondary");
+  t.unmount();
+});

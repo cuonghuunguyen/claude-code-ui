@@ -702,6 +702,7 @@ export function FileTree({
           const repo = entry.isDir ? folders.get(pathKey(entry.path)) : undefined;
           const repoText = repo && repoIconText(repo, entry.name);
           const selected = entry.path === activePath;
+          const marked = selected || entry.path === focused; // focus state outlives pointer hover and blur
           return (
             <Fragment key={entry.path}>
             <div
@@ -716,7 +717,7 @@ export function FileTree({
               data-path={entry.path}
               data-dir={entry.isDir ? "" : undefined}
               aria-busy={busyPath === entry.path || undefined}
-              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${selected ? "bg-muted text-foreground" : ""} ${busyPath === entry.path ? "opacity-60" : ""}`}
+              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : ""} ${busyPath === entry.path ? "opacity-60" : ""}`}
               style={pad}
               onFocus={() => setFocused(entry.path)}
               onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
