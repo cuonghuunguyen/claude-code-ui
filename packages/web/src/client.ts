@@ -42,6 +42,8 @@ export function connect(opts: {
   onUpdate?: (m: Extract<ServerMessage, { type: "update_available" | "update_state" }>) => void;
   /** The daemon runs older code than is on disk (stale-toast.tsx). */
   onStale?: (note: string) => void;
+  /** The daemon's machine slept during a run (GH-518). */
+  onSlept?: (m: Extract<ServerMessage, { type: "daemon_slept" }>) => void;
   onOpen?: () => void;
   onStatus?: (s: ConnectionStatus) => void;
   /** Test seam: replaces the browser's visibilitychange / pageshow / online (wake.ts). Returns the unsubscribe. */
@@ -118,6 +120,7 @@ export function connect(opts: {
       if (m.type === "settings_changed") return opts.onSettingsChanged?.(m);
       if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m);
       if (m.type === "daemon_stale") return opts.onStale?.(m.note);
+      if (m.type === "daemon_slept") return opts.onSlept?.(m);
       if (m.type === "sessions.search.result") return streams.get(m.reqId)?.(m);
       const p = m.reqId ? pending.get(m.reqId) : undefined;
       if (!p) return console.error("daemon error", m);

@@ -168,7 +168,7 @@ if (side) {
   const keepAwake = createKeepAwake({ inhibitor: inhibitorFor(process.platform, process.pid) });
   // Signals end in process.exit; SIGKILL is covered by caffeinate -w / the stdin pipe.
   process.on("exit", keepAwake.close);
-  const server = createDaemon({ addonsDir: configDir(), webRoot, token, roots, push, keepAwake, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+  const server = createDaemon({ addonsDir: configDir(), webRoot, token, roots, push, keepAwake, watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
   // The Aside leftover probe of other daemons connects to 127.0.0.1: keep binding 127.0.0.1 or 0.0.0.0, never another address.
   server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     // Where this daemon listens, for the client commands (no token in it); gone with the process.

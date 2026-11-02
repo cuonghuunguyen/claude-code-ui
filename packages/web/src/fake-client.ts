@@ -45,6 +45,7 @@ export function connect(opts: Opts): Client {
     if (m.type === "config.changed") return opts.onConfigChanged?.(m);
     if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m);
     if (m.type === "daemon_stale") return opts.onStale?.(m.note);
+    if (m.type === "daemon_slept") return opts.onSlept?.(m);
   };
 
   queueMicrotask(() => {

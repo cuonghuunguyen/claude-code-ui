@@ -390,6 +390,8 @@ export type ServerMessage =
   | { type: "settings_changed"; settings: Settings; jiraToken?: boolean }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
+  /** GH-518: the Hub's machine slept while a session ran; to every connection when found, the last one again to each new connection. */
+  | { type: "daemon_slept"; at: number; gapMs: number }
   /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes (`cwd` "" for addons: Hub-wide). `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
   | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   /** A newer claude-ui is on npm: on connect and when a check finds it. */

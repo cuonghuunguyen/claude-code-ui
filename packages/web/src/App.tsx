@@ -1361,6 +1361,8 @@ export function App() {
       onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
+      // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
+      onSlept: () => ((slept.current = true), connGen.current > 1 && recNow.current.keepAwake()),
       onConfigChanged: (m) => {
         if (m.kind === "addons") return setAddonsRev((n) => n + 1);
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
@@ -2296,9 +2298,14 @@ export function App() {
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
-  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean });
-  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush() };
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void });
+  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake };
   const sentHere = useRef(new Set<string>());
+  // GH-518: the daemon's machine slept during a run (a daemon_slept message); suggests Keep computer awake.
+  const slept = useRef(false);
+  function offerKeepAwake() {
+    offer("keepAwake", { slept: slept.current, supported: !!computerAwake?.supported, on: !!computerAwake?.on }, () => void setComputer(true));
+  }
   const desktopForcedOff = useRef(false);
   const hiddenNeed = useRef(false);
   useEffect(() => {
@@ -2322,7 +2329,7 @@ export function App() {
       const needed = hiddenNeed.current;
       hiddenNeed.current = false;
       const n = recNow.current;
-      needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush);
+      (needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush)) || n.keepAwake();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
