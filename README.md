@@ -42,7 +42,23 @@ Read more:
 [Keyboard shortcuts](https://cuonghuunguyen.github.io/claude-code-ui/reference/shortcuts) ·
 [CLI flags](https://cuonghuunguyen.github.io/claude-code-ui/reference/cli) ·
 [Troubleshooting](https://cuonghuunguyen.github.io/claude-code-ui/reference/troubleshooting) ·
-[Privacy](https://cuonghuunguyen.github.io/claude-code-ui/reference/privacy)
+[Privacy](https://cuonghuunguyen.github.io/claude-code-ui/reference/privacy) ·
+[FAQ](https://cuonghuunguyen.github.io/claude-code-ui/guide/faq) ·
+[How it compares](https://cuonghuunguyen.github.io/claude-code-ui/guide/compare)
+
+For AI assistants: [llms.txt](https://cuonghuunguyen.github.io/claude-code-ui/llms.txt) (index) and [llms-full.txt](https://cuonghuunguyen.github.io/claude-code-ui/llms-full.txt) (all docs in one file).
+
+## FAQ
+
+**Is this a GUI for Claude Code?** Yes: a free, open-source web UI. `npx claude-code-ui`, open the printed link, and use Claude Code in the browser.
+
+**Can I use Claude Code from my phone?** Yes. `claude-ui --tailscale` prints an HTTPS link and QR code that only your devices can open; the app installs on the Home Screen and sends push notifications.
+
+**Can I run many Claude Code sessions in parallel?** Yes. Sessions are tabs grouped by project, each can get its own git worktree, and the Focus page shows every session that waits for you.
+
+**Does it need an API key?** No. It uses your Claude subscription (`claude login`).
+
+**Is it the same as CloudCLI / "Claude Code UI" (claudecodeui)?** No, that is a separate project with a similar name. This one is `cuonghuunguyen/claude-code-ui`, npm package `claude-code-ui`, command `claude-ui`. See [How it compares](https://cuonghuunguyen.github.io/claude-code-ui/guide/compare).
 
 ## Security in one paragraph
 
