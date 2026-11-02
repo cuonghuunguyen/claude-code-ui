@@ -5,6 +5,7 @@ Feature: Recommendations (GH-518)
     And the app is open
     And the scratch project is a git repository with an origin
     And I open the scratch project
+    And Jira is not set up
     When I click the new worktree button of the scratch project
     Then the Create worktree modal is open
     And the modal shows the Jira hint
@@ -26,6 +27,7 @@ Feature: Recommendations (GH-518)
     And the app is open
     And the scratch project is a git repository with an origin
     And I open the scratch project
+    And Jira is not set up
     When I open Settings › General
     And I turn off Show recommendations
     Then Show recommendations is off
