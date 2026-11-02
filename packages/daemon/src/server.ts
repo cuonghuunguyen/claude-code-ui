@@ -36,6 +36,7 @@ import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpReque
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
+import type { KeepAwake } from "./keep-awake.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -319,6 +320,10 @@ export function createDaemon(opts: {
   sideCallTimeoutMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
+  /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
+  keepAwake?: KeepAwake;
+  /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
+  onRunning?: (running: boolean) => void;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
   /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
@@ -622,6 +627,7 @@ export function createDaemon(opts: {
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
         for (const s of live) {
           sessions.delete(s.id);
+          syncRunning();
           queue.drop(s.id);
           touched.delete(s.id);
           await s.close().catch(() => {});
@@ -638,7 +644,16 @@ export function createDaemon(opts: {
     }
   };
 
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
+  // GH-523: "running" as the web's anySessionRunning: a live session that runs or waits for the user; a Side reports its own.
+  let localWas = false;
+  const syncRunning = () => {
+    const local = [...sessions.values()].some((s) => ["running", "needs_input"].includes(s.info().state));
+    if (local !== localWas) (localWas = local), opts.onRunning?.(local);
+    opts.keepAwake?.update(appSettings.get().power.keepAwake && (local || !!opts.sides?.anyRunning()));
+  };
+  opts.keepAwake?.onStatus(() => broadcast({ type: "settings_changed", settings: appSettings.get(), jiraToken: settingsReply().jiraToken }));
+  opts.sides?.onRunning(syncRunning);
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -799,7 +814,7 @@ export function createDaemon(opts: {
       const t = e.part.type;
       if (t === "session_cleared") queue.move(s.id, (e.part as { sessionId: string }).sessionId);
       else if (t === "session_state" || t === "external_turn" || t === "bash") {
-        if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
+        if (t === "session_state") (queue.setNotLive(s.id, !s.isLive()), syncRunning());
         queue.kick(s.id);
         // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
         if (t === "session_state" && (e.part as { state?: string }).state === "idle") markWorktreeStale(s.cwd);
@@ -1104,6 +1119,7 @@ export function createDaemon(opts: {
     queue.drop(id);
     deleting.add(id);
     sessions.delete(id);
+    syncRunning();
     orchestration.forget(id);
     touched.delete(id);
     try {
@@ -1403,7 +1419,7 @@ export function createDaemon(opts: {
   });
 
   // A side's start, failure or stop changes the side list every client shows.
-  opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  opts.sides?.onChange(() => (broadcast({ type: "sessions.changed" }), syncRunning()));
   http.once("listening", () => void cleanupAsides());
   if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
@@ -1979,6 +1995,8 @@ export function createDaemon(opts: {
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             if (!settings.focus.nextForYou) for (const s of sessions.values()) s.clearSuggestion();
             perfMon.setEnabled(settings.performance.monitor);
+            if (!settings.power.keepAwake) opts.keepAwake?.reset();
+            syncRunning();
             broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
             return reply(settingsReply(settings));
           } catch (err) {
@@ -2576,7 +2594,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

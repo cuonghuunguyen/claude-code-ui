@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -29,7 +29,8 @@ async function render({ sides, docker, failGet = false, tokenReset = false, grou
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  if (legacy) delete (settings as Partial<Settings>).power;
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -41,7 +42,7 @@ async function render({ sides, docker, failGet = false, tokenReset = false, grou
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
@@ -770,6 +771,76 @@ it("Screen switches write the store; the sub-switch is held while the main one i
     Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
     localStorage.removeItem("claude-ui.keepAwake");
   }
+});
+
+const KA = { host: "box", keepAwake: { supported: true } };
+const sets = (calls: Request[]) => calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: unknown }).patch);
+
+it("General › Screen: Keep computer awake is off by default, shows the lid hint and sends power.keepAwake only (GH-523)", async () => {
+  const { q, pick, calls } = await render({ daemon: KA });
+  await pick("general");
+  expect(q("settings-computer-awake")!.getAttribute("aria-checked")).toBe("false");
+  expect(q("settings-screen")!.textContent).toContain("Keep computer awake");
+  expect(q("settings-screen")!.textContent).toContain("Closing the lid can still sleep a laptop");
+  await act(async () => q("settings-computer-awake")!.click());
+  expect(sets(calls)).toEqual([{ power: { keepAwake: true } }]);
+  expect(q("settings-computer-awake")!.getAttribute("aria-checked")).toBe("true");
+});
+
+it('Keep computer awake is disabled with "Not supported on this system" when the daemon cannot hold it (GH-523)', async () => {
+  const { q, pick, calls } = await render({ daemon: { host: "box", keepAwake: { supported: false } } });
+  await pick("general");
+  expect(q("settings-computer-awake")!.getAttribute("aria-disabled")).toBe("true");
+  expect(q("settings-screen")!.textContent).toContain("Not supported on this system");
+  await act(async () => q("settings-computer-awake")!.click());
+  expect(sets(calls)).toEqual([]);
+});
+
+it("a failed inhibitor keeps the switch on and shows the daemon's error (GH-523)", async () => {
+  const { q, pick } = await render({ daemon: { host: "box", keepAwake: { supported: true, error: "caffeinate: exited with 1" } } });
+  await pick("general");
+  await act(async () => q("settings-computer-awake")!.click());
+  expect(q("settings-computer-awake")!.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-computer-awake-error")!.textContent).toBe("Could not keep this computer awake: caffeinate: exited with 1");
+});
+
+it("turning Keep screen awake on and off also sends power.keepAwake (GH-523)", async () => {
+  Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+  Object.defineProperty(navigator, "wakeLock", { value: { request: async () => ({}) }, configurable: true });
+  try {
+    saveKeepAwake({ on: false, onlyRunning: false });
+    const { q, pick, calls } = await render({ daemon: KA });
+    await pick("general");
+    await act(async () => q("settings-keep-awake")!.click());
+    await act(async () => q("settings-keep-awake")!.click());
+    expect(sets(calls)).toEqual([{ power: { keepAwake: true } }, { power: { keepAwake: false } }]);
+  } finally {
+    delete (navigator as { wakeLock?: unknown }).wakeLock;
+    Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
+    localStorage.removeItem("claude-ui.keepAwake");
+  }
+});
+
+it("Keep screen awake sends no power patch when the daemon cannot keep its computer awake (GH-523)", async () => {
+  Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+  Object.defineProperty(navigator, "wakeLock", { value: { request: async () => ({}) }, configurable: true });
+  try {
+    saveKeepAwake({ on: false, onlyRunning: false });
+    const { q, pick, calls } = await render({ daemon: { host: "box", keepAwake: { supported: false } } });
+    await pick("general");
+    await act(async () => q("settings-keep-awake")!.click());
+    expect(sets(calls)).toEqual([]);
+  } finally {
+    delete (navigator as { wakeLock?: unknown }).wakeLock;
+    Object.defineProperty(window, "isSecureContext", { value: undefined, configurable: true });
+    localStorage.removeItem("claude-ui.keepAwake");
+  }
+});
+
+it("an older daemon without power shows no Keep computer awake row (GH-523)", async () => {
+  const { q, pick } = await render({ legacy: true });
+  await pick("general");
+  expect(q("settings-computer-awake")).toBeNull();
 });
 
 it("Settings › Git shows the nine settings with VS Code's labels and defaults; the parent-folders hint names the difference", async () => {

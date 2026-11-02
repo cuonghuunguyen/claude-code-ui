@@ -267,6 +267,13 @@ it("Toggle keep screen awake is listed only where App offers it, and runs it", (
   expect(toggleKeepAwake).toHaveBeenCalledOnce();
 });
 
+it("Toggle keep computer awake is listed only when the daemon supports it, and runs its toggle (GH-523)", () => {
+  const toggleComputerAwake = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "computerAwake.toggle")).toBe(false);
+  run(ctx({ toggleComputerAwake }), "computerAwake.toggle");
+  expect(toggleComputerAwake).toHaveBeenCalledOnce();
+});
+
 it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {
   const openFocus = vi.fn();
   const nextWaiting = vi.fn();

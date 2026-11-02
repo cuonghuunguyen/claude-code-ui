@@ -12,6 +12,7 @@ import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
+import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
@@ -89,8 +90,12 @@ if (side) {
   console.log = console.error;
   let push: (p: Parameters<Push["send"]>[0]) => void = () => {};
   const sidePush = { publicKey: "", subscribe: () => false, send: async (p) => push(p) } satisfies Push;
-  const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state });
-  push = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) }).push;
+  // The hub holds the sleep inhibitor (a side runs on its machine): a side only reports whether a session runs.
+  let running: (on: boolean) => void = () => {};
+  const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, onRunning: (on) => running(on), ...state });
+  const io = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) });
+  push = io.push;
+  running = io.running;
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
@@ -160,7 +165,10 @@ if (side) {
   const update = updateCheck !== false && version !== "dev" && launched ? { current: version, dir: versionsDir(), registry, exit: (code: number) => void setTimeout(() => process.exit(code), 200) } : undefined;
   // A source checkout compares its files with the start; a release compares its version with the installed ones (build-info.ts).
   const buildInfo = createBuildInfo({ version, srcDirs: [fileURLToPath(new URL("../src", import.meta.url)), fileURLToPath(new URL("../../protocol/src", import.meta.url))], versionsDir: versionsDir() });
-  const server = createDaemon({ webRoot, token, roots, push, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+  const keepAwake = createKeepAwake({ inhibitor: inhibitorFor(process.platform, process.pid) });
+  // Signals end in process.exit; SIGKILL is covered by caffeinate -w / the stdin pipe.
+  process.on("exit", keepAwake.close);
+  const server = createDaemon({ webRoot, token, roots, push, keepAwake, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
   // The Aside leftover probe of other daemons connects to 127.0.0.1: keep binding 127.0.0.1 or 0.0.0.0, never another address.
   server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
     // Where this daemon listens, for the client commands (no token in it); gone with the process.
