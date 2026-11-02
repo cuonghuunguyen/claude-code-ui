@@ -89,6 +89,20 @@ When("I choose {string} in the menu of the scratch project", async ({ page, proj
   await page.getByTestId(`project-menu-${entry}`).click();
 });
 
+Then("the menu of the scratch project has {string} and not {string}", async ({ page, project }, has: string, hasNot: string) => {
+  await expect(page.getByTestId("new-session-tab")).toBeVisible({ timeout: 60_000 });
+  const r = row(page, project.path);
+  const phone = await page.getByTestId("open-drawer").isVisible();
+  const prefix = phone ? "project-menu-" : "group-menu-"; // the context menu on desktop has its own ids
+  if (phone) {
+    await page.getByTestId("open-drawer").click();
+    await expect(r.getByTestId("project-menu")).toBeInViewport({ timeout: 60_000 });
+    await r.getByTestId("project-menu").click();
+  } else await r.getByTestId("group-toggle").click({ button: "right", timeout: 60_000 }); // desktop: the kebab is phone-only, the menu is the context menu
+  await expect(page.getByTestId(`${prefix}${has}`)).toBeVisible();
+  await expect(page.getByTestId(`${prefix}${hasNot}`)).toHaveCount(0);
+});
+
 Then("the Create worktree modal is open", async ({ page }) => {
   await expect(modal(page)).toBeVisible();
 });
