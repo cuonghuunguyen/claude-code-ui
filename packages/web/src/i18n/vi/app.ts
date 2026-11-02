@@ -166,6 +166,7 @@ export default {
   "app.cmd.terminalToggle": "Bật/tắt terminal",
   "app.cmd.signalToggle": "Bật/tắt chế độ chỉ tín hiệu",
   "app.cmd.awakeToggle": "Bật/tắt giữ màn hình sáng",
+  "app.cmd.computerAwakeToggle": "Bật/tắt giữ máy tính thức",
   "app.cmd.terminalNew": "Terminal mới",
   "app.cmd.layoutReset": "Đặt lại bố cục",
   "app.cmd.promptFocus": "Chuyển đến prompt",

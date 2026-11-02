@@ -523,7 +523,7 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 }
 
 type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
-type Side = SideInfo & { proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall> };
+type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall> };
 
 let nextGit = 0;
 
@@ -583,6 +583,7 @@ export function createSides(opts: {
   const routers = new Set<Router>();
   const changeListeners = new Set<() => void>();
   const changed = () => changeListeners.forEach((l) => l());
+  const runningListeners = new Set<() => void>();
   let nextConn = 1;
   /** Sides with "Start with Claude UI" on: they start again with the next daemon start (a saved ID not seen yet stays saved). */
   const saved = new Map((opts.saved ?? []).map((e) => [e.id, e]));
@@ -825,6 +826,8 @@ export function createSides(opts: {
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
+        } else if (f.kind === "running") {
+          if (s.running !== f.running) (s.running = f.running), runningListeners.forEach((l) => l());
         } else if (f.kind === "push") {
           // A side notifies for its own sessions only (GH-279): not for one another side owns.
           const owner = sessionSide.get(f.push.sessionId);
@@ -869,6 +872,7 @@ export function createSides(opts: {
         const restarting = wasReady && scheduleRestart(s);
         Object.assign(s, restarting ? {} : notInstalled ? { state: "off", message: undefined } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
+        s.running = false;
         for (const [gid, c] of s.gits) {
           clearTimeout(c.timer);
           c.fail(new SideGone(`${s.label} stopped`, true));
@@ -1106,6 +1110,12 @@ export function createSides(opts: {
     onChange(l: () => void) {
       changeListeners.add(l);
       return () => void changeListeners.delete(l);
+    },
+    /** GH-523: a ready side reports a session running or waiting (keep computer awake). */
+    anyRunning: () => [...sides.values()].some((s) => s.state === "ready" && !!s.running),
+    onRunning(l: () => void) {
+      runningListeners.add(l);
+      return () => void runningListeners.delete(l);
     },
     addRouter: (r: Router) => void routers.add(r),
     removeRouter: (r: Router) => void routers.delete(r),
@@ -1559,5 +1569,6 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
   write(JSON.stringify({ ready: true }));
   return {
     push: (p: PushPayload) => write(JSON.stringify({ push: p })),
+    running: (on: boolean) => write(JSON.stringify({ running: on })),
   };
 }

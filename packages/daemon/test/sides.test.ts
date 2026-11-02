@@ -850,6 +850,27 @@ describe("docker side discovery", () => {
   });
 });
 
+describe("a side's running frames (GH-523)", () => {
+  it("drive anyRunning and onRunning; its exit clears it", async () => {
+    const stdout = new PassThrough();
+    const exit = new EventEmitter();
+    stdout.write(JSON.stringify({ ready: true }) + "\n");
+    const proc: SideProcess = { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => proc });
+    const heard = vi.fn();
+    s.onRunning(heard);
+    await s.start("wsl:Ubuntu");
+    expect(s.anyRunning()).toBe(false);
+    stdout.write('{"running":true}\n');
+    await vi.waitFor(() => expect(s.anyRunning()).toBe(true));
+    expect(heard).toHaveBeenCalledTimes(1);
+    stdout.write('{"running":true}\n');
+    exit.emit("exit", 1);
+    expect(s.anyRunning()).toBe(false);
+    s.close();
+  });
+});
+
 describe("a ready side that exits (GH-263)", () => {
   /** A ready side that writes `stderrText` and exits with `code` once `die()` is called. */
   function dyingSide(stderrText: string | string[], code: number) {

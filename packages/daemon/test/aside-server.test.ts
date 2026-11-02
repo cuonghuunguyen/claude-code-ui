@@ -8,7 +8,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ServerMessage } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { calls, fakeQuery, history as chain, inputs } from "./fake-query.ts";
+import { calls, fakeQuery, history as chain, inputs, permissionQuery } from "./fake-query.ts";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { vi } from "vitest";
+import { createKeepAwake } from "../src/keep-awake.ts";
+import { createSettings } from "../src/settings.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
 const webRoot = realpathSync(mkdtempSync(join(tmpdir(), "as-web-")));
@@ -34,7 +39,7 @@ let open: { close(): void }[] = [];
 afterEach(() => (open.forEach((o) => o.close()), (open = [])));
 
 /** A daemon over a fake SDK history: `owner` has a transcript (`messages`); forkSession adds a transcript copy. */
-async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tmpdir(), "as-cfg-")), "sessions.json"), idleCloseMs = 0, asideSweepMs = undefined as number | undefined, listen = true, seed = {} as Record<string, object> } = {}) {
+async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tmpdir(), "as-cfg-")), "sessions.json"), idleCloseMs = 0, asideSweepMs = undefined as number | undefined, listen = true, seed = {} as Record<string, object>, extra = {} as Record<string, unknown> } = {}) {
   const forks: Fork[] = [];
   const deleted: string[] = [];
   const transcripts = new Map<string, { messages: unknown[]; summary: string }>([[OWNER, { messages: messages as never[], summary: "owner" }]]);
@@ -63,6 +68,7 @@ async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tm
       }) as never,
       deleteSession: (async (sid: string) => void (deleted.push(sid), transcripts.delete(sid))) as never,
     },
+    ...extra,
   });
   open.push(d);
   // listen: false stands for a --side daemon, which has no port of its own.
@@ -263,5 +269,23 @@ describe("leftovers", () => {
     await again.request({ type: "session.prompt", sessionId: session.id, text: "next" });
     const run = calls.slice(before).find((o) => o.resume === session.id && o.canUseTool)!;
     expect(run.disallowedTools).toEqual(["Edit", "Write", "NotebookEdit"]);
+  });
+});
+
+describe("Aside and keep computer awake (GH-523)", () => {
+  it("force-deleting a running Aside (aside.close) releases the inhibitor", async () => {
+    let spawned = 0;
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), unref: () => {} });
+    const keepAwake = createKeepAwake({ inhibitor: { cmd: "inh", args: [] }, spawn: (() => (spawned++, child)) as never });
+    const appSettings = createSettings({ file: join(mkdtempSync(join(tmpdir(), "as-set-")), "settings.json") });
+    appSettings.set({ power: { keepAwake: true } });
+    const t = await start({ extra: { query: permissionQuery, keepAwake, appSettings } });
+    await t.request({ type: "session.create", cwd: webRoot });
+    const { session } = (await t.request({ type: "aside.open", sessionId: OWNER, text: "q" })).result;
+    // The Aside's turn waits for permission: running state holds the inhibitor.
+    await until(() => spawned === 1);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect((await t.request({ type: "aside.close", sessionId: session.id })).type).toBe("reply");
+    await until(() => child.kill.mock.calls.length === 1);
   });
 });

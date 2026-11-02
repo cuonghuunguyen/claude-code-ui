@@ -434,6 +434,8 @@ export function App() {
   const [workerNotices, setWorkerNotices] = useState(true);
   // Settings › Git: no "modified content" probes of submodules in Changes.
   const [ignoreSubmodules, setIgnoreSubmodules] = useState(false);
+  /** GH-523: Keep computer awake; undefined until settings.get answers or on an older daemon. */
+  const [computerAwake, setComputerAwake] = useState<{ on: boolean; supported: boolean }>();
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
     window.addEventListener(IN_APP_EVENT, sync);
@@ -607,6 +609,9 @@ export function App() {
   if (removing) lastRemoving.current = removing;
   const paletteOpener = useRef<Element>(null);
   const client = useRef<Client>(undefined);
+  const setComputer = (on: boolean) => client.current!.request({ type: "settings.set", patch: { power: { keepAwake: on } } }).catch((e) => setError((e as Error).message));
+  /** GH-523: Keep screen awake also sets Keep computer awake, when the daemon can; never the reverse. */
+  const toggleScreen = () => (awake.toggle(), computerAwake?.supported && void setComputer(!awake.setting.on));
   const viewsRef = useRef(views);
   viewsRef.current = views;
   const statusRef = useRef(status);
@@ -1318,7 +1323,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true)),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true })),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1339,7 +1344,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -2964,7 +2969,8 @@ export function App() {
     focusNotifications: notify.cards.length ? () => setCardFocus((n) => n + 1) : undefined,
     nextWaiting: waiting.length ? () => (open(FOCUS_TAB), setFocusSel(nextWaiting(waiting, activeId === FOCUS_TAB ? focusSel ?? waiting[0]?.part.id : undefined)?.part.id)) : undefined,
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
-    toggleKeepAwake: awake.supported ? awake.toggle : undefined,
+    toggleKeepAwake: awake.supported ? toggleScreen : undefined,
+    toggleComputerAwake: computerAwake?.supported ? () => void setComputer(!computerAwake.on) : undefined,
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast(tr("app.main.tipsReset"))),
@@ -3350,7 +3356,7 @@ export function App() {
               <SearchIcon />
             </IconButton>
           )}
-          <KeepAwakeButton className="max-sm:hidden" status={awake.status} error={awake.error} onToggle={awake.toggle} testId="keep-awake" />
+          <KeepAwakeButton className="max-sm:hidden" status={awake.status} error={awake.error} onToggle={toggleScreen} testId="keep-awake" />
           <IconButton className="max-sm:hidden" label={tr("app.main.themeLabel", { theme: tr(`app.main.theme.${theme}`) })} onClick={() => setTheme(nextPref)} testId="theme-toggle">
             <ThemeIcon />
           </IconButton>
@@ -3531,7 +3537,7 @@ export function App() {
                 <SearchIcon />
               </IconButton>
             )}
-            <KeepAwakeButton status={awake.status} error={awake.error} onToggle={awake.toggle} testId="drawer-keep-awake" />
+            <KeepAwakeButton status={awake.status} error={awake.error} onToggle={toggleScreen} testId="drawer-keep-awake" />
             <IconButton label={tr("app.main.themeLabel", { theme: tr(`app.main.theme.${theme}`) })} onClick={() => setTheme(nextPref)} testId="drawer-theme">
               <ThemeIcon />
             </IconButton>

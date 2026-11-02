@@ -164,6 +164,7 @@ export default {
   "app.cmd.terminalToggle": "Toggle terminal",
   "app.cmd.signalToggle": "Toggle signal only",
   "app.cmd.awakeToggle": "Toggle keep screen awake",
+  "app.cmd.computerAwakeToggle": "Toggle keep computer awake",
   "app.cmd.terminalNew": "New terminal",
   "app.cmd.layoutReset": "Reset layout",
   "app.cmd.promptFocus": "Focus prompt",

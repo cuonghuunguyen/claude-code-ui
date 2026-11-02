@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -252,4 +252,13 @@ it("Jira URL: a new value is https, or http only for localhost and 127.0.0.1; a 
   const f = file();
   writeFileSync(f, JSON.stringify({ jira: { url: "http://jira.example.com" } }));
   expect(createSettings({ file: f }).get().jira.url).toBe("http://jira.example.com");
+});
+
+it("power.keepAwake defaults off, is saved and refused unless on or off (GH-523)", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().power.keepAwake).toBe(false);
+  s.set({ power: { keepAwake: true } });
+  expect(createSettings({ file: f }).get().power.keepAwake).toBe(true);
+  expect(() => s.set({ power: { keepAwake: "yes" as never } })).toThrow("Keep computer awake must be on or off");
 });
