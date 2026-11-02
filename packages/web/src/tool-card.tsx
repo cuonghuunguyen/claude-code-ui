@@ -250,7 +250,10 @@ function FileSummary({ path, range }: { path: string; range: string }) {
 }
 
 /** Card body by tool type; tools without a purpose-built body get the generic JSON view. */
-/** The image of a Read result: inline, or loaded with session.media when the snapshot left it out; PDFs and other types show only the caption. */
+/** Image/document blocks of a result with their index in the output (session.media names a payload by it). */
+const mediaOf = (result?: ToolResult) => (Array.isArray(result?.output) ? result.output.flatMap((b, index) => { const m = mediaBlock(b); return m ? [{ ...m, index }] : []; }) : []);
+
+/** The image of a tool result (Read, MCP screenshots): inline, or loaded with session.media when the snapshot left it out; PDFs and other types show only the caption. */
 function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m: { media: string; src?: string; omitted: boolean }; alt: string }) {
   const loads = m.omitted && isPromptImage(m.media);
   const { src, failed, retry } = useMediaSrc(partId, index, loads, m.src);
@@ -283,8 +286,7 @@ function BuiltinToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
         </div>
       );
     case "Read": {
-      // The index is the block's position in the output: session.media names the payload by it.
-      const media = Array.isArray(result?.output) ? result.output.flatMap((b, index) => { const m = mediaBlock(b); return m ? [{ ...m, index }] : []; }) : [];
+      const media = mediaOf(result);
       return (
         <div className="space-y-2">
           <div data-testid="read-path" className="font-mono text-xs">
@@ -371,6 +373,11 @@ function BuiltinToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
       {result && (
         <ToolOutput output={result.isError ? undefined : redact(result.output)} errorText={result.isError ? text(result.output) : undefined} />
       )}
+      {result && !result.isError && mediaOf(result).filter((m) => isPromptImage(m.media)).map((m) => (
+        <figure key={m.index} className="space-y-1" data-testid="tool-media">
+          <ReadImage partId={result.id} index={m.index} m={m} alt={call.tool} />
+        </figure>
+      ))}
     </>
   );
 }

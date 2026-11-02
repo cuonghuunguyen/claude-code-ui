@@ -447,6 +447,8 @@ export function App() {
   // Settings › Git: no "modified content" probes of submodules in Changes.
   const [ignoreSubmodules, setIgnoreSubmodules] = useState(false);
   /** GH-523: Keep computer awake; undefined until settings.get answers or on an older daemon. */
+  /** GH-514: Claude in Chrome setting; undefined on a daemon without it. */
+  const [chromeOn, setChromeOn] = useState<boolean>();
   const [computerAwake, setComputerAwake] = useState<{ on: boolean; supported: boolean }>();
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
@@ -1341,7 +1343,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true })),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1363,7 +1365,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -3050,6 +3052,7 @@ export function App() {
     toggleSignalOnly: () => saveSignalOnly(!loadSignalOnly()),
     toggleKeepAwake: awake.supported ? toggleScreen : undefined,
     toggleComputerAwake: computerAwake?.supported ? () => void setComputer(!computerAwake.on) : undefined,
+    toggleChrome: chromeOn === undefined ? undefined : () => void client.current!.request({ type: "settings.set", patch: { chrome: { enabled: !chromeOn } } }).catch((e) => setError((e as Error).message)),
     openSettings: () => setSettingsOpen(true),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast(tr("app.main.tipsReset"))),

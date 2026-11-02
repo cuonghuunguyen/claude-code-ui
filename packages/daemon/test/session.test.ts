@@ -501,6 +501,30 @@ describe("Session", () => {
     ]);
   });
 
+  describe("Claude in Chrome (GH-514)", () => {
+    it("runs the CLI with --chrome when the setting is on", () => {
+      started({ query: fakeQuery as never, chrome: () => true });
+      expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null, "replay-user-messages": null });
+    });
+    it("no --chrome when the setting is off or absent", () => {
+      started({ query: fakeQuery as never, chrome: () => false });
+      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+      started({ query: fakeQuery as never });
+      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+    });
+    it("a worker never gets --chrome", () => {
+      started({ query: fakeQuery as never, chrome: () => true, worker: () => true });
+      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+    });
+    it("reads the setting at each query start", () => {
+      let on = false;
+      const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never, chrome: () => on });
+      on = true;
+      s.prompt("hi");
+      expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null });
+    });
+  });
+
   it("loads user, project and local settings like Claude Code: commands, skills, saved permission rules", () => {
     started({ query: fakeQuery as never });
     expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project", "local"] });

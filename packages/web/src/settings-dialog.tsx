@@ -620,6 +620,12 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "chrome",
+    rows: [
+      { key: "enabled", kind: "switch" },
+    ],
+  },
+  {
     id: "git",
     rows: [
       { key: "autoRepositoryDetection", kind: "select", options: ["true", "false", "subFolders", "openEditors"].map((value) => ({ value })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
@@ -763,6 +769,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const orchestration = daemonGroup("orchestration");
   const usageLimit = daemonGroup("usageLimit");
   const performance = daemonGroup("performance");
+  const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
   const git = daemonGroup("git");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
@@ -817,6 +824,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
+    ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
     ...(sides?.some((x) => x.id !== LOCAL_SIDE) || docker ? [{ id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
     ...(performance
       ? [

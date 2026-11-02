@@ -118,6 +118,8 @@ export type CommandContext = {
   toggleKeepAwake?: () => void;
   /** GH-523: set only when the daemon can keep its computer awake. */
   toggleComputerAwake?: () => void;
+  /** GH-514: set only when the daemon sends the chrome setting. */
+  toggleChrome?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -205,6 +207,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("signal.toggle", t("app.cmd.signalToggle"), c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", t("app.cmd.awakeToggle"), c.toggleKeepAwake),
     c.toggleComputerAwake && cmd("computerAwake.toggle", t("app.cmd.computerAwakeToggle"), c.toggleComputerAwake),
+    c.toggleChrome && cmd("chrome.toggle", t("app.cmd.chromeToggle"), c.toggleChrome),
     c.panels && cmd("terminal.new", t("app.cmd.terminalNew"), c.newTerminal),
     cmd("layout.reset", t("app.cmd.layoutReset"), c.resetLayout),
     c.panels && cmd("panel.flip", t(c.side === "left" ? "app.cmd.flipRight" : "app.cmd.flipLeft"), c.flipSide),

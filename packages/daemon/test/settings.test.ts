@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -173,6 +173,13 @@ it("performance.monitor defaults to true and accepts a boolean; a string is refu
   expect(s.get().performance).toEqual({ monitor: true });
   expect(s.set({ performance: { monitor: false } }).performance).toEqual({ monitor: false });
   expect(() => s.set({ performance: { monitor: "x" as never } })).toThrow("Performance monitor must be on or off");
+});
+
+it("chrome.enabled defaults to off, saves, refuses a non-boolean", () => {
+  const s = createSettings({ file: file() });
+  expect(s.get().chrome).toEqual({ enabled: false });
+  expect(s.set({ chrome: { enabled: true } }).chrome).toEqual({ enabled: true });
+  expect(() => s.set({ chrome: { enabled: "yes" as never } })).toThrow("Claude in Chrome must be on or off");
 });
 
 it("workerNotifications defaults to on, saves off, refuses a non-boolean with 'Notifications from workers must be on or off'", () => {

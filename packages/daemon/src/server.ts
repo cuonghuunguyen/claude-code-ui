@@ -357,6 +357,7 @@ export function createDaemon(opts: {
     ...initial,
     plan,
     promptSuggestions: () => appSettings.get().focus.nextForYou,
+    chrome: () => appSettings.get().chrome.enabled,
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
       const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);

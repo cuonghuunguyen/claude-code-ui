@@ -313,6 +313,31 @@ describe("Read of an image or PDF", () => {
   });
 });
 
+describe("MCP tool result images (GH-514)", () => {
+  const b64 = "iVBORw0KGgo".repeat(200);
+  const card = (output: unknown, isError = false) =>
+    renderToStaticMarkup(<ToolBody call={done("mcp__claude-in-chrome__computer", { action: "screenshot" })} result={{ type: "tool_result", toolUseId: "t1", output, isError } as never} />);
+  const text = { type: "text", text: "Took screenshot" };
+
+  it("shows an MCP screenshot image in the generic card", () => {
+    const html = card([text, { type: "image", source: { type: "base64", media_type: "image/png", data: b64 } }]);
+    expect(html.split(`<img src="data:image/png;base64,${b64}"`)).toHaveLength(2);
+    expect(html).toContain('data-testid="tool-media"');
+    expect(html).toContain("image/png, 1.6 KB");
+    expect(html).not.toContain("&quot;data&quot;");
+  });
+
+  it("an omitted MCP image shows the load placeholder, not an img", () => {
+    const html = card([text, { type: "image", source: { type: "omitted", media_type: "image/png", bytes: 300000 } }]);
+    expect(html).not.toContain("<img");
+    expect(html).toContain('data-testid="tool-media"');
+  });
+
+  it("no image for an error result", () => {
+    expect(card([{ type: "image", source: { type: "base64", media_type: "image/png", data: b64 } }], true)).not.toContain("<img");
+  });
+});
+
 describe("failed Read card", () => {
   it("shows the error message without the <tool_use_error> wrapper", () => {
     const html = renderToStaticMarkup(
