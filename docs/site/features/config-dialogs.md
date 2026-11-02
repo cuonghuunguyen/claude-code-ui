@@ -1,6 +1,6 @@
 # MCP, skills & plugins
 
-Three dialogs manage Claude Code's MCP servers, skills and plugins, the same way the VS Code extension does. Changes are saved to Claude Code's own config files, so the `claude` CLI sees them too.
+Three dialogs manage Claude Code's MCP servers, skills and plugins, the same way the VS Code extension does. Changes are saved to Claude Code's own config files, so the `claude` CLI sees them too. Addons, which change claude-ui itself, have their own dialog: see [Addons](addons).
 
 ## How to open them
 
