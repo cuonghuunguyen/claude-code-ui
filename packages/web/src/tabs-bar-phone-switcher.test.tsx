@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB, replaceTab } from "./tabs.ts";
+import { resetPageForTests, seen, setRecommendationHost } from "./recommendations.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,7 +18,7 @@ const INFO: Record<string, TabInfo> = {
 };
 
 let root: ReturnType<typeof createRoot> | undefined;
-afterEach(() => (root?.unmount(), (root = undefined), document.body.replaceChildren()));
+afterEach(() => (root?.unmount(), (root = undefined), document.body.replaceChildren(), localStorage.clear(), resetPageForTests(), setRecommendationHost(undefined), vi.unstubAllGlobals()));
 const wait = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
 const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
 
@@ -94,4 +95,29 @@ it("phone: Enter on a highlighted row of the switcher switches to its tab", asyn
   await act(async () => void row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
   await wait(20);
   expect(onSelect).toHaveBeenCalledExactlyOnceWith("b");
+});
+
+it("phone: the third pick of a neighbour tab shows the swipe tip", async () => {
+  vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("40rem"), addEventListener() {}, removeEventListener() {} }));
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const { onSelect, bar, openList } = mount();
+  await bar(["a", "b", "c"], "a");
+  const pick = async (title: string) => {
+    await openList();
+    const row = rows().find((r) => r.textContent?.includes(title))!;
+    await act(async () => {
+      row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+      row.click();
+    });
+    await wait(60);
+  };
+  await pick("Gamma"); // not a neighbour: not counted
+  await pick("Beta");
+  await pick("Beta");
+  expect(show).not.toHaveBeenCalled();
+  await pick("Beta");
+  expect(onSelect).toHaveBeenCalledTimes(4);
+  expect(seen("adjacentPick")).toBe(3);
+  expect(show).toHaveBeenCalledExactlyOnceWith("Tip: swipe up or down on the tab name to switch tabs.", undefined);
 });

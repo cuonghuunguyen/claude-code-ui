@@ -1,6 +1,6 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
 import { SideBadge, SideLabel, SideStatusLine } from "./sides.tsx";
-import { Fragment, memo, use, useEffect, useRef, useState } from "react";
+import { Fragment, memo, use, useEffect, useRef, useState, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
 import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
@@ -19,6 +19,7 @@ import { CHECK_ITEM, RowContextMenu, RowMenu, Tick } from "./sidebar-menus.tsx";
 import { groupEntries, groupSessions, idleTargets, workerCounts, workerEntries } from "./sidebar-menus.ts";
 import { useKeyContextMenu } from "./context-menu-key.ts";
 import { t, useT } from "./i18n.ts";
+import { offer, scrolledFar } from "./recommendations.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
@@ -197,6 +198,19 @@ export function SessionList({
   const now = useNow(60_000, true);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  // GH-518: a long scroll through the list, then 200 ms of stillness, suggests the search box.
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const scrolls = useRef<{ t: number; top: number }[]>([]);
+  const stopTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const onListScroll = (e: UIEvent<HTMLElement>) => {
+    const el = e.currentTarget;
+    const now = Date.now();
+    scrolls.current = [...scrolls.current.filter((x) => now - x.t <= 10_000), { t: now, top: el.scrollTop }];
+    clearTimeout(stopTimer.current);
+    stopTimer.current = setTimeout(() => offer("searchSessions", { far: scrolledFar(scrolls.current, Date.now(), el.clientHeight), empty: queryRef.current === "" }, () => searchRef.current?.focus()), 200);
+  };
+  useEffect(() => () => clearTimeout(stopTimer.current), []);
   useEffect(() => {
     if (!search) return;
     setQuery(search.text);
@@ -549,7 +563,7 @@ export function SessionList({
           </button>
         </p>
       )}
-      <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label={t("sidebar.sessions")} data-testid="session-list" ref={listRef}>
+      <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label={t("sidebar.sessions")} data-testid="session-list" ref={listRef} onScroll={onListScroll}>
         {archived && !!groups.length && (
           <p className="px-1.5 text-muted-foreground text-xs" data-testid="archived-caption">
             {t("sidebar.archivedSessions")}

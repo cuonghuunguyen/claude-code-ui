@@ -3,6 +3,7 @@ import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, ty
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { fileNameProblem, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
+import { tipMiddleClick } from "./recommendations.ts";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
@@ -552,7 +553,7 @@ export function FileTree({
       case "open":
         return onOpen(path, { pinned: true, focusEditor: true });
       case "openTab":
-        return onOpenTab?.(path);
+        return (onOpenTab?.(path), tipMiddleClick());
       case "viewer":
         return onViewer?.(path);
       case "changes": {

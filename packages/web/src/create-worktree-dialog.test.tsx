@@ -2,9 +2,10 @@
 import type { BranchRow, JiraTicket } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Request } from "./client.ts";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
+import { resetPageForTests, setRecommendationsOn } from "./recommendations.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -27,6 +28,7 @@ const TICKETS: JiraTicket[] = [
 
 let root: Root | undefined;
 let el: HTMLElement | undefined;
+beforeEach(() => resetPageForTests());
 afterEach(() => {
   act(() => root?.unmount());
   el?.remove();
@@ -295,4 +297,33 @@ it("a plain branch list that arrives after the fetched one does not replace it",
   await act(async () => gates.plain!({ branches: [{ name: "stale", local: true }], defaultBase: "origin/main" }));
   await flush();
   expect(document.body.textContent).not.toContain("stale");
+});
+
+it("shows the Connect Jira hint once when Jira is not set up", async () => {
+  const { onJiraSettings } = mount();
+  await flush();
+  expect(q("rec-jira")).not.toBeNull();
+  await act(async () => q("rec-jira-connect")!.click());
+  expect(onJiraSettings).toHaveBeenCalledOnce();
+  await act(async () => q("rec-jira-close")!.click());
+  expect(q("rec-jira")).toBeNull();
+  act(() => root!.unmount());
+  el!.remove();
+  resetPageForTests();
+  mount();
+  await flush();
+  expect(q("rec-jira")).toBeNull();
+});
+
+it("no hint when Jira is set up", async () => {
+  mount({ jira: true });
+  await flush();
+  expect(q("rec-jira")).toBeNull();
+});
+
+it("no hint when recommendations are off", async () => {
+  setRecommendationsOn(false);
+  mount();
+  await flush();
+  expect(q("rec-jira")).toBeNull();
 });

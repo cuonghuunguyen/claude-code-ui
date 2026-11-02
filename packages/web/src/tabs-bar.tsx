@@ -22,6 +22,8 @@ import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-
 import { kindLabel, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { t as tt, useT } from "./i18n.ts";
+import { count, offer } from "./recommendations.ts";
+import { usePhone } from "./lib/use-narrow.ts";
 import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
@@ -351,7 +353,15 @@ export function TabsBar({
   // When the last swipe on a switcher row ended: the click that follows it must not select the row (base-ui commits a selection on click).
   const swiped = useRef(-Infinity);
   // Vertical swipe on the switcher button: previous / next tab in the list's order (Focus first), no wrap.
-  const trigger = useTriggerSwipe(focus ? [FOCUS_TAB, ...given] : given, activeId, onSelect, swiped);
+  const order = focus ? [FOCUS_TAB, ...given] : given;
+  const trigger = useTriggerSwipe(order, activeId, onSelect, swiped);
+  // GH-518: picking the neighbour of the active tab from the phone switcher three times suggests the swipe.
+  const phone = usePhone();
+  const tipSwipe = (v: string) => {
+    const a = activeId ? order.indexOf(activeId) : -1;
+    const b = order.indexOf(v);
+    if (phone && a >= 0 && b >= 0 && Math.abs(a - b) === 1) offer("phoneSwipe", { phone, n: count("adjacentPick") });
+  };
   const active = activeId && activeId !== FOCUS_TAB ? info(activeId) : undefined;
   const sideOf = use(SideLabel);
   // Below sm the session header row is gone: the switcher says where the session is, "<project or project · branch> · <side>" (GH-165).
@@ -476,7 +486,7 @@ export function TabsBar({
             // GH-417: only a picked row (tap, click, Enter/Space: "item-press") switches tabs. base-ui also changes the value when the
             // rows change and the active tab has no row yet (a New session tab becoming its session, a /clear): it falls back to the
             // tab the switcher mounted with, which must not be opened.
-            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : d.reason === "item-press" && v && onSelect(v))}
+            onValueChange={(v, d) => (justSwiped(swiped) ? d.cancel() : d.reason === "item-press" && v && (tipSwipe(v), onSelect(v)))}
             onOpenChange={(o, d) => (o ? d.reason === "trigger-press" : d.reason === "item-press") && justSwiped(swiped) && d.cancel()}
           >
             <SelectTrigger
