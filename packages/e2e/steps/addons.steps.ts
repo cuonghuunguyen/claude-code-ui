@@ -66,3 +66,23 @@ Then("the addon {string} is enabled", async ({ page }, name: string) => {
   await expect(row.getByTestId("addons-state")).toHaveText("Enabled");
   await expect(row.getByTestId("addons-enabled")).toHaveAttribute("aria-checked", "true");
 });
+
+/** The stylesheet link of an addon sets `--<name>-css: 1` on :root (theme.css of the example). */
+const cssFlag = (page: Page, name: string) => page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(`--${n}-css`).trim(), name);
+
+async function setAddonEnabled(page: Page, name: string, enabled: boolean): Promise<void> {
+  await openAddons(page);
+  const sw = addonRow(page, name).getByTestId("addons-enabled");
+  if ((await sw.getAttribute("aria-checked")) !== String(enabled)) await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", String(enabled));
+  await closeAddons(page);
+}
+When("I disable the addon {string}", async ({ page }, name: string) => setAddonEnabled(page, name, false));
+When("I enable the addon {string}", async ({ page }, name: string) => setAddonEnabled(page, name, true));
+
+Then("the addon stylesheet of {string} is applied", async ({ page }, name: string) => {
+  await expect.poll(() => cssFlag(page, name)).toBe("1");
+});
+Then("the addon stylesheet of {string} is not applied", async ({ page }, name: string) => {
+  await expect.poll(() => cssFlag(page, name)).toBe("");
+});

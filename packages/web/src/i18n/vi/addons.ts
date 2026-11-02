@@ -4,6 +4,7 @@ export default {
   "app.cmd.addons": "Quản lý addon",
   "app.cmd.addonsDesc": "Cài, duyệt, cập nhật hoặc gỡ addon",
   "app.slash.addons": "Cài, bật hoặc tắt addon",
+  "shortcut.addons.open": "Quản lý addon",
   "addons.title": "Quản lý addon",
   "addons.loading": "Đang tải addon…",
   "addons.loadFailed": "Không tải được addon: {error}",

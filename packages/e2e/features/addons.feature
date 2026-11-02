@@ -21,3 +21,16 @@ Feature: Addons (GH-516)
     Then the addon "example" is enabled
     And the page has no horizontal scroll
     And I capture "addons dialog phone"
+
+  Scenario: An addon theme is picked like a built-in one and its CSS goes with the addon
+    Given the example addon is installed and enabled
+    And the mode is "dark"
+    When I choose the theme "Example Dusk"
+    Then the app card colour is "#1d1a2e"
+    And the addon stylesheet of "example" is applied
+    And I capture "addon theme"
+    When I disable the addon "example"
+    Then the addon stylesheet of "example" is not applied
+    And I capture "addon theme disabled"
+    When I enable the addon "example"
+    Then the addon stylesheet of "example" is applied

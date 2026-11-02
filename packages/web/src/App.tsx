@@ -79,7 +79,8 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { AddonsContext, EMPTY_ADDONS, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { AddonsContext, EMPTY_ADDONS, enabledAddons, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
@@ -175,7 +176,7 @@ import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, 
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
-import { applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
+import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -2795,11 +2796,17 @@ export function App() {
     let stale = false;
     // A daemon without addons (a Side-only setup) answers addons_unavailable: no addons, no message.
     client.current!.request<AddonsListResult>({ type: "addons.list" }).then(
-      (r) => !stale && setAddons((s) => ({ ...s, addons: r.addons, picks: r.picks })),
+      (r) => !stale && setAddons((s) => ({ ...s, addons: r.addons ?? [], picks: r.picks ?? {} })),
       () => !stale && setAddons((s) => ({ ...s, addons: [], picks: {} })),
     );
     return () => void (stale = true);
   }, [status === "connected", addonsRev]);
+  // Themes and CSS of the enabled addons (GH-516): the rules and links exist exactly while the addon is enabled.
+  useEffect(() => {
+    const on = enabledAddons(addons.addons);
+    applyAddonThemes(addonThemes(on));
+    applyAddonCss(on);
+  }, [addons.addons]);
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
   /** Shells list (GH-442) of session `sessionId`. */
   const openShells = (sessionId = projectSession) => sessionId && setShellsDialog({ open: true, sessionId });

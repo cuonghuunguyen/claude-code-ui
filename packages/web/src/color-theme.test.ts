@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { themeById, tokensOf } from "./themes.ts";
-import { applyColorTheme, applyTheme, loadColorTheme, setColorTheme } from "./theme.ts";
+import type { AddonInfo } from "@claude-ui/protocol";
+import { addonThemes } from "./themes.ts";
+import { applyAddonCss, applyAddonThemes, applyColorTheme, applyTheme, loadColorTheme, setColorTheme } from "./theme.ts";
 
 const root = document.documentElement;
 const meta = () => document.querySelector('meta[name="theme-color"]')!.getAttribute("content");
@@ -59,5 +61,40 @@ describe("colour theme", () => {
     expect(meta()).toBe("#e6e9ef");
     applyColorTheme("default");
     expect(meta()).toBe("#fafafa");
+  });
+});
+
+describe("addon themes and CSS (GH-516)", () => {
+  const addon = (name: string, css?: string): AddonInfo =>
+    ({ name, source: { kind: "local", path: "/x" }, approved: [], state: "enabled", base: `/addon/${"0".repeat(32)}/${name}/`, manifest: { name, version: "1", description: "", capabilities: [], themes: [], css, views: [], commands: [], renderers: [] } }) as AddonInfo;
+  const links = () => [...document.querySelectorAll("link[id^='addon-css-']")].map((l) => [l.id, l.getAttribute("href")]);
+
+  it("a stored addon theme id is kept before addons load", () => {
+    localStorage.setItem("claude-ui.colorTheme", "addon:example:dusk");
+    expect(loadColorTheme()).toBe("addon:example:dusk");
+    localStorage.setItem("claude-ui.colorTheme", 'addon:x"y:z');
+    expect(loadColorTheme()).toBe("default");
+  });
+
+  it("applyAddonThemes writes one style element and replaces its content", () => {
+    const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
+    const a = { ...addon("example"), manifest: { ...addon("example").manifest!, themes: [{ id: "dusk", name: "D", dark: palette }] } };
+    applyAddonThemes(addonThemes([a]));
+    expect(document.getElementById("claude-ui-addon-themes")!.textContent).toContain('[data-theme="addon:example:dusk"].dark');
+    applyAddonThemes([]);
+    expect(document.querySelectorAll("#claude-ui-addon-themes")).toHaveLength(1);
+    expect(document.getElementById("claude-ui-addon-themes")!.textContent).toBe("");
+  });
+
+  it("applyAddonCss adds a link per enabled addon with css and removes it when the addon is gone", () => {
+    applyAddonCss([addon("one", "theme.css"), addon("two", "css/a b.css"), addon("three")]);
+    expect(links()).toEqual([
+      ["addon-css-one", `/addon/${"0".repeat(32)}/one/theme.css`],
+      ["addon-css-two", `/addon/${"0".repeat(32)}/two/css/a%20b.css`],
+    ]);
+    applyAddonCss([addon("two", "css/a b.css")]);
+    expect(links().map((l) => l[0])).toEqual(["addon-css-two"]);
+    applyAddonCss([]);
+    expect(links()).toEqual([]);
   });
 });

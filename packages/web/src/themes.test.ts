@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { KEYS, SURFACE, swatchOf, terminalTheme, themeCss, THEMES, tokensOf } from "./themes.ts";
+import type { AddonInfo } from "@claude-ui/protocol";
+import { addonThemes, KEYS, SURFACE, swatchOf, terminalTheme, themeCss, THEMES, tokensOf } from "./themes.ts";
 
 const HEX = /^#[0-9a-f]{6}$/;
 const lum = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i]!, 0);
@@ -133,5 +134,45 @@ describe("palette contrast", () => {
     }
     expect(ratio(p.fg, p.card) / ratio(p.muted, p.card), "fg above muted").toBeGreaterThanOrEqual(1.25);
     expect(ratio(p.pfg, p.primary), "pfg on primary").toBeGreaterThanOrEqual(4.7);
+  });
+});
+
+describe("addonThemes", () => {
+  const full = (v = "#112233") => Object.fromEntries(KEYS.map((k) => [k, v]));
+  const addon = (themes: NonNullable<AddonInfo["manifest"]>["themes"], name = "example"): AddonInfo =>
+    ({ name, source: { kind: "local", path: "/x" }, approved: [], state: "enabled", manifest: { name, version: "1", description: "", capabilities: [], themes, views: [], commands: [], renderers: [] } }) as AddonInfo;
+
+  it("maps an addon palette to addon:<name>:<id>", () => {
+    const [t] = addonThemes([addon([{ id: "dusk", name: "Example Dusk", light: full("#eeeeee"), dark: full() }])]);
+    expect(t).toMatchObject({ id: "addon:example:dusk", name: "Example Dusk" });
+    expect(t!.dark!.bg).toBe("#112233");
+    expect(swatchOf("addon:example:dusk", [t!])).toEqual(["#eeeeee", "#112233"]);
+  });
+
+  it("a palette missing a key drops that mode; a theme with no complete mode is left out", () => {
+    const { info: _, ...noInfo } = full();
+    const [t, ...rest] = addonThemes([addon([{ id: "dusk", name: "D", light: noInfo, dark: full() }, { id: "bad", name: "B", light: noInfo }])]);
+    expect(t!.light).toBeUndefined();
+    expect(t!.dark).toBeDefined();
+    expect(rest).toEqual([]);
+  });
+
+  it("a colour that is not #rrggbb drops that mode (tokens mix and add alpha to hex)", () => {
+    expect(addonThemes([addon([{ id: "dusk", name: "D", dark: { ...full(), fg: "rgb(1, 2, 3)" } }])])).toEqual([]);
+  });
+
+  it("unknown keys are ignored", () => {
+    const [t] = addonThemes([addon([{ id: "dusk", name: "D", dark: { ...full(), "--evil": "red" } }])]);
+    expect(Object.keys(t!.dark!)).toEqual([...KEYS]);
+  });
+
+  it("themeCss of an addon theme emits :root[data-theme=\"addon:example:dusk\"].dark", () => {
+    const css = themeCss(addonThemes([addon([{ id: "dusk", name: "D", dark: full() }])]));
+    expect(css).toContain(':root[data-theme="addon:example:dusk"].dark { --background: #112233;');
+    expect(css).not.toContain(":not(.dark)");
+  });
+
+  it("an id that would not be a safe selector is dropped", () => {
+    expect(addonThemes([addon([{ id: 'x"]{}', name: "D", dark: full() }])])).toEqual([]);
   });
 });

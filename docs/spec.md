@@ -693,6 +693,13 @@ Browsers keep Ctrl/Cmd+T, +W, +N, +Tab, +Shift+T, +1..9 and Ctrl+PageUp/PageDown
 - The log of an addon (refused calls of this browser, in memory, last 50) shows folded under its row.
 
 
+### Addon themes and CSS
+
+- A theme an addon declares (`themes` of the manifest) is listed in Settings › Appearance after the built-in ones as `addon:<name>:<id>` (the `data-theme` value and the stored pick), only while the addon is enabled. The app generates its rules like the built-in ones (`themeCss(list)`) into `<style id="claude-ui-addon-themes">`; a mode is used only when the palette has all 19 keys of `themes.ts` `KEYS`, each as `#rrggbb` (tokens mix colours and add alpha to hex); unknown keys are ignored and a theme without a complete mode is not listed. The daemon accepts more colour forms (hex 3-8, `rgb|hsl|oklch|oklab(...)`); the web app lists only the `#rrggbb` ones.
+- The stored pick of an addon theme is kept before the addons arrive (the default tokens show until they do). When its addon is disabled or removed the stored id stays, the picker shows Default, and the look is Default (no rule matches). Diffs and the terminal use Default's colours for an addon theme.
+- `css` of the manifest: one `<link rel="stylesheet" id="addon-css-<name>">` to `<base><css>` while the addon is enabled, whichever theme is picked; removed when it is disabled. The link is same-origin, so the app CSP allows it, and the app CSP (`img-src 'self' data: blob:`, `style-src 'self'`) blocks external images and `@import` inside it.
+
+
 ## Security
 
 The daemon can run arbitrary shell commands; treat it as a remote shell.

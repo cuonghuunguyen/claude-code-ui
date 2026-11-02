@@ -3,7 +3,7 @@
 // daemon-side settings come from SECTIONS; per-browser choices (General, Layout, Keyboard, most of Notifications) never reach the daemon.
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
 import { sideStatus } from "./sides.tsx";
 import type { Request } from "./client.ts";
@@ -32,7 +32,8 @@ import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
-import { swatchOf, THEMES, type ThemeId } from "./themes.ts";
+import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
+import { AddonsContext, enabledAddons } from "./addons.ts";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
 /** Groups merged into larger ones: a remembered old id opens the group that holds its section now. */
@@ -147,8 +148,8 @@ function SendingSection() {
 }
 
 /** Light half = the theme's light card, dark half = its dark card. */
-function Swatch({ id }: { id: ThemeId }) {
-  const [l, d] = swatchOf(id);
+function Swatch({ id, list }: { id: ThemeId; list: readonly Theme[] }) {
+  const [l, d] = swatchOf(id, list);
   return (
     <span className="inline-flex h-4 w-7 shrink-0 overflow-hidden rounded-[4px] ring-1 ring-border" aria-hidden data-testid="settings-theme-swatch">
       <span className="flex-1" style={{ background: l }} />
@@ -187,8 +188,12 @@ function LanguageRow() {
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
 function AppearanceSection() {
   const t = useT();
-  const id = useColorTheme();
+  const stored = useColorTheme();
   const dark = useDark();
+  // Built-in themes, then those of the enabled addons. A stored addon theme whose addon is off shows Default (its look is the default tokens).
+  const addons = useContext(AddonsContext).addons;
+  const list = useMemo(() => [...THEMES, ...addonThemes(enabledAddons(addons))], [addons]);
+  const id = list.some((th) => th.id === stored) ? stored : "default";
   return (
     <section aria-labelledby="settings-appearance-title" className="flex flex-col" data-testid="settings-appearance">
       <h3 id="settings-appearance-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
@@ -204,16 +209,16 @@ function AppearanceSection() {
             <SelectValue>
               {(v: ThemeId) => (
                 <>
-                  <Swatch id={v} />
-                  {THEMES.find((th) => th.id === v)?.name ?? v}
+                  <Swatch id={v} list={list} />
+                  {list.find((th) => th.id === v)?.name ?? v}
                 </>
               )}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {THEMES.map((th) => (
+            {list.map((th) => (
               <SelectItem key={th.id} value={th.id} data-testid={`settings-theme-${th.id}`}>
-                <Swatch id={th.id} />
+                <Swatch id={th.id} list={list} />
                 {th.name}
                 {!th.light && th.dark && <span className="text-muted-foreground text-xs">{t("settings.theme.darkOnly")}</span>}
               </SelectItem>

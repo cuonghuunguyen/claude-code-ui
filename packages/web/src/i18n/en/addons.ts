@@ -4,6 +4,7 @@ export default {
   "app.cmd.addonsDesc": "Install, approve, update or remove addons",
   "app.slash.addons": "Install, enable, or disable addons",
   // addons-dialog.tsx
+  "shortcut.addons.open": "Manage addons",
   "addons.title": "Manage addons",
   "addons.loading": "Loading addons…",
   "addons.loadFailed": "Failed to load addons: {error}",
