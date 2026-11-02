@@ -1,7 +1,11 @@
 import type { ArtifactPreviewResult } from "@claude-ui/protocol";
+import { Menu } from "@base-ui/react/menu";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { useKeyboardOpen } from "./dock-area.tsx";
 import { t, useT } from "./i18n.ts";
+import { ITEM, POPUP } from "./session-actions.tsx";
 
 /** Asks the daemon for the preview URL of an Artifact publish part (artifact.preview). */
 export type ArtifactPreviewLoader = (partId: string) => Promise<ArtifactPreviewResult>;
@@ -15,6 +19,9 @@ export const ArtifactOpenedContext = createContext<Set<string> | undefined>(unde
 
 /** Opens the artifact tab of a part of this session; absent: no "Open in tab" button. */
 export const ArtifactTabContext = createContext<((partId: string) => void) | undefined>(undefined);
+
+/** GH-512: claude.ai URL -> part id of a previewable publish of this session; a link in assistant text with such a URL gets the menu. */
+export const ArtifactUrlContext = createContext<ReadonlyMap<string, string> | undefined>(undefined);
 
 type State = "idle" | "loading" | { url: string; n: number; unavailable: string[]; title?: string } | { error: string; retry?: boolean };
 
@@ -102,14 +109,22 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
   );
 }
 
-/** Collapsed "Show preview" of a local Artifact page (and "Open in tab" when a tab can open); open: an ArtifactFrame. */
-export function ArtifactPreview({ partId, title }: { partId: string; title: string }): ReactNode {
+/** The card's open state, shared with `opened` (see ArtifactOpenedContext). */
+export function usePreviewOpen(partId: string): [boolean, (o: boolean) => void] {
+  const own = useRef(new Set<string>()); // without a provider (a bare card): this card only
+  const opened = use(ArtifactOpenedContext) ?? own.current;
+  const [open, set] = useState(() => opened.has(partId));
+  return [open, (o) => (o ? opened.add(partId) : opened.delete(partId), set(o))];
+}
+
+/** Collapsed "Show preview" of a local Artifact page (and "Open in tab" when a tab can open); open: an ArtifactFrame. `open`/`onOpenChange`: controlled by the card (the link menu's Preview). */
+export function ArtifactPreview({ partId, title, open: controlled, onOpenChange }: { partId: string; title: string; open?: boolean; onOpenChange?: (o: boolean) => void }): ReactNode {
   const t = useT();
   const load = use(ArtifactPreviewContext);
   const toTab = use(ArtifactTabContext);
-  const own = useRef(new Set<string>()); // without a provider (a bare card): this card only
-  const opened = use(ArtifactOpenedContext) ?? own.current;
-  const [open, setOpen] = useState(() => opened.has(partId));
+  const [own, setOwn] = usePreviewOpen(partId);
+  const open = controlled ?? own;
+  const setOpen = onOpenChange ?? setOwn;
   if (!load) return null;
   const tab = toTab && (
     <Button variant="outline" size="sm" className={btn} onClick={() => toTab(partId)}>
@@ -119,7 +134,7 @@ export function ArtifactPreview({ partId, title }: { partId: string; title: stri
   if (!open)
     return (
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" className={btn} aria-expanded={false} data-testid="artifact-preview-toggle" onClick={() => (opened.add(partId), setOpen(true))}>
+        <Button variant="outline" size="sm" className={btn} aria-expanded={false} data-testid="artifact-preview-toggle" onClick={() => setOpen(true)}>
           {t("files.artifact.show")}
         </Button>
         {tab}
@@ -131,12 +146,70 @@ export function ArtifactPreview({ partId, title }: { partId: string; title: stri
       title={title}
       actions={
         <>
-          <Button variant="outline" size="sm" className={btn} aria-expanded={true} onClick={() => (opened.delete(partId), setOpen(false))}>
+          <Button variant="outline" size="sm" className={btn} aria-expanded={true} onClick={() => setOpen(false)}>
             {t("files.artifact.hide")}
           </Button>
           {tab}
         </>
       }
     />
+  );
+}
+
+/**
+ * GH-512: a claude.ai artifact link. A plain click opens a menu (Preview when `onPreview`, Open in tab, Open on claude.ai); Ctrl/Cmd/Shift/Alt
+ * and middle click keep the native new tab. Without ArtifactTabContext or `partId` it is a plain link.
+ */
+export function ArtifactLinkMenu({ url, partId, onPreview, className }: { url: string; partId?: string; onPreview?: () => void; className?: string }) {
+  const t = useT();
+  const toTab = use(ArtifactTabContext);
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLAnchorElement>(null);
+  const kb = useKeyboardOpen();
+  const menu = !!toTab && !!partId;
+  const item = cn(ITEM, "pointer-coarse:min-h-11");
+  return (
+    <>
+      <a
+        ref={anchor}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={t("session.toolCard.opensNewTab", { url })}
+        className={className}
+        aria-haspopup={menu ? "menu" : undefined}
+        aria-expanded={menu ? open : undefined}
+        onClick={(e) => {
+          if (!menu || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          // Enter on a focused link is a click with detail 0: the menu then takes the focus.
+          kb.root.onOpenChange(true, { event: e.nativeEvent });
+          setOpen(true);
+        }}
+      >
+        {url}
+      </a>
+      {menu && (
+        <Menu.Root open={open} onOpenChange={(o) => setOpen(o)} onOpenChangeComplete={kb.root.onOpenChangeComplete}>
+          <Menu.Portal>
+            <Menu.Positioner anchor={anchor} sideOffset={4} className="z-50">
+              <Menu.Popup ref={kb.popup} className={POPUP}>
+                {onPreview && (
+                  <Menu.Item className={item} onClick={onPreview} data-testid="artifact-link-preview">
+                    {t("files.artifact.preview")}
+                  </Menu.Item>
+                )}
+                <Menu.Item className={item} onClick={() => toTab(partId)} data-testid="artifact-link-tab">
+                  {t("files.openInTab")}
+                </Menu.Item>
+                <Menu.LinkItem className={item} href={url} target="_blank" rel="noopener noreferrer" data-testid="artifact-link-claude">
+                  {t("files.artifact.openOnClaude")}
+                </Menu.LinkItem>
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
+      )}
+    </>
   );
 }

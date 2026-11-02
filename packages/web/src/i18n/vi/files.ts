@@ -14,6 +14,8 @@ export default {
   "files.artifact.frameTitle": "Xem trước: {title}",
   "files.artifact.show": "Hiện bản xem trước",
   "files.artifact.hide": "Ẩn bản xem trước",
+  "files.artifact.preview": "Xem trước",
+  "files.artifact.openOnClaude": "Mở trên claude.ai",
   // artifacts-pane.tsx, artifacts.ts
   "files.artifacts.failed": "Không tải được phiên này.",
   "files.artifacts.loading": "Đang tải artifact…",

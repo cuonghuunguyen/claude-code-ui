@@ -340,3 +340,29 @@ it("GH-402 DropStrip with `accepts` takes a strip tab drag", async () => {
   await act(async () => void fire(el.firstElementChild!, "drop", [TAB]));
   expect(onDropTab).toHaveBeenCalled();
 });
+
+it("GH-512 a narrow side header puts the last panes into the more menu; the active pane stays a tab", async () => {
+  const RO = globalThis.ResizeObserver;
+  const ow = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+  const cw = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as never;
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 60 });
+  Object.defineProperty(Element.prototype, "clientWidth", { configurable: true, get: () => 200 });
+  try {
+    const { fns, render } = h("side", { panes: ["changes", "files", "graph", "plan", "artifacts"], active: "artifacts" });
+    await render();
+    expect([...el.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => t.dataset.paneTab)).toEqual(["changes", "artifacts"]);
+    await act(async () => doc("pane-overflow").click());
+    expect([...document.querySelectorAll<HTMLElement>('[role="menuitem"][data-testid^="pane-"]')].map((i) => i.dataset.testid)).toEqual(["pane-files", "pane-graph", "pane-plan"]);
+    await act(async () => doc("pane-graph").click());
+    expect(fns.onSelect).toHaveBeenCalledWith("graph");
+  } finally {
+    globalThis.ResizeObserver = RO;
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", ow!);
+    Object.defineProperty(Element.prototype, "clientWidth", cw!);
+  }
+});

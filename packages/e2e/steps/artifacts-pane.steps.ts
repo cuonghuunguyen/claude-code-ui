@@ -5,7 +5,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
 import { runDir } from "../support/paths.ts";
-import { RECONNECT_MS, waitConnected } from "../support/ui.ts";
+import { RECONNECT_MS, pickPane, waitConnected } from "../support/ui.ts";
 import { writeTurnsTranscript } from "../support/fake-transcript.ts";
 import { Given, Then, When, After } from "./fixtures.ts";
 
@@ -64,8 +64,15 @@ When("I restart the Artifacts daemon", async ({ page }) => {
   await waitConnected(page);
 });
 
+// GH-512: reachable = the tab is in view (a tab scrolled out of an overflow row is "visible" to Playwright but not to the user) or an item of the more panes menu.
 Then("the side panel lists the Artifacts tab", async ({ page }) => {
-  await expect(page.getByTestId("side-panel").getByTestId("pane-artifacts")).toBeVisible({ timeout: 30_000 });
+  const side = page.getByTestId("side-panel");
+  await expect(async () => {
+    if (await side.getByTestId("pane-artifacts").and(page.locator('[role="tab"]')).isVisible()) return expect(side.getByTestId("pane-artifacts").and(page.locator('[role="tab"]'))).toBeInViewport();
+    await side.getByTestId("pane-overflow").click();
+    await expect(page.getByRole("menuitem").and(page.getByTestId("pane-artifacts"))).toBeVisible();
+    await page.keyboard.press("Escape");
+  }).toPass({ timeout: 30_000 });
 });
 
 Then("the side panel has no Artifacts tab", async ({ page }) => {
@@ -153,7 +160,7 @@ Then("the pane switcher lists Artifacts", async ({ page }) => {
 });
 
 When("I pick Artifacts in the pane switcher", async ({ page }) => {
-  await page.getByTestId("pane-artifacts").first().click();
+  await pickPane(page, "artifacts");
 });
 
 When("I go back to all artifacts", async ({ page }) => {
