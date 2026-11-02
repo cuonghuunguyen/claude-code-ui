@@ -11,6 +11,15 @@ When("I stop the turn", async ({ page }) => {
   await page.getByTestId("toolbar-stop").click();
 });
 
+When("I press Escape in the prompt box", async ({ page }) => {
+  await promptBox(page).focus();
+  await page.keyboard.press("Escape");
+});
+
+Then("no terminal CLI turn notice is shown", async ({ page }) => {
+  await expect(page.getByText("A terminal CLI turn is running")).toHaveCount(0);
+});
+
 Then("I see my prompt in the transcript", async ({ page }) => {
   await expect(page.locator('[data-testid="user-message"]:not([data-pending])').first()).toBeVisible({ timeout: TURN_MS });
 });
