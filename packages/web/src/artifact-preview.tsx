@@ -3,7 +3,7 @@ import { Menu } from "@base-ui/react/menu";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useKeyboardOpen } from "./dock-area.tsx";
+import { useKeyboardOpen } from "./menu-keyboard.ts";
 import { t, useT } from "./i18n.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 
@@ -193,7 +193,7 @@ export function ArtifactLinkMenu({ url, partId, onPreview, className }: { url: s
         <Menu.Root open={open} onOpenChange={(o) => setOpen(o)} onOpenChangeComplete={kb.root.onOpenChangeComplete}>
           <Menu.Portal>
             <Menu.Positioner anchor={anchor} sideOffset={4} className="z-50">
-              <Menu.Popup ref={kb.popup} className={POPUP}>
+              <Menu.Popup ref={kb.popup} className={POPUP} finalFocus={anchor}>
                 {onPreview && (
                   <Menu.Item className={item} onClick={onPreview} data-testid="artifact-link-preview">
                     {t("files.artifact.preview")}

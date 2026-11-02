@@ -4,7 +4,7 @@ import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "./i18n.ts";
 import { useContainerWidth } from "./lib/use-container-width.ts";
 import { cn } from "@/lib/utils";
-import { MENU_BUTTON, useKeyboardOpen } from "./dock-area.tsx";
+import { MENU_BUTTON, useKeyboardOpen } from "./menu-keyboard.ts";
 import { fitTabs } from "./overflow-tabs.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 
@@ -26,6 +26,8 @@ export function OverflowTabs({
   renderTab,
   menuItem,
   className,
+  testId = "pane-overflow",
+  moreLabel,
 }: {
   keys: string[];
   selected?: string;
@@ -33,6 +35,9 @@ export function OverflowTabs({
   renderTab: (key: string) => ReactNode;
   menuItem: (key: string) => OverflowItem;
   className?: string;
+  /** The more button's data-testid and its label for a count of hidden tabs (defaults: panes). */
+  testId?: string;
+  moreLabel?: (count: number) => string;
 }) {
   const t = useT();
   const box = useRef<HTMLDivElement>(null);
@@ -42,11 +47,12 @@ export function OverflowTabs({
   const [shown, setShown] = useState<string[]>(keys);
   const seen = useRef(keys); // the keys of the last layout pass: a key new since then (a pane moved in) shows at once, so the move can focus its tab
   const kb = useKeyboardOpen();
+  const moreText = (n: number) => (moreLabel ?? ((c) => t("app.dock.morePanes", { count: c })))(n);
   // Runs after every render: measures what shows, then decides what shows (setState only on a change, so it settles).
   useLayoutEffect(() => {
     const cache = widths.current;
     list.current?.querySelectorAll<HTMLElement>("[data-overflow-key]").forEach((n) => cache.set(n.dataset.overflowKey!, n.offsetWidth));
-    const trigger = box.current?.querySelector<HTMLElement>("[data-testid=pane-overflow]");
+    const trigger = box.current?.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
     const coarse = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
     const more = trigger?.offsetWidth || (coarse ? 44 : 32);
     const gap = (list.current && Number.parseFloat(getComputedStyle(list.current).columnGap)) || 4;
@@ -77,7 +83,7 @@ export function OverflowTabs({
             aria-label={t("app.dock.morePanes", { count: hidden.length })}
             title={t("app.dock.morePanes", { count: hidden.length })}
             className={MENU_BUTTON}
-            data-testid="pane-overflow"
+            data-testid={testId}
             {...kb.trigger}
           >
             <EllipsisIcon aria-hidden />

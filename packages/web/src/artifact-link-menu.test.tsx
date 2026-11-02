@@ -70,6 +70,17 @@ it("Open in tab calls the ArtifactTabContext with the part id", async () => {
   expect(tab).toHaveBeenCalledWith("p1");
 });
 
+it("Escape and choosing an item return the focus to the link", async () => {
+  await card(() => {});
+  link().focus();
+  click({ detail: 0 });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+  await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(document.activeElement).toBe(link());
+});
+
 it("Ctrl / Cmd / Shift / Alt click is not intercepted", async () => {
   await card(() => {});
   for (const m of ["ctrlKey", "metaKey", "shiftKey", "altKey"]) expect(click({ [m]: true }).defaultPrevented).toBe(false);

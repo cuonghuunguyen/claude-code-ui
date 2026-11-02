@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
 import { useT } from "./i18n.ts";
+import { MENU_BUTTON, useKeyboardOpen } from "./menu-keyboard.ts";
 import { OverflowTabs } from "./overflow-tabs.tsx";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import { STATUS_LABEL, TabIcon, type TabInfo, status, useTouchPrimary } from "./tabs-bar.tsx";
@@ -51,38 +52,6 @@ export function useAreaDrop(on: DropHandlers) {
 export type DockedCommand = "moveSide" | "moveBottom" | "main" | "close";
 export type DockedSession = TabInfo & { id: string };
 
-/** Menus opened from the keyboard (Enter, Space, Shift+F10) put the focus on the first item, so Enter works at once. */
-export function useKeyboardOpen() {
-  const kb = useRef(false);
-  const popup = useRef<HTMLDivElement | null>(null);
-  // Shift+F10 / the Menu key: browsers differ in the contextmenu event they send after it (button, coordinates), so the key itself is the sign.
-  const hint = useRef(false);
-  return {
-    popup,
-    /** Spread on the element the menu opens from. */
-    trigger: {
-      onKeyDown: (e: { key: string; shiftKey: boolean }) => void (hint.current = e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)),
-      onPointerDown: () => void (hint.current = false),
-    },
-    root: {
-      onOpenChange: (open: boolean, details: { event: Event }) => {
-        const e = details.event as MouseEvent;
-        kb.current = open && (hint.current || e.type === "keydown" || (e.type === "click" && e.detail === 0) || (e.type === "contextmenu" && e.button === 0));
-      },
-      onOpenChangeComplete: (open: boolean) => {
-        const first = () => popup.current?.querySelector<HTMLElement>('[role="menuitem"]');
-        if (open && kb.current) {
-          first()?.focus();
-          // The focus manager may put the focus on the popup after this; take it back once.
-          requestAnimationFrame(() => document.activeElement !== first() && popup.current?.contains(document.activeElement) !== false && first()?.focus());
-        }
-        kb.current = false;
-        hint.current = false;
-      },
-    },
-  };
-}
-
 /** One stable element per pane: its content is portaled into it once and the element moves between slots, so a move never remounts the pane. */
 export function usePaneHosts(): Record<PaneId, HTMLDivElement> {
   const [hosts] = useState(() =>
@@ -103,8 +72,6 @@ export function PaneSlot({ host }: { host: HTMLElement }) {
   return <div className="contents" ref={(n) => void (n && host.parentNode !== n && n.appendChild(host))} />;
 }
 
-export const MENU_BUTTON =
-  "grid size-7 shrink-0 cursor-pointer place-items-center rounded-sm text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:size-11 [&_svg]:size-4";
 
 /** Wide screens only (below lg the panes are the pane switcher). `extra`: area buttons left of the menu. */
 export function DockHeader({

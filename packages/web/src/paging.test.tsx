@@ -29,12 +29,14 @@ const answer = (id: string): Part => ({ type: "assistant_text", id, text: `answe
 const snapshot: Snapshot = { heads: [], attentionSeq: 0, page: { parts: [user("u3"), answer("a3")], older: { before: "u3", pos: 30 } }, aux: [] };
 
 let reopen: () => void = () => {};
+let setStatus: (s: string) => void = () => {};
 const replies: Record<string, (m: { [k: string]: unknown }) => unknown> = {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     reopen = () => opts.onOpen?.();
+    setStatus = (s) => opts.onStatus?.(s);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {
       request: async (m: { type: string }) => (sent.push(m), (replies[m.type] ?? (() => ({})))(m)),
@@ -185,5 +187,26 @@ it("GH-176 session.artifacts is asked once with the cursor; a publish older than
   for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
   const asked = sent.filter((m) => m.type === "session.artifacts");
   expect(asked).toEqual([{ type: "session.artifacts", sessionId: ID, logEpoch: "e1", before: "u3" }]);
+  expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
+});
+
+it("GH-512 a session.artifacts request cut by a connection drop is asked again once the connection is back", async () => {
+  const old = { type: "tool_call", id: "old", toolUseId: "old", tool: "Artifact", input: { file_path: "/p/demo/old.html" }, status: "done", endedAt: 1 };
+  let down = true;
+  replies["session.artifacts"] = () => (down ? Promise.reject(new Error("disconnected")) : { parts: [{ part: old, pos: 5 }] });
+  replies["session.page"] = () => new Promise(() => {});
+  await mount();
+  const wait = () => act(async () => new Promise((r) => setTimeout(r, 30)));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(sent.some((m) => m.type === "session.artifacts")).toBe(true);
+  expect(document.querySelector('[data-testid="pane-artifacts"]')).toBeNull();
+  const before = sent.filter((m) => m.type === "session.artifacts").length;
+  down = false;
+  // Same epoch: the server resumes the view without a snapshot, so nothing else changes the effect's deps.
+  replies["session.subscribe"] = () => ({ logEpoch: "e1", seq: 100, session });
+  await act(async () => setStatus("reconnecting"));
+  await act(async () => setStatus("connected"));
+  for (let i = 0; i < 4; i++) await wait();
+  expect(sent.filter((m) => m.type === "session.artifacts").length).toBeGreaterThan(before);
   expect(document.querySelector('[data-testid="pane-artifacts"]')).not.toBeNull();
 });

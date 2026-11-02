@@ -247,6 +247,15 @@ When("I Tab through the link menu to Open on claude.ai", async ({ page }) => {
   await settle(page);
 });
 
+When("I press Escape in the link menu", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(menuItems(page)).toHaveCount(0);
+});
+
+Then("the Artifact card link has the focus", async ({ page }) => {
+  await expect(cardLink(page)).toBeFocused();
+});
+
 // A phone is a coarse pointer: `pointer-coarse:` classes apply only then; headless Chromium reports a fine pointer unless touch is emulated.
 Given("the device has a coarse touch pointer", async ({ page }) => {
   const cdp = await page.context().newCDPSession(page);

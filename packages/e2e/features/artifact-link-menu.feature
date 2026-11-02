@@ -25,6 +25,8 @@ Feature: Artifact link menu (GH-512)
     And the first link menu item has the focus
     When I Tab through the link menu to Open on claude.ai
     And I capture "artifact-link-menu-keyboard"
+    And I press Escape in the link menu
+    Then the Artifact card link has the focus
 
   Scenario: The link in assistant text offers only Open in tab and Open on claude.ai
     Given a session that published the page "dash.html" and replied with its link
