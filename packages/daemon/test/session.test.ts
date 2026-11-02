@@ -1559,6 +1559,40 @@ describe("Session context usage", () => {
     expect(usageCalls.at(-1)!.options).toMatchObject({ resume: id, resumeSessionAt: firstTurnLastAssistant, persistSession: false });
   });
 
+  describe("a call-less task-notification in the transcript (GH-513)", () => {
+    const rec = (uuid: string, content: string) => ({ type: "user", uuid, session_id: "x", message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null });
+    const own = "<task-notification>\n<task-id>t1</task-id>\n<task-type>artifact-auto-react</task-type>\n<summary>artifact auto-reply subscriptions paused by the interrupt</summary>\n</task-notification>";
+    const monitor = "<task-notification>\n<task-id>t2</task-id>\n<summary>Monitor event: build finished</summary>\n<event>done</event>\n</task-notification>";
+
+    it("the own CLI's artifact-auto-react after an interrupt keeps the own query and sets no external turn; Esc then stops the next turn", async () => {
+      const dropped: string[] = [];
+      let notice: unknown[] = [];
+      const s = new Session("/tmp", { query: interruptQuery as never, onLiveChange: (id) => dropped.push(id), readTranscript: async () => ({ main: notice as never, runs: [] }) });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("hi");
+      await until(events, (e) => e.part.type === "turn_result");
+      await until(events, () => s.info().state === "idle");
+      const live = dropped.length;
+      notice = [rec(inputs.at(-1)!.uuid!, "hi"), rec("int", "[Request interrupted by user]"), rec("note", own)];
+      await s.sync();
+      expect(s.externalTurnRunning()).toBe(false);
+      expect(dropped.length).toBe(live);
+      s.prompt("run it");
+      await until(events, (e) => e.part.type === "tool_call");
+      const n = interrupts.length;
+      await s.interrupt();
+      expect(interrupts.length).toBe(n + 1);
+    });
+
+    it("a terminal CLI's call-less Monitor notification still sets the external turn", async () => {
+      const main = [...history, rec("int", "[Request interrupted by user]"), rec("mon", monitor)];
+      const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, readTranscript: async () => ({ main: main as never, runs: [] }) });
+      await s.sync();
+      expect(s.externalTurnRunning()).toBe(true);
+    });
+  });
+
   it("a terminal CLI turn silent past the quiet time stays running while the CLI process reports the session busy; ends once it does not", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let busy = true;
