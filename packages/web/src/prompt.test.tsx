@@ -980,6 +980,19 @@ it("GH-77: Edit takes the message back before the typed text; the chip button de
   expect(el.querySelectorAll('[data-testid="image-strip"] img, img[alt]').length).toBeGreaterThan(0);
 });
 
+it("a taken-back message deleted from the box stays deleted when the hidden tab shows again", async () => {
+  const onDequeue = vi.fn(async () => ({ text: "old text", images: [] }));
+  const { box, el, rerender } = await render({ onDequeue }, queueView([{ id: "q1", text: "old text", imageCount: 0 }]));
+  await act(async () => void (el.querySelector('[aria-label="Edit: old text"]') as HTMLElement).click());
+  expect(box.value).toBe("old text");
+  await type(box, "");
+  activity = "hidden";
+  await rerender({});
+  activity = "visible";
+  await rerender({});
+  expect(box.value).toBe("");
+});
+
 it("GH-77: Edit of an item already sent shows Already sent", async () => {
   const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
   const { el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));

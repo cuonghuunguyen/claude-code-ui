@@ -5039,6 +5039,7 @@ export function SessionPane({
               onPrompt={onPrompt}
               onQueue={onQueue}
               takeBack={takeBack}
+              onTaken={() => (setTakeBack(undefined), setDraft(undefined))}
               onBash={onBash}
               onSearch={onSearch}
               insert={insert}
@@ -5097,6 +5098,7 @@ function PromptBox({
   onPrompt,
   onQueue,
   takeBack,
+  onTaken,
   onBash,
   onSearch,
   insert,
@@ -5144,6 +5146,8 @@ function PromptBox({
   onQueue?: (text: string, images: string[]) => Promise<unknown>;
   /** A queued message taken back: its text goes before the typed text, its images in front; `error` only shows. Handled once per `key`. */
   takeBack?: { key: string; text: string; images: string[]; bash?: boolean; error?: string };
+  /** `takeBack` or `draft` was applied: the owner drops it, so a hidden tab shown again (its effects re-run) or a remount does not apply it again. */
+  onTaken?: () => void;
   /** Given: `!` at the start of the box enters bash mode, Enter runs the command; rejects when it was not run. Not on the new-session tab. */
   onBash?: (command: string) => Promise<unknown>;
   onSearch: (query: string) => Promise<string[]>;
@@ -5327,12 +5331,14 @@ function PromptBox({
     setImages((cur) => [...takeBack.images, ...cur]);
     input.current?.focus();
   }, [takeBack?.key]);
+  useEffect(() => void (takeBack && onTaken?.()), [takeBack?.key]);
   useEffect(() => {
     if (!draft) return;
     const back = collapsePasted(draft.text);
     setPastes(back.pastes);
     edit(back.text);
     setImages(draft.images);
+    onTaken?.();
   }, [draft]);
   // Another project: an error about the last one does not apply.
   // Only on a change: a hidden Activity (the new-session card during its first send, GH-133) re-runs its effects when it shows again, and that would clear the error of the failed send.
