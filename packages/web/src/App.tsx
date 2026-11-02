@@ -43,7 +43,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
+import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,6 +67,7 @@ import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
+import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
@@ -173,7 +174,7 @@ import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pa
 import type { TabCommand } from "./tab-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
-import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, useGroupedTabs } from "./tabs-bar.tsx";
+import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
@@ -886,6 +887,7 @@ export function App() {
     // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
     if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
     const key = pendingKey();
+    sentHere.current.add(id);
     setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
     return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
       setOptimistic((o) => dropPending(o, id, key));
@@ -1002,7 +1004,9 @@ export function App() {
       if (activeId !== FOCUS_TAB) setFocusSel(undefined);
       return;
     }
+    const fresh = !tabsRef.current.includes(id);
     setTabs((t) => openTab(t, id));
+    if (fresh) requestAnimationFrame(tabOpened);
     if (!keepHash) history.replaceState(null, "", tabHash(id));
     // A pane tab shows from its owner's view: follow the owner (no hold unless a session tab holds it).
     if (isPaneRef(id)) return followOwner(ownerOf(id));
@@ -1269,6 +1273,7 @@ export function App() {
     const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
     if (!ids.length) return setToast(tr("app.main.noTabsToClose"));
     closeSeveral(ids);
+    offer("autoClose", { autoClose: recNow.current.autoClose, n: count("cleanups") }, () => changeAutoClose("1d"));
   }
   const cleanupInfo = (scope?: string[]) => buildCleanupMenu(tabFacts(), cleanupCtx(), scope && new Set(scope));
 
@@ -1328,6 +1333,16 @@ export function App() {
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
         if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
+        if (live && e.part.type === "session_state") {
+          const prev = viewsRef.current[e.sessionId]?.state;
+          if (document.visibilityState === "hidden" && prev && isAttention(prev, e.part)) hiddenNeed.current = true;
+          if (sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") {
+            sentHere.current.delete(e.sessionId);
+            const percent = viewsRef.current[e.sessionId]?.contextUsage?.percentage ?? 0;
+            offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent }, () =>
+              document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
+          }
+        }
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
         if (e.part.type === "session_state" && live) void refreshList();
@@ -1343,7 +1358,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), setChromeOn(m.settings.chrome?.enabled)),
+      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
@@ -1365,7 +1380,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => ((desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1572,6 +1587,7 @@ export function App() {
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
       const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
+        sentHere.current.add(s.id);
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
@@ -2031,7 +2047,7 @@ export function App() {
                         }
                         onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
-                        onArtifactTab={(partId) => openArtifactTab(s.id, partId)}
+                        onArtifactTab={(partId) => (openArtifactTab(s.id, partId), offer("artifactsPane", { artifacts: sessionArtifacts(viewsRef.current[s.id] ?? v).length, paneSeen: recSeen("artifactsPane") > 0 }, () => showArtifacts(s.id)))}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -2277,6 +2293,40 @@ export function App() {
   };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
+  // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
+  const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
+  const recKey = useRef(0);
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean });
+  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush() };
+  const sentHere = useRef(new Set<string>());
+  const desktopForcedOff = useRef(false);
+  const hiddenNeed = useRef(false);
+  useEffect(() => {
+    setRecommendationHost({
+      blocked: () => recNow.current.guideRun || recNow.current.drag || draggedTab() !== undefined || promptBusy(),
+      show: (message, b) => setRec({ key: ++recKey.current, message, ...(b && { action: { label: b.label, onClick: b.run } }) }),
+    });
+    return () => setRecommendationHost(undefined);
+  }, []);
+  const tabOpened = () => {
+    const n = recNow.current;
+    const tabs = tabsRef.current.filter((t) => t !== NEW_TAB);
+    const el = document.querySelector<HTMLElement>('[data-testid="tab-strip"]');
+    const projects = new Set(tabs.flatMap((t) => { const c = sessionOf(ownerOf(t))?.cwd; return c ? [tabGroup(c, "project", n.worktrees).key] : []; })).size;
+    offer("compactTabs", { compact: n.compact, overflow: !!el && el.scrollWidth > el.clientWidth, projects }, () => (changeCompact(true), n.grouping === "none" && changeGrouping("project")))
+      || offer("cleanupTabs", { count: tabs.length }, () => ((paletteOpener.current = document.activeElement), setPalette({ start: "tab.cleanup" })));
+  };
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      const needed = hiddenNeed.current;
+      hiddenNeed.current = false;
+      const n = recNow.current;
+      needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
   const [dropAt, setDropAt] = useState<DropAt>();
   // GH-402: a strip tab or a docked session tab being dragged (never set together with `drag`), and whether the tab strip is the drop target. The source can unmount mid-drag (no dragend): a drop or dragend anywhere ends the drag.
   const [stripDrag, setStripDrag] = useState<Drag>();
@@ -3718,7 +3768,7 @@ export function App() {
                   if (!s || !v) return null;
                   return (
                     <Activity key={tabKeys[id] ?? id} mode={onScreen(id) ? "visible" : "hidden"}>
-                      <div {...(inSplit(id) ? splitProps(id) : { className: "flex min-h-0 min-w-0 flex-1 flex-col" })}>
+                      <div data-session-id={id} {...(inSplit(id) ? splitProps(id) : { className: "flex min-h-0 min-w-0 flex-1 flex-col" })}>
                       {renderTab(id, s, v, pend, { active: splitShown ? id === activeId : true })}
                       </div>
                     </Activity>
@@ -4231,6 +4281,7 @@ export function App() {
           />
         )}
         {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
+        {rec && <Toast key={`rec-${rec.key}`} message={rec.message} action={rec.action} onClose={() => setRec(undefined)} />}
         <KeyTips
           hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
           onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
@@ -4423,6 +4474,9 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
  * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt
  * or runs the first bash mode command. Rejects when it was not taken; `created` then keeps the session for the retry.
  */
+/** The browser runs on the daemon machine (a LAN or Tailscale address of it counts as remote). */
+const onDaemonMachine = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+
 export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },

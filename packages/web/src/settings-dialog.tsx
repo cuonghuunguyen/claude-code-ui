@@ -29,6 +29,7 @@ import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
+import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts";
 import { ChevronLeftIcon } from "lucide-react";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
@@ -273,6 +274,25 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
 }
 
 /** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
+/** GH-518: the master switch of recommendations (per browser). */
+function RecommendationsSection() {
+  const t = useT();
+  const on = useRecommendationsOn();
+  return (
+    <Section id="recs" title={t("settings.rec.title")}>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">{t("settings.rec.label")}</span>
+          <span id="settings-rec-hint" className="block text-muted-foreground text-xs">
+            {t("settings.rec.hint")}
+          </span>
+        </div>
+        <Switch on={on} label={t("settings.rec.label")} held={false} onToggle={setRecommendationsOn} title={t("settings.rec.label")} describedBy="settings-rec-hint" testId="settings-recommendations" />
+      </div>
+    </Section>
+  );
+}
+
 function ScreenSection({ settings, daemon, saving, save }: { settings?: Settings; daemon?: SettingsResult["daemon"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void> }) {
   const t = useT();
   const ka = daemon?.keepAwake;
@@ -784,6 +804,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           <TimelineSection />
           <SendingSection />
           <ScreenSection settings={settings} daemon={daemon} saving={saving} save={save} />
+          <RecommendationsSection />
         </>
       ),
     },

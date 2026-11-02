@@ -389,11 +389,11 @@ it("lists the groups under category headings: App, Sessions, Integrations, Syste
   expect(q("settings-category-sessions")!.nextElementSibling).toBe(q("settings-group-orchestration"));
 });
 
-it("General holds Timeline, Sending and Screen; Layout holds Sidebar, Tabs, Changes and Terminal; Help & about holds Guide and About", async () => {
+it("General holds Timeline, Sending, Screen and Recommendations; Layout holds Sidebar, Tabs, Changes and Terminal; Help & about holds Guide and About", async () => {
   const { q, pick } = await render();
   const order = () => [...q("settings-panel")!.querySelectorAll(":scope > section")].map((s) => s.getAttribute("data-testid"));
   await pick("general");
-  expect(order()).toEqual(["settings-timeline", "settings-sending", "settings-screen"]);
+  expect(order()).toEqual(["settings-timeline", "settings-sending", "settings-screen", "settings-recs"]);
   await pick("layout");
   expect(order()).toEqual(["settings-sidebar", "settings-tabs", "settings-changes", "settings-terminal"]);
   await pick("about");
@@ -493,6 +493,17 @@ it("Jira: no notice when no token was cleared (GH-487)", async () => {
   const { q, pick } = await render();
   await pick("jira");
   expect(q("settings-jira-token-reset")).toBeNull();
+});
+
+it("General has Show recommendations, on by default; off is stored", async () => {
+  localStorage.removeItem("claude-ui.recommendations");
+  const { q, pick } = await render();
+  await pick("general");
+  expect(q("settings-recommendations")!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-recommendations")!.click());
+  expect(q("settings-recommendations")!.getAttribute("aria-checked")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("claude-ui.recommendations")!).off).toBe(true);
+  localStorage.removeItem("claude-ui.recommendations");
 });
 
 it("the Keyboard section's Customize button opens the shortcuts dialog", async () => {
