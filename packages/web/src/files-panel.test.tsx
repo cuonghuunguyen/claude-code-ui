@@ -61,7 +61,8 @@ it("opening a binary, too large or not UTF-8 file gets a tab that shows its stat
     await show(path!);
     const notice = el.querySelector("[data-testid=file-notice]")!;
     expect(notice.textContent).toContain(text);
-    expect(notice.querySelector("nav[aria-label=Breadcrumb] [aria-current=page]")!.textContent).toBe(path!.slice(3));
+    // A root file has no breadcrumb: the tab already names it.
+    expect(notice.querySelector("nav[aria-label=Breadcrumb]")).toBeNull();
     expect(el.textContent).not.toMatch(/raw:|too_large|not_utf8/);
     // It is a tab like any file (here a preview tab replacing the previous one), and the active one.
     const tabs = [...el.querySelectorAll("[data-testid=editor-tab]")];

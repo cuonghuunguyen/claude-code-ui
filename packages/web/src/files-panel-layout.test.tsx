@@ -214,7 +214,7 @@ it("the beside tree column resizes with the drag handle and remembers its width"
 });
 
 it("path header: the breadcrumb, then Pop out in the Files tab; Open in editor (not Pop out) in the dialog, only inside cwd; 44px below md", async () => {
-  await show({ openPath: "/p/a.ts", onPopOut: () => {}, onOpenInFiles: () => {} });
+  await show({ openPath: "/p/src/a.ts", onPopOut: () => {}, onOpenInFiles: () => {} });
   const header = q("[data-testid=file-path-header]")!;
   expect(header.className).toMatch(/\bmin-h-10\b/);
   expect(header.className).toContain("border-b");

@@ -716,6 +716,8 @@ function Breadcrumb({ path, cwd, onFolder }: { path: string; cwd: string; onFold
   const base = rel === path ? "" : path.slice(0, path.length - rel.length);
   const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
   const collapse = useNarrow() && parts.length > 4;
+  // A file at the cwd root has no folders: its name alone would repeat the tab label. The spacer keeps the buttons right-aligned.
+  if (parts.length === 1 && rel !== path) return <span className="md:flex-1" />;
   return (
     <nav aria-label={tr("files.panel.breadcrumb")} className="min-w-0 max-md:basis-full md:flex-1" title={path}>
       <ol className="flex min-w-0 items-center font-mono text-muted-foreground">
