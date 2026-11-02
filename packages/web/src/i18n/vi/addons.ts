@@ -62,5 +62,7 @@ export default {
   "addons.cap.net": "Kết nối tới {origin}",
   "addons.cap.unknown": "{capability}",
   "addons.commandNotReady": "Addon {name} chưa nạp xong bộ xử lý lệnh. Thử lại sau giây lát.",
+  "addons.showRaw": "Hiện bản gốc",
+  "addons.showAddon": "Hiện bản của {name}",
   "addons.refused": "Addon {name} bị từ chối: {type}",
 } satisfies Partial<Messages>;

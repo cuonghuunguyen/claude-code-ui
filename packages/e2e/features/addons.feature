@@ -97,3 +97,17 @@ Feature: Addons (GH-516)
     Then the prompt box contains "Summarise this session: release notes"
     And no new user message is shown
     And I capture "addon command"
+
+  Scenario: An addon draws a code fence, with show raw
+    Given the example addon is installed and enabled
+    And a Haiku session with one finished reply
+    When I send a prompt containing an "example" code fence with "hello addon"
+    Then the user message shows the addon block of "example"
+    When I click show raw
+    Then the code fence source "hello addon" is shown
+    And I capture "fence renderer"
+
+  Scenario: The example addon is removed again
+    Given the example addon is not installed
+    Then the addon "example" is not listed
+    And I capture "addon removed"

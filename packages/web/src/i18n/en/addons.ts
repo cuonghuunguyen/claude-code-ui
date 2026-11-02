@@ -63,5 +63,7 @@ export default {
   "addons.cap.unknown": "{capability}",
   // addon host (refused call)
   "addons.commandNotReady": "Addon {name} has no command handler loaded yet. Try again in a moment.",
+  "addons.showRaw": "Show raw",
+  "addons.showAddon": "Show {name}'s view",
   "addons.refused": "Addon {name} was refused: {type}",
 } as const;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -75,5 +75,20 @@ describe("commands", () => {
     const rows = commandRows([a], []);
     expect(addonCommandOf("/example:other", rows)).toBeUndefined();
     expect(addonCommandOf("hello /example:cmd", rows)).toBeUndefined();
+  });
+});
+
+describe("rendererFor", () => {
+  const claim = (name: string, state: AddonInfo["state"] = "enabled", renderers: NonNullable<AddonInfo["manifest"]>["renderers"] = [{ fence: "example", entry: `${name}.html` }]): AddonInfo => ({ ...addon([]), name, state, manifest: { ...addon([]).manifest!, name, renderers } }) as AddonInfo;
+  it("returns the only claiming addon", () => {
+    expect(rendererFor({ addons: [claim("a"), claim("b", "enabled", [{ tool: "T", entry: "t.html" }])], picks: {} }, "fence:example")).toMatchObject({ addon: { name: "a" }, entry: "a.html" });
+    expect(rendererFor({ addons: [claim("b", "enabled", [{ tool: "T", entry: "t.html" }])], picks: {} }, "tool:T")?.entry).toBe("t.html");
+    expect(rendererFor({ addons: [claim("a")], picks: {} }, "fence:other")).toBeUndefined();
+  });
+  it("uses the pick between two", () => expect(rendererFor({ addons: [claim("a"), claim("b")], picks: { "fence:example": "b" } }, "fence:example")?.addon.name).toBe("b"));
+  it("without a pick takes the first name", () => expect(rendererFor({ addons: [claim("b"), claim("a")], picks: {} }, "fence:example")?.addon.name).toBe("a"));
+  it("ignores a disabled addon, and a pick of one", () => {
+    expect(rendererFor({ addons: [claim("a", "disabled"), claim("b")], picks: { "fence:example": "a" } }, "fence:example")?.addon.name).toBe("b");
+    expect(rendererFor({ addons: [claim("a", "needs_approval")], picks: {} }, "fence:example")).toBeUndefined();
   });
 });

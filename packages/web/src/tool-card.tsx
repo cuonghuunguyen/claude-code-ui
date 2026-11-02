@@ -26,6 +26,8 @@ import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
+import { AddonBlock } from "./addon-render.tsx";
+import { AddonsContext, rendererFor } from "./addons.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -257,7 +259,15 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
   return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
-export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
+/** The body of a tool card: an addon that draws this tool (GH-516) with "Show raw" for the built-in body, else the built-in body. */
+export function ToolBody(props: { call: ToolCall; result?: ToolResult; plan?: string; tail?: boolean }) {
+  const target = `tool:${props.call.tool}`;
+  const claimed = !!props.result && !!rendererFor(use(AddonsContext), target);
+  const builtin = <BuiltinToolBody {...props} />;
+  return claimed ? <AddonBlock target={target} payload={{ tool: { name: props.call.tool, input: props.call.input, result: props.result!.output } }} raw={builtin} /> : builtin;
+}
+
+function BuiltinToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
   const t = useT();
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} tail={tail} />;
   switch (call.tool) {

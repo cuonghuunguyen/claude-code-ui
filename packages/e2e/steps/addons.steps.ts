@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { REPO_ROOT } from "../support/daemon.ts";
+import { sendPrompt } from "../support/flow.ts";
 import { pickPane, promptBox } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
@@ -154,4 +155,27 @@ When("I run {string}", async ({ page }, text: string) => {
 });
 Then("the prompt box contains {string}", async ({ page }, text: string) => {
   await expect(promptBox(page)).toHaveValue(text);
+});
+
+When("I send a prompt containing an {string} code fence with {string}", async ({ page }, lang: string, source: string) => {
+  await sendPrompt(page, `Reply with OK.\n\`\`\`${lang}\n${source}\n\`\`\``);
+});
+const lastUser = (page: Page) => page.getByTestId("user-message").last();
+Then("the user message shows the addon block of {string}", async ({ page }, name: string) => {
+  const block = lastUser(page).locator(`[data-testid="addon-block"][data-addon="${name}"]`);
+  await expect(block).toBeVisible({ timeout: 30_000 });
+  const card = block.frameLocator(`[data-testid="addon-frame-${name}-render"]`).locator("body");
+  await expect(card).toContainText("hello addon");
+  await expect(card).toContainText("2 words");
+});
+When("I click show raw", async ({ page }) => {
+  await lastUser(page).getByTestId("addon-show-raw").click();
+});
+Then("the code fence source {string} is shown", async ({ page }, source: string) => {
+  await expect(lastUser(page).locator("pre")).toContainText(source);
+  await expect(lastUser(page).locator("iframe")).toHaveCount(0);
+});
+Then("the addon {string} is not listed", async ({ page }, name: string) => {
+  await openAddons(page);
+  await expect(addonRow(page, name)).toHaveCount(0);
 });

@@ -43,6 +43,8 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       const fail = (code: "refused" | "bad_request" | "unknown", message: string) => (live.current.api.refused(addon.name, type, message), postTo(frame.current, { id, ok: false, error: { code, message } }));
       const g = gate(type, addon.approved);
       if (!g.ok) return fail(g.code, g.message);
+      // A render frame belongs to a message, not to a session: nothing that needs one.
+      if (!sessionId && type !== "ui.ready" && type !== "ui.toast") return fail("refused", `${type} is not available in this frame`);
       if (type === "ui.ready") {
         if (typeof m.height === "number" && Number.isFinite(m.height)) live.current.onHeight?.(clampHeight(m.height));
         return done();

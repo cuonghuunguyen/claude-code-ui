@@ -108,3 +108,17 @@ export function addonCommandOf(text: string, rows: SlashCommand[]): { addon: str
 export type AddonCommandRun = { addon: string; name: string; args: string };
 /** Runs an addon command for a session (App provides it). */
 export const AddonCommandContext = createContext<(sessionId: string, c: AddonCommandRun) => void>(() => {});
+
+/** The addon that draws `target` (`fence:<lang>` or `tool:<name>`): the only enabled claimer; of several the one picked in the Addons dialog, else the first by name. */
+export function rendererFor(state: Pick<AddonsState, "addons" | "picks">, target: string): { addon: AddonInfo; entry: string } | undefined {
+  const claims = enabledAddons(state.addons)
+    .flatMap((a) => {
+      const r = a.manifest!.renderers.find((x) => ("fence" in x ? `fence:${x.fence}` : `tool:${x.tool}`) === target);
+      return r ? [{ addon: a, entry: r.entry }] : [];
+    })
+    .sort((x, y) => (x.addon.name < y.addon.name ? -1 : x.addon.name > y.addon.name ? 1 : 0));
+  return claims.find((c) => c.addon.name === state.picks[target]) ?? claims[0];
+}
+
+/** The code fence languages the enabled addons draw. */
+export const fenceLanguages = (addons: AddonInfo[]): string[] => [...new Set(enabledAddons(addons).flatMap((a) => a.manifest!.renderers.flatMap((r) => ("fence" in r ? [r.fence] : []))))].sort();
