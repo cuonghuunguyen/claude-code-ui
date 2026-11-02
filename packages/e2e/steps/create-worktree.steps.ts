@@ -84,6 +84,8 @@ When("I choose {string} in the menu of the scratch project", async ({ page, proj
   await expect(page.getByTestId("open-drawer")).toBeVisible();
   await page.getByTestId("open-drawer").click();
   const r = row(page, project.path);
+  // Earlier scenarios' projects stay in the shared daemon and sort above this empty one: scroll to it.
+  await r.getByTestId("project-menu").scrollIntoViewIfNeeded({ timeout: 60_000 });
   await expect(r.getByTestId("project-menu")).toBeInViewport({ timeout: 60_000 });
   await r.getByTestId("project-menu").click();
   await page.getByTestId(`project-menu-${entry}`).click();
@@ -96,6 +98,7 @@ Then("the menu of the scratch project has {string} and not {string}", async ({ p
   const prefix = phone ? "project-menu-" : "group-menu-"; // the context menu on desktop has its own ids
   if (phone) {
     await page.getByTestId("open-drawer").click();
+    await r.getByTestId("project-menu").scrollIntoViewIfNeeded({ timeout: 60_000 });
     await expect(r.getByTestId("project-menu")).toBeInViewport({ timeout: 60_000 });
     await r.getByTestId("project-menu").click();
   } else await r.getByTestId("group-toggle").click({ button: "right", timeout: 60_000 }); // desktop: the kebab is phone-only, the menu is the context menu
@@ -330,6 +333,15 @@ const setUrl = async (page: Page, value: string) => {
 };
 
 When("I set the Jira URL to {string}", async ({ page }, value: string) => setUrl(page, value));
+
+// The daemon is shared: an earlier scenario's Jira setup stays. An empty URL also clears the token.
+Given("Jira is not set up", async ({ page }) => {
+  await openJiraSettings(page);
+  await setUrl(page, "");
+  await expect(page.getByTestId("settings-jira-token-set")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-dialog")).toBeHidden();
+});
 When("I set the Jira URL to the fake Jira", async ({ page, jira }) => setUrl(page, jira.fake!.url));
 When("I set the Jira URL to the fake Jira on another host", async ({ page, jira }) => setUrl(page, jira.fake!.url.replace("127.0.0.1", "localhost")));
 When("I set the Jira URL to the fake Jira with the path {string}", async ({ page, jira }, path: string) => setUrl(page, jira.fake!.url + path));
