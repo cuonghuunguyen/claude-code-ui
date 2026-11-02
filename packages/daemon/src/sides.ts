@@ -1391,6 +1391,7 @@ export function createRouter(opts: {
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {
+    if (typeof msg.type === "string" && msg.type.startsWith("addons.")) return opts.local(msg); // Hub only (GH-516): no `side`, `cwd` or `path` routes it
     switch (msg.type) {
       case "session.list":
         return send(await mergedList(msg));

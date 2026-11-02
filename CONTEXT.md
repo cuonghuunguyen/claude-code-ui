@@ -171,7 +171,7 @@ The dock area on the right or left of the session view; its tabs are panes (Chan
 _Avoid_: sidebar (the project and session list), side (a Side is a Daemon)
 
 **Pane**:
-Something of one session that the user can show and place: a kind, an owner session. Plan, Artifacts, Files, Git graph and Terminal can also be main-area tabs (`plan:<session>`, `artifacts:<session>`, `files:<session>`, `graph:<session>`, `terminal:<session>`).
+Something of one session that the user can show and place: a kind, an owner session. Plan, Artifacts, Files, Git graph and Terminal can also be main-area tabs (`plan:<session>`, `artifacts:<session>`, `files:<session>`, `graph:<session>`, `terminal:<session>`). An addon pane is a view an Addon declares; its identity is the addon, the view and the owner session.
 _Avoid_: view, panel (a panel is a dock area), widget, document
 
 **Owner session**:
@@ -185,7 +185,7 @@ The pane that lists the artifacts one session published (one row per artifact, n
 _Avoid_: artifact browser, gallery
 
 **Pane identity**:
-What "already open" compares: the owner's folder for Files, Git graph and Terminal (one tab per project folder), the owner session for Plan.
+What "already open" compares: the owner's folder for Files, Git graph and Terminal (one tab per project folder), the owner session for Plan and for addon panes.
 _Avoid_: instance
 
 **Main area**:
@@ -238,7 +238,15 @@ How much of a skill Claude sees: On (listed with its description, and yours to i
 
 **Plugin**:
 A Claude Code plugin, `name@marketplace`: commands, skills, agents, hooks and MCP servers in one package; installed from a marketplace and enabled per config scope (`enabledPlugins` in the user, project or local settings file).
-_Avoid_: extension, add-on
+_Avoid_: extension, addon (different thing)
+
+**Addon**:
+A claude-ui customization that runs in the browser: a theme, panes, a band above the prompt, slash commands or renderers for messages. Installed by the owner from a git repository or a local folder, on the Hub only, and active in every browser that connects. It acts only through the capabilities it declares, and never submits a prompt by itself. Capabilities: `session.read`, `prompt.insert`, `ui.status`, `ui.toast`, `ui.pane`, `ui.band`, `ui.command`, `render.fence:<lang>`, `render.tool:<name>`, `net:<origin>`.
+_Avoid_: plugin, extension, mod, UI mod
+
+**Claude Code mod**:
+A Claude Code plugin with a hooks module that hooks engine events and draws on Claude Code's own surfaces. Its engine hooks run in claude-ui sessions; its drawings do not.
+_Avoid_: mod (alone), addon
 
 **Marketplace**:
 A plugin catalog known to the Claude Code CLI (a GitHub repo, git or URL source, a local directory or file, an npm package).
