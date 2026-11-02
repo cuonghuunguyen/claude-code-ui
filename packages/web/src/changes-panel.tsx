@@ -18,7 +18,8 @@ import { inDir, isWinPath, joinPath, relPath } from "./paths.ts";
 import { pathKey } from "./file-tree-model.ts";
 import { repoDir } from "./repos.ts";
 import { t, useT } from "./i18n.ts";
-import { DIFF_MODES, loadDiffScope, repoRoot, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
+import { DIFF_MODES, loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
+import { offer, streak } from "./recommendations.ts";
 import { eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
@@ -604,7 +605,7 @@ export function ChangesPanel({
   ) : undefined;
 
   const modeSelect = (
-    <Select value={mode} onValueChange={(v) => v && pick(v as DiffMode)}>
+    <Select value={mode} onValueChange={(v) => v && (pick(v as DiffMode), offer("diffMode", { mode: v as DiffMode, def: loadDiffMode(), streak: streak(v) }, () => saveDiffMode(v as DiffMode)))}>
       <SelectTrigger aria-label={t("files.changes.diffMode")} data-testid="diff-mode" className={cn("min-w-0", narrow ? "flex-1 data-[size=default]:h-11" : "w-40 shrink-0 data-[size=default]:h-7")}>
         <SelectValue>{(v: DiffMode) => t(MODE_KEY[v])}</SelectValue>
       </SelectTrigger>

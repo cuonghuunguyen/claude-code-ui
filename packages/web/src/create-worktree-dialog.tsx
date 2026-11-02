@@ -2,7 +2,7 @@
 // The daemon creates it (`worktree.create`); errors (a taken folder or branch: `exists`) show here and the modal stays open.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { branchNameError, checkoutFolder, checkoutFolderError, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
-import { LoaderCircleIcon } from "lucide-react";
+import { LoaderCircleIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ import { baseOptions, branchesWithKey, branchKind, branchWithKey, checkoutRef, p
 import { isImeKey } from "./ime.ts";
 import { projectName } from "./tabs.ts";
 import { useT } from "./i18n.ts";
+import { offer } from "./recommendations.ts";
 
 type Props = {
   /** The project whose repository gets the worktree; the modal shows while set. */
@@ -58,6 +59,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>();
   const tabRefs = useRef(new Map<Source, HTMLButtonElement>());
+  // GH-518: the one-time Jira hint above the sources.
+  const [jiraHint, setJiraHint] = useState(false);
 
   // The local list at once, then again after `git fetch --prune origin` (offline: the local list stays, with a hint).
   useEffect(() => {
@@ -70,7 +73,12 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       () => {},
     ).finally(() => live && setFetching(false));
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && setJira({ ready: !!r.settings.jira?.url && !!r.jiraToken, template: r.settings.jira?.template || "{type}/{key}-{summary}", filter: !!r.settings.jira?.jql?.trim() }),
+      (r) => {
+        if (!live) return;
+        const ready = !!r.settings.jira?.url && !!r.jiraToken;
+        setJira({ ready, template: r.settings.jira?.template || "{type}/{key}-{summary}", filter: !!r.settings.jira?.jql?.trim() });
+        if (offer("jira", { ready })) setJiraHint(true);
+      },
       () => live && setJira({ ready: false, template: "", filter: false }),
     );
     return () => void (live = false);
@@ -233,6 +241,19 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         </>
       }
     >
+      {jiraHint && (
+        <p className="flex items-center gap-2 text-sm" data-testid="rec-jira">
+          <span className="min-w-0 flex-1">
+            {t("rec.jira")}{" "}
+            <button type="button" onClick={onJiraSettings} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="rec-jira-connect">
+              {t("rec.jiraConnect")}
+            </button>
+          </span>
+          <button type="button" onClick={() => setJiraHint(false)} aria-label={t("app.toast.dismiss")} className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid="rec-jira-close">
+            <XIcon className="size-4" aria-hidden />
+          </button>
+        </p>
+      )}
       <div role="tablist" aria-label={t("sidebar.cw.sourceAria")} onKeyDown={onTabKey} className="flex gap-1 rounded-lg bg-secondary/50 p-1" data-testid="create-worktree-sources">
         {SOURCES.map((s) => (
           <button

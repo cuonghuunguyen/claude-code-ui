@@ -7,6 +7,7 @@ import { Then } from "./fixtures.ts";
 Then("I capture {string}", async ({ page, evidence, $testInfo }, name: string) => {
   const dir = evidenceDir(runDir());
   mkdirSync(dir, { recursive: true });
+  await page.waitForTimeout(500); // a toast or dialog that is still sliding in or fading would show half transparent
   const size = page.viewportSize();
   const { feature, scenario } = testSlugs($testInfo);
   const retry = $testInfo.retry ? `-r${$testInfo.retry}` : "";

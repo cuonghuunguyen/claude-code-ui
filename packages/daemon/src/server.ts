@@ -11,6 +11,7 @@ import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, M
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
+import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
@@ -325,6 +326,8 @@ export function createDaemon(opts: {
   sides?: Sides;
   /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
   keepAwake?: KeepAwake;
+  /** GH-518: sleep detection (Hub only; a Side runs on the Hub's machine). `everyMs` and `now` are test seams. */
+  watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
   onRunning?: (running: boolean) => void;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
@@ -658,6 +661,11 @@ export function createDaemon(opts: {
   };
   opts.keepAwake?.onStatus(() => broadcast({ type: "settings_changed", settings: appSettings.get(), jiraToken: settingsReply().jiraToken }));
   opts.sides?.onRunning(syncRunning);
+  // GH-518: the last sleep found while a session ran; each new connection gets it once.
+  let slept: Slept | undefined;
+  const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
+  const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
+  sleepTimer?.unref();
   const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
@@ -1481,6 +1489,8 @@ export function createDaemon(opts: {
   http.on("close", () => clearInterval(pinger));
 
   wss.on("connection", (ws: Conn) => {
+    // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
+    sleepWatch?.check();
     connections.add(ws);
     answered.add(ws);
     ws.on("pong", () => answered.add(ws));
@@ -1490,6 +1500,8 @@ export function createDaemon(opts: {
     updater?.messages().forEach((m) => send(ws, m));
     const stale = opts.buildInfo?.stale();
     if (stale) send(ws, { type: "daemon_stale", note: stale });
+    if (slept && (opts.watchSleep?.now ?? Date.now)() - slept.at > SLEEP_KEEP_MS) slept = undefined;
+    if (slept) send(ws, { type: "daemon_slept", ...slept });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
@@ -2633,7 +2645,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

@@ -9,6 +9,7 @@ import { syntaxHighlighting } from "@codemirror/language";
 import type { FsMediaResult } from "@claude-ui/protocol";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { tipMiddleClick } from "./recommendations.ts";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
@@ -192,7 +193,7 @@ export function FilesPanel({
   }, [wide]);
   /** Pop out in the Files tab, Open in editor in the file dialog (for a file inside `cwd`): the file view's way to the other place. */
   const tabButton = active && onOpenTab && inDir(active.path, cwd) && (
-    <Button size="icon-sm" variant="ghost" onClick={() => onOpenTab(active.path)} title={tr("files.openInTab")} aria-label={tr("files.openInTab")} className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
+    <Button size="icon-sm" variant="ghost" onClick={() => (onOpenTab(active.path), tipMiddleClick())} title={tr("files.openInTab")} aria-label={tr("files.openInTab")} className="max-md:size-11 pointer-coarse:size-11" data-testid="open-in-tab">
       <ExternalLinkIcon />
     </Button>
   );

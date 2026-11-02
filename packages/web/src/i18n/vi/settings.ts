@@ -430,5 +430,7 @@ export default {
   "keymap.edit.moveParagraph": "Di chuyển hoặc chọn theo đoạn",
   "keymap.edit.startEndText": "Đầu hoặc cuối văn bản",
   "keymap.edit.startEndLineText": "Đầu hoặc cuối dòng hoặc văn bản",
-
+  "settings.rec.title": "Gợi ý",
+  "settings.rec.label": "Hiện gợi ý",
+  "settings.rec.hint": "Gợi ý một cài đặt hoặc tính năng một lần, đúng lúc nó có ích. Tối đa 5 lần mỗi ngày. Lưu trong trình duyệt này.",
 } satisfies Partial<Messages>;

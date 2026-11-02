@@ -7,7 +7,8 @@ import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { connect } from "./client.ts";
-import { saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
+import { loadDiffMode, saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
+import { resetPageForTests, setRecommendationHost } from "./recommendations.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
@@ -1448,4 +1449,33 @@ it("GH-468: a colour theme change hands that theme's diff themes to the diff", a
   await act(async () => void document.documentElement.setAttribute("data-theme", "dracula"));
   expect(diff.options!.theme).toEqual({ light: "claude-ui-light", dark: "claude-ui-dracula-dark" });
   document.documentElement.removeAttribute("data-theme");
+});
+
+it("third pick of the same non-default mode offers it as default; Turn on saves it", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const client = fakeClient({}, { status: REPO, diff: D([]) });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const pickMode = async (m: string) => {
+    await openSelect("diff-mode");
+    await act(async () => (optionById(`diff-mode-${m}`).click(), undefined));
+    await flush();
+  };
+  await pickMode("uncommitted");
+  await pickMode("uncommitted");
+  await pickMode("session"); // another mode resets the run
+  await pickMode("uncommitted");
+  await pickMode("uncommitted");
+  expect(show).not.toHaveBeenCalled();
+  await pickMode("uncommitted");
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Make Uncommitted the default diff view?");
+  show.mock.calls[0]![1].run();
+  expect(loadDiffMode()).toBe("uncommitted");
+  setRecommendationHost(undefined);
+  localStorage.clear();
+  resetPageForTests();
 });

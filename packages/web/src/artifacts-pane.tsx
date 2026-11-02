@@ -1,6 +1,7 @@
 // The Artifacts pane (GH-176, docs/spec.md "Pane layout"): the artifacts a session published, newest first, with the selected one previewed. In a dock or as a main-area tab.
 import { memo, useMemo, useRef, useSyncExternalStore, useEffect, type KeyboardEvent } from "react";
 import { ChevronLeftIcon } from "lucide-react";
+import { count } from "./recommendations.ts";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useContainerWidth } from "@/lib/use-container-width";
@@ -58,6 +59,8 @@ const empty = (text: string, testId?: string) => (
 
 export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, load, connected, onOpenTab, requestOlder, failed, hidden }: Props) {
   const t = useT();
+  // GH-518: showing the pane counts; the artifacts recommendation never shows once it was seen.
+  useEffect(() => void (!hidden && count("artifactsPane")), [hidden]);
   const rows = useMemo(() => (view ? sessionArtifacts(view) : []), [view?.parts, view?.aux]);
   const want = !!view?.older && !view.auxArtifacts;
   useEffect(() => {

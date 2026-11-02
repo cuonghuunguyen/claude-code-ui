@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDrafts, loadDraftImages } from "./drafts.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
+import { resetPageForTests } from "./recommendations.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -71,11 +72,13 @@ let sessionsChanged: (m: unknown) => void = () => {};
 let reconnect: () => void = () => {};
 let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
+let slept: (m: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void }) => {
+  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void; onSlept?: (m: unknown) => void }) => {
     emit = opts.onEvent;
+    slept = opts.onSlept ?? (() => {});
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
@@ -6545,5 +6548,130 @@ describe("GH-176 Artifacts pane", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("recommendations hooks (GH-518)", () => {
+  const toastText = () => [...document.querySelectorAll('[data-testid="toast"]')].map((t) => t.textContent ?? "").join("|");
+  const usage = (percentage: number) => ({ totalTokens: percentage * 10, maxTokens: 1000, percentage, categories: [] });
+  const state = (seq: number, st: string) => act(async () => emit({ type: "event", sessionId: ID, seq, part: { type: "session_state", id: "session_state", state: st } }));
+  let vis = "visible";
+  const setVis = (v: string) => act(async () => ((vis = v), void document.dispatchEvent(new Event("visibilitychange"))));
+  const wait = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+  beforeEach(() => {
+    resetPageForTests();
+    localStorage.clear();
+    vis = "visible";
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => vis });
+  });
+  afterEach(() => void Reflect.deleteProperty(document, "visibilityState"));
+  const sendHello = async () => {
+    await typeInto(promptBox(), "hello");
+    await press({ key: "Enter" }, promptBox());
+  };
+
+  it("context breakdown: the turn's context_usage after the idle state decides, not the previous one", async () => {
+    await sendHello();
+    await state(1, "running");
+    await state(2, "idle");
+    expect(toastText()).not.toContain("Context is half full");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "context_usage", id: "cu", usage: usage(62) } }));
+    expect(toastText()).toContain("Context is half full. See what uses it.");
+  });
+
+  it("context breakdown: a /compact that leaves 14% never says half full", async () => {
+    await sendHello();
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "context_usage", id: "cu", usage: usage(62) } }));
+    await state(2, "running");
+    await state(3, "idle");
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 4, part: { type: "context_usage", id: "cu", usage: usage(14) } }));
+    expect(toastText()).not.toContain("Context is half full");
+  });
+
+  it("keep computer awake: the page's first connection never shows it, a reconnect with daemon_slept does", async () => {
+    const restore = await remount({ "settings.get": { settings: { orchestration: {}, notifications: { desktop: false }, power: { keepAwake: false } }, daemon: { host: "h", keepAwake: { supported: true } } } });
+    try {
+      await act(async () => slept({ type: "daemon_slept", at: 1, gapMs: 61_000 }));
+      await setVis("hidden");
+      await setVis("visible");
+      // The first connection only remembers it; the offer waits for the next return to the page.
+      expect(toastText()).toContain("This computer slept during a run");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keep computer awake: daemon_slept on a reconnect shows it at once", async () => {
+    const restore = await remount({ "settings.get": { settings: { orchestration: {}, notifications: { desktop: false }, power: { keepAwake: false } }, daemon: { host: "h", keepAwake: { supported: true } } } });
+    try {
+      await act(async () => slept({ type: "daemon_slept", at: 1, gapMs: 61_000 }));
+      expect(toastText()).not.toContain("This computer slept");
+      await act(async () => reconnect());
+      await wait(20);
+      await act(async () => slept({ type: "daemon_slept", at: 2, gapMs: 61_000 }));
+      expect(toastText()).toContain("This computer slept during a run. Keep it awake while sessions run?");
+    } finally {
+      restore();
+    }
+  });
+
+  describe("push", () => {
+    const stubPush = () => {
+      vi.stubGlobal("isSecureContext", true);
+      vi.stubGlobal("PushManager", class {});
+      vi.stubGlobal("Notification", { permission: "default" });
+      Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { addEventListener() {}, removeEventListener() {}, ready: Promise.resolve({ pushManager: { getSubscription: async () => null } }) } });
+    };
+    afterEach(() => (vi.unstubAllGlobals(), void Reflect.deleteProperty(navigator, "serviceWorker")));
+    const settings = { "settings.get": { settings: { orchestration: {}, notifications: { desktop: false } } } };
+
+    it("hidden, a session needs input, visible again: offered", async () => {
+      stubPush();
+      const restore = await remount(settings);
+      try {
+        await setVis("hidden");
+        await state(1, "running");
+        await state(2, "needs_input");
+        expect(toastText()).not.toContain("needed you");
+        await setVis("visible");
+        expect(toastText()).toContain("A session needed you while this page was hidden. Turn on push notifications?");
+      } finally {
+        restore();
+      }
+    });
+
+    // The subscribe reply says events up to seq 5 are a replay.
+    const replaying = { ...settings, "session.subscribe": { logEpoch: "e1", seq: 5, session } };
+
+    it("a dead socket: hidden, visible while still connected, then the reconnect's replayed needs_input is offered", async () => {
+      stubPush();
+      const restore = await remount(replaying);
+      try {
+        await setVis("hidden");
+        await setVis("visible");
+        await act(async () => reconnect());
+        await state(3, "needs_input"); // seq 3 <= 5: replayed
+        expect(toastText()).not.toContain("needed you");
+        await wait(900);
+        expect(toastText()).toContain("A session needed you while this page was hidden");
+      } finally {
+        restore();
+      }
+    });
+
+    it("a live permission request in the window after a reconnect, page visible, shows no tip", async () => {
+      stubPush();
+      const restore = await remount(replaying);
+      try {
+        await setVis("hidden");
+        await setVis("visible");
+        await act(async () => reconnect());
+        await state(6, "needs_input"); // seq 6 > 5: live
+        await wait(900);
+        expect(toastText()).not.toContain("needed you");
+      } finally {
+        restore();
+      }
+    });
   });
 });
