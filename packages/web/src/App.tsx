@@ -1337,11 +1337,13 @@ export function App() {
         if (e.part.type === "session_state") {
           // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
           const prev = viewsRef.current[e.sessionId]?.state;
-          if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || awaitReplay.current)) {
+          if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
             hiddenNeed.current = true;
-            if (awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
+            if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
           }
           // The turn's context_usage comes after this idle event: the rule waits for it.
+          // A new turn drops a context_usage that never came (a failed read).
+          if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
           if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
         }
         if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
@@ -1377,7 +1379,7 @@ export function App() {
         // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
         connGen.current++;
         listFresh.current = false;
-        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), setTimeout(() => (awaitReplay.current = false), 3000));
+        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);
@@ -2313,6 +2315,8 @@ export function App() {
   const wasHidden = useRef(false);
   const awaitReplay = useRef(false);
   const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const windowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => (clearTimeout(pushTimer.current), clearTimeout(windowTimer.current)), []);
   function offerPush() {
     const needed = hiddenNeed.current;
     hiddenNeed.current = false;
@@ -2344,7 +2348,6 @@ export function App() {
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === "hidden") return void (wasHidden.current = true);
-      if (statusRef.current === "connected") wasHidden.current = false;
       recNow.current.push() || recNow.current.keepAwake();
     };
     document.addEventListener("visibilitychange", onVis);

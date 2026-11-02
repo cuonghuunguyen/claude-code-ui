@@ -81,11 +81,19 @@ it("a sleep older than 24 h is dropped, not sent to a new connection", { timeout
   const e = await client(p2); // still within 24 h: replayed; this check sees idle
   await settle();
   expect(slept(e)).toHaveLength(1);
-  now2 += 24 * 3600_000 + 1;
-  const f = await client(p2);
+  now2 += 23 * 3600_000;
+  const g = await client(p2); // 23 h old: kept
+  await settle();
+  expect(slept(g)).toHaveLength(1);
+  now2 += 3600_000;
+  const h = await client(p2); // exactly 24 h old: kept
+  await settle();
+  expect(slept(h)).toHaveLength(1);
+  now2 += 1;
+  const f = await client(p2); // 24 h and 1 ms: dropped
   await settle();
   expect(slept(f)).toEqual([]);
-  for (const x of [a, b, c, e, f]) x.ws.close();
+  for (const x of [a, b, c, e, g, h, f]) x.ws.close();
   d2.close();
 });
 

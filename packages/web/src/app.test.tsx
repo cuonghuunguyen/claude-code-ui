@@ -6640,18 +6640,35 @@ describe("recommendations hooks (GH-518)", () => {
       }
     });
 
-    it("the socket dropped while hidden: the reconnect's replay still counts", async () => {
+    // The subscribe reply says events up to seq 5 are a replay.
+    const replaying = { ...settings, "session.subscribe": { logEpoch: "e1", seq: 5, session } };
+
+    it("a dead socket: hidden, visible while still connected, then the reconnect's replayed needs_input is offered", async () => {
       stubPush();
-      const restore = await remount(settings);
+      const restore = await remount(replaying);
       try {
-        await state(1, "running");
         await setVis("hidden");
-        await act(async () => reconnect());
         await setVis("visible");
+        await act(async () => reconnect());
+        await state(3, "needs_input"); // seq 3 <= 5: replayed
         expect(toastText()).not.toContain("needed you");
-        await state(2, "needs_input");
         await wait(900);
         expect(toastText()).toContain("A session needed you while this page was hidden");
+      } finally {
+        restore();
+      }
+    });
+
+    it("a live permission request in the window after a reconnect, page visible, shows no tip", async () => {
+      stubPush();
+      const restore = await remount(replaying);
+      try {
+        await setVis("hidden");
+        await setVis("visible");
+        await act(async () => reconnect());
+        await state(6, "needs_input"); // seq 6 > 5: live
+        await wait(900);
+        expect(toastText()).not.toContain("needed you");
       } finally {
         restore();
       }
