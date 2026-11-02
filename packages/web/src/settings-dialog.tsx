@@ -484,7 +484,7 @@ function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAu
           </Select>
         </div>
       )}
-    {!phone && (
+      {!phone && (
         <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
           <div className="min-w-0 flex-1">
             <span id="settings-tabs-shake-label" className="block text-sm">{t("settings.tabs.shake")}</span>

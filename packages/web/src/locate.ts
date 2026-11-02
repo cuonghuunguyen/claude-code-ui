@@ -90,8 +90,10 @@ export function onShake(l: () => void) {
   if (!detach) {
     const detect = createShakeDetector();
     const h = (e: PointerEvent) => {
-      if (document.querySelector('[aria-modal="true"]')) return; // dialog or palette open
-      if (detect({ x: e.clientX, t: e.timeStamp, pointerType: e.pointerType, buttons: e.buttons })) subs.forEach((s) => s());
+      if (!detect({ x: e.clientX, t: e.timeStamp, pointerType: e.pointerType, buttons: e.buttons })) return;
+      if (document.querySelector('[aria-modal="true"]')) return; // dialog or palette open: quiet
+      document.querySelectorAll("[data-locate]").forEach((o) => o.removeAttribute("data-locate")); // a ring left on a tab that is no longer active
+      subs.forEach((s) => s());
     };
     window.addEventListener("pointermove", h, { passive: true });
     detach = () => window.removeEventListener("pointermove", h);
@@ -114,11 +116,13 @@ export function useShakeToLocate(fn: () => void) {
   useEffect(() => (on && !phone ? onShake(() => ref.current()) : undefined), [on, phone]);
 }
 
+const ends = new WeakMap<Element, ReturnType<typeof setTimeout>>();
 const reduced = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 /** Scrolls `el` into view and rings it for RING_MS. Not rendered or hidden (display:none ancestor): nothing. */
 export function ringLocate(el: HTMLElement | null | undefined) {
   if (!el || el.checkVisibility?.() === false) return;
   el.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: reduced() ? "auto" : "smooth" });
   el.setAttribute("data-locate", "");
-  setTimeout(() => el.removeAttribute("data-locate"), RING_MS);
+  clearTimeout(ends.get(el));
+  ends.set(el, setTimeout(() => el.removeAttribute("data-locate"), RING_MS));
 }

@@ -6,7 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { SessionList } from "./sidebar.tsx";
-import { saveShakeLocate } from "./locate.ts";
+import { saveShakeLocate, ringLocate } from "./locate.ts";
+import { ConfirmDialog } from "./session-actions.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -27,6 +28,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root?.unmount());
+  root = undefined;
   document.body.innerHTML = "";
   window.matchMedia = mm;
   scroll.mockClear();
@@ -34,9 +36,11 @@ afterEach(() => {
 });
 
 const mount = async (o: { activeId?: string; sessionId?: string; compact?: boolean } = {}) => {
-  const el = document.createElement("div");
-  document.body.append(el);
-  root = createRoot(el);
+  if (!root) {
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+  }
   await act(async () =>
     root!.render(
       <>
@@ -114,4 +118,34 @@ it("touch shake does nothing", async () => {
   await mount({ sessionId: "a" });
   shake("touch");
   expect(rung()).toHaveLength(0);
+});
+
+it("an open confirm dialog blocks the shake", async () => {
+  await mount({ sessionId: "a" });
+  await act(async () => createRoot(document.body.appendChild(document.createElement("div"))).render(<ConfirmDialog open title="Delete?" description="Sure" confirm="Delete" onConfirm={() => {}} onCancel={() => {}} testId="x" />));
+  expect(document.querySelector('[data-testid="x-dialog"]')?.getAttribute("aria-modal")).toBe("true");
+  shake();
+  expect(rung()).toHaveLength(0);
+});
+
+it("the shake follows the active tab right after it changed, and leaves no ring on the old one", async () => {
+  await mount({ activeId: "a1" });
+  shake();
+  expect(document.querySelector('[data-tab-id="a1"]')!.hasAttribute("data-locate")).toBe(true);
+  await mount({ activeId: "b1" });
+  act(() => void vi.advanceTimersByTime(2500)); // cooldown
+  shake();
+  expect(rung().map((e) => e.getAttribute("data-tab-id"))).toEqual(["b1"]);
+});
+
+it("ringLocate scrolls nearest, smooth unless reduced motion; the ring is static then", () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  el.scrollIntoView = vi.fn();
+  ringLocate(el);
+  expect(el.scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  ringLocate(el);
+  expect(el.scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest", behavior: "auto" });
+  expect(el.hasAttribute("data-locate")).toBe(true);
 });
