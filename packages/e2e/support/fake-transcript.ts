@@ -39,7 +39,7 @@ export function writePublishTranscript(p: FakePublish): string {
 }
 
 export type FakeTurnPublish = { file: string; title?: string; url: string };
-export type FakeTurns = { sessionId: string; cwd: string; configDir: string; run: string; /** Number of prompt/reply turns. */ turns: number; /** Turn number (from 1) -> the Artifact publish that turn makes; the other turns end in a text reply. */ publishes: Record<number, FakeTurnPublish> };
+export type FakeTurns = { sessionId: string; cwd: string; configDir: string; run: string; /** Number of prompt/reply turns. */ turns: number; /** The first prompt (the session's sidebar title); default `Turn 1`. */ first?: string; /** Turn number (from 1) -> the Artifact publish that turn makes; the other turns end in a text reply. */ publishes: Record<number, FakeTurnPublish> };
 
 /** Writes a session of `turns` turns, one hour apart, ending an hour before now; the turns in `publishes` call Artifact (GH-176 e2e). Returns its path. */
 export function writeTurnsTranscript(p: FakeTurns): string {
@@ -58,7 +58,7 @@ export function writeTurnsTranscript(p: FakeTurns): string {
     parent = uuid;
   };
   for (let n = 1; n <= p.turns; n++) {
-    add(n, 0, "user", { role: "user", content: `Turn ${n}` });
+    add(n, 0, "user", { role: "user", content: n === 1 && p.first ? p.first : `Turn ${n}` });
     const pub = p.publishes[n];
     const head = { id: `msg_fake_${n}`, type: "message", role: "assistant", model: "claude-haiku-4-5" };
     if (!pub) {

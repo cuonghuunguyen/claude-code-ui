@@ -124,7 +124,9 @@ Then("the clipboard holds the scratch worktree path", async ({ page, project, me
 });
 
 Then("a toast says {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("toast").filter({ hasText: text }).last()).toHaveText(new RegExp(`^${text}`));
+  const toast = page.getByTestId("toast").filter({ hasText: text }).last();
+  await expect(toast).toHaveText(new RegExp(`^${text}`));
+  await expect(toast).toHaveAttribute("data-state", "open"); // slid in: the capture after it shows the toast fully
 });
 
 Then("an error toast says {string} and ends with the scratch project path", async ({ page, project }, text: string) => {
