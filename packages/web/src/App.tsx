@@ -79,7 +79,8 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { AddonsContext, EMPTY_ADDONS, enabledAddons, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { AddonApiContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { AddonFrame } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -99,11 +100,11 @@ import { appendQuote } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { clearSaved } from "./editor-persist.ts";
-import { clearDrafts, draftKeys, loadDraft, loadDraftImages, NEW_TAB_DRAFT, saveDraftImages } from "./drafts.ts";
+import { clearDrafts, draftKeys, loadDraft, loadDraftImages, NEW_TAB_DRAFT, saveDraft, saveDraftImages } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
-import { flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
+import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -164,7 +165,7 @@ import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, 
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
-import { type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, canMain, type PaneId, activePane, areaOf, flipSide, loadLayout, loadPaneTabs, movePane, rememberPane, resetLayout, saveLayout, saveTerminalDock, useLayout, useMinWidth, withPane } from "./layout.ts";
+import { type Area, type DockArea, type DockSide, PANE_IDS, canMain, type PaneId, activePane, areaOf, flipSide, isAddonPane, loadLayout, loadPaneTabs, movePane, paneLabel, paneTabText, rememberPane, resetLayout, saveLayout, saveTerminalDock, setAddonPaneTitles, useLayout, useMinWidth, withPane, withPanes } from "./layout.ts";
 import { PlanPane } from "./plan-pane.tsx";
 import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, partIdOf, pathOf, refOf } from "./pane-ref.ts";
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
@@ -312,6 +313,10 @@ export function App() {
   const [addons, setAddons] = useState<AddonsState>(EMPTY_ADDONS);
   const [addonsOpen, setAddonsOpen] = useState(false);
   const [addonsRev, setAddonsRev] = useState(0);
+  /** The first list answer arrived (or failed): addon pane tabs of an unknown addon close only then. */
+  const [addonsReady, setAddonsReady] = useState(false);
+  const [addonStatus, setAddonStatus] = useState<Record<string, Record<string, string>>>({});
+  const refusedShown = useRef(new Set<string>());
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
@@ -503,8 +508,14 @@ export function App() {
     }
   }, [terminalHeight]);
   // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
-  const layout = useLayout();
+  const savedLayout = useLayout();
   const lg = useMinWidth(1024);
+  // Addon panes (GH-516): the enabled addons' pane views (without `phone: false` ones on a phone) join the layout in memory, in the side panel until the user moves one.
+  const phoneNow = usePhone();
+  const addonPanes = useMemo(() => paneIdsOf(enabledAddons(addons.addons), phoneNow), [addons.addons, phoneNow]);
+  const addonPanesAll = useMemo(() => paneIdsOf(enabledAddons(addons.addons), false), [addons.addons]);
+  const layout = useMemo(() => withPanes(savedLayout, addonPanes), [savedLayout, addonPanes]);
+  setAddonPaneTitles(paneTitlesOf(enabledAddons(addons.addons)));
   // GH-401: sessions shown in a dock. Their ids stay in `tabs`; every action on the tabs bar reads `strip` (wide: `tabs` without them), never `tabs`.
   const docked = useDocked();
   const strip = stripTabs(tabs, docked, lg);
@@ -1852,13 +1863,15 @@ export function App() {
       const k = kindOf(t);
       if (!k) return false;
       if (!isItem(t) && areaOf(loadLayout(), k as PaneId) !== "main") return true;
+      // An addon pane tab whose addon or view is gone or off closes silently (once the list is known).
+      if (addonsReady && isAddonPane(k) && !addonPanesAll.includes(k)) return true;
       const id = identityOf(t, cwdOfOwner);
       if (seen.has(id)) return true;
       seen.add(id);
       return false;
     });
     if (stray.length) closeGroup(stray);
-  }, [layout, tabs, list]);
+  }, [layout, tabs, list, addonsReady, addonPanesAll]);
   const ownerTitle = (o: string) => displayTitle(list.find((s) => s.id === o)?.title || titles[o] || "Untitled");
   /** A pane tab's title: Files and Git graph name the owner's folder ("demo", "demo · feature"), Plan the owner's title. */
   const paneTitle = (ref: string) => {
@@ -2171,9 +2184,9 @@ export function App() {
   // The Graph panel stays mounted (hidden) after its first visit, so coming back shows the loaded list at once.
   const [graphCwd, setGraphCwd] = useState<string>();
   // The Plan pane lists only while the current session has a plan and its home is a dock.
-  const available = (p: PaneId) => (p === "plan" ? planListed : p === "artifacts" ? artifactsListed : p !== "graph" || isGit);
+  const available = (p: PaneId) => (isAddonPane(p) ? addonPanes.includes(p) : p === "plan" ? planListed : p === "artifacts" ? artifactsListed : p !== "graph" || isGit);
   /** Narrow: the side column holds every pane. */
-  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? PANE_IDS.filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
+  const areaPanes = (a: DockArea): PaneId[] => (lg ? layout.areas[a] : a === "side" ? [...PANE_IDS, ...addonPanes].filter((p) => areaOf(layout, p) !== "main") : []).filter(available);
   /** The panes of the area that can be selected: the Terminal tab stays listed, but selects only once the terminal is available. */
   const selectable = (a: DockArea) => areaPanes(a).filter((p) => p !== "terminal" || termAvail);
   const activeOf = (a: DockArea) => activePane(selectable(a), hist, paneTabs[a]);
@@ -2279,7 +2292,7 @@ export function App() {
     artifacts: tr("app.main.noMainTab.artifacts"),
     plan: tr("app.main.noMainTab.plan"),
   };
-  const kindToast = (p: PaneId) => (n: number) => tr("app.main.closedPaneTabs", { count: n, pane: PANE_LABEL[p] });
+  const kindToast = (p: PaneId) => (n: number) => tr("app.main.closedPaneTabs", { count: n, pane: paneLabel(p) });
   /** Back to a dock: the pane's main tabs close, one toast with Undo (the layout comes back first). */
   const leaveMain = (p: PaneId) => {
     if (areaOf(loadLayout(), p) !== "main") return;
@@ -2295,7 +2308,7 @@ export function App() {
       const ref = mainTab(p);
       if (!ref) {
         focusShownPrompt();
-        setToast(NO_MAIN_TAB[p as keyof typeof NO_MAIN_TAB]);
+        setToast(isAddonPane(p) ? tr("app.main.openSessionToShow", { pane: paneLabel(p) }) : NO_MAIN_TAB[p as keyof typeof NO_MAIN_TAB]);
         return;
       }
       // Carry: the dock terminal's xterm moves into the tab (no remount) when it is mounted for the tab's own folder; the instance is quiet: no termLoud.
@@ -2475,11 +2488,11 @@ export function App() {
   };
   /** The narrow pane switcher: Plan with its home in the main area shows the plan tab; a plan tab is left by picking another pane. */
   const switchPane = (p: Pane) => {
-    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : p === "plan" ? showPlan() : p === "artifacts" ? showArtifacts() : p === "terminal" ? showTerminal() : showKind(p as "files" | "graph");
+    if (p !== "session" && areaOf(layout, p) === "main") return paneRef?.kind === p ? setPane("session") : isAddonPane(p) ? (mainTab(p) ? openPaneTab(mainTab(p)!) : undefined) : p === "plan" ? showPlan() : p === "artifacts" ? showArtifacts() : p === "terminal" ? showTerminal() : showKind(p as "files" | "graph");
     if (p === "session" && paneRef) return open(paneRef.owner);
     selectPane(p);
   };
-  const hosts = usePaneHosts();
+  const hosts = usePaneHosts(addonPanes);
   useEffect(() => {
     if (shows("graph") && panelCwd) setGraphCwd(panelCwd);
   }, [shows("graph"), panelCwd]);
@@ -2590,7 +2603,7 @@ export function App() {
   };
   /** Opens or focuses the Files / Git graph tab of the folder of `sid` (default: the shown session, else the one shown last). */
   const showKind = (p: "files" | "graph", sid = paneOwner) => {
-    if (!sid) return setToast(tr("app.main.openSessionToShow", { pane: PANE_LABEL[p] }));
+    if (!sid) return setToast(tr("app.main.openSessionToShow", { pane: paneLabel(p) }));
     openPaneTab(paneTabFor(tabsRef.current, p, sid, cwdOfOwner));
   };
   /** The tab of a pane ref takes the focus (its strip button; on a phone its body). */
@@ -2627,7 +2640,7 @@ export function App() {
     open(ref);
   };
   /** Ctrl+`, the terminal buttons, New terminal, the narrow switcher with home = main: the current session's project terminal tab. */
-  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast(tr("app.main.openSessionToShow", { pane: PANE_LABEL.terminal })));
+  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast(tr("app.main.openSessionToShow", { pane: paneLabel("terminal") })));
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
@@ -2652,6 +2665,14 @@ export function App() {
             <ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} hidden={!here} />
           </div>
         </Activity>
+      );
+    }
+    if (kind && isAddonPane(kind)) {
+      const v = addonViewOf(enabledAddons(addons.addons), kind);
+      return (
+        <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
+          {v && <AddonFrame addon={v.addon} entry={v.view.entry} role="pane" view={v.view.id} sessionId={ownerOf(ref)} session={views[ownerOf(ref)]} />}
+        </div>
       );
     }
     const on = ref === activeId;
@@ -2791,13 +2812,35 @@ export function App() {
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
   const openAddons = () => setAddonsOpen(true);
+  // The host side of the addon bridge (AddonFrame gates every call first). Stable object, current closures through the ref.
+  const addonImpl = useRef<AddonApi>(undefined as never);
+  addonImpl.current = {
+    // Never sends: the owner session's prompt box when it shows, else its saved draft.
+    insert: (sid, text) => {
+      if (shown?.id === sid && !paneRef) return setInsert(text);
+      saveDraft(sid, loadDraft(sid) + text);
+      announceDraft(sid);
+    },
+    status: (sid, addon, text) =>
+      setAddonStatus((s) => {
+        const { [addon]: _, ...rest } = s[sid] ?? {};
+        return { ...s, [sid]: text === null || text === "" ? rest : { ...rest, [addon]: text } };
+      }),
+    toast: (addon, text) => setToast(`${addon}: ${text}`),
+    refused: (addon, type, message) => {
+      console.warn(`[addon ${addon}] refused ${type}: ${message}`);
+      setAddons((s) => ({ ...s, log: new Map(s.log).set(addon, [...(s.log.get(addon) ?? []), { at: Date.now(), type, message }].slice(-50)) }));
+      if (!refusedShown.current.has(addon)) (refusedShown.current.add(addon), setToast(tr("addons.refused", { name: addon, type })));
+    },
+  };
+  const addonApi = useMemo<AddonApi>(() => ({ insert: (...a) => addonImpl.current.insert(...a), status: (...a) => addonImpl.current.status(...a), toast: (...a) => addonImpl.current.toast(...a), refused: (...a) => addonImpl.current.refused(...a) }), []);
   useEffect(() => {
     if (status !== "connected") return;
     let stale = false;
     // A daemon without addons (a Side-only setup) answers addons_unavailable: no addons, no message.
     client.current!.request<AddonsListResult>({ type: "addons.list" }).then(
-      (r) => !stale && setAddons((s) => ({ ...s, addons: r.addons ?? [], picks: r.picks ?? {} })),
-      () => !stale && setAddons((s) => ({ ...s, addons: [], picks: {} })),
+      (r) => !stale && (setAddons((s) => ({ ...s, addons: r.addons ?? [], picks: r.picks ?? {} })), setAddonsReady(true)),
+      () => !stale && (setAddons((s) => ({ ...s, addons: [], picks: {} })), setAddonsReady(true)),
     );
     return () => void (stale = true);
   }, [status === "connected", addonsRev]);
@@ -2806,6 +2849,9 @@ export function App() {
     const on = enabledAddons(addons.addons);
     applyAddonThemes(addonThemes(on));
     applyAddonCss(on);
+    // A disabled or removed addon's status entries go.
+    const names = new Set(on.map((a) => a.name));
+    setAddonStatus((s) => (Object.values(s).every((m) => Object.keys(m).every((n) => names.has(n))) ? s : Object.fromEntries(Object.entries(s).map(([sid, m]) => [sid, Object.fromEntries(Object.entries(m).filter(([n]) => names.has(n)))]))));
   }, [addons.addons]);
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
   /** Shells list (GH-442) of session `sessionId`. */
@@ -3186,6 +3232,7 @@ export function App() {
   const mainTab = (p: PaneId): string | undefined => {
     const owner = currentId && isSession(currentId) ? currentId : undefined;
     if (p === "files" || p === "graph" || p === "terminal") return paneOwner && (p !== "graph" || isGit) ? paneTabFor(tabsRef.current, p, paneOwner, cwdOfOwner) : undefined;
+    if (isAddonPane(p)) return paneOwner ? paneTabFor(tabsRef.current, p, paneOwner, cwdOfOwner) : undefined;
     if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? refOf({ kind: "artifacts", owner }) : undefined;
     return owner && views[owner] && latestPlan(views[owner]!) ? refOf({ kind: "plan", owner }) : undefined;
   };
@@ -3301,6 +3348,8 @@ export function App() {
   );
   return (
     <AddonsContext value={addons}>
+    <AddonApiContext value={addonApi}>
+    <AddonStatusContext value={addonStatus}>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
@@ -3628,7 +3677,7 @@ export function App() {
             <>
               {shown && (
                 <div className="flex min-w-0 items-center gap-1 lg:hidden">
-                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : []), ...(panelHasArtifacts ? (["artifacts"] as const) : [])]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
+                  <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : []), ...(panelHasArtifacts ? (["artifacts"] as const) : []), ...addonPanes]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
               )}
               {layout.side === "left" && lg && (
@@ -3887,7 +3936,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "plan") !== "main" && panelTarget.sessionId && (
                       <div className={shows("plan") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <PlanPane view={panelView} label={PANE_LABEL.plan} onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
+                        <PlanPane view={panelView} label={paneLabel("plan")} onGoToRequest={() => goToRequest(panelTarget.sessionId!)} />
                       </div>
                     ),
                     hosts.plan,
@@ -3895,11 +3944,26 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "artifacts") !== "main" && panelTarget.sessionId && (
                       <div className={shows("artifacts") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label={PANE_LABEL.artifacts} load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
+                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label={paneLabel("artifacts")} load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
                       </div>
                     ),
                     hosts.artifacts,
                   )}
+                  {addonPanes.map((id) => {
+                    const v = addonViewOf(enabledAddons(addons.addons), id);
+                    return (
+                      v &&
+                      panelTarget.sessionId &&
+                      areaOf(layout, id) !== "main" &&
+                      createPortal(
+                        <div className={shows(id) ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                          <AddonFrame addon={v.addon} entry={v.view.entry} role="pane" view={v.view.id} sessionId={panelTarget.sessionId} session={panelView} />
+                        </div>,
+                        hosts[id],
+                        id,
+                      )
+                    );
+                  })}
                 </>
               )}
               {/* GH-397: one position for the dock terminal and the tab it moved into, so a move never remounts it. */}
@@ -4169,6 +4233,8 @@ export function App() {
     </SideState>
     </SideLabel>
     </AvatarColors>
+    </AddonStatusContext>
+    </AddonApiContext>
     </AddonsContext>
   );
 }
@@ -4190,12 +4256,12 @@ export function PaneTabs({ panes, value, onChange, changes = 0 }: { panes: Pane[
         const p = k as Pane;
         return (
           <Button key={p} size="sm" variant={p === value ? "secondary" : "ghost"} className="pointer-coarse:h-11" role="tab" aria-selected={p === value} onClick={() => onChange(p)} data-testid={`pane-${p}`} data-overflow-key={p} data-command={command(p)}>
-            {tr(`app.dock.tab.${p}`)}
+            {p === "session" ? tr("app.dock.tab.session") : paneTabText(p)}
             {count(p)}
           </Button>
         );
       }}
-      menuItem={(k) => ({ label: <>{tr(`app.dock.tab.${k as Pane}`)}{count(k as Pane)}</>, onSelect: () => onChange(k as Pane), testId: `pane-${k}`, command: command(k as Pane) })}
+      menuItem={(k) => ({ label: <>{k === "session" ? tr("app.dock.tab.session") : paneTabText(k as PaneId)}{count(k as Pane)}</>, onSelect: () => onChange(k as Pane), testId: `pane-${k}`, command: command(k as Pane) })}
     />
   );
 }
@@ -5098,7 +5164,7 @@ export function SessionPane({
             />
           </>
         )}
-        <StatusBar view={view} git={onGitStatus} onShells={onShells} />
+        <StatusBar view={view} git={onGitStatus} onShells={onShells} sessionId={session.id} />
       </div>
     </AgentLinksContext>
     </BackgroundShellContext>

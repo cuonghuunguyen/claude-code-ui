@@ -2,6 +2,7 @@
 import { createContext } from "react";
 import type { AddonInfo, AddonSource } from "@claude-ui/protocol";
 import type { Key } from "./i18n.ts";
+import type { AddonPaneId } from "./layout.ts";
 
 export type { AddonInfo, AddonsListResult, AddonUpdateCheck } from "@claude-ui/protocol";
 
@@ -46,3 +47,39 @@ export function rendererConflicts(addons: AddonInfo[]): Record<string, string[]>
   for (const a of enabledAddons(addons)) for (const r of a.manifest!.renderers) (by[`fence` in r ? `fence:${r.fence}` : `tool:${r.tool}`] ??= []).push(a.name);
   return Object.fromEntries(Object.entries(by).filter(([, n]) => n.length > 1).map(([t, n]) => [t, n.sort()]));
 }
+
+/** What a bridge request needs: null = nothing, else the capability. Any type not listed (prompt.submit, fs, shell, permission, ...) is refused whatever was approved. */
+const GATE: Record<string, string | null> = { "ui.ready": null, "session.read": "session.read", "prompt.insert": "prompt.insert", "ui.status": "ui.status", "ui.toast": "ui.toast" };
+
+/** The capability gate of the bridge (ADR 0006): pure, no DOM. */
+export function gate(type: string, approved: readonly string[]): { ok: true } | { ok: false; code: "refused" | "unknown"; message: string } {
+  if (!Object.hasOwn(GATE, type)) return { ok: false, code: "unknown", message: `${type} is not available to addons` };
+  const need = GATE[type];
+  return need === null || approved.includes(need) ? { ok: true } : { ok: false, code: "refused", message: `${type} needs capability ${need}` };
+}
+
+/** The pane ids of the enabled addons' pane views; `phone`: views with `phone: false` are left out (GH-516 story: hidden below 640 px). */
+export const paneIdsOf = (addons: AddonInfo[], phone: boolean): AddonPaneId[] =>
+  addons.flatMap((a) => a.manifest!.views.filter((v) => v.kind === "pane" && !(phone && v.phone === false)).map((v) => `addon:${a.name}:${v.id}` as AddonPaneId));
+
+/** Pane id -> view title. */
+export const paneTitlesOf = (addons: AddonInfo[]): Map<string, string> => new Map(addons.flatMap((a) => a.manifest!.views.filter((v) => v.kind === "pane").map((v) => [`addon:${a.name}:${v.id}`, v.title] as const)));
+
+/** The addon and view of a pane id `addon:<name>:<view>`, when that addon is enabled. */
+export function addonViewOf(addons: AddonInfo[], pane: string) {
+  const [, name, id] = pane.split(":");
+  const addon = addons.find((a) => a.name === name);
+  const view = addon?.manifest?.views.find((v) => v.id === id && v.kind === "pane");
+  return addon && view ? { addon, view } : undefined;
+}
+
+/** What the host does for an addon (App provides it): the bridge of AddonFrame calls these after the gate. */
+export type AddonApi = {
+  insert: (sessionId: string, text: string) => void;
+  status: (sessionId: string, addon: string, text: string | null) => void;
+  toast: (addon: string, text: string) => void;
+  refused: (addon: string, type: string, message: string) => void;
+};
+export const AddonApiContext = createContext<AddonApi>({ insert() {}, status() {}, toast() {}, refused() {} });
+/** Status texts by session, then addon (the status bar shows them). */
+export const AddonStatusContext = createContext<Record<string, Record<string, string>>>({});

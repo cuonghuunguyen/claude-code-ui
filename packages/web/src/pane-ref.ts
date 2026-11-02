@@ -1,10 +1,13 @@
 // Pane refs (GH-395/396, docs/spec.md "Titlebar tabs"): strip/tab ids of non-session panes, `plan:<session uuid>`, `artifacts:<session uuid>` (GH-176), `files:<session uuid>`, `graph:<session uuid>`, `terminal:<session uuid>` (GH-397). Sessions stay bare uuids.
 import { t } from "./i18n.ts";
-export type PaneKind = "plan" | "files" | "graph" | "terminal" | "file" | "artifact" | "artifacts"; // "file" (GH-399): one file as a tab, `file:<uuid>:<absolute path>`; "artifact" (GH-400): `artifact:<uuid>:<part id>`
+import { type AddonPaneId, isAddonPane, paneLabel } from "./layout.ts";
+export type BuiltinKind = "plan" | "files" | "graph" | "terminal" | "file" | "artifact" | "artifacts";
+/** An addon pane (GH-516): the kind is its pane id, `addon:<name>:<view>`; the ref is `addon:<name>:<view>:<session uuid>`. */
+export type PaneKind = BuiltinKind | AddonPaneId; // "file" (GH-399): one file as a tab, `file:<uuid>:<absolute path>`; "artifact" (GH-400): `artifact:<uuid>:<part id>`
 export type PaneRef = { kind: PaneKind; owner: string; /** Kind "file". */ path?: string; /** Kind "artifact": the Artifact publish part. */ part?: string };
 
 // Lowercase only, like the session ids the daemon makes: tabs compare ids as exact strings, so one session has one ref.
-const REF = /^(plan|files|graph|terminal|artifacts):([0-9a-f-]{36})$/;
+const REF = /^(plan|files|graph|terminal|artifacts|addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*):([0-9a-f-]{36})$/;
 // The path may hold colons (`C:\\a`), so it is everything after the owner.
 const FILE_REF = /^file:([0-9a-f-]{36}):([\s\S]+)$/;
 const ARTIFACT_REF = /^artifact:([0-9a-f-]{36}):([\s\S]+)$/;
@@ -29,7 +32,7 @@ export const isPaneRef = (id: unknown): id is string => typeof id === "string" &
 /** The owner session of a ref; the id itself for anything else. */
 export const ownerOf = (id: string): string => parseRef(id)?.owner ?? id;
 export const kindOf = (id: string): PaneKind | undefined => parseRef(id)?.kind;
-export const KIND_LABEL: Record<PaneKind, string> = {
+export const KIND_LABEL: Record<BuiltinKind, string> = {
   get plan() {
     return t("app.layout.pane.plan");
   },
@@ -73,4 +76,5 @@ export const splittable = (id: string): boolean => {
   return k !== undefined && k !== "graph";
 };
 /** "Plan · <title>", "Files · <project>". */
-export const paneTabTitle = (kind: PaneKind, ownerTitle: string): string => `${KIND_LABEL[kind]} · ${ownerTitle}`;
+export const kindLabel = (kind: PaneKind): string => (isAddonPane(kind) ? paneLabel(kind) : KIND_LABEL[kind]);
+export const paneTabTitle = (kind: PaneKind, ownerTitle: string): string => `${kindLabel(kind)} · ${ownerTitle}`;

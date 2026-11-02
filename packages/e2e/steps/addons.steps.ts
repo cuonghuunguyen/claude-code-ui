@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { REPO_ROOT } from "../support/daemon.ts";
-import { promptBox } from "../support/ui.ts";
+import { pickPane, promptBox } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
 // GH-516 addons. The daemon of a run persists across scenarios (one worker): every Given is idempotent.
@@ -85,4 +85,46 @@ Then("the addon stylesheet of {string} is applied", async ({ page }, name: strin
 });
 Then("the addon stylesheet of {string} is not applied", async ({ page }, name: string) => {
   await expect.poll(() => cssFlag(page, name)).toBe("");
+});
+
+const PANE_ID: Record<string, string> = { Stats: "addon:example:stats" };
+const paneFrame = (page: Page) => page.frameLocator('[data-testid="addon-frame-example-pane"]');
+
+When("I open the {string} addon pane in the side panel", async ({ page }, title: string) => {
+  await pickPane(page, PANE_ID[title]!, page.getByTestId("side-panel"));
+  await expect(page.getByTestId("addon-frame-example-pane")).toBeVisible();
+});
+
+Then("the addon pane shows the part counts of the session", async ({ page }) => {
+  await expect(paneFrame(page).getByTestId("example-parts")).toHaveText(/\d+ parts/);
+});
+
+When("I click {string} in the addon pane", async ({ page }, label: string) => {
+  await paneFrame(page).getByRole("button", { name: label, exact: true }).click();
+});
+
+Then("the status bar shows {string} status {string}", async ({ page }, addon: string, text: string) => {
+  await expect(page.getByTestId(`addon-status-${addon}`)).toHaveText(text);
+});
+
+Then("the pane shows a refused error", async ({ page }) => {
+  await expect(paneFrame(page).getByTestId("example-refused")).toContainText("Refused");
+});
+
+Then("the log of {string} lists {string}", async ({ page }, name: string, type: string) => {
+  await expect(addonRow(page, name).getByTestId("addons-log")).toContainText(type);
+});
+
+Then("the pane switcher does not list {string}", async ({ page }, title: string) => {
+  await expect(page.getByTestId("pane-session").first()).toBeAttached();
+  await page.locator('[data-testid="pane-overflow"]:visible').first().click().catch(() => {});
+  await expect(page.locator(`[data-testid="pane-${PANE_ID[title]}"]:visible`)).toHaveCount(0);
+});
+
+let userMessages = 0;
+const userMessage = (page: Page) => page.locator('[data-testid="user-message"]:not([data-pending])');
+When("I count the user messages", async ({ page }) => void (userMessages = await userMessage(page).count()));
+Then("no new user message is shown", async ({ page }) => {
+  await page.waitForTimeout(500);
+  await expect(userMessage(page)).toHaveCount(userMessages);
 });
