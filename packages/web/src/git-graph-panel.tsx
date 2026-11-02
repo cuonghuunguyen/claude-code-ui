@@ -55,16 +55,17 @@ function RefChips({ refs }: { refs: string[] }) {
     <>
       {refs.includes("HEAD") && (!head || !names.length) && <Chip className={cn(REF_HEAD, "font-semibold")}>{HEAD}</Chip>}
       {names.map((r, i) => (
-        <Chip key={r} data-ref={r} className={cn(head && i === 0 ? REF_HEAD : r.startsWith("refs/heads/") ? REF_LOCAL : r.startsWith("refs/remotes/") && REF_REMOTE, head && i === 0 && "font-semibold")}>
+        <Chip key={r} data-ref={r} title={short(r)} className={cn(head && i === 0 ? REF_HEAD : r.startsWith("refs/heads/") ? REF_LOCAL : r.startsWith("refs/remotes/") && REF_REMOTE, head && i === 0 && "font-semibold")}>
           {r.startsWith("refs/tags/") && <TagIcon className="size-3" aria-hidden />}
-          {short(r)}
+          <span className="truncate">{short(r)}</span>
         </Chip>
       ))}
     </>
   );
 }
-const Chip = ({ children, className, "data-ref": ref }: { children: React.ReactNode; className?: string; "data-ref"?: string }) => (
-  <span className={cn("inline-flex max-w-40 shrink-0 items-center gap-0.5 truncate rounded border px-1 text-xs", className)} data-testid="commit-ref" data-ref={ref}>
+// title: a long name is cut at max-w-40; hover shows it whole.
+const Chip = ({ children, className, title, "data-ref": ref }: { children: React.ReactNode; className?: string; title?: string; "data-ref"?: string }) => (
+  <span className={cn("inline-flex min-w-0 max-w-40 shrink-0 items-center gap-0.5 overflow-hidden rounded border px-1 text-xs", className)} title={title} data-testid="commit-ref" data-ref={ref}>
     {children}
   </span>
 );

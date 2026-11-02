@@ -332,6 +332,8 @@ it("ref chips: local green, remote purple, HEAD (bare and its branch) yellow, ta
   expect(cls("dev")).toContain("text-ref-local");
   expect(cls("HEAD")).toContain("text-ref-head");
   expect(cls("v1")).not.toMatch(/text-ref-|bg-\[/);
+  // A long name is cut by the chip width; hover (title) shows it whole.
+  expect(chips.find((c) => c.textContent === "origin/main")!.getAttribute("title")).toBe("origin/main");
 });
 
 const optionTexts = async () => {
