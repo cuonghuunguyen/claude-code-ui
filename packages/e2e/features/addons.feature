@@ -83,8 +83,14 @@ Feature: Addons (GH-516)
     Then the addon band of "example" is above the prompt box
     And the band shows the turn count
     And I capture "addon band"
-    When the viewport is 390x844
-    Then the page has no horizontal scroll
+
+  Scenario: The addon band fits a phone screen
+    Given the example addon is installed and enabled
+    And the viewport is 390x844
+    And a Haiku session with one finished reply
+    Then the addon band of "example" is above the prompt box
+    And the band shows the turn count
+    And the page has no horizontal scroll
     And I capture "addon band phone"
 
   Scenario: An addon command puts text in the prompt box without sending it

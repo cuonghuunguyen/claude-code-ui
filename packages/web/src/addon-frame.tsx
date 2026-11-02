@@ -108,6 +108,8 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
 
 const BAND_DEFAULT = 32;
 const BAND_MAX = 160;
+/** A band is never thinner than its default (a sane minimum) nor taller than BAND_MAX. */
+const bandHeight = (px: number) => Math.max(BAND_DEFAULT, Math.min(px, BAND_MAX));
 /** The bands of the enabled addons above the prompt box of session `sessionId` (GH-516); each starts at 32 px and takes the height the frame asks for with `ui.ready`. */
 export function AddonBands({ sessionId, session }: { sessionId: string; session?: SessionView }) {
   const addons = useContext(AddonsContext).addons;
@@ -124,7 +126,7 @@ export function AddonBands({ sessionId, session }: { sessionId: string; session?
         view={view.id}
         sessionId={sessionId}
         session={session}
-        onHeight={(px) => setHeights((h) => (h[key] === Math.min(px, BAND_MAX) ? h : { ...h, [key]: Math.min(px, BAND_MAX) }))}
+        onHeight={(px) => setHeights((h) => (h[key] === bandHeight(px) ? h : { ...h, [key]: bandHeight(px) }))}
         className="w-full shrink-0 rounded-md border"
         style={{ height: heights[key] ?? BAND_DEFAULT }}
       />
