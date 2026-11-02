@@ -167,6 +167,7 @@ export default {
   "app.cmd.signalToggle": "Bật/tắt chế độ chỉ tín hiệu",
   "app.cmd.awakeToggle": "Bật/tắt giữ màn hình sáng",
   "app.cmd.computerAwakeToggle": "Bật/tắt giữ máy tính thức",
+  "app.cmd.chromeToggle": "Bật/tắt Claude in Chrome",
   "app.cmd.terminalNew": "Terminal mới",
   "app.cmd.layoutReset": "Đặt lại bố cục",
   "app.cmd.promptFocus": "Chuyển đến prompt",

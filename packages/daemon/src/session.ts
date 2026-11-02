@@ -86,6 +86,8 @@ type SessionOpts = Partial<SessionSettings> & {
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Asks the CLI for a predicted next prompt after each turn (Settings › Focus › Next for you); read when the CLI starts. */
   promptSuggestions?: () => boolean;
+  /** Claude in Chrome setting (GH-514); read at every query start. Workers never get it. */
+  chrome?: () => boolean;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
   plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
   /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
@@ -326,7 +328,7 @@ export class Session {
         promptSuggestions: this.opts.promptSuggestions?.(),
         settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
-        extraArgs: { "thinking-display": "summarized", "replay-user-messages": null },
+        extraArgs: { "thinking-display": "summarized", "replay-user-messages": null, ...(this.opts.chrome?.() && !this.bashPinned && { chrome: null }) },
         // Subagent text and thinking too, not only its tool calls: the UI shows the nested transcript.
         forwardSubagentText: true,
         // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.

@@ -273,6 +273,13 @@ it("Toggle keep screen awake is listed only where App offers it, and runs it", (
   expect(toggleKeepAwake).toHaveBeenCalledOnce();
 });
 
+it("Toggle Claude in Chrome is listed only when the daemon sends the setting, and runs its toggle (GH-514)", () => {
+  const toggleChrome = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "chrome.toggle")).toBe(false);
+  run(ctx({ toggleChrome }), "chrome.toggle");
+  expect(toggleChrome).toHaveBeenCalledOnce();
+});
+
 it("Toggle keep computer awake is listed only when the daemon supports it, and runs its toggle (GH-523)", () => {
   const toggleComputerAwake = vi.fn();
   expect(appCommands(ctx()).some((i) => i.id === "computerAwake.toggle")).toBe(false);
