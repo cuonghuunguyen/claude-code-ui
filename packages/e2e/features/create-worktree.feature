@@ -123,14 +123,17 @@ Feature: Create worktree modal
     Then the modal fits the viewport
     And I capture "phone modal"
 
-  Scenario: The project menu creates a worktree at once on a phone
+  Scenario: The project menu has Create worktree… and no quick New worktree item
     Given the viewport is 390x844
     And I open the scratch project
-    When I choose "new-worktree" in the menu of the scratch project
-    Then no Create worktree modal is open
-    And a worktree with a generated name exists
-    And the new-session tab runs in a worktree with a generated name
-    And I capture "phone quick create"
+    Then the menu of the scratch project has "create-worktree" and not "new-worktree"
+    And I capture "phone project menu"
+
+  Scenario: The project menu has Create worktree… and no quick New worktree item on desktop
+    Given the viewport is 1440x900
+    And I open the scratch project
+    Then the menu of the scratch project has "create-worktree" and not "new-worktree"
+    And I capture "desktop project menu"
 
   Scenario: A new worktree gets the gitignored files .worktreeinclude lists and nothing else
     Given the scratch project has gitignored files listed in .worktreeinclude

@@ -85,7 +85,6 @@ export default {
   "sidebar.close": "Close",
   // sidebar-menus.ts / sidebar.tsx menus
   "sidebar.menu.newSession": "New session",
-  "sidebar.menu.newWorktree": "New worktree",
   "sidebar.menu.createWorktree": "Create worktree…",
   "sidebar.menu.copyPath": "Copy path",
   "sidebar.menu.hideInactive": "Hide inactive sessions",

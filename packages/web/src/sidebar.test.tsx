@@ -714,9 +714,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(trigger.getAttribute("aria-label")).toBe("Actions for web");
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
-    await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-new-worktree"]')!.click());
-    expect(onNewWorktree).toHaveBeenCalledWith("/home/u/web", true);
-    await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
+    expect(document.querySelector('[data-testid="project-menu-new-worktree"]')).toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-create-worktree"]')!.click());
     expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
