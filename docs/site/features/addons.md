@@ -40,7 +40,7 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 ## How an addon is kept apart {#security}
 
 - Each view runs in an iframe with `sandbox="allow-scripts"`: no cookies, no storage, no access to the app. It never gets the daemon token.
-- The daemon serves its files at `/addon/<nonce>/<name>/…`, only while the addon is enabled. The content security policy allows scripts, styles, images and fonts from the addon's own folder, and network only to the `net:` origins you approved. An API that an addon calls must allow the request origin `null` (CORS).
+- The daemon serves its files at `/addon/<nonce>/<name>/…`, only while the addon is enabled. The content security policy allows scripts, styles, images and fonts from the addon's own folder, and `fetch`/XHR only to the `net:` origins you approved. This limit is not complete: browsers do not apply the policy to WebRTC, so treat an addon that can read your session (`session.read`) as trusted code. An API that an addon calls must allow the request origin `null` (CORS).
 - Every request from a frame goes through the capability gate. Anything not in the table above (sending a prompt, files, shell, git, permission answers) is refused whatever you approved. A refused call shows a toast once per addon and is listed under the addon's row in the dialog (this browser, in memory).
 - An addon's stylesheet cannot load images or other styles from outside: the app's own policy blocks them.
 
@@ -74,7 +74,7 @@ A view is an HTML file that loads its own script (inline scripts are blocked). I
 | `ui.status {text}` | `ui.status` | A status bar entry up to 80 characters; `null` clears it |
 | `ui.toast {text}` | `ui.toast` | A toast up to 200 characters |
 
-Events from claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` or `render {tool: {name, input, result}}`, `session.parts`. The example's `bridge.js` wraps this in `call(type, payload)` and `on(type, fn)`.
+Events from claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` or `render {tool: {name, input, result}}`, `session.parts`. The example's `bridge.js` wraps this in `call(type, payload)` and `on(type, fn)`. **Act only on messages whose `event.source` is `parent`:** every other frame of the page (another addon, an Artifact preview) can post to your frame too, and `bridge.js` drops such messages.
 
 ## Themes {#themes}
 

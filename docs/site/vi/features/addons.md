@@ -40,7 +40,7 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 ## Addon bị cô lập thế nào {#security}
 
 - Mỗi khung hiển thị chạy trong iframe `sandbox="allow-scripts"`: không cookie, không lưu trữ, không truy cập ứng dụng. Nó không bao giờ nhận token của daemon.
-- Daemon phục vụ tệp của addon tại `/addon/<nonce>/<tên>/…`, chỉ khi addon đang bật. Chính sách bảo mật nội dung chỉ cho script, style, ảnh và font từ thư mục của addon, và mạng chỉ tới các origin `net:` bạn đã duyệt. API mà addon gọi phải cho phép origin `null` (CORS).
+- Daemon phục vụ tệp của addon tại `/addon/<nonce>/<tên>/…`, chỉ khi addon đang bật. Chính sách bảo mật nội dung chỉ cho script, style, ảnh và font từ thư mục của addon, và `fetch`/XHR chỉ tới các origin `net:` bạn đã duyệt. Giới hạn này chưa đầy đủ: trình duyệt không áp chính sách này cho WebRTC, nên hãy coi addon đọc được phiên của bạn (`session.read`) là mã đáng tin. API mà addon gọi phải cho phép origin `null` (CORS).
 - Mọi yêu cầu từ khung đều qua cổng quyền. Thứ không có trong bảng trên (gửi prompt, tệp, shell, git, trả lời quyền) đều bị từ chối dù bạn đã duyệt gì. Lời gọi bị từ chối hiện một thông báo mỗi addon và được liệt kê dưới dòng của addon trong hộp thoại (trình duyệt này, trong bộ nhớ).
 - Stylesheet của addon không tải được ảnh hay style từ bên ngoài: chính sách của ứng dụng chặn chúng.
 
@@ -74,7 +74,7 @@ Khung là tệp HTML nạp script riêng của nó (script nội tuyến bị ch
 | `ui.status {text}` | `ui.status` | Mục thanh trạng thái tới 80 ký tự; `null` để xóa |
 | `ui.toast {text}` | `ui.toast` | Thông báo tới 200 ký tự |
 
-Sự kiện từ claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` hoặc `render {tool: {name, input, result}}`, `session.parts`. `bridge.js` của ví dụ gói việc này thành `call(type, payload)` và `on(type, fn)`.
+Sự kiện từ claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` hoặc `render {tool: {name, input, result}}`, `session.parts`. `bridge.js` của ví dụ gói việc này thành `call(type, payload)` và `on(type, fn)`. **Chỉ xử lý thông điệp có `event.source` là `parent`:** mọi khung khác trên trang (addon khác, bản xem trước Artifact) cũng gửi được tới khung của bạn, và `bridge.js` bỏ qua các thông điệp đó.
 
 ## Giao diện màu {#themes}
 

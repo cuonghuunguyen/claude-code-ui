@@ -3966,7 +3966,7 @@ export function App() {
                       areaOf(layout, id) !== "main" &&
                       createPortal(
                         <div className={shows(id) ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                          <AddonFrame addon={v.addon} entry={v.view.entry} role="pane" view={v.view.id} sessionId={panelTarget.sessionId} session={panelView} />
+                          <AddonFrame key={`${id}:${panelTarget.sessionId}`} addon={v.addon} entry={v.view.entry} role="pane" view={v.view.id} sessionId={panelTarget.sessionId} session={panelView} />
                         </div>,
                         hosts[id],
                         id,

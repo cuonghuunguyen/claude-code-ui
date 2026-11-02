@@ -28,8 +28,10 @@ export const CAPABILITY = {
   tool: /^render\.tool:[A-Za-z0-9_.-]{1,128}$/,
   net: /^net:(.+)$/,
 };
-/** A palette value goes into a <style> text: no `;{}` injection. */
-const COLOR = /^(#[0-9a-f]{3,8}|(rgb|hsl|oklch|oklab)a?\([0-9a-z.,%\s/+-]*\))$/i;
+/** A palette value goes into a <style> text (no `;{}` injection); the web app takes only `#rrggbb` (its token builder mixes colours and adds alpha to hex), so a theme is checked the same way here. */
+const COLOR = /^#[0-9a-f]{6}$/i;
+/** The palette keys of themes.ts `KEYS`: a mode that is given needs all of them (else the web app would drop it silently). */
+const PALETTE_KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"];
 const GIT_TIMEOUT = 5 * 60_000;
 const MAX_ERROR = 400;
 
@@ -115,6 +117,8 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
         if (typeof v !== "string" || !COLOR.test(v)) throw bad(`themes[${tid}].${mode}.${k}: not a colour`);
         out[k] = v;
       }
+      const missing = PALETTE_KEYS.filter((k) => !(k in out));
+      if (missing.length) throw bad(`themes[${tid}].${mode}: missing ${missing.join(", ")}`);
       return out;
     };
     const light = palette("light");
@@ -256,6 +260,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
   const nonce = randomBytes(16).toString("hex");
   /** The `latest` of the last checkUpdate per addon: only that SHA can be applied. */
   const checked = new Map<string, string>();
+  /** Addons whose manifest loaded and covered their approvals when a page was last served. */
+  const valid = new Set<string>();
 
   const env = (): NodeJS.ProcessEnv => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) && { GIT_SSH_COMMAND: BATCH_SSH }) });
   const git = async (cwd: string, args: string[]): Promise<string> => {
@@ -282,7 +288,7 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     if (!r) throw err("not_found", `unknown addon ${name}`);
     return r;
   };
-  const changed = (fn: (s: State) => void) => (store.change(fn), opts.onChanged());
+  const changed = (fn: (s: State) => void) => (store.change(fn), valid.clear(), opts.onChanged());
   const info = (name: string) => {
     const r = get(name);
     const i = toInfo(name, r, dir, nonce);
@@ -374,6 +380,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     changed((s) => {
       const x = s.addons[name]!;
       x.sha = sha;
+      // Approvals of capabilities the new version no longer declares end: declaring one again later needs approval again.
+      x.approved = x.approved.filter((c) => l.manifest.capabilities.includes(c));
       if (!covered(l.manifest, x.approved)) x.enabled = false;
     });
     checked.delete(name);
@@ -448,11 +456,17 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     const r = store.get().addons[name];
     if (!r) return undefined;
     const root = rootOf(dir, name, r);
-    const l = load(root, name);
-    if ("error" in l || !r.enabled || !covered(l.manifest, r.approved)) return undefined;
     const f = addonFile(root, rest);
     if (!f) return undefined;
-    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html: f.type.startsWith("text/html") };
+    const html = f.type.startsWith("text/html");
+    // The manifest is validated when a page (an HTML entry) loads, not for every script, style and image it then asks for.
+    if (html || !valid.has(name)) {
+      const l = load(root, name);
+      const ok = !("error" in l) && r.enabled && covered(l.manifest, r.approved);
+      ok ? valid.add(name) : valid.delete(name);
+      if (!ok) return undefined;
+    } else if (!r.enabled) return undefined;
+    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html };
   }
 
   return { handle, serve, nonce };

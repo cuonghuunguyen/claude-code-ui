@@ -1,10 +1,12 @@
 // The addon side of the claude-ui bridge (v1): every request carries an id, the host answers with the same id.
-// Nothing else reaches the host: the frame has no token, cookie or storage.
+// Nothing else reaches the host: the frame has no token, cookie or storage. Handle only messages whose `e.source` is `parent`.
 const pending = new Map();
 const handlers = new Map();
 let n = 0;
 
 window.addEventListener("message", (e) => {
+  // Only the host: any other frame of the page (another addon, an Artifact preview) can post here too.
+  if (e.source !== parent) return;
   const m = e.data;
   if (!m || m.v !== 1) return;
   if (m.id && pending.has(m.id)) {

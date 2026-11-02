@@ -256,6 +256,46 @@ describe("updates", () => {
   });
 });
 
+describe("review fixes (GH-516)", () => {
+  it("an update drops the approvals of capabilities the new version no longer declares; declaring one again needs approval", async () => {
+    commitAddon({ capabilities: ["ui.pane", "ui.toast"] });
+    await installGit();
+    await approveAll("example");
+    const v2 = commitAddon({ capabilities: ["ui.pane"] });
+    await c.request({ type: "addons.checkUpdate", name: "example" });
+    expect((await c.request({ type: "addons.update", name: "example", sha: v2 })).result).toMatchObject({ state: "enabled", approved: ["ui.pane"] });
+    const v3 = commitAddon({ capabilities: ["ui.pane", "ui.toast"] });
+    await c.request({ type: "addons.checkUpdate", name: "example" });
+    const u = (await c.request({ type: "addons.update", name: "example", sha: v3 })).result as AddonInfo;
+    expect(u.state).toBe("needs_approval");
+    expect(u.base).toBeUndefined();
+  });
+
+  it("refuses a theme mode that lacks a palette key or uses a colour the web app would drop", async () => {
+    const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
+    const { info: _, ...short } = all;
+    commitAddon({ themes: [{ id: "dusk", name: "D", dark: short }] });
+    expect((await installGit()).message).toContain("missing info");
+    commitAddon({ themes: [{ id: "dusk", name: "D", dark: { ...all, fg: "rgb(1, 2, 3)" } }] });
+    expect(await installGit()).toMatchObject({ code: "bad_manifest" });
+    commitAddon({ themes: [{ id: "dusk", name: "D", dark: all }] });
+    expect(await installGit()).toMatchObject({ type: "reply" });
+  });
+
+  it("an edit of a local folder that needs approval stops its assets too, after the next page request", async () => {
+    const d = folder("cache");
+    await c.request({ type: "addons.install", source: { kind: "local", path: d } });
+    const i = await approveAll("cache");
+    expect((await fetchAddon(i.base + "pane.html")).status).toBe(200);
+    expect((await fetchAddon(i.base + "pane.js", "script")).status).toBe(404); // folder() writes no pane.js
+    writeFileSync(join(d, "pane.js"), "");
+    expect((await fetchAddon(i.base + "pane.js", "script")).status).toBe(200);
+    writeFileSync(join(d, "addon.json"), json({ ...BASE, name: "cache", capabilities: ["ui.pane", "ui.band"], views: [...BASE.views, { id: "b", title: "B", entry: "band.html", kind: "band" }] }));
+    expect((await fetchAddon(i.base + "pane.html")).status).toBe(404);
+    expect((await fetchAddon(i.base + "pane.js", "script")).status).toBe(404);
+  });
+});
+
 describe("local folders, uninstall, renderer picks", () => {
   it("a local folder is re-read on list; a new capability needs approval", async () => {
     const d = folder("loc");
