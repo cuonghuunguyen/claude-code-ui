@@ -76,3 +76,13 @@ Feature: Addons (GH-516)
     Then the pane switcher does not list "Stats"
     And the page has no horizontal scroll
     And I capture "phone no stats"
+
+  Scenario: The addon band shows above the prompt
+    Given the example addon is installed and enabled
+    And a Haiku session with one finished reply
+    Then the addon band of "example" is above the prompt box
+    And the band shows the turn count
+    And I capture "addon band"
+    When the viewport is 390x844
+    Then the page has no horizontal scroll
+    And I capture "addon band phone"

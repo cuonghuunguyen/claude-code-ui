@@ -710,6 +710,7 @@ Browsers keep Ctrl/Cmd+T, +W, +N, +Tab, +Shift+T, +1..9 and Ctrl+PageUp/PageDown
 
 - Host to frame events: `init {addon, view, role, session, theme, mode}` (on the frame's `load`), `theme.changed {theme, mode}`, then (later steps) `command.run`, `render`.
 - A refused or invalid call: the error reply, `console.warn("[addon <name>] refused <type>: …")`, an entry in the in-memory log of that addon (last 50, shown folded under its row in the Addons dialog) and one toast per addon per page load.
+- Band: each `kind: "band"` view of an enabled addon is one frame in the session pane's dock stack, after the continue dock and before the prompt box (`AddonBands`), full width, 32 px until it sends `ui.ready {height}` (clamped 24-160). A `phone: false` band is left out below 640 px. One band frame per addon view per session pane.
 - Addon panes: each `kind: "pane"` view of an enabled addon is a pane `addon:<name>:<view>` (layout, in memory until the user moves one: appended to the side panel); its main-area tab ref is `addon:<name>:<view>:<session uuid>` (one per view per owner session; the strip icon is a puzzle piece; title `<view title> · <session title>`). A view with `phone: false` is not listed below 640 px (`usePhone`); at 640-1023 px it is listed. The tab context menu moves it between areas like a built-in pane; the narrow pane switcher lists it. A tab of an addon or view that is gone or disabled closes silently once the addon list is known. Its key in the dock header is the pane id itself (`s:<id>` is only docked sessions).
 
 

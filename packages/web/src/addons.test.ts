@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { bandsOf, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -34,5 +34,16 @@ describe("addon panes", () => {
     expect(addonViewOf([a], "addon:example:wide")?.view.entry).toBe("wide.html");
     expect(addonViewOf([a], "addon:example:info")).toBeUndefined();
     expect(addonViewOf([a], "addon:other:wide")).toBeUndefined();
+  });
+});
+
+describe("bands", () => {
+  const a = addon([{ id: "info", title: "Info", entry: "band.html", kind: "band" }, { id: "p", title: "P", entry: "p.html", kind: "pane" }, { id: "small", title: "S", entry: "s.html", kind: "band", phone: false }]);
+  it("bandsOf lists band views of enabled addons, without phone:false ones on a phone", () => {
+    expect(bandsOf([a], false).map((b) => b.view.id)).toEqual(["info", "small"]);
+    expect(bandsOf([a], true).map((b) => b.view.id)).toEqual(["info"]);
+  });
+  it("clampHeight keeps 24..max", () => {
+    expect([clampHeight(5), clampHeight(100.4), clampHeight(900), clampHeight(900, 160)]).toEqual([24, 100, 480, 160]);
   });
 });

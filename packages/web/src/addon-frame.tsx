@@ -1,8 +1,9 @@
 // One sandboxed addon iframe and its bridge (docs/spec.md "Addon host", ADR 0006). The frame has an opaque origin: it is told apart by `event.source`,
 // never by origin, and it never receives the token. Every request passes the capability gate (addons.ts) before the host acts.
-import { useContext, useEffect, useRef, type CSSProperties } from "react";
+import { useContext, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Part } from "@claude-ui/protocol";
-import { AddonApiContext, gate, type AddonInfo } from "./addons.ts";
+import { AddonApiContext, AddonsContext, bandsOf, clampHeight, enabledAddons, gate, type AddonInfo } from "./addons.ts";
+import { usePhone } from "./lib/use-narrow.ts";
 import { useColorTheme, useDark } from "./theme.ts";
 import { wholeParts, type SessionView } from "./store.ts";
 
@@ -38,7 +39,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       const g = gate(type, addon.approved);
       if (!g.ok) return fail(g.code, g.message);
       if (type === "ui.ready") {
-        if (typeof m.height === "number" && Number.isFinite(m.height)) live.current.onHeight?.(Math.max(24, Math.min(480, Math.round(m.height))));
+        if (typeof m.height === "number" && Number.isFinite(m.height)) live.current.onHeight?.(clampHeight(m.height));
         return done();
       }
       if (type === "session.read") {
@@ -91,4 +92,30 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       data-testid={`addon-frame-${addon.name}-${role}`}
     />
   );
+}
+
+const BAND_DEFAULT = 32;
+const BAND_MAX = 160;
+/** The bands of the enabled addons above the prompt box of session `sessionId` (GH-516); each starts at 32 px and takes the height the frame asks for with `ui.ready`. */
+export function AddonBands({ sessionId, session }: { sessionId: string; session?: SessionView }) {
+  const addons = useContext(AddonsContext).addons;
+  const phone = usePhone();
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  return bandsOf(enabledAddons(addons), phone).map(({ addon, view }) => {
+    const key = `${addon.name}:${view.id}`;
+    return (
+      <AddonFrame
+        key={key}
+        addon={addon}
+        entry={view.entry}
+        role="band"
+        view={view.id}
+        sessionId={sessionId}
+        session={session}
+        onHeight={(px) => setHeights((h) => (h[key] === Math.min(px, BAND_MAX) ? h : { ...h, [key]: Math.min(px, BAND_MAX) }))}
+        className="w-full shrink-0 rounded-md border"
+        style={{ height: heights[key] ?? BAND_DEFAULT }}
+      />
+    );
+  });
 }

@@ -80,7 +80,7 @@ import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialo
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
 import { AddonApiContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
-import { AddonFrame } from "./addon-frame.tsx";
+import { AddonBands, AddonFrame } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -5124,6 +5124,7 @@ export function SessionPane({
         ) : (
           <>
             {view.continueAt !== undefined && <ContinueDock at={view.continueAt} onCancel={() => onCancelContinue?.()} />}
+            <AddonBands sessionId={session.id} session={view} />
             <PromptBox
               draftKey={session.id}
               pasteTag={pasteTagId(session.id)}

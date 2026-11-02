@@ -128,3 +128,14 @@ Then("no new user message is shown", async ({ page }) => {
   await page.waitForTimeout(500);
   await expect(userMessage(page)).toHaveCount(userMessages);
 });
+
+const bandFrame = (page: Page) => page.getByTestId("addon-frame-example-band");
+Then("the addon band of {string} is above the prompt box", async ({ page }) => {
+  const band = bandFrame(page);
+  await expect(band).toBeVisible();
+  const [b, p] = [await band.boundingBox(), await promptBox(page).boundingBox()];
+  expect(b!.y + b!.height).toBeLessThanOrEqual(p!.y);
+});
+Then("the band shows the turn count", async ({ page }) => {
+  await expect(page.frameLocator('[data-testid="addon-frame-example-band"]').getByTestId("example-band")).toHaveText(/\d+ turns?/);
+});

@@ -62,6 +62,13 @@ export function gate(type: string, approved: readonly string[]): { ok: true } | 
 export const paneIdsOf = (addons: AddonInfo[], phone: boolean): AddonPaneId[] =>
   addons.flatMap((a) => a.manifest!.views.filter((v) => v.kind === "pane" && !(phone && v.phone === false)).map((v) => `addon:${a.name}:${v.id}` as AddonPaneId));
 
+/** The band views of the enabled addons (above the prompt box); `phone`: `phone: false` ones are left out. */
+export const bandsOf = (addons: AddonInfo[], phone: boolean) =>
+  addons.flatMap((a) => a.manifest!.views.filter((v) => v.kind === "band" && !(phone && v.phone === false)).map((view) => ({ addon: a, view })));
+
+/** A frame height the frame asked for, kept in range (a band at most 160). */
+export const clampHeight = (px: number, max = 480) => Math.max(24, Math.min(max, Math.round(px)));
+
 /** Pane id -> view title. */
 export const paneTitlesOf = (addons: AddonInfo[]): Map<string, string> => new Map(addons.flatMap((a) => a.manifest!.views.filter((v) => v.kind === "pane").map((v) => [`addon:${a.name}:${v.id}`, v.title] as const)));
 
