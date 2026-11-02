@@ -428,5 +428,7 @@ export default {
   "keymap.edit.moveParagraph": "Move or select by paragraph",
   "keymap.edit.startEndText": "Start or end of text",
   "keymap.edit.startEndLineText": "Start or end of line or text",
-
+  "settings.rec.title": "Recommendations",
+  "settings.rec.label": "Show recommendations",
+  "settings.rec.hint": "Suggests a setting or feature once, at the moment it helps. At most 5 a day. Kept in this browser.",
 } as const;
