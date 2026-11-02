@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type DefaultTheme, type HeadConfig } from "vitepress";
+import llmstxt from "vitepress-plugin-llms";
 
 const repo = "https://github.com/cuonghuunguyen/claude-code-ui";
 const site = "https://cuonghuunguyen.github.io/claude-code-ui/";
 const ogImage = `${site}og.png`;
+const srcDir = fileURLToPath(new URL("..", import.meta.url));
 
 // A page without a `description:` in its frontmatter gets the first plain paragraph under its H1,
 // so every page has its own search snippet without a second copy to keep in sync.
@@ -24,6 +27,26 @@ function firstParagraph(source: string): string | undefined {
   return undefined;
 }
 
+// A page with `faq: true` in its frontmatter: each `### Question?` and the paragraphs under it, as plain text,
+// for the FAQPage structured data that search engines and AI answer engines read.
+function faqEntries(source: string): { q: string; a: string }[] {
+  const body = source.replace(/^---[\s\S]*?\n---\n/, "");
+  const entries: { q: string; a: string }[] = [];
+  for (const section of body.split(/^### /m).slice(1)) {
+    const [heading, ...rest] = section.split("\n");
+    const answer = rest
+      .join("\n")
+      .split(/^#{1,3} /m)[0]
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/[*_`]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const q = heading.replace(/\s*\{#[^}]*\}\s*$/, "").trim().replace(/`/g, "");
+    if (q.endsWith("?") && answer) entries.push({ q, a: answer });
+  }
+  return entries;
+}
+
 type Labels = Record<string, string>;
 /** The sidebar and nav of one locale: `prefix` "" (English) or "/vi"; `l` maps an English label to that locale's text. */
 const nav = (prefix: string, l: Labels): DefaultTheme.NavItem[] => [
@@ -32,7 +55,7 @@ const nav = (prefix: string, l: Labels): DefaultTheme.NavItem[] => [
   { text: l["Changelog"] ?? "Changelog", link: `${repo}/blob/main/CHANGELOG.md` },
 ];
 const SIDEBAR: [string, [string, string][]][] = [
-  ["Getting started", [["Install & first run", "/guide/install"], ["A quick tour", "/guide/tour"]]],
+  ["Getting started", [["Install & first run", "/guide/install"], ["A quick tour", "/guide/tour"], ["FAQ", "/guide/faq"], ["How it compares", "/guide/compare"]]],
   ["Working in a session", [["The prompt box", "/features/prompt-box"], ["Permissions & modes", "/features/permissions"], ["Reading a session", "/features/timeline"], ["Usage & context", "/features/usage"], ["Ask an aside (/btw)", "/features/aside"], ["Background shells", "/features/background-shells"]]],
   ["Many sessions", [["Projects & worktrees", "/features/projects"], ["Focus page", "/features/focus"], ["Notifications", "/features/notifications"], ["Orchestration (workers)", "/features/orchestration"]]],
   ["Workspace & layout", [["Sessions & tabs", "/features/sessions"], ["Panes & layout", "/features/panes"], ["Split view", "/features/split-view"], ["Context menus", "/features/context-menus"], ["Clean up", "/features/clean-up"], ["Command palette", "/features/palette"], ["Keep screen awake", "/features/keep-awake"]]],
@@ -50,6 +73,8 @@ const VI: Labels = {
   "Getting started": "Bắt đầu",
   "Install & first run": "Cài đặt và chạy lần đầu",
   "A quick tour": "Tham quan nhanh",
+  FAQ: "Hỏi đáp",
+  "How it compares": "So sánh với công cụ khác",
   "Working in a session": "Làm việc trong một phiên",
   "The prompt box": "Ô prompt",
   "Permissions & modes": "Quyền và chế độ",
@@ -88,6 +113,20 @@ const VI: Labels = {
   Privacy: "Quyền riêng tư",
 };
 
+// The llms.txt table of contents: the English sidebar, each link with the page's description (frontmatter, else
+// the first paragraph, as for search snippets), so an AI reading llms.txt knows what each page answers.
+function llmsToc(): string {
+  return SIDEBAR.map(([text, items]) => {
+    const links = items.map(([title, link]) => {
+      const source = readFileSync(join(srcDir, `${link}.md`), "utf8");
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(source)?.[1] ?? "";
+      const description = /^description:\s*(.+)$/m.exec(fm)?.[1].trim() ?? firstParagraph(source);
+      return `- [${title}](${site}${link.slice(1)}.md)${description ? `: ${description}` : ""}`;
+    });
+    return `### ${text}\n\n${links.join("\n")}`;
+  }).join("\n\n");
+}
+
 export default defineConfig({
   title: "claude-code-ui",
   description: "Run, watch and steer Claude Code sessions from your browser or phone.",
@@ -119,6 +158,25 @@ export default defineConfig({
   cleanUrls: true,
   // The screenshot pipeline (scenes.html, scenes) lives here but is not a page.
   srcExclude: ["shots/**"],
+  // llms.txt, llms-full.txt and a Markdown copy of every English page, for AI assistants and answer engines.
+  vite: {
+    plugins: [
+      llmstxt({
+        domain: "https://cuonghuunguyen.github.io",
+        ignoreFiles: ["shots/**", "vi/**"],
+        customTemplateVariables: {
+          description:
+            "claude-code-ui is a free, open-source (MIT) web UI and GUI for Claude Code. A small local daemon runs Claude Code sessions on your own machine; you run, watch and steer many of them from any browser, including your phone. No cloud, no relay, no telemetry. Unofficial; not affiliated with Anthropic.",
+          details: [
+            "- Run: `npx claude-code-ui` (or `npm i -g claude-code-ui`; the command is `claude-ui`). Needs Node.js 22+ and Claude Code logged in (`claude login`); uses the Claude subscription, no API key.",
+            `- Source: ${repo} (npm package \`claude-code-ui\`).`,
+            "- Not the same project as CloudCLI (also called \"Claude Code UI\", repo siteboon/claudecodeui), opcode or claude-code-webui.",
+          ].join("\n"),
+          toc: llmsToc(),
+        },
+      }),
+    ],
+  },
   sitemap: { hostname: "https://cuonghuunguyen.github.io/claude-code-ui/" },
   // Dead links fail the build (VitePress default); keep it that way.
   head: [
@@ -166,6 +224,22 @@ export default defineConfig({
           license: "https://opensource.org/licenses/MIT",
           codeRepository: repo,
           offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        }),
+      ]);
+    }
+    if (fm.faq) {
+      const source = readFileSync(join(siteConfig.srcDir, pageData.relativePath), "utf8");
+      head.push([
+        "script",
+        { type: "application/ld+json" },
+        JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: faqEntries(source).map(({ q, a }) => ({
+            "@type": "Question",
+            name: q,
+            acceptedAnswer: { "@type": "Answer", text: a },
+          })),
         }),
       ]);
     }
