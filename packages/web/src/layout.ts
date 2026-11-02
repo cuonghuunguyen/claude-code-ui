@@ -2,7 +2,10 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { t } from "./i18n.ts";
 
-export type PaneId = "changes" | "files" | "graph" | "terminal" | "plan" | "artifacts";
+export type BuiltinPaneId = "changes" | "files" | "graph" | "terminal" | "plan" | "artifacts";
+/** `addon:<addon name>:<view id>` (GH-516): a pane view an addon declares. */
+export type AddonPaneId = `addon:${string}:${string}`;
+export type PaneId = BuiltinPaneId | AddonPaneId;
 export type DockArea = "side" | "bottom";
 export type DockSide = "left" | "right";
 /** Where a pane lives: a dock area, or the main area (a tab in the tabs bar; GH-395). */
@@ -10,8 +13,8 @@ export type Area = DockArea | "main";
 export type Layout = { side: DockSide; areas: Record<Area, PaneId[]> };
 
 /** Also the order of the narrow pane switcher. */
-export const PANE_IDS: PaneId[] = ["changes", "files", "graph", "terminal", "plan", "artifacts"];
-export const PANE_LABEL: Record<PaneId, string> = {
+export const PANE_IDS: BuiltinPaneId[] = ["changes", "files", "graph", "terminal", "plan", "artifacts"];
+export const PANE_LABEL: Record<BuiltinPaneId, string> = {
   get changes() {
     return t("app.layout.pane.changes");
   },
@@ -31,6 +34,15 @@ export const PANE_LABEL: Record<PaneId, string> = {
     return t("app.layout.pane.artifacts");
   },
 };
+export const isAddonPane = (p: string): p is AddonPaneId => /^addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p);
+export const isPaneId = (v: unknown): v is PaneId => PANE_IDS.includes(v as BuiltinPaneId) || (typeof v === "string" && isAddonPane(v));
+// The titles of the enabled addons' pane views, set by App on each render (a module value: DockHeader and the strip read labels without props).
+let addonTitles = new Map<string, string>();
+export const setAddonPaneTitles = (m: Map<string, string>) => void (addonTitles = m);
+/** The pane's name: the view title for an addon pane. */
+export const paneLabel = (p: PaneId): string => (isAddonPane(p) ? (addonTitles.get(p) ?? p.split(":")[2]!) : PANE_LABEL[p]);
+/** The text of a pane tab. */
+export const paneTabText = (p: PaneId): string => (isAddonPane(p) ? paneLabel(p) : t(`app.dock.tab.${p}`));
 export const AREA_LABEL: Record<DockArea, string> = {
   get side() {
     return t("app.layout.area.side");
@@ -52,8 +64,8 @@ export const HOME_LABEL: Record<Area, string> = {
 };
 export const DEFAULT_LAYOUT: Layout = { side: "right", areas: { side: ["changes", "files", "graph", "plan", "artifacts"], bottom: ["terminal"], main: [] } };
 /** Panes that may have the main area as their home (Changes never). */
-export const MAIN_KINDS: PaneId[] = ["plan", "artifacts", "files", "graph", "terminal"];
-export const canMain = (p: PaneId): boolean => MAIN_KINDS.includes(p);
+export const MAIN_KINDS: BuiltinPaneId[] = ["plan", "artifacts", "files", "graph", "terminal"];
+export const canMain = (p: PaneId): boolean => isAddonPane(p) || MAIN_KINDS.includes(p as BuiltinPaneId);
 export const TERMINAL_DOCKS: { value: Area; label: string }[] = [
   { value: "bottom", get label() { return t("app.layout.dockBottom"); } },
   { value: "side", get label() { return t("app.layout.area.side"); } },
@@ -67,7 +79,7 @@ export type PaneTabs = Partial<Record<DockArea, PaneId>> & { narrow?: PaneId | "
 const TABS_KEY = "claude-ui.paneTabs";
 const NO_TABS: PaneTabs = {};
 const DEFAULT_JSON = JSON.stringify(DEFAULT_LAYOUT);
-const isPane = (v: unknown): v is PaneId => PANE_IDS.includes(v as PaneId);
+const isPane = isPaneId;
 const defaultArea = (p: PaneId): DockArea => (DEFAULT_LAYOUT.areas.side.includes(p) ? "side" : "bottom");
 
 /** Never throws: bad input reads as the default; unknown panes drop, duplicates keep the first, missing panes return to their default area. */
@@ -94,7 +106,15 @@ export function parseLayout(raw: string | null, legacyDock?: string | null): Lay
   return { side, areas };
 }
 
-export const areaOf = (l: Layout, p: PaneId): Area => (l.areas.main.includes(p) ? "main" : l.areas.side.includes(p) ? "side" : "bottom");
+/** `l` with the addon panes `ids` that no area holds appended to the side panel (in memory; saved when the user moves a pane). */
+export function withPanes(l: Layout, ids: readonly AddonPaneId[]): Layout {
+  const held = new Set([...l.areas.side, ...l.areas.bottom, ...l.areas.main]);
+  const add = ids.filter((p) => !held.has(p));
+  return add.length ? { ...l, areas: { ...l.areas, side: [...l.areas.side, ...add] } } : l;
+}
+
+/** A pane no area holds is the default area's: Terminal-like built-ins bottom, a not yet placed addon pane the side panel (withPanes). */
+export const areaOf = (l: Layout, p: PaneId): Area => (l.areas.main.includes(p) ? "main" : l.areas.side.includes(p) || (isAddonPane(p) && !l.areas.bottom.includes(p)) ? "side" : "bottom");
 
 /** Moves `p` to `to`, before `before` (the end when absent or not in `to`). Returns `l` itself when nothing changes. */
 export function movePane(l: Layout, p: PaneId, to: Area, before?: PaneId): Layout {

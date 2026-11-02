@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from "react";
 import { TAB_DRAG_TYPE, draggedTab } from "./tabs-bar.tsx";
 import { DOCKED_DRAG_TYPE, PANE_DRAG_TYPE } from "./dock-area.tsx";
-import { PANE_IDS, type PaneId } from "./layout.ts";
+import { isPaneId, type PaneId } from "./layout.ts";
 import type { Drag } from "./pane-drop.ts";
 import { type DropZone, type SplitRefusal, dropZone } from "./split.ts";
 
@@ -37,7 +37,7 @@ const dragOf = (e: DragEvent, known: Drag | undefined, read: boolean): Drag | un
   if (t.types.includes(TAB_DRAG_TYPE)) return { tab: (read ? get(TAB_DRAG_TYPE) : draggedTab() || t.getData(TAB_DRAG_TYPE)) || "" };
   if (t.types.includes(PANE_DRAG_TYPE)) {
     const p = read ? get(PANE_DRAG_TYPE) : known && "pane" in known ? known.pane : "";
-    return PANE_IDS.includes(p as PaneId) ? { pane: p as PaneId } : undefined;
+    return isPaneId(p) ? { pane: p } : undefined;
   }
   if (t.types.includes(DOCKED_DRAG_TYPE)) return { docked: read ? get(DOCKED_DRAG_TYPE) : known && "docked" in known ? known.docked : "" };
   return undefined;

@@ -7,7 +7,7 @@
 import { Fragment, createContext, memo, use, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { AppWindowIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, LayoutGridIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, Rows2Icon, SquarePenIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { AppWindowIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Columns2Icon, CrosshairIcon, FolderIcon, GitGraphIcon, LayoutGridIcon, ListTodoIcon, LoaderCircleIcon, PanelLeftIcon, PlusIcon, PuzzleIcon, Rows2Icon, SquarePenIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -19,7 +19,7 @@ import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, enterFrom, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
-import { KIND_LABEL, type PaneKind } from "./pane-ref.ts";
+import { kindLabel, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { t as tt, useT } from "./i18n.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
@@ -93,6 +93,7 @@ export function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; ki
   if (kind === "files") return <FolderIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "graph") return <GitGraphIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind === "terminal") return <SquareTerminalIcon className="size-4 shrink-0 text-faint" aria-hidden />;
+  if (kind && kind.startsWith("addon:")) return <PuzzleIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
   // Needs input gets its own shape, not only another dot colour than unread.
@@ -1281,7 +1282,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: KIND_LABEL[t.kind], item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: kindLabel(t.kind), item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

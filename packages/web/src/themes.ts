@@ -10,12 +10,17 @@
  *   One Light / One Dark              https://github.com/atom/atom (one-{light,dark}-syntax)  MIT    Copyright (c) 2011-2022 GitHub Inc.
  */
 
+import type { AddonInfo } from "@claude-ui/protocol";
+
 export type Mode = "light" | "dark";
 export const KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"] as const;
 export type Key = (typeof KEYS)[number];
 /** `x`: extra tokens (`--graph-*`, `--context-*`) moved in lightness from Default so they reach 3:1 on this palette's surfaces. */
 export type Palette = Record<Key, string> & { x?: Record<string, string> };
-export type ThemeId = "default" | "catppuccin" | "tokyonight" | "solarized" | "nord" | "dracula" | "one";
+export type BuiltinThemeId = "default" | "catppuccin" | "tokyonight" | "solarized" | "nord" | "dracula" | "one";
+/** `addon:<addon name>:<theme id>` (GH-516): a theme an addon declares. */
+export type ThemeId = BuiltinThemeId | `addon:${string}:${string}`;
+export const ADDON_THEME_ID = /^addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** Default has no palette: it is the `:root` / `.dark` blocks of index.css. Dracula has no light. */
 export type Theme = { id: ThemeId; name: string; light?: Palette; dark?: Palette };
 
@@ -84,7 +89,7 @@ export const THEMES: readonly Theme[] = [
   },
 ];
 
-export const themeById = (id: string) => THEMES.find((t) => t.id === id);
+export const themeById = (id: string, list: readonly Theme[] = THEMES) => list.find((t) => t.id === id);
 
 /** Palette key -> the index.css tokens it sets (docs: issue "Token mapping"). */
 const MAP: Record<Key, string[]> = {
@@ -127,9 +132,9 @@ export function tokensOf(p: Palette, mode: Mode): Record<string, string> {
 }
 
 /** One rule per palette and mode; Default and Dracula light have none (index.css `:root` applies). */
-export function themeCss(): string {
+export function themeCss(list: readonly Theme[] = THEMES): string {
   const out: string[] = [];
-  for (const t of THEMES)
+  for (const t of list)
     for (const mode of ["light", "dark"] as const) {
       const p = t[mode];
       if (!p) continue;
@@ -152,7 +157,32 @@ export function terminalTheme(id: ThemeId, mode: Mode): Record<string, string> {
 }
 
 /** Swatch halves: light card, dark card (Default's where the theme has none). */
-export const swatchOf = (id: ThemeId): [string, string] => {
-  const t = themeById(id);
+export const swatchOf = (id: ThemeId, list: readonly Theme[] = THEMES): [string, string] => {
+  const t = themeById(id, list);
   return [t?.light?.card ?? SURFACE.light.bg, t?.dark?.card ?? SURFACE.dark.bg];
 };
+
+const HEX6 = /^#[0-9a-f]{6}$/i;
+/** A palette an addon declares: all 19 keys as `#rrggbb` (tokensOf mixes and adds alpha to hex), unknown keys ignored; else undefined (that mode is left out, like Dracula light). */
+function addonPalette(raw: Record<string, string> | undefined): Palette | undefined {
+  if (!raw) return undefined;
+  const out: Record<string, string> = {};
+  for (const k of KEYS) {
+    const v = raw[k];
+    if (typeof v !== "string" || !HEX6.test(v)) return undefined;
+    out[k] = v;
+  }
+  return out as Palette;
+}
+
+/** The themes of these addons (pass the enabled ones), as `addon:<name>:<id>`; a theme without a complete palette in either mode is left out. */
+export function addonThemes(addons: readonly AddonInfo[]): Theme[] {
+  return addons.flatMap((a) =>
+    (a.manifest?.themes ?? []).flatMap((th) => {
+      const id = `addon:${a.name}:${th.id}`;
+      const light = addonPalette(th.light);
+      const dark = addonPalette(th.dark);
+      return ADDON_THEME_ID.test(id) && (light || dark) ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }) }] : [];
+    }),
+  );
+}

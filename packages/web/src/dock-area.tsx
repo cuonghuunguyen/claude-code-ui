@@ -4,7 +4,7 @@ import { Menu } from "@base-ui/react/menu";
 import { EllipsisIcon } from "lucide-react";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, PANE_LABEL, type PaneId, canMain } from "./layout.ts";
+import { AREA_LABEL, type Area, type DockArea, type DockSide, PANE_IDS, type PaneId, canMain, isPaneId, paneLabel, paneTabText } from "./layout.ts";
 import { useT } from "./i18n.ts";
 import { MENU_BUTTON, useKeyboardOpen } from "./menu-keyboard.ts";
 import { OverflowTabs } from "./overflow-tabs.tsx";
@@ -21,8 +21,8 @@ export type DropAt = { area: DockArea; before?: PaneId };
 export const isPaneDrag = (e: { dataTransfer: DataTransfer | null }) => !!e.dataTransfer?.types.includes(PANE_DRAG_TYPE);
 /** The pane a drop carries, when it is one. */
 export const droppedPane = (e: { dataTransfer: DataTransfer | null }): PaneId | undefined => {
-  const p = e.dataTransfer?.getData(PANE_DRAG_TYPE) as PaneId;
-  return PANE_IDS.includes(p) ? p : undefined;
+  const p = e.dataTransfer?.getData(PANE_DRAG_TYPE);
+  return isPaneId(p) ? p : undefined;
 };
 
 type DropHandlers = {
@@ -53,18 +53,17 @@ export type DockedCommand = "moveSide" | "moveBottom" | "main" | "close";
 export type DockedSession = TabInfo & { id: string };
 
 /** One stable element per pane: its content is portaled into it once and the element moves between slots, so a move never remounts the pane. */
-export function usePaneHosts(): Record<PaneId, HTMLDivElement> {
-  const [hosts] = useState(() =>
-    Object.fromEntries(
-      PANE_IDS.map((p) => {
-        const d = document.createElement("div");
-        d.style.display = "contents";
-        d.dataset.paneHost = p;
-        return [p, d];
-      }),
-    ),
-  ) as [Record<PaneId, HTMLDivElement>, unknown];
-  return hosts;
+export function usePaneHosts(addonIds: readonly string[] = []): Record<PaneId, HTMLDivElement> {
+  const [hosts] = useState(() => new Map<string, HTMLDivElement>());
+  // Addon panes come and go with their addons: a host is made when its pane first listed, and kept (the content moves, never remounts).
+  for (const p of [...PANE_IDS, ...addonIds])
+    if (!hosts.has(p)) {
+      const d = document.createElement("div");
+      d.style.display = "contents";
+      d.dataset.paneHost = p;
+      hosts.set(p, d);
+    }
+  return Object.fromEntries(hosts) as Record<PaneId, HTMLDivElement>;
 }
 
 /** Empty element that holds the pane's host while it is rendered (React never renders children into it). */
@@ -244,7 +243,7 @@ export function DockHeader({
                   data-overflow-key={p}
                   data-command={p === "files" || p === "changes" || p === "graph" ? `pane.${p}` : undefined}
                 >
-                  {t(`app.dock.tab.${p}`)}
+                  {paneTabText(p)}
                   {p === "changes" && changes > 0 && <span className="text-muted-foreground tabular-nums">{changes}</span>}
                 </Button>
               </ContextMenu.Trigger>
@@ -282,7 +281,7 @@ export function DockHeader({
           return {
             label: (
               <>
-                {t(`app.dock.tab.${p}`)}
+                {paneTabText(p)}
                 {p === "changes" && changes > 0 && <span className="ml-1 text-muted-foreground tabular-nums">{changes}</span>}
               </>
             ),
@@ -309,14 +308,14 @@ export function DockHeader({
                 {active && (
                   <Menu.Item className={ITEM} onClick={() => move(active)} data-testid="dock-move">
                     {t("app.dock.movePane", {
-                      pane: PANE_LABEL[active],
+                      pane: paneLabel(active),
                       area: AREA_LABEL[other].toLowerCase(),
                     })}
                   </Menu.Item>
                 )}
                 {active && canMain(active) && (
                   <Menu.Item className={ITEM} onClick={() => moveTo(active, "main")} data-testid="dock-move-main">
-                    {t("app.dock.movePaneMain", { pane: PANE_LABEL[active] })}
+                    {t("app.dock.movePaneMain", { pane: paneLabel(active) })}
                   </Menu.Item>
                 )}
                 {area === "side" && onFlipSide && (

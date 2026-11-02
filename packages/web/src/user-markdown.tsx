@@ -5,6 +5,7 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { defaultRehypePlugins, defaultRemarkPlugins, type Streamdown } from "streamdown";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
+import { useAddonFenceRenderers } from "./addon-render.tsx";
 import { codeOf, unwatchBlock, watchBlock } from "./user-code-paint.ts";
 
 type Plugins<K extends "remarkPlugins" | "rehypePlugins"> = NonNullable<ComponentProps<typeof Streamdown>[K]>;
@@ -106,7 +107,8 @@ export function UserMarkdown({ text }: { text: string }) {
     const own = { ...userCodeFor(() => queued || ((queued = true), queueMicrotask(scan))), scan, unwatchAll };
     return own;
   });
-  const plugins = useMemo(() => ({ cjk, code: own.plugin, math, mermaid }), [own]);
+  const renderers = useAddonFenceRenderers();
+  const plugins = useMemo(() => ({ cjk, code: own.plugin, math, mermaid, ...(renderers.length && { renderers }) }), [own, renderers]);
   useEffect(() => {
     own.scan();
     return own.unwatchAll;

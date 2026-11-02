@@ -26,6 +26,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "skills.open", title: "Slash commands", group: "General" },
   { id: "shells.open", title: "Background shells", group: "Session" },
   { id: "plugins.open", title: "Manage plugins", group: "General" },
+  { id: "addons.open", title: "Manage addons", group: "General" },
   { id: "session.new", title: "New session", group: "Tabs", key: "mod+shift+s" },
   // The browser keeps Ctrl+Tab and Ctrl+W (OpenCode's other tab keys) for its own tabs.
   { id: "tab.prev", title: "Previous tab", group: "Tabs", key: "mod+alt+arrowleft" },

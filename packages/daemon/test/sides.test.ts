@@ -969,7 +969,7 @@ function scriptedSide(answer: (m: { type: string }) => unknown): SideProcess {
 describe("local cwds on a POSIX hub", () => {
   const hostCwd = "/work/host";
   const list = (cwd: string) => ({ sessions: [{ id: "s1", cwd, lastActivity: 1 }], projects: [cwd], recentProjects: [] });
-  async function setup(answer: (m: { type: string }) => unknown) {
+  async function setup(answer: (m: { type: string }) => unknown, local: (m: unknown) => Promise<void> = async () => {}) {
     const s = createSides({ targets: [], localLabel: "Linux", posixLocal: true, discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide(answer) });
     await s.refresh();
     await s.start("docker:dev");
@@ -977,7 +977,7 @@ describe("local cwds on a POSIX hub", () => {
     const router = createRouter({
       sides: s,
       send: (m) => sent.push(m),
-      local: async () => {},
+      local,
       localCall: async (msg) => ({ type: "reply", reqId: msg.reqId, result: msg.type === "session.list" ? list(hostCwd) : {} }),
       isLocalSession: async () => false,
     });
@@ -995,6 +995,19 @@ describe("local cwds on a POSIX hub", () => {
     expect(r.result.cwdSides[hostCwd]).toBeUndefined();
     expect(s.pathSide(hostCwd)).toBe("local");
     expect(s.pathSide(hostCwd + "/sub")).toBe("local");
+    router.close();
+    s.close();
+  });
+
+  it("addons.* is answered by the hub and never forwarded to a side", async () => {
+    const seen: string[] = [];
+    const hub: string[] = [];
+    const { s, router, request } = await setup((m) => (seen.push(m.type), {}), async (m) => void hub.push((m as { type: string }).type));
+    await request({ type: "session.list" });
+    seen.length = 0;
+    await request({ type: "addons.list", side: "docker:dev", cwd: "/ct/other", path: "/ct/other" });
+    expect(hub).toEqual(["addons.list"]);
+    expect(seen).toEqual([]);
     router.close();
     s.close();
   });

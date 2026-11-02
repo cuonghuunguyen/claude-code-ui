@@ -53,7 +53,7 @@ export const asideOf = (text: string) => /^\/btw(?:\s+([\s\S]*))?$/.exec(text.tr
 export const ASIDE_COMMAND: SlashCommand = { name: "btw", get description() { return t("app.slash.btw"); }, argumentHint: "<question>" };
 
 /** The dialogs the web app opens itself. */
-export type DialogName = "mcp" | "skills" | "plugins" | "resume" | "shells";
+export type DialogName = "mcp" | "skills" | "plugins" | "addons" | "resume" | "shells";
 
 /**
  * Commands the web app handles itself, like the VS Code extension: typed alone they open a dialog and are not sent.
@@ -63,6 +63,7 @@ export const DIALOG_COMMANDS: (SlashCommand & { dialog: DialogName; always?: boo
   { name: "mcp", get description() { return t("app.slash.mcp"); }, argumentHint: "", dialog: "mcp", always: true },
   { name: "skills", get description() { return t("app.slash.skills"); }, argumentHint: "", dialog: "skills" },
   { name: "plugins", aliases: ["plugin", "marketplace"], get description() { return t("app.slash.plugins"); }, argumentHint: "", dialog: "plugins" },
+  { name: "addons", get description() { return t("app.slash.addons"); }, argumentHint: "", dialog: "addons" },
   { name: "tasks", aliases: ["bashes"], get description() { return t("app.slash.tasks"); }, argumentHint: "", dialog: "shells", always: true },
   { name: "resume", get description() { return t("app.slash.resume"); }, argumentHint: "", dialog: "resume", always: true },
 ];

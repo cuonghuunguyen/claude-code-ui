@@ -1,0 +1,7 @@
+/* Addon CSS: applied while the addon is enabled, whichever theme is picked. */
+:root {
+  --example-css: 1;
+}
+[data-testid="pane-session"] {
+  letter-spacing: 0.01em;
+}

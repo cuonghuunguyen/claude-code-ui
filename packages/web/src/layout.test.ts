@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, withPane, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
+import { canMain, withPanes, DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, withPane, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
@@ -218,4 +218,28 @@ it("GH-176 artifacts may have the main home; an old layout without it gets it in
   expect(n.areas.main).toEqual(["artifacts"]);
   expect(areaOf(n, "artifacts")).toBe("main");
   expect(parseLayout('{"side":"right","areas":{"side":["files"],"bottom":[]}}').areas.side.at(-1)).toBe("artifacts");
+});
+
+it("parseLayout keeps an addon pane id", () => {
+  const raw = JSON.stringify({ side: "right", areas: { side: ["changes", "addon:example:stats"], bottom: ["terminal"], main: ["addon:example:wide"] } });
+  const l = parseLayout(raw);
+  expect(l.areas.side).toContain("addon:example:stats");
+  expect(l.areas.main).toEqual(["addon:example:wide"]);
+  expect(parseLayout(JSON.stringify({ areas: { side: ["addon:Bad:Id"] } })).areas.side).not.toContain("addon:Bad:Id");
+});
+
+it("withPanes appends a new addon pane to the side area and keeps one a user placed", () => {
+  const l = withPanes(DEFAULT_LAYOUT, ["addon:example:stats"]);
+  expect(l.areas.side.at(-1)).toBe("addon:example:stats");
+  expect(areaOf(l, "addon:example:stats")).toBe("side");
+  const moved = movePane(l, "addon:example:stats", "bottom");
+  expect(withPanes(moved, ["addon:example:stats"])).toBe(moved);
+  expect(withPanes(DEFAULT_LAYOUT, [])).toBe(DEFAULT_LAYOUT);
+  // Not yet in any area: the side panel, as withPanes will place it.
+  expect(areaOf(DEFAULT_LAYOUT, "addon:example:stats")).toBe("side");
+});
+
+it("canMain is true for an addon pane and false for Changes", () => {
+  expect(canMain("addon:example:stats")).toBe(true);
+  expect(canMain("changes")).toBe(false);
 });
