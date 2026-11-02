@@ -86,3 +86,14 @@ Feature: Addons (GH-516)
     When the viewport is 390x844
     Then the page has no horizontal scroll
     And I capture "addon band phone"
+
+  Scenario: An addon command puts text in the prompt box without sending it
+    Given the example addon is installed and enabled
+    And a Haiku session with one finished reply
+    When I count the user messages
+    And I type "/example:" in the prompt box
+    Then the command picker lists "/example:cmd" with its description
+    When I run "/example:cmd release notes"
+    Then the prompt box contains "Summarise this session: release notes"
+    And no new user message is shown
+    And I capture "addon command"

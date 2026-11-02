@@ -1,6 +1,6 @@
 // One sandboxed addon iframe and its bridge (docs/spec.md "Addon host", ADR 0006). The frame has an opaque origin: it is told apart by `event.source`,
 // never by origin, and it never receives the token. Every request passes the capability gate (addons.ts) before the host acts.
-import { useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useContext, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import type { Part } from "@claude-ui/protocol";
 import { AddonApiContext, AddonsContext, bandsOf, clampHeight, enabledAddons, gate, type AddonInfo } from "./addons.ts";
 import { usePhone } from "./lib/use-narrow.ts";
@@ -17,8 +17,10 @@ export const postTo = (frame: HTMLIFrameElement | null, msg: object) => frame?.c
 
 export const frameUrl = (addon: AddonInfo, entry: string) => addon.base + entry.split("/").map(encodeURIComponent).join("/");
 
+export type AddonHandle = { post: (msg: object) => void };
+
 /** `view`: the id of the view (or "" for a command handler); `session`/`sessionId`: the owner session, whose parts `session.read` returns. */
-export function AddonFrame({ addon, entry, role, view, sessionId, session, onHeight, className, style, hidden }: { addon: AddonInfo; entry: string; role: AddonRole; view: string; sessionId: string; session?: SessionView; onHeight?: (px: number) => void; className?: string; style?: CSSProperties; hidden?: boolean }) {
+export function AddonFrame({ addon, entry, role, view, sessionId, session, onHeight, className, style, hidden, handle }: { /** `post`: sends an event to the frame once it has loaded (queued before). */ handle?: Ref<AddonHandle>; addon: AddonInfo; entry: string; role: AddonRole; view: string; sessionId: string; session?: SessionView; onHeight?: (px: number) => void; className?: string; style?: CSSProperties; hidden?: boolean }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const api = useContext(AddonApiContext);
   const theme = useColorTheme();
@@ -27,6 +29,9 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
   live.current = { session, onHeight, api, theme, dark };
   // The parts the frame has read: session.parts pushes only the ones that are new or changed since.
   const sent = useRef<Map<string, Part> | undefined>(undefined);
+  const loaded = useRef(false);
+  const queue = useRef<object[]>([]);
+  useImperativeHandle(handle, () => ({ post: (msg) => (loaded.current ? postTo(frame.current, msg) : void queue.current.push(msg)) }), []);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -84,8 +89,13 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       sandbox="allow-scripts"
       title={`${addon.name} ${view}`.trim()}
       referrerPolicy="no-referrer"
-      loading="lazy"
-      onLoad={() => (sent.current = undefined, postTo(frame.current, { type: "init", addon: addon.name, view, role, session: sessionId, theme: live.current.theme, mode: live.current.dark ? "dark" : "light" }))}
+      loading={role === "command" ? "eager" : "lazy"} // a hidden frame is never "near": a command handler must load
+      onLoad={() => {
+        sent.current = undefined;
+        postTo(frame.current, { type: "init", addon: addon.name, view, role, session: sessionId, theme: live.current.theme, mode: live.current.dark ? "dark" : "light" });
+        loaded.current = true;
+        for (const m of queue.current.splice(0)) postTo(frame.current, m);
+      }}
       className={className ?? "min-h-0 w-full flex-1 border-0"}
       style={style}
       hidden={hidden}

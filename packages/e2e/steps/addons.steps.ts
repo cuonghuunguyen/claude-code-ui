@@ -139,3 +139,19 @@ Then("the addon band of {string} is above the prompt box", async ({ page }) => {
 Then("the band shows the turn count", async ({ page }) => {
   await expect(page.frameLocator('[data-testid="addon-frame-example-band"]').getByTestId("example-band")).toHaveText(/\d+ turns?/);
 });
+
+When("I type {string} in the prompt box", async ({ page }, text: string) => {
+  await promptBox(page).fill(text);
+});
+Then("the command picker lists {string} with its description", async ({ page }, name: string) => {
+  const row = page.getByRole("option").filter({ hasText: name });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Insert a sample prompt");
+});
+When("I run {string}", async ({ page }, text: string) => {
+  await promptBox(page).fill(text);
+  await promptBox(page).press("Enter");
+});
+Then("the prompt box contains {string}", async ({ page }, text: string) => {
+  await expect(promptBox(page)).toHaveValue(text);
+});

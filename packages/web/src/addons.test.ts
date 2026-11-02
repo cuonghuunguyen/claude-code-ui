@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bandsOf, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -45,5 +45,35 @@ describe("bands", () => {
   });
   it("clampHeight keeps 24..max", () => {
     expect([clampHeight(5), clampHeight(100.4), clampHeight(900), clampHeight(900, 160)]).toEqual([24, 100, 480, 160]);
+  });
+});
+
+describe("commands", () => {
+  const a = { ...addon([]), manifest: { ...addon([]).manifest!, commands: [{ name: "cmd", description: "Insert", argumentHint: "[text]" }, { name: "plain", description: "P" }] } } as AddonInfo;
+  it("commandRows namespaces commands as addon:cmd", () => {
+    expect(commandRows([a], [])).toEqual([
+      { name: "example:cmd", description: "Insert", argumentHint: "[text]" },
+      { name: "example:plain", description: "P", argumentHint: "" },
+    ]);
+  });
+  it("commandRows drops a row that clashes with a session command or alias", () => {
+    const rows = commandRows([a], [{ name: "x", description: "", argumentHint: "", aliases: ["example:cmd"] }]);
+    expect(rows.map((r) => r.name)).toEqual(["example:plain"]);
+  });
+  it("commandRows drops a row that clashes with a dialog command or /btw", () => {
+    // A dialog name has no ':' so only the CLI plugin form can clash; the filter still covers the dialog names.
+    const mk = (name: string) => ({ ...a, name, manifest: { ...a.manifest!, commands: [{ name: "y", description: "d" }] } }) as AddonInfo;
+    expect(commandRows([mk("x")], [{ name: "x:y", description: "", argumentHint: "" }])).toEqual([]);
+    expect(commandRows([mk("x")], []).map((r) => r.name)).toEqual(["x:y"]);
+  });
+  it("addonCommandOf parses args", () => {
+    const rows = commandRows([a], []);
+    expect(addonCommandOf("/example:cmd release notes ", rows)).toEqual({ addon: "example", name: "cmd", args: "release notes" });
+    expect(addonCommandOf("/example:plain", rows)).toEqual({ addon: "example", name: "plain", args: "" });
+  });
+  it("addonCommandOf ignores a command not in rows", () => {
+    const rows = commandRows([a], []);
+    expect(addonCommandOf("/example:other", rows)).toBeUndefined();
+    expect(addonCommandOf("hello /example:cmd", rows)).toBeUndefined();
   });
 });

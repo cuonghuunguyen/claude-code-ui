@@ -62,5 +62,6 @@ export default {
   "addons.cap.net": "Connect to {origin}",
   "addons.cap.unknown": "{capability}",
   // addon host (refused call)
+  "addons.commandNotReady": "Addon {name} has no command handler loaded yet. Try again in a moment.",
   "addons.refused": "Addon {name} was refused: {type}",
 } as const;

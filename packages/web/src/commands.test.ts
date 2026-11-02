@@ -51,6 +51,13 @@ describe("choose", () => {
   });
 });
 
+describe("addon command rows (GH-516)", () => {
+  it('an addon row with argumentHint leaves "/example:cmd " in the box', () => {
+    expect(choose({ name: "example:cmd", description: "", argumentHint: "[text]" }, "/example:")).toEqual({ text: "/example:cmd " });
+    expect(choose({ name: "example:plain", description: "", argumentHint: "" }, "/example:")).toEqual({ send: "/example:plain" });
+  });
+});
+
 describe("dialog commands", () => {
   it("/addons alone opens the addons dialog unless the CLI has /addons", () => {
     expect(dialogOf("/addons")).toBe("addons");

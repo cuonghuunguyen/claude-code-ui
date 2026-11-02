@@ -1,6 +1,7 @@
 // Addons in the web app (docs/spec.md "Frontend" › Addons dialog; ADR 0006): the list the daemon sent, shared by context, and the pure helpers on it.
 import { createContext } from "react";
-import type { AddonInfo, AddonSource } from "@claude-ui/protocol";
+import type { AddonInfo, AddonSource, SlashCommand } from "@claude-ui/protocol";
+import { ASIDE_COMMAND, DIALOG_COMMANDS } from "./commands.ts";
 import type { Key } from "./i18n.ts";
 import type { AddonPaneId } from "./layout.ts";
 
@@ -90,3 +91,20 @@ export type AddonApi = {
 export const AddonApiContext = createContext<AddonApi>({ insert() {}, status() {}, toast() {}, refused() {} });
 /** Status texts by session, then addon (the status bar shows them). */
 export const AddonStatusContext = createContext<Record<string, Record<string, string>>>({});
+
+/** The picker rows of the enabled addons' commands, `<addon>:<command>`. A row whose name is a session command (or alias), a dialog command or /btw is left out: an addon never hides a built-in or a skill. */
+export function commandRows(addons: AddonInfo[], sessionCommands: SlashCommand[]): SlashCommand[] {
+  const taken = new Set([...sessionCommands, ...DIALOG_COMMANDS, ASIDE_COMMAND].flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+  return addons.flatMap((a) => a.manifest!.commands.map((c) => ({ name: `${a.name}:${c.name}`, description: c.description, argumentHint: c.argumentHint ?? "" })).filter((r) => !taken.has(r.name)));
+}
+
+/** `/addon:cmd args` typed in full, when `rows` has it; the web app runs it, nothing is sent to the session. */
+export function addonCommandOf(text: string, rows: SlashCommand[]): { addon: string; name: string; args: string } | undefined {
+  const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (!m || !rows.some((r) => r.name === m[1])) return undefined;
+  const [addon, name] = m[1]!.split(":") as [string, string];
+  return { addon, name, args: (m[2] ?? "").trim() };
+}
+export type AddonCommandRun = { addon: string; name: string; args: string };
+/** Runs an addon command for a session (App provides it). */
+export const AddonCommandContext = createContext<(sessionId: string, c: AddonCommandRun) => void>(() => {});

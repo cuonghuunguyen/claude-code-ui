@@ -79,8 +79,8 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { AddonApiContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
-import { AddonBands, AddonFrame } from "./addon-frame.tsx";
+import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -2833,6 +2833,14 @@ export function App() {
       if (!refusedShown.current.has(addon)) (refusedShown.current.add(addon), setToast(tr("addons.refused", { name: addon, type })));
     },
   };
+  // Command handlers (`/addon:cmd`): one hidden frame per enabled addon with commands, for the shown session (a new frame, so a fresh `init`, on a session switch).
+  const commandFrames = useRef(new Map<string, AddonHandle>());
+  const commandSession = shown && !draftShown && !paneRef ? shown.id : undefined;
+  const runAddonCommand = useCallback((sid: string, c: { addon: string; name: string; args: string }) => {
+    const h = commandFrames.current.get(`${c.addon}:${sid}`);
+    if (h) h.post({ type: "command.run", name: c.name, args: c.args });
+    else setToast(tr("addons.commandNotReady", { name: c.addon }));
+  }, []);
   const addonApi = useMemo<AddonApi>(() => ({ insert: (...a) => addonImpl.current.insert(...a), status: (...a) => addonImpl.current.status(...a), toast: (...a) => addonImpl.current.toast(...a), refused: (...a) => addonImpl.current.refused(...a) }), []);
   useEffect(() => {
     if (status !== "connected") return;
@@ -3350,6 +3358,7 @@ export function App() {
     <AddonsContext value={addons}>
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
+    <AddonCommandContext value={runAddonCommand}>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
@@ -4132,6 +4141,14 @@ export function App() {
           onClose={() => setShellsDialog({ ...shellsDialog, open: false })}
         />
       )}
+      {commandSession &&
+        enabledAddons(addons.addons)
+          .filter((a) => a.manifest!.commands.length > 0)
+          .map((a) => {
+            const entry = a.manifest!.commandsEntry ?? a.manifest!.views[0]?.entry;
+            const key = `${a.name}:${commandSession}`;
+            return entry && <AddonFrame key={key} handle={(h) => (h ? commandFrames.current.set(key, h) : commandFrames.current.delete(key), undefined)} addon={a} entry={entry} role="command" view="" sessionId={commandSession} hidden />;
+          })}
       <AddonsDialog open={addonsOpen} changed={addonsRev} log={addons.log} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
       {plugins && (
         <PluginsDialog
@@ -4233,6 +4250,7 @@ export function App() {
     </SideState>
     </SideLabel>
     </AvatarColors>
+    </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
     </AddonsContext>
@@ -5348,8 +5366,14 @@ function PromptBox({
   // An input method is composing (Telex, Gboard...): its keys and its text are not ours to act on until compositionend.
   const composing = useRef(false);
   const token = dismissed || bash ? undefined : activeCommand(text, caret);
+  // Addon commands (GH-516): rows `<addon>:<cmd>` after the session's commands; run by the web app, never sent. Not in the new-session box (no session to run them in).
+  const addonsList = use(AddonsContext).addons;
+  const runAddon = use(AddonCommandContext);
+  const sessionKey = draftKey && draftKey !== NEW_TAB_DRAFT ? draftKey : undefined;
+  const addonRows = useMemo(() => (sessionKey ? commandRows(enabledAddons(addonsList), commands) : []), [addonsList, commands, sessionKey]);
+  const listed = addonRows.length ? [...commands, ...addonRows] : commands;
   // Dialog commands are actions, not text: only when the slash is the whole prompt.
-  const matches = token && matchCommands((onDialog || onAside) && token.lead ? withDialogCommands(commands) : commands, text, caret);
+  const matches = token && matchCommands((onDialog || onAside) && token.lead ? withDialogCommands(listed) : listed, text, caret);
   const mention = dismissed || bash || matches ? undefined : activeMention(text, caret);
   // Only results for the query being typed, so Enter never picks a stale path.
   const paths = mention && found?.query === mention.query ? found.paths : [];
@@ -5490,6 +5514,8 @@ function PromptBox({
       const arg = dialogArg(t);
       return arg ? onDialog(dialog, arg) : onDialog(dialog), setPastes({}), edit("");
     }
+    const addonCmd = sessionKey && addonCommandOf(t, addonRows);
+    if (addonCmd && sessionKey) return runAddon(sessionKey, addonCmd), setPastes({}), edit("");
     if (how === "queue" && onQueue) {
       // The queue waits for the idle session, also behind a terminal CLI turn or a running /clear.
       const sent = images;

@@ -61,5 +61,6 @@ export default {
   "addons.cap.tool": "Vẽ kết quả của công cụ {name}",
   "addons.cap.net": "Kết nối tới {origin}",
   "addons.cap.unknown": "{capability}",
+  "addons.commandNotReady": "Addon {name} chưa nạp xong bộ xử lý lệnh. Thử lại sau giây lát.",
   "addons.refused": "Addon {name} bị từ chối: {type}",
 } satisfies Partial<Messages>;
