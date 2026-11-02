@@ -11,7 +11,7 @@ import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, M
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
-import { createSleepWatch, SLEEP_CHECK_MS, type Slept } from "./sleep-watch.ts";
+import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
@@ -1500,6 +1500,7 @@ export function createDaemon(opts: {
     updater?.messages().forEach((m) => send(ws, m));
     const stale = opts.buildInfo?.stale();
     if (stale) send(ws, { type: "daemon_stale", note: stale });
+    if (slept && (opts.watchSleep?.now ?? Date.now)() - slept.at > SLEEP_KEEP_MS) slept = undefined;
     if (slept) send(ws, { type: "daemon_slept", ...slept });
     const unsubscribes = new Map<string, () => void>();
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.

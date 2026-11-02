@@ -888,6 +888,7 @@ export function App() {
     if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
     const key = pendingKey();
     sentHere.current.add(id);
+    turnEnded.current.delete(id);
     setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
     return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
       setOptimistic((o) => dropPending(o, id, key));
@@ -1333,15 +1334,19 @@ export function App() {
         const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
         if (live) liveAt.current.set(e.sessionId, Date.now());
         notifyRef.current?.(e, live);
-        if (live && e.part.type === "session_state") {
+        if (e.part.type === "session_state") {
+          // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
           const prev = viewsRef.current[e.sessionId]?.state;
-          if (document.visibilityState === "hidden" && prev && isAttention(prev, e.part)) hiddenNeed.current = true;
-          if (sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") {
-            sentHere.current.delete(e.sessionId);
-            const percent = viewsRef.current[e.sessionId]?.contextUsage?.percentage ?? 0;
-            offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent }, () =>
-              document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
+          if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || awaitReplay.current)) {
+            hiddenNeed.current = true;
+            if (awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
           }
+          // The turn's context_usage comes after this idle event: the rule waits for it.
+          if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
+        }
+        if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
+          offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
+            document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
         }
         // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
         if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
@@ -1372,6 +1377,7 @@ export function App() {
         // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
         connGen.current++;
         listFresh.current = false;
+        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), setTimeout(() => (awaitReplay.current = false), 3000));
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);
@@ -2298,9 +2304,21 @@ export function App() {
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
-  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void });
-  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake };
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean });
+  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
   const sentHere = useRef(new Set<string>());
+  /** Sessions whose turn ended and whose context_usage is still to come. */
+  const turnEnded = useRef(new Set<string>());
+  // Push rule across a reconnect: the page was hidden since the socket closed; the replay's attention events count for a while after the open.
+  const wasHidden = useRef(false);
+  const awaitReplay = useRef(false);
+  const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  function offerPush() {
+    const needed = hiddenNeed.current;
+    hiddenNeed.current = false;
+    const n = recNow.current;
+    return needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush);
+  }
   // GH-518: the daemon's machine slept during a run (a daemon_slept message); suggests Keep computer awake.
   const slept = useRef(false);
   function offerKeepAwake() {
@@ -2325,11 +2343,9 @@ export function App() {
   };
   useEffect(() => {
     const onVis = () => {
-      if (document.visibilityState !== "visible") return;
-      const needed = hiddenNeed.current;
-      hiddenNeed.current = false;
-      const n = recNow.current;
-      (needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush)) || n.keepAwake();
+      if (document.visibilityState === "hidden") return void (wasHidden.current = true);
+      if (statusRef.current === "connected") wasHidden.current = false;
+      recNow.current.push() || recNow.current.keepAwake();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);

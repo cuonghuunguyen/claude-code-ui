@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GAP_MS, KEY, PER_DAY, RULES, gate, localDay, markShown, nextStreak, offer, parseRec, promptBusy, resetPageForTests, scrolledFar, setRecommendationHost, setRecommendationsOn, streak, count, bump, type RecState } from "./recommendations.ts";
+import { GAP_MS, KEY, PER_DAY, RULES, gate, localDay, markShown, nextStreak, offer, parseRec, promptBusy, resetPageForTests, scrolledFar, seen, setRecommendationHost, setRecommendationsOn, streak, count, bump, type RecState } from "./recommendations.ts";
 
 const fresh = (): RecState => ({ v: 1, shown: [], dayCount: 0, counts: {} });
 const shown = vi.fn();
@@ -169,6 +169,15 @@ describe("offer", () => {
     expect(ok()).toBe(true);
     expect(ok(T0 + 3 * 24 * 3600_000)).toBe(false);
     expect(count("x")).toBeGreaterThan(0);
+  });
+});
+
+describe("storage", () => {
+  it("blocked write only (getItem works): counters keep counting in memory", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    expect(count("x")).toBe(1);
+    expect(count("x")).toBe(2);
+    expect(seen("x")).toBe(2);
   });
 });
 

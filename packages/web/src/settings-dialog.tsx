@@ -273,7 +273,6 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
   );
 }
 
-/** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
 /** GH-518: the master switch of recommendations (per browser). */
 function RecommendationsSection() {
   const t = useT();
@@ -293,6 +292,7 @@ function RecommendationsSection() {
   );
 }
 
+/** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
 function ScreenSection({ settings, daemon, saving, save }: { settings?: Settings; daemon?: SettingsResult["daemon"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void> }) {
   const t = useT();
   const ka = daemon?.keepAwake;

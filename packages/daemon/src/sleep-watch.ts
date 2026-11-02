@@ -1,6 +1,8 @@
 // Sleep detection (GH-518, docs/spec.md "Sleep detection"): a wall-clock gap between two checks means the machine slept.
 export const SLEEP_CHECK_MS = 15_000;
 export const SLEEP_GAP_MS = 60_000;
+/** A sleep older than this is not sent to a new connection (owner decision). */
+export const SLEEP_KEEP_MS = 24 * 3600_000;
 export type Slept = { at: number; gapMs: number };
 
 export function createSleepWatch({ now = Date.now, running, onSleep }: { now?: () => number; running: () => boolean; onSleep: (s: Slept) => void }) {

@@ -61,6 +61,34 @@ it("a sleep during a run goes to every connection once, and to each later connec
   for (const x of [a, b, c, d]) x.ws.close();
 });
 
+it("a sleep older than 24 h is dropped, not sent to a new connection", { timeout: 20_000 }, async () => {
+  let now2 = 5_000_000;
+  const d2 = mk({ everyMs: 1e9, now: () => now2 });
+  await new Promise<void>((r) => d2.listen(0, "127.0.0.1", r));
+  const p2 = (d2.address() as AddressInfo).port;
+  const a = await client(p2);
+  const id = ((await a.request({ type: "session.create", cwd: dir })).result as any).session.id as string;
+  await a.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+  await a.request({ type: "session.prompt", sessionId: id, text: "go" });
+  const req = await vi.waitFor(() => a.inbox.find((m: any) => m.type === "event" && m.part.type === "permission_request") ?? Promise.reject(new Error("no request")), { timeout: 5000 });
+  const b = await client(p2); // was = running
+  now2 += 61_000;
+  const c = await client(p2); // sleep found
+  await settle();
+  expect(slept(c)).toHaveLength(1);
+  await a.request({ type: "permission.respond", requestId: (req as any).part.requestId, decision: "allow" });
+  await vi.waitFor(() => a.inbox.find((m: any) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle") ?? Promise.reject(new Error("not idle")), { timeout: 5000 });
+  const e = await client(p2); // still within 24 h: replayed; this check sees idle
+  await settle();
+  expect(slept(e)).toHaveLength(1);
+  now2 += 24 * 3600_000 + 1;
+  const f = await client(p2);
+  await settle();
+  expect(slept(f)).toEqual([]);
+  for (const x of [a, b, c, e, f]) x.ws.close();
+  d2.close();
+});
+
 it("a daemon without watchSleep never reports one", async () => {
   const c = await client(plainPort);
   await settle();
