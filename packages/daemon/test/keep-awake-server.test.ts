@@ -9,6 +9,7 @@ import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createKeepAwake } from "../src/keep-awake.ts";
+import { createSides, wslSide, type SideProcess } from "../src/sides.ts";
 import { createDaemon } from "../src/server.ts";
 import { createSettings } from "../src/settings.ts";
 import { permissionQuery } from "./fake-query.ts";
@@ -131,5 +132,62 @@ describe("keep computer awake in the daemon (GH-523)", { timeout: 20_000 }, () =
     http.close();
     http.closeAllConnections();
     await vi.waitFor(() => expect(held.kill).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("keep computer awake with a Side (GH-523)", { timeout: 20_000 }, () => {
+  /** A Hub with one WSL Side (fake process) and a keepAwake on; `procs` = every Side process spawned, `held` = inhibitor children. */
+  async function hub() {
+    const procs: { stdout: PassThrough; exit: EventEmitter }[] = [];
+    const held: (EventEmitter & { kill: ReturnType<typeof vi.fn> })[] = [];
+    const sides = createSides({
+      targets: [wslSide("Ubuntu")],
+      restartMs: [10],
+      spawn: async () => {
+        const stdout = new PassThrough();
+        const exit = new EventEmitter();
+        stdout.write(JSON.stringify({ ready: true }) + "\n");
+        procs.push({ stdout, exit });
+        return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) } satisfies SideProcess;
+      },
+    });
+    const keepAwake = createKeepAwake({ inhibitor: { cmd: "inh", args: [] }, spawn: (() => (held.push(Object.assign(new EventEmitter(), { stdin: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), unref: () => {} })), held.at(-1))) as never });
+    const appSettings = createSettings({ file: join(dir, `side${Math.random()}.json`) });
+    appSettings.set({ power: { keepAwake: true } });
+    const d = createDaemon({ webRoot: dir, roots: [dir], token, appSettings, sides, keepAwake });
+    await sides.start("wsl:Ubuntu");
+    return { procs, held, d, sides, running: (on: boolean) => procs.at(-1)!.stdout.write(JSON.stringify({ running: on }) + "\n") };
+  }
+
+  it("a Side's running frame holds the inhibitor and its end releases it", async () => {
+    const h = await hub();
+    h.running(true);
+    await vi.waitFor(() => expect(h.held).toHaveLength(1));
+    h.running(false);
+    await vi.waitFor(() => expect(h.held[0]!.kill).toHaveBeenCalledTimes(1));
+    h.d.close();
+  });
+
+  it("a Side that exits while running releases the inhibitor", async () => {
+    const h = await hub();
+    h.running(true);
+    await vi.waitFor(() => expect(h.held).toHaveLength(1));
+    h.sides.close();
+    h.procs.at(-1)!.exit.emit("exit", 1);
+    await vi.waitFor(() => expect(h.held[0]!.kill).toHaveBeenCalledTimes(1));
+    h.d.close();
+  });
+
+  it("a Side that crashes during a turn and restarts to ready no longer counts as running", async () => {
+    const h = await hub();
+    h.running(true);
+    await vi.waitFor(() => expect(h.held).toHaveLength(1));
+    h.procs.at(-1)!.exit.emit("exit", 1);
+    await vi.waitFor(() => expect(h.procs).toHaveLength(2));
+    await vi.waitFor(() => expect(h.sides.list().find((s) => s.id === "wsl:Ubuntu")?.state).toBe("ready"));
+    await vi.waitFor(() => expect(h.held[0]!.kill).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.held).toHaveLength(1);
+    h.d.close();
   });
 });
