@@ -34,8 +34,10 @@ import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
+import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
+import type { KeepAwake } from "./keep-awake.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -269,6 +271,8 @@ async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string
  * `modelListWaitMs`: how long session.list waits for the model list (default MODEL_LIST_WAIT_MS).
  */
 export function createDaemon(opts: {
+  /** Hub only: addons and their checkouts (docs/spec.md "Addons"). Unset: addons.* fail addons_unavailable. */
+  addonsDir?: string;
   /** Directory no Artifact preview (page or supporting file) may read: the daemon's config dir (token, settings). Default configDir(). */
   privateDir?: string;
   webRoot: string;
@@ -319,6 +323,10 @@ export function createDaemon(opts: {
   sideCallTimeoutMs?: number;
   /** WSL distros and Docker containers this daemon routes to (sides.ts). */
   sides?: Sides;
+  /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
+  keepAwake?: KeepAwake;
+  /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
+  onRunning?: (running: boolean) => void;
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
   /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
@@ -462,6 +470,7 @@ export function createDaemon(opts: {
       broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload && { reloadFailed: reload.failed }) });
     },
   });
+  const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
   const root = resolve(opts.webRoot);
   // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
   let models: ReturnType<typeof listModels> | undefined;
@@ -622,6 +631,7 @@ export function createDaemon(opts: {
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
         for (const s of live) {
           sessions.delete(s.id);
+          syncRunning();
           queue.drop(s.id);
           touched.delete(s.id);
           await s.close().catch(() => {});
@@ -638,7 +648,16 @@ export function createDaemon(opts: {
     }
   };
 
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }) });
+  // GH-523: "running" as the web's anySessionRunning: a live session that runs or waits for the user; a Side reports its own.
+  let localWas = false;
+  const syncRunning = () => {
+    const local = [...sessions.values()].some((s) => ["running", "needs_input"].includes(s.info().state));
+    if (local !== localWas) (localWas = local), opts.onRunning?.(local);
+    opts.keepAwake?.update(appSettings.get().power.keepAwake && (local || !!opts.sides?.anyRunning()));
+  };
+  opts.keepAwake?.onStatus(() => broadcast({ type: "settings_changed", settings: appSettings.get(), jiraToken: settingsReply().jiraToken }));
+  opts.sides?.onRunning(syncRunning);
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -799,7 +818,7 @@ export function createDaemon(opts: {
       const t = e.part.type;
       if (t === "session_cleared") queue.move(s.id, (e.part as { sessionId: string }).sessionId);
       else if (t === "session_state" || t === "external_turn" || t === "bash") {
-        if (t === "session_state") queue.setNotLive(s.id, !s.isLive());
+        if (t === "session_state") (queue.setNotLive(s.id, !s.isLive()), syncRunning());
         queue.kick(s.id);
         // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
         if (t === "session_state" && (e.part as { state?: string }).state === "idle") markWorktreeStale(s.cwd);
@@ -1104,6 +1123,7 @@ export function createDaemon(opts: {
     queue.drop(id);
     deleting.add(id);
     sessions.delete(id);
+    syncRunning();
     orchestration.forget(id);
     touched.delete(id);
     try {
@@ -1320,6 +1340,21 @@ export function createDaemon(opts: {
     const base = src.assets.size ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
     streamFile(req, res, f.fd, f.size, artifactHeaders(base));
   };
+  /** GET /addon/<nonce>/<name>/<path> (GH-516): a file of an enabled addon. HTML only as a frame (addon CSP); other files as subresources. */
+  const serveAddon = (req: IncomingMessage, res: ServerResponse, nonce: string, name: string, rest: string) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+    const f = addons && nonce === addons.nonce ? addons.serve(name, rest) : undefined;
+    if (!f) return void res.writeHead(404).end();
+    const h = req.headers;
+    const dest = h["sec-fetch-dest"] as string | undefined;
+    if (f.html) {
+      if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
+    } else if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
+    const o = openArtifact(f.path, !f.html);
+    if (!o) return void res.writeHead(404).end();
+    const base = `http://${new URL("http://" + h.host).host}/addon/${nonce}/${name}/`;
+    streamFile(req, res, o.fd, o.size, f.html ? addonHeaders(base, f.net) : { ...addonAssetHeaders, "content-type": f.type, ...(f.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
+  };
   /** GET /media/<nonce>/<name>: the file comes only from the nonce entry; <name> is cosmetic. */
   const serveMedia = (req: IncomingMessage, res: ServerResponse, nonce: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
@@ -1380,6 +1415,10 @@ export function createDaemon(opts: {
       const m = /^\/artifact\/([0-9a-f]{32})\/(.*)$/.exec(rawPath);
       return m ? serveArtifact(req, res, m[1]!, m[2]!) : void res.writeHead(404).end();
     }
+    if (rawPath.startsWith("/addon/")) {
+      const m = /^\/addon\/([0-9a-f]{32})\/([a-z0-9-]{1,64})\/(.+)$/.exec(rawPath);
+      return m ? serveAddon(req, res, m[1]!, m[2]!, m[3]!) : void res.writeHead(404).end();
+    }
     try {
       path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
     } catch {
@@ -1403,7 +1442,7 @@ export function createDaemon(opts: {
   });
 
   // A side's start, failure or stop changes the side list every client shows.
-  opts.sides?.onChange(() => broadcast({ type: "sessions.changed" }));
+  opts.sides?.onChange(() => (broadcast({ type: "sessions.changed" }), syncRunning()));
   http.once("listening", () => void cleanupAsides());
   if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
@@ -1979,6 +2018,8 @@ export function createDaemon(opts: {
             if (!settings.usageLimit.autoContinue) autoContinue.clear();
             if (!settings.focus.nextForYou) for (const s of sessions.values()) s.clearSuggestion();
             perfMon.setEnabled(settings.performance.monitor);
+            if (!settings.power.keepAwake) opts.keepAwake?.reset();
+            syncRunning();
             broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
             return reply(settingsReply(settings));
           } catch (err) {
@@ -2501,6 +2542,21 @@ export function createDaemon(opts: {
             return fail(e instanceof ConfigError ? e.code : msg.type.startsWith("skills.") ? "skills_failed" : "mcp_failed", (e as Error).message);
           }
         }
+        case "addons.list":
+        case "addons.install":
+        case "addons.checkUpdate":
+        case "addons.update":
+        case "addons.approve":
+        case "addons.setEnabled":
+        case "addons.uninstall":
+        case "addons.pickRenderer": {
+          if (!addons) return fail("addons_unavailable", "addons live on the Hub");
+          try {
+            return reply(await addons.handle(msg as AddonsRequest));
+          } catch (e) {
+            return fail(e instanceof ConfigError ? e.code : "addons_failed", (e as Error).message);
+          }
+        }
         case "update.install":
         case "update.restart": {
           if (!updater) return fail("update_unavailable", "updates are off (source checkout, --no-update-check or not started by claude-ui)");
@@ -2576,7 +2632,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
 }

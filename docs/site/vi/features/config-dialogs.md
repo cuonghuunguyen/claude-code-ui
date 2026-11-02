@@ -1,6 +1,6 @@
 # MCP, skill & plugin {#mcp-skills-plugins}
 
-Ba hộp thoại quản lý máy chủ MCP, skill và plugin của Claude Code, giống như tiện ích mở rộng VS Code. Thay đổi được lưu vào các tệp cấu hình riêng của Claude Code, nên CLI `claude` cũng thấy chúng.
+Ba hộp thoại quản lý máy chủ MCP, skill và plugin của Claude Code, giống như tiện ích mở rộng VS Code. Thay đổi được lưu vào các tệp cấu hình riêng của Claude Code, nên CLI `claude` cũng thấy chúng. Addon, thứ thay đổi chính claude-ui, có hộp thoại riêng: xem [Addon](addons).
 
 ## Cách mở {#how-to-open-them}
 

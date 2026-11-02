@@ -116,6 +116,8 @@ export type CommandContext = {
   toggleSignalOnly: () => void;
   /** Set only where the Screen Wake Lock API works (HTTPS or localhost). */
   toggleKeepAwake?: () => void;
+  /** GH-523: set only when the daemon can keep its computer awake. */
+  toggleComputerAwake?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
   /** Restarts the guided tour from its first step. */
@@ -130,6 +132,7 @@ export type CommandContext = {
   openSkills?: () => void;
   /** Opens the Manage Plugins dialog of the shown project; none without a project. */
   openPlugins?: () => void;
+  openAddons?: () => void;
 };
 
 const RECENT_SESSIONS = 5;
@@ -201,6 +204,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.panels && cmd("terminal.toggle", t("app.cmd.terminalToggle"), c.toggleTerminal),
     cmd("signal.toggle", t("app.cmd.signalToggle"), c.toggleSignalOnly),
     c.toggleKeepAwake && cmd("awake.toggle", t("app.cmd.awakeToggle"), c.toggleKeepAwake),
+    c.toggleComputerAwake && cmd("computerAwake.toggle", t("app.cmd.computerAwakeToggle"), c.toggleComputerAwake),
     c.panels && cmd("terminal.new", t("app.cmd.terminalNew"), c.newTerminal),
     cmd("layout.reset", t("app.cmd.layoutReset"), c.resetLayout),
     c.panels && cmd("panel.flip", t(c.side === "left" ? "app.cmd.flipRight" : "app.cmd.flipLeft"), c.flipSide),
@@ -248,6 +252,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", ...grp("app.cmd.groupCustomize"), keys: specOf("mcp.open"), title: t("app.cmd.mcp"), description: t("app.cmd.mcpDesc"), run: c.openMcp },
     c.openSkills && { id: "skills.open", ...grp("app.cmd.groupCustomize"), keys: specOf("skills.open"), title: t("app.cmd.skills"), description: t("app.cmd.skillsDesc"), run: c.openSkills },
+    c.openAddons && { id: "addons.open", ...grp("app.cmd.groupCustomize"), keys: specOf("addons.open"), title: t("app.cmd.addons"), description: t("app.cmd.addonsDesc"), run: c.openAddons },
     c.openPlugins && { id: "plugins.open", ...grp("app.cmd.groupCustomize"), keys: specOf("plugins.open"), title: t("app.cmd.plugins"), description: t("app.cmd.pluginsDesc"), run: c.openPlugins },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]

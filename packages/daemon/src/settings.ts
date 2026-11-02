@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -39,6 +39,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   usageLimit: { autoContinue: bool("Continue automatically after a usage limit resets") },
   focus: { nextForYou: bool("Next for you suggestions on the Focus page") },
   notifications: { desktop: bool("Desktop notifications") },
+  power: { keepAwake: bool("Keep computer awake") },
   performance: { monitor: bool("Performance monitor") },
   jira: {
     url: { valid: (v) => v === "" || jiraUrl(v), label: "Jira URL", rule: "empty or an http(s) address without user name or password", patch: (v) => v === "" || (jiraUrl(v) && !jiraUrlProblem(v as string)), patchRule: "empty or an https address without user name or password (http only for localhost or 127.0.0.1)" },

@@ -15,6 +15,19 @@ export const toolCard = (page: Page, text: string): Locator => page.getByTestId(
 /** What a user calls the end of a tool call, and the status the card carries for it. */
 export const TOOL_STATUS: Record<string, string> = { running: "running", finished: "done", denied: "denied", stopped: "error", killed: "stopped" };
 
+/**
+ * GH-512: opens pane `id` from its tab, or from the `…` (more panes) menu when the tab row has no room for it. `scope`: the side panel,
+ * the bottom panel or the page (a phone's pane switcher).
+ */
+export async function pickPane(page: Page, id: string, scope?: Locator): Promise<void> {
+  const root = scope ?? page;
+  // :visible — a phone also has the desktop side panel's tabs in the DOM (display: none).
+  const tab = root.locator(`[role="tab"][data-testid="pane-${id}"]:visible`).first();
+  if (await tab.count()) return void (await tab.click());
+  await root.locator('[data-testid="pane-overflow"]:visible').first().click();
+  await page.getByRole("menuitem").and(page.getByTestId(`pane-${id}`)).click();
+}
+
 export async function waitConnected(page: Page): Promise<void> {
   // On a phone the connection badge lives in the drawer: it is attached but not always visible.
   // By state, not by its text: the badge text follows the UI language (GH-510).

@@ -12,6 +12,8 @@ export default {
   "files.artifact.frameTitle": "Preview: {title}",
   "files.artifact.show": "Show preview",
   "files.artifact.hide": "Hide preview",
+  "files.artifact.preview": "Preview",
+  "files.artifact.openOnClaude": "Open on claude.ai",
   // artifacts-pane.tsx, artifacts.ts
   "files.artifacts.failed": "Could not load this session.",
   "files.artifacts.loading": "Loading artifacts…",

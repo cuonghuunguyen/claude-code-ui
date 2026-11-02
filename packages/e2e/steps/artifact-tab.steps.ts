@@ -37,6 +37,22 @@ Given("a session that published the page {string} titled {string}", async ({ pag
   await expect(card(page)).toBeVisible({ timeout: 30_000 });
 });
 
+// GH-512: the same publish, followed by an assistant text that links its claude.ai URL.
+Given("a session that published the page {string} and replied with its link", async ({ page, project, $testInfo }, name: string) => {
+  const file = join(project.path, name);
+  writeFileSync(file, PAGE_HTML);
+  const run = runDir();
+  const configDir = join(run, `claude-config-w${$testInfo.workerIndex}`);
+  const url = "https://claude.ai/artifact/AbC123";
+  transcript = writePublishTranscript({ sessionId: randomUUID(), cwd: project.path, file, title: "Sales dashboard", url, configDir, run, reply: `Your page is live: ${url}` });
+  own = await startDaemon(run, 1000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: { CLAUDE_CONFIG_DIR: configDir } });
+  await openApp(page, own);
+  await openProject(page, project.path);
+  if (await page.getByTestId("open-drawer").isVisible()) await page.getByTestId("open-drawer").click();
+  await page.getByTestId("session-item").filter({ hasText: "Publish the dashboard" }).first().click({ timeout: 60_000 });
+  await expect(page.getByTestId("assistant-text").filter({ hasText: "Your page is live" })).toBeVisible({ timeout: 30_000 });
+});
+
 After(async () => {
   await own?.stop();
   own = undefined;
@@ -161,4 +177,104 @@ Then("the artifact split fills its half", async ({ page }) => {
 
 Then("the tab switcher lists the artifact row {string}", async ({ page }, name: string) => {
   await expect(page.getByRole("option").filter({ hasText: name })).toHaveCount(1);
+});
+
+// GH-512 link menu
+const cardLink = (page: Page): Locator => card(page).locator('a[href^="https://claude.ai/artifact/"]').first();
+const textLink = (page: Page): Locator => page.getByTestId("assistant-text").locator('a[href^="https://claude.ai/artifact/"]').first();
+const menuItems = (page: Page): Locator => page.getByRole("menuitem");
+/** The menu popup fades/scales in 150 ms: a capture right after it opens shows it half drawn. */
+const settle = (page: Page) => page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
+
+When("I click the claude.ai link of the Artifact card", async ({ page }) => {
+  await cardLink(page).click();
+});
+
+When("I click the claude.ai link in the assistant text", async ({ page }) => {
+  await textLink(page).click();
+});
+
+Then("the link menu offers Preview, Open in tab and Open on claude.ai", async ({ page }) => {
+  await expect(menuItems(page)).toHaveCount(3);
+  await expect(page.getByTestId("artifact-link-preview")).toHaveText("Preview");
+  await expect(page.getByTestId("artifact-link-tab")).toHaveText("Open in tab");
+  await expect(page.getByTestId("artifact-link-claude")).toHaveText("Open on claude.ai");
+  await settle(page);
+});
+
+Then("the link menu offers only Open in tab and Open on claude.ai", async ({ page }) => {
+  await expect(menuItems(page)).toHaveCount(2);
+  await expect(page.getByTestId("artifact-link-preview")).toHaveCount(0);
+  await expect(page.getByTestId("artifact-link-tab")).toHaveText("Open in tab");
+  await expect(page.getByTestId("artifact-link-claude")).toHaveText("Open on claude.ai");
+  await settle(page);
+});
+
+Then("the link menu has no menu", async ({ page }) => {
+  await expect(menuItems(page)).toHaveCount(0);
+});
+
+When("I choose {string} in the link menu", async ({ page }, id: string) => {
+  await page.getByTestId(`artifact-link-${id}`).click();
+});
+
+Then("the Artifact card shows the inline preview", async ({ page }) => {
+  await expect(card(page).getByTestId("artifact-preview")).toBeVisible();
+  await expect(card(page).getByRole("button", { name: "Hide preview", exact: true })).toBeVisible();
+  await expect(menuItems(page)).toHaveCount(0);
+  await settle(page);
+});
+
+Then("the artifact tab opens in the main area active", async ({ page }) => {
+  await expect(page.locator('[data-testid="tab"][data-tab-id^="artifact:"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid="tab"][data-tab-id^="artifact:"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+  await expect(menuItems(page)).toHaveCount(0);
+  await settle(page);
+});
+
+When("I open the link menu of the Artifact card with the keyboard", async ({ page }) => {
+  await cardLink(page).focus();
+  await page.keyboard.press("Enter");
+});
+
+Then("the first link menu item has the focus", async ({ page }) => {
+  await expect(menuItems(page).first()).toBeFocused();
+});
+
+When("I Tab through the link menu to Open on claude.ai", async ({ page }) => {
+  for (let i = 0; i < 2; i++) await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("artifact-link-claude")).toBeFocused();
+  await settle(page);
+});
+
+When("I press Escape in the link menu", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(menuItems(page)).toHaveCount(0);
+});
+
+Then("the Artifact card link has the focus", async ({ page }) => {
+  await expect(cardLink(page)).toBeFocused();
+});
+
+// A phone is a coarse pointer: `pointer-coarse:` classes apply only then; headless Chromium reports a fine pointer unless touch is emulated.
+Given("the device has a coarse touch pointer", async ({ page }) => {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+  expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+});
+
+Then("every link menu item is at least 44 px high", async ({ page }) => {
+  for (const item of await menuItems(page).all()) expect(await item.evaluate((n) => (n as HTMLElement).offsetHeight)).toBeGreaterThanOrEqual(44); // layout height: the popup's open animation scales the bounding box
+});
+
+Then("a modified or middle click on the {string} link opens a new browser tab without a menu", async ({ page }, where: string) => {
+  const link = where === "card" ? cardLink(page) : textLink(page);
+  for (const click of [() => link.click({ modifiers: ["ControlOrMeta"] }), () => link.click({ button: "middle" })]) {
+    const popup = page.context().waitForEvent("page", { timeout: 10_000 });
+    await click();
+    const opened = await popup;
+    expect(opened.url() === "about:blank" || opened.url().startsWith("https://claude.ai/")).toBe(true);
+    await opened.close();
+    await expect(menuItems(page)).toHaveCount(0);
+  }
 });

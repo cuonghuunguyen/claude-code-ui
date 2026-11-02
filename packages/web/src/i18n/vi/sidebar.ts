@@ -87,7 +87,6 @@ export default {
   "sidebar.close": "Đóng",
   // sidebar-menus.ts / sidebar.tsx menus
   "sidebar.menu.newSession": "Phiên mới",
-  "sidebar.menu.newWorktree": "Worktree mới",
   "sidebar.menu.createWorktree": "Tạo worktree…",
   "sidebar.menu.copyPath": "Sao chép đường dẫn",
   "sidebar.menu.hideInactive": "Ẩn phiên không hoạt động",

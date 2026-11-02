@@ -1,6 +1,7 @@
 // Color scheme: follows the OS by default (OpenCode `system`), or forced light / dark; kept per browser.
 import { useSyncExternalStore } from "react";
-import { themeById, themeCss, type ThemeId } from "./themes.ts";
+import type { AddonInfo } from "@claude-ui/protocol";
+import { ADDON_THEME_ID, themeById, themeCss, type Theme, type ThemeId } from "./themes.ts";
 export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "claude-ui.theme";
@@ -36,6 +37,8 @@ function syncMeta(dark = document.documentElement.classList.contains("dark")) {
 export function loadColorTheme(): ThemeId {
   try {
     const v = localStorage.getItem(COLOR_KEY);
+    // An addon theme id is kept before the addons arrive; with no matching rule the default tokens show.
+    if (v && ADDON_THEME_ID.test(v)) return v as ThemeId;
     return (themeById(v ?? "")?.id ?? "default") as ThemeId;
   } catch {
     return "default";
@@ -47,6 +50,32 @@ export function applyColorTheme(id: ThemeId) {
   if (id === "default") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", id);
   syncMeta();
+}
+
+/** The colour rules of the enabled addons' themes (GH-516), in a <style> of their own. */
+export function applyAddonThemes(themes: readonly Theme[]) {
+  let style = document.getElementById("claude-ui-addon-themes");
+  if (!style) {
+    style = document.createElement("style");
+    style.id = "claude-ui-addon-themes";
+    document.head.append(style);
+  }
+  style.textContent = themeCss(themes);
+  syncMeta();
+}
+
+/** One stylesheet link per enabled addon with `css`; links of addons no longer enabled go (GH-516). Same-origin, so the app CSP allows it and blocks what the sheet loads from elsewhere. */
+export function applyAddonCss(addons: readonly AddonInfo[]) {
+  const want = new Map<string, string>(addons.flatMap((a) => (a.base && a.manifest?.css ? [[`addon-css-${a.name}`, a.base + a.manifest.css.split("/").map(encodeURIComponent).join("/")] as const] : [])));
+  for (const l of document.querySelectorAll<HTMLLinkElement>('link[id^="addon-css-"]')) if (want.get(l.id) !== l.getAttribute("href")) l.remove();
+  for (const [id, href] of want)
+    if (!document.getElementById(id)) {
+      const l = document.createElement("link");
+      l.rel = "stylesheet";
+      l.id = id;
+      l.href = href;
+      document.head.append(l);
+    }
 }
 
 /** A user pick: applied at once and kept in this browser. */

@@ -302,6 +302,22 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "marketplace.remove"; cwd: string; name: string }
   /** Refreshes its catalog. Reply `{}`. */
   | { type: "marketplace.update"; cwd: string; name: string }
+  // Addons (docs/spec.md "Addons"): Hub only, never routed to a Side. Each write broadcasts `config.changed` (kind addons, cwd "").
+  /** Reply AddonsListResult. Re-reads local-folder addons. */
+  | { type: "addons.list" }
+  /** Clones (git) or reads (local) and validates; stored with approved [] (state needs_approval). Reply AddonInfo. */
+  | { type: "addons.install"; source: AddonSource }
+  /** git fetch; reply AddonUpdateCheck. */
+  | { type: "addons.checkUpdate"; name: string }
+  /** Checks out `sha` (the last checkUpdate's latest). Reply AddonInfo. */
+  | { type: "addons.update"; name: string; sha: string }
+  /** Approves `capabilities` (must equal the declared set) and enables. Reply AddonInfo. */
+  | { type: "addons.approve"; name: string; capabilities: string[] }
+  | { type: "addons.setEnabled"; name: string; enabled: boolean }
+  /** Removes the record and, for git, `<config>/addons/<name>/`. Reply `{}`. */
+  | { type: "addons.uninstall"; name: string }
+  /** `target`: `fence:<lang>` or `tool:<name>`. Reply `{}`. */
+  | { type: "addons.pickRenderer"; target: string; name: string }
   // Updates (docs/spec.md "Updates").
   /** Installs the available version into the daemon's versions dir; reply UpdateInstallResult. The daemon keeps running. */
   | { type: "update.install" }
@@ -374,7 +390,7 @@ export type ServerMessage =
   | { type: "settings_changed"; settings: Settings; jiraToken?: boolean }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
-  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes. `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
+  /** To every connection after a config write (e.g. `mcp.add`) in `cwd`: an open dialog of that project refreshes (`cwd` "" for addons: Hub-wide). `reloadFailed`: set when plugins were reloaded: the sessions whose reload failed (empty: none; restart banners then clear). */
   | { type: "config.changed"; kind: ConfigKind; cwd: string; reloadFailed?: string[] }
   /** A newer claude-ui is on npm: on connect and when a check finds it. */
   | { type: "update_available"; version: string; current: string }
@@ -676,6 +692,8 @@ export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditor
 /** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
 export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
+  /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
+  power: { keepAwake: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */
   performance: { monitor: boolean };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
@@ -699,7 +717,7 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
@@ -731,7 +749,7 @@ export type PerfDaemon = {
   cost: { ownMs: number; wallMs: number };
 };
 export type PerfReport = { daemon: PerfDaemon };
-export type ConfigKind = "mcp" | "plugins" | "skills";
+export type ConfigKind = "mcp" | "plugins" | "skills" | "addons";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
 /**
@@ -799,3 +817,28 @@ export type PluginWriteResult = { reload: ReloadResult };
 export type PluginUpdateFailure = "timeout" | "policy" | "disabled" | "needs_consent" | "not_installed" | "not_found" | "network" | "other";
 /** ok: `message` = the CLI's result line (e.g. already at the latest version); `reload` when the update needs one. */
 export type PluginUpdateResult = { outcome: "ok"; message?: string; reload?: ReloadResult } | { outcome: "failed"; kind: PluginUpdateFailure; message: string };
+
+// Addons (docs/spec.md "Addons", ADR 0006).
+export type AddonSource = { kind: "git"; url: string; ref?: string } | { kind: "local"; path: string };
+export type AddonView = { id: string; title: string; entry: string; kind: "pane" | "band"; phone?: boolean };
+export type AddonCommand = { name: string; description: string; argumentHint?: string };
+export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };
+/** Colours per palette key (themes.ts KEYS); a mode may be partial: the web drops incomplete modes. */
+export type AddonTheme = { id: string; name: string; light?: Record<string, string>; dark?: Record<string, string> };
+export type AddonManifest = {
+  name: string;
+  version: string;
+  description: string;
+  capabilities: string[];
+  themes: AddonTheme[];
+  css?: string;
+  views: AddonView[];
+  commands: AddonCommand[];
+  commandsEntry?: string;
+  renderers: AddonRenderer[];
+};
+/** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
+export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
+export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; approved: string[]; state: AddonState; error?: string; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
+export type AddonsListResult = { addons: AddonInfo[]; picks: Record<string, string> };
+export type AddonUpdateCheck = { name: string; current: string; latest: string; added: string[]; removed: string[]; error?: string };

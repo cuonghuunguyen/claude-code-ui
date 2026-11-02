@@ -212,6 +212,12 @@ it("lists Background shells while a session shows", () => {
   expect(openShells).toHaveBeenCalled();
 });
 
+it("lists Manage addons in the Customize group", () => {
+  const openAddons = vi.fn();
+  expect(run(ctx({ openAddons }), "addons.open")).toMatchObject({ group: "Customize", title: "Manage addons" });
+  expect(openAddons).toHaveBeenCalled();
+});
+
 it("lists Manage plugins in the Customize group while a project is shown", () => {
   expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
   const openPlugins = vi.fn();
@@ -265,6 +271,13 @@ it("Toggle keep screen awake is listed only where App offers it, and runs it", (
   expect(appCommands(ctx()).some((i) => i.id === "awake.toggle")).toBe(false);
   run(ctx({ toggleKeepAwake }), "awake.toggle");
   expect(toggleKeepAwake).toHaveBeenCalledOnce();
+});
+
+it("Toggle keep computer awake is listed only when the daemon supports it, and runs its toggle (GH-523)", () => {
+  const toggleComputerAwake = vi.fn();
+  expect(appCommands(ctx()).some((i) => i.id === "computerAwake.toggle")).toBe(false);
+  run(ctx({ toggleComputerAwake }), "computerAwake.toggle");
+  expect(toggleComputerAwake).toHaveBeenCalledOnce();
 });
 
 it("Open Focus is always listed when App offers it; Next waiting request only while something waits, on Ctrl+Alt+Down", () => {

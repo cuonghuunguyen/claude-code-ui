@@ -1,5 +1,7 @@
 // File references in markdown (docs/spec.md "Session view UX", "Editor"): inline code like `src/a.ts:12` and relative links open the Files tab.
 import { createContext, createElement, use, useEffect, useState, type ComponentProps } from "react";
+import { ArtifactLinkMenu, ArtifactUrlContext } from "./artifact-preview.tsx";
+import { isClaudeUrl } from "./tools.ts";
 import { defaultComponents, defaultRemarkPlugins, type Components } from "streamdown";
 import { useT } from "./i18n.ts";
 import { inDir, isWinPath, joinPath, sepOf, withSep } from "./paths.ts";
@@ -143,7 +145,11 @@ function FileCode(props: ComponentProps<"code">) {
 function FileAnchor(props: ComponentProps<"a">) {
   const t = useT();
   const { open, base, root } = useTarget();
+  const urls = use(ArtifactUrlContext);
   const href = props.href;
+  // GH-512: the link of a previewable publish of this session offers Open in tab / Open on claude.ai.
+  const partId = isClaudeUrl(href) ? urls?.get(href) : undefined;
+  if (partId) return <ArtifactLinkMenu url={href!} partId={partId} className="text-primary underline" />;
   if (!href?.startsWith(FILE_LINK)) return createElement(defaultComponents.a as never, props as never);
   const target = decodeURIComponent(href.slice(FILE_LINK.length));
   const ref = open && base ? (fileRef(percentDecoded(target), base, root) ?? linkRef(target, base, root)) : undefined;

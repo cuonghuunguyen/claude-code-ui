@@ -23,9 +23,11 @@ import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
-import { ArtifactPreview } from "./artifact-preview.tsx";
+import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
+import { AddonBlock } from "./addon-render.tsx";
+import { AddonsContext, rendererFor } from "./addons.ts";
 
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 
@@ -257,7 +259,15 @@ function ReadImage({ partId, index, m, alt }: { partId: string; index: number; m
   return loads ? <MediaPlaceholder failed={failed} retry={retry} label={alt} className="h-52 w-full max-w-sm" /> : null;
 }
 
-export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
+/** The body of a tool card: an addon that draws this tool (GH-516) with "Show raw" for the built-in body, else the built-in body. */
+export function ToolBody(props: { call: ToolCall; result?: ToolResult; plan?: string; tail?: boolean }) {
+  const target = `tool:${props.call.tool}`;
+  const claimed = !!props.result && !!rendererFor(use(AddonsContext), target);
+  const builtin = <BuiltinToolBody {...props} />;
+  return claimed ? <AddonBlock target={target} payload={{ tool: { name: props.call.tool, input: props.call.input, result: props.result!.output } }} raw={builtin} /> : builtin;
+}
+
+function BuiltinToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
   const t = useT();
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} tail={tail} />;
   switch (call.tool) {
@@ -365,12 +375,14 @@ export function ToolBody({ call, result, plan: folded, tail }: { call: ToolCall;
   );
 }
 
+const LINK = "inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0";
+
 /** A claude.ai artifact link opening in a new tab; any other URL is plain text (a result is not trusted). */
 function ArtifactLink({ url }: { url: string }) {
   const t = useT();
   if (!isClaudeUrl(url)) return <span className="break-all font-mono text-xs">{url}</span>;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" title={t("session.toolCard.opensNewTab", { url })} className="inline-flex min-h-11 items-center break-all text-foreground text-xs underline md:min-h-0">
+    <a href={url} target="_blank" rel="noopener noreferrer" title={t("session.toolCard.opensNewTab", { url })} className={LINK}>
       {url}
     </a>
   );
@@ -386,6 +398,7 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
   const output = result && <Lines id={call.id} text={out} error={failed} wrap />;
   const action = field(call.input, "action") || (call.tool === "Artifact" ? "publish" : "");
   const url = field(call.input, "url");
+  const [previewOpen, setPreviewOpen] = usePreviewOpen(call.id);
   if (call.tool === "ArtifactData") {
     const data = (call.input as Record<string, unknown> | null)?.data ?? (call.input as Record<string, unknown> | null)?.writes;
     return (
@@ -427,13 +440,13 @@ function ArtifactBody({ call, result }: { call: ToolCall; result?: ToolResult })
         <div data-testid="artifact-publish" className="space-y-1">
           {title && <div className="font-medium text-sm">{title}</div>}
           {description && <p className="whitespace-pre-wrap text-muted-foreground text-xs">{description}</p>}
-          {link && <ArtifactLink url={link} />}
+          {link && (artifactPreviewable(call) ? <ArtifactLinkMenu url={link} partId={call.id} onPreview={() => setPreviewOpen(true)} className={LINK} /> : <ArtifactLink url={link} />)}
           {file && (
             <div title={file} className="break-all font-mono text-muted-foreground text-xs">
               {file}
             </div>
           )}
-          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={artifactTitle(call) || file} />}
+          {artifactPreviewable(call) && <ArtifactPreview partId={call.id} title={artifactTitle(call) || file} open={previewOpen} onOpenChange={setPreviewOpen} />}
         </div>
         {output}
       </div>

@@ -130,3 +130,21 @@ describe("GH-176 artifacts kind", () => {
     expect(paneTabTitle("artifacts", "Fix")).toBe("Artifacts · Fix");
   });
 });
+
+describe("addon pane refs (GH-516)", () => {
+  const ref = `addon:example:stats:${U}`;
+  it("parseRef/refOf round-trip an addon pane ref; the kind is the pane id", () => {
+    expect(parseRef(ref)).toEqual({ kind: "addon:example:stats", owner: U });
+    expect(refOf(parseRef(ref)!)).toBe(ref);
+    expect(kindOf(ref)).toBe("addon:example:stats");
+    expect(ownerOf(ref)).toBe(U);
+    expect(isPaneRef(ref)).toBe(true);
+    expect(parseRef(`addon:Example:stats:${U}`)).toBeUndefined();
+    expect(parseRef(`s:${U}`)).toBeUndefined();
+  });
+  it("identityOf of an addon ref is the ref (one per view per owner session); it is splittable", () => {
+    expect(identityOf(ref, () => "/p")).toBe(ref);
+    expect(paneTabFor([ref], "addon:example:stats", U, () => "/p")).toBe(ref);
+    expect(splittable(ref)).toBe(true);
+  });
+});

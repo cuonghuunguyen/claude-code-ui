@@ -3,7 +3,7 @@
 // daemon-side settings come from SECTIONS; per-browser choices (General, Layout, Keyboard, most of Notifications) never reach the daemon.
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
 import { sideStatus } from "./sides.tsx";
 import type { Request } from "./client.ts";
@@ -23,6 +23,8 @@ import { AboutSection } from "./about-settings.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
 import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
+import { saveShakeLocate, useShakeLocate } from "./locate.ts";
+import { usePhone } from "@/lib/use-narrow.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
@@ -32,7 +34,8 @@ import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
-import { swatchOf, THEMES, type ThemeId } from "./themes.ts";
+import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
+import { AddonsContext, enabledAddons } from "./addons.ts";
 
 const GROUP_KEY = "claude-ui.settingsGroup";
 /** Groups merged into larger ones: a remembered old id opens the group that holds its section now. */
@@ -147,8 +150,8 @@ function SendingSection() {
 }
 
 /** Light half = the theme's light card, dark half = its dark card. */
-function Swatch({ id }: { id: ThemeId }) {
-  const [l, d] = swatchOf(id);
+function Swatch({ id, list }: { id: ThemeId; list: readonly Theme[] }) {
+  const [l, d] = swatchOf(id, list);
   return (
     <span className="inline-flex h-4 w-7 shrink-0 overflow-hidden rounded-[4px] ring-1 ring-border" aria-hidden data-testid="settings-theme-swatch">
       <span className="flex-1" style={{ background: l }} />
@@ -187,8 +190,12 @@ function LanguageRow() {
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
 function AppearanceSection() {
   const t = useT();
-  const id = useColorTheme();
+  const stored = useColorTheme();
   const dark = useDark();
+  // Built-in themes, then those of the enabled addons. A stored addon theme whose addon is off shows Default (its look is the default tokens).
+  const addons = useContext(AddonsContext).addons;
+  const list = useMemo(() => [...THEMES, ...addonThemes(enabledAddons(addons))], [addons]);
+  const id = list.some((th) => th.id === stored) ? stored : "default";
   return (
     <section aria-labelledby="settings-appearance-title" className="flex flex-col" data-testid="settings-appearance">
       <h3 id="settings-appearance-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
@@ -204,16 +211,16 @@ function AppearanceSection() {
             <SelectValue>
               {(v: ThemeId) => (
                 <>
-                  <Swatch id={v} />
-                  {THEMES.find((th) => th.id === v)?.name ?? v}
+                  <Swatch id={v} list={list} />
+                  {list.find((th) => th.id === v)?.name ?? v}
                 </>
               )}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {THEMES.map((th) => (
+            {list.map((th) => (
               <SelectItem key={th.id} value={th.id} data-testid={`settings-theme-${th.id}`}>
-                <Swatch id={th.id} />
+                <Swatch id={th.id} list={list} />
                 {th.name}
                 {!th.light && th.dark && <span className="text-muted-foreground text-xs">{t("settings.theme.darkOnly")}</span>}
               </SelectItem>
@@ -266,8 +273,11 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
 }
 
 /** The Keep screen awake rows (GH-361): this browser only; the titlebar button and the palette command change the same setting. */
-function ScreenSection() {
+function ScreenSection({ settings, daemon, saving, save }: { settings?: Settings; daemon?: SettingsResult["daemon"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void> }) {
   const t = useT();
+  const ka = daemon?.keepAwake;
+  // GH-523: Keep screen awake also sets Keep computer awake, when this daemon can.
+  const linked = !!settings?.power && !!ka?.supported;
   const s = useKeepAwakeSetting();
   const supported = wakeLockSupported();
   return (
@@ -281,7 +291,7 @@ function ScreenSection() {
               : t("settings.screen.unavailable", { reason: wakeLockReason() })}
           </span>
         </div>
-        <Switch on={s.on} label={t("settings.screen.awake")} held={!supported} onToggle={(on) => saveKeepAwake({ ...s, on })} title={t("settings.screen.awake")} describedBy="settings-awake-hint" testId="settings-keep-awake" />
+        <Switch on={s.on} label={t("settings.screen.awake")} held={!supported} onToggle={(on) => (saveKeepAwake({ ...s, on }), linked && void save({ power: { keepAwake: on } }))} title={t("settings.screen.awake")} describedBy="settings-awake-hint" testId="settings-keep-awake" />
       </div>
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
@@ -292,6 +302,22 @@ function ScreenSection() {
         </div>
         <Switch on={s.onlyRunning} label={t("settings.screen.onlyRunning")} held={!s.on || !supported} onToggle={(onlyRunning) => saveKeepAwake({ ...s, onlyRunning })} title={t("settings.screen.onlyRunning")} describedBy="settings-awake-running-hint" testId="settings-keep-awake-running" />
       </div>
+      {settings?.power && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm">{t("settings.screen.computer")}</span>
+            <span id="settings-computer-awake-hint" className="block text-muted-foreground text-xs">
+              {ka && !ka.supported ? t("settings.screen.computerUnsupported") : t("settings.screen.computerHint")}
+            </span>
+            {ka?.error && settings.power.keepAwake && (
+              <span id="settings-computer-awake-error" className="block text-destructive text-xs" data-testid="settings-computer-awake-error">
+                {t("settings.screen.computerError", { error: ka.error })}
+              </span>
+            )}
+          </div>
+          <Switch on={settings.power.keepAwake} label={t("settings.screen.computer")} held={saving || ka?.supported === false} onToggle={(on) => void save({ power: { keepAwake: on } })} title={t("settings.screen.computer")} describedBy="settings-computer-awake-hint settings-computer-awake-error" testId="settings-computer-awake" />
+        </div>
+      )}
     </Section>
   );
 }
@@ -403,6 +429,8 @@ function SidebarSection() {
 /** Tab bar choices; App owns them (per browser) and passes the values in. */
 function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAutoClose }: { grouping: TabGrouping; onGrouping: (g: TabGrouping) => void; compact: boolean; onCompact?: (on: boolean) => void; autoClose: AutoClose; onAutoClose?: (v: AutoClose) => void }) {
   const t = useT();
+  const phone = usePhone();
+  const shake = useShakeLocate();
   return (
     <Section id="tabs" title={t("settings.tabs.title")}>
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
@@ -454,6 +482,15 @@ function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAu
               ))}
             </SelectContent>
           </Select>
+        </div>
+      )}
+      {!phone && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-tabs-shake-label" className="block text-sm">{t("settings.tabs.shake")}</span>
+            <span id="settings-tabs-shake-hint" className="block text-muted-foreground text-xs">{t("settings.tabs.shakeHint")}</span>
+          </div>
+          <Switch on={shake} label={t("settings.tabs.shake")} held={false} onToggle={saveShakeLocate} title={t("settings.tabs.shake")} describedBy="settings-tabs-shake-hint" testId="settings-tabs-shake" />
         </div>
       )}
     </Section>
@@ -739,7 +776,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         <>
           <TimelineSection />
           <SendingSection />
-          <ScreenSection />
+          <ScreenSection settings={settings} daemon={daemon} saving={saving} save={save} />
         </>
       ),
     },

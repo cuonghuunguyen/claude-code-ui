@@ -1,7 +1,8 @@
 // Status bar under the prompt box: git branch + diff, session token totals, background shells (click: the shells list). Model, context, mode and plan limits live in the prompt toolbar and titlebar.
 import { isBackgroundShell } from "@claude-ui/protocol";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { GitStatus } from "@claude-ui/protocol";
+import { AddonStatusContext } from "./addons.ts";
 import { useT } from "./i18n.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { bashShell, type Shell } from "./shells.ts";
@@ -85,7 +86,7 @@ function Field({ field, children, label, onOpen }: { field: string; children: Re
 }
 
 /** `onShells`: opens the shells list (GH-442); without it the shells field is plain text. */
-export function StatusBar(props: { view: SessionView; git?: () => Promise<GitStatus | null>; onShells?: () => void }) {
+export function StatusBar(props: { view: SessionView; git?: () => Promise<GitStatus | null>; onShells?: () => void; /** The session's addon status entries (addon name -> text); default: the app's, by `sessionId`. */ addonStatus?: Record<string, string>; sessionId?: string }) {
   const t = useT();
   const { view } = props;
   const sum = totals(view);
@@ -95,7 +96,9 @@ export function StatusBar(props: { view: SessionView; git?: () => Promise<GitSta
   const phone = usePhone();
   const tokensShown = sum && !phone;
   // No field has data (outside a git repo before the first turn): no row.
-  if (!git && !tokensShown && !shells.length) return null;
+  const fromApp = useContext(AddonStatusContext);
+  const entries = Object.entries(props.addonStatus ?? (props.sessionId ? fromApp[props.sessionId] : undefined) ?? {});
+  if (!git && !tokensShown && !shells.length && !entries.length) return null;
   return (
     <div data-testid="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums max-sm:flex-nowrap max-sm:overflow-hidden max-sm:whitespace-nowrap">
       {git && <Field field="branch">{git.branch}</Field>}
@@ -107,6 +110,13 @@ export function StatusBar(props: { view: SessionView; git?: () => Promise<GitSta
       {tokensShown && <Field field="in">{t("app.status.in", { tokens: tokens(sum.input) })}</Field>}
       {tokensShown && <Field field="out">{t("app.status.out", { tokens: tokens(sum.output) })}</Field>}
       {tokensShown && <Field field="cached">{t("app.status.cached", { tokens: tokens(sum.cached) })}</Field>}
+      {entries.map(([name, text]) => (
+        <Field key={name} field={`addon-${name}`}>
+          <span className="max-w-48 truncate" title={`${name}: ${text}`} data-testid={`addon-status-${name}`}>
+            {text}
+          </span>
+        </Field>
+      ))}
       {shells.length > 0 && (
         <Field field="shells" label={t("app.status.shellsLabel")} onOpen={props.onShells}>
           {t("app.status.shells", { count: shells.length })}

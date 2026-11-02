@@ -1,5 +1,5 @@
 // What a drag of a pane or session tab does on each drop target (GH-402, docs/spec.md "Layout"). Pure: every result maps to an existing menu command, App only executes it.
-import { type DockArea, type Layout, PANE_IDS, type PaneId, areaOf, canMain } from "./layout.ts";
+import { type DockArea, type Layout, type PaneId, areaOf, canMain, isPaneId } from "./layout.ts";
 import { kindOf } from "./pane-ref.ts";
 import { type DropZone, type SplitDir, type SplitRefusal, isSession } from "./split.ts";
 
@@ -16,7 +16,7 @@ export type MainDrop =
   | { do: "undockSplit"; id: string; dir: SplitDir; before: boolean }
   | { refused: SplitRefusal };
 
-const isPane = (k: string | undefined): k is PaneId => PANE_IDS.includes(k as PaneId);
+const isPane = (k: string | undefined): k is PaneId => isPaneId(k);
 
 /** Drop on a dock area, its drop strip or one of its pane tabs (`before`); undefined: refused. */
 export function dockDrop(d: Drag, area: DockArea, ctx: DropCtx, before?: PaneId): DockDrop | undefined {

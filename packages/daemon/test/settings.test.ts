@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -129,13 +129,24 @@ it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean (GH-3
   expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
 });
 
-it("usageLimit.autoContinue defaults off, is saved when on, refuses a non-boolean", () => {
+it("usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean (GH-524)", () => {
   const f = file();
   const s = createSettings({ file: f });
-  expect(s.get().usageLimit).toEqual({ autoContinue: false });
+  expect(s.get().usageLimit).toEqual({ autoContinue: true });
+  expect(s.set({ usageLimit: { autoContinue: false } }).usageLimit).toEqual({ autoContinue: false });
+  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit).toEqual({ autoContinue: false });
+  expect(createSettings({ file: f }).get().usageLimit.autoContinue).toBe(false);
   s.set({ usageLimit: { autoContinue: true } });
-  expect(createSettings({ file: f }).get().usageLimit).toEqual({ autoContinue: true });
+  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit?.autoContinue).toBeUndefined();
   expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
+});
+
+it("an install that saved nothing for autoContinue gets it on after the update (GH-524)", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ orchestration: { enabled: true } }));
+  const g = createSettings({ file: f }).get();
+  expect(g.usageLimit).toEqual({ autoContinue: true });
+  expect(g.orchestration.enabled).toBe(true);
 });
 
 it("notifications.desktop is on by default, off is stored and read, true is not stored, a non-boolean in the file falls back (GH-158)", () => {
@@ -241,4 +252,13 @@ it("Jira URL: a new value is https, or http only for localhost and 127.0.0.1; a 
   const f = file();
   writeFileSync(f, JSON.stringify({ jira: { url: "http://jira.example.com" } }));
   expect(createSettings({ file: f }).get().jira.url).toBe("http://jira.example.com");
+});
+
+it("power.keepAwake defaults off, is saved and refused unless on or off (GH-523)", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().power.keepAwake).toBe(false);
+  s.set({ power: { keepAwake: true } });
+  expect(createSettings({ file: f }).get().power.keepAwake).toBe(true);
+  expect(() => s.set({ power: { keepAwake: "yes" as never } })).toThrow("Keep computer awake must be on or off");
 });

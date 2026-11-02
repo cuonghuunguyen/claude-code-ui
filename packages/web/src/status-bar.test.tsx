@@ -168,3 +168,15 @@ it("N shells counts a ! command moved to the background; foregroundShells lists 
   const { text } = await render({ view: view(b("m", "background")), git: async () => null });
   expect(text()).toContain("shells=1 shell");
 });
+
+it("shows an addon status field with the text, and nothing else is needed for the row to show", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  await act(async () => root.render(<StatusBar view={view()} addonStatus={{ example: "ready" }} />));
+  const f = el.querySelector('[data-field="addon-example"]')!;
+  expect(f.textContent).toBe("ready");
+  expect(el.querySelector('[data-testid="addon-status-example"]')!.getAttribute("title")).toBe("example: ready");
+  act(() => root.unmount());
+  el.remove();
+});

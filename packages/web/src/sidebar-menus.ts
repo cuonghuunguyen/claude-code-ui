@@ -89,7 +89,7 @@ export function groupEntries(o: {
   if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: t("sidebar.menu.newSession"), onSelect: o.newSession });
   if (o.newWorktree) {
     const nw = o.newWorktree;
-    e.push({ kind: "item", id: `${p}new-worktree`, label: t("sidebar.menu.newWorktree"), onSelect: () => nw(true) }, { kind: "item", id: `${p}create-worktree`, label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false) });
+    e.push({ kind: "item", id: `${p}create-worktree`, label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false) });
   }
   if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
   if (!o.archivedView) {
