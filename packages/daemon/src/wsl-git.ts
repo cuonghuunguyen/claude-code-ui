@@ -29,6 +29,8 @@ export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, s
   const out: Record<string, string> = Object.fromEntries(FORWARD_ENV.filter((k) => env[k] !== undefined).map((k) => [k, env[k]!]));
   // A Windows ssh path means nothing in Linux: only our own BatchMode command crosses.
   if (env.GIT_SSH_COMMAND === BATCH_SSH) out.GIT_SSH_COMMAND = BATCH_SSH;
+  // Windows git-credential-manager.exe launched from Linux sees only the variables WSLENV names. The consumers append this to the distro's own WSLENV.
+  if (out.GCM_INTERACTIVE !== undefined) out.WSLENV = "GCM_INTERACTIVE";
   for (const k of PIN_ENV) {
     const v = env[k];
     if (v === undefined) continue;
@@ -48,7 +50,7 @@ export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, s
 
 /** Shell script run by bash in the distro: cd, git's env, exec git. */
 export function wslGitScript(posix: string, args: string[], env: Record<string, string>): string {
-  return [`cd -- ${q(posix)} || exit 128`, ...Object.entries(env).map(([k, v]) => `export ${k}=${q(v)}`), `exec git ${args.map(q).join(" ")}`].join("\n");
+  return [`cd -- ${q(posix)} || exit 128`, ...Object.entries(env).map(([k, v]) => `export ${k}=${q(v)}${k === "WSLENV" ? `"\${WSLENV:+:$WSLENV}"` : ""}`), `exec git ${args.map(q).join(" ")}`].join("\n");
 }
 
 /** wsl.exe arguments: the script travels base64-encoded (like `wslArgs`), bash without login files. */

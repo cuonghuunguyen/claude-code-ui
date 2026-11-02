@@ -89,8 +89,20 @@ describe("wslEnv remote switches", () => {
   it("forwards the no-prompt switches and only our BatchMode ssh command", async () => {
     const { wslEnv } = await import("../src/wsl-git.ts");
     const { BATCH_SSH } = await import("../src/git-runner.ts");
-    expect(wslEnv({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH }, "Ubuntu")).toEqual({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH });
+    expect(wslEnv({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH }, "Ubuntu")).toEqual({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH, WSLENV: "GCM_INTERACTIVE" });
     expect(wslEnv({ GIT_SSH_COMMAND: "C:\\ssh.exe" }, "Ubuntu")).toEqual({});
+  });
+
+  it("GCM_INTERACTIVE reaches the Windows credential manager: WSLENV names it and is appended to the distro's own value", async () => {
+    const { wslEnv, wslGitScript } = await import("../src/wsl-git.ts");
+    const e = wslEnv({ GCM_INTERACTIVE: "never" }, "Ubuntu");
+    expect(e).toEqual({ GCM_INTERACTIVE: "never", WSLENV: "GCM_INTERACTIVE" });
+    expect(wslEnv({}, "Ubuntu").WSLENV).toBeUndefined();
+    expect(wslGitScript("/", ["fetch"], e)).toContain('export WSLENV=\'GCM_INTERACTIVE\'"${WSLENV:+:$WSLENV}"');
+    if (process.platform !== "win32") {
+      const out = execFileSync("bash", ["-c", wslGitScript("/", [], e).replace("exec git", 'exec printf %s "$WSLENV"')], { encoding: "utf8", env: { ...process.env, WSLENV: "FOO/u" } });
+      expect(out).toBe("GCM_INTERACTIVE:FOO/u");
+    }
   });
 
   it("a wsl project's fetch still routes through the wsl runner with the no-prompt env", async () => {

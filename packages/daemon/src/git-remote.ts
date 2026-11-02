@@ -268,6 +268,8 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
     if (o.local !== info.local) throw new WorktreeError("stale", `${x} moved since the menu opened: reopen it`);
     const shown = verb === "push" ? info.trackingHash : info.upstreamHash;
     const shownRef = verb === "push" ? info.tracking?.replace(/^refs\/remotes\//, "") : info.upstream;
+    // No `tracking` while one exists: a page from an older build, which reopening the menu cannot fix.
+    if (o.tracking === undefined && shown) throw new WorktreeError("stale", "This page is out of date: reload it, then retry");
     if (o.tracking !== shown) throw new WorktreeError("stale", `${shownRef ?? "The remote branch"} moved since the menu opened: reopen it`);
     let argv: string[];
     let remote: string | undefined;

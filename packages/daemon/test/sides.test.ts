@@ -1053,6 +1053,23 @@ describe("git frames", () => {
     s.close();
   });
 
+  it("the side appends the hub's WSLENV to its own", async () => {
+    const seen: { env: Record<string, string> }[] = [];
+    const side = gitSide(((o: { env: Record<string, string> }) => (seen.push(o), Promise.resolve({ stdout: Buffer.alloc(0), stderr: "" }))) as never);
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    const old = process.env.WSLENV;
+    process.env.WSLENV = "FOO/u";
+    try {
+      await s.git("wsl:Ubuntu", { cwd: "/", args: ["version"], env: { WSLENV: "GCM_INTERACTIVE" } });
+    } finally {
+      if (old === undefined) delete process.env.WSLENV;
+      else process.env.WSLENV = old;
+    }
+    expect(seen[0]!.env.WSLENV).toBe("GCM_INTERACTIVE:FOO/u");
+    s.close();
+  });
+
   it("killTree crosses to the side", async () => {
     const seen: unknown[] = [];
     const side = gitSide(((o: unknown) => (seen.push(o), Promise.resolve({ stdout: Buffer.alloc(0), stderr: "" }))) as never);

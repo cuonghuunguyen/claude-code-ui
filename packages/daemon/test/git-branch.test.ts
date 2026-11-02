@@ -191,7 +191,8 @@ describe("the remote branch moved since the menu opened (GH-309)", () => {
   it("a push without the shown tracking hash while one exists is stale; a non-hex one is bad_request", async () => {
     const { a, inside } = repos();
     const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
-    await expect(gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, allowed: inside })).rejects.toMatchObject({ code: "stale" });
+    await expect(gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/reload/) });
+    await expect(gitPull(a, { ref: MAIN, local: i.local, argv: i.pull!, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/reload/) });
     await expect(gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, tracking: "x", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
   });
   it("refused from a detached HEAD: bad_request, nothing runs, the menu data never moves HEAD", async () => {
