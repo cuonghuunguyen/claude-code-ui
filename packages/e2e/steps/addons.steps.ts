@@ -12,10 +12,11 @@ export const addonRow = (page: Page, name: string): Locator => page.locator(`[da
 
 /** `/addons` in the prompt box opens the dialog (a dialog command is never sent). */
 export async function openAddons(page: Page): Promise<void> {
-  if (await dialog(page).isVisible()) return;
+  if (await dialog(page).isVisible()) return void (await expect(dialog(page).getByText("Loading addons…")).toHaveCount(0));
   await promptBox(page).fill("/addons");
   await promptBox(page).press("Enter");
   await expect(dialog(page)).toBeVisible();
+  await expect(dialog(page).getByText("Loading addons…")).toHaveCount(0);
 }
 const closeAddons = async (page: Page) => {
   await page.keyboard.press("Escape");
@@ -131,7 +132,7 @@ Then("no new user message is shown", async ({ page }) => {
 });
 
 const bandFrame = (page: Page) => page.getByTestId("addon-frame-example-band");
-Then("the addon band of {string} is above the prompt box", async ({ page }) => {
+Then("the addon band of {string} is above the prompt box", async ({ page }, _name: string) => {
   const band = bandFrame(page);
   await expect(band).toBeVisible();
   const [b, p] = [await band.boundingBox(), await promptBox(page).boundingBox()];
@@ -141,9 +142,6 @@ Then("the band shows the turn count", async ({ page }) => {
   await expect(page.frameLocator('[data-testid="addon-frame-example-band"]').getByTestId("example-band")).toHaveText(/\d+ turns?/);
 });
 
-When("I type {string} in the prompt box", async ({ page }, text: string) => {
-  await promptBox(page).fill(text);
-});
 Then("the command picker lists {string} with its description", async ({ page }, name: string) => {
   const row = page.getByRole("option").filter({ hasText: name });
   await expect(row).toBeVisible();
@@ -154,7 +152,8 @@ When("I run {string}", async ({ page }, text: string) => {
   await promptBox(page).press("Enter");
 });
 Then("the prompt box contains {string}", async ({ page }, text: string) => {
-  await expect(promptBox(page)).toHaveValue(text);
+  // the command inserts its text plus one trailing space for typing on
+  await expect.poll(() => promptBox(page).inputValue()).toBe(text + " ");
 });
 
 When("I send a prompt containing an {string} code fence with {string}", async ({ page }, lang: string, source: string) => {
