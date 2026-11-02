@@ -10,6 +10,7 @@ import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
 import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { useNow } from "./plan-meter.tsx";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
@@ -345,6 +346,8 @@ export function SessionList({
     if (reveal.focus) row?.focus();
     setReveal(undefined);
   }, [reveal]);
+  // GH-517: shake to locate; a row hidden in a collapsed group or by the search is left alone.
+  useShakeToLocate(() => ringLocate(activeId ? listRef.current?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(activeId)}"]`) : null));
   const setAll = (update: (c: Set<string>) => Iterable<string>) =>
     setCollapsed((c) => {
       const next = new Set(update(c));

@@ -22,6 +22,7 @@ import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-
 import { kindLabel, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { t as tt, useT } from "./i18n.ts";
+import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { swallowKeyFollowup } from "./context-menu-key.ts";
 import { ITEM, Items, POPUP, RenameInput, type SessionAction } from "./session-actions.tsx";
 
@@ -340,6 +341,13 @@ export function TabsBar({
     ro.observe(el);
     return () => ro.disconnect();
   }, [activeId, tabs.length, collapsed]);
+  // GH-517: shake to locate. Compact tabs: the active tab's group chip rings instead.
+  useShakeToLocate(() => {
+    if (!activeId || activeId === NEW_TAB) return;
+    const s = strip.current;
+    const chip = compact && chips ? s?.querySelector<HTMLElement>(`[data-group-chip="${CSS.escape(keyOf(activeId))}"]`) : null;
+    ringLocate(chip ?? s?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeId)}"]`));
+  });
   // When the last swipe on a switcher row ended: the click that follows it must not select the row (base-ui commits a selection on click).
   const swiped = useRef(-Infinity);
   // Vertical swipe on the switcher button: previous / next tab in the list's order (Focus first), no wrap.

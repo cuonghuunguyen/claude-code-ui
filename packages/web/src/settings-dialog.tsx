@@ -23,6 +23,8 @@ import { AboutSection } from "./about-settings.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
 import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
+import { saveShakeLocate, useShakeLocate } from "./locate.ts";
+import { usePhone } from "@/lib/use-narrow.ts";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
@@ -427,6 +429,8 @@ function SidebarSection() {
 /** Tab bar choices; App owns them (per browser) and passes the values in. */
 function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAutoClose }: { grouping: TabGrouping; onGrouping: (g: TabGrouping) => void; compact: boolean; onCompact?: (on: boolean) => void; autoClose: AutoClose; onAutoClose?: (v: AutoClose) => void }) {
   const t = useT();
+  const phone = usePhone();
+  const shake = useShakeLocate();
   return (
     <Section id="tabs" title={t("settings.tabs.title")}>
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
@@ -478,6 +482,15 @@ function TabsSection({ grouping, onGrouping, compact, onCompact, autoClose, onAu
               ))}
             </SelectContent>
           </Select>
+        </div>
+      )}
+    {!phone && (
+        <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <div className="min-w-0 flex-1">
+            <span id="settings-tabs-shake-label" className="block text-sm">{t("settings.tabs.shake")}</span>
+            <span id="settings-tabs-shake-hint" className="block text-muted-foreground text-xs">{t("settings.tabs.shakeHint")}</span>
+          </div>
+          <Switch on={shake} label={t("settings.tabs.shake")} held={false} onToggle={saveShakeLocate} title={t("settings.tabs.shake")} describedBy="settings-tabs-shake-hint" testId="settings-tabs-shake" />
         </div>
       )}
     </Section>

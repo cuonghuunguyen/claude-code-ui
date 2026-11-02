@@ -76,6 +76,23 @@
     }
 }
 
+/* Shake to locate (GH-517): accent ring on the active tab, group chip and sidebar row; inset, the strip and list clip outside outlines. */
+@keyframes locate-pulse {
+    50% {
+        outline-color: transparent;
+    }
+}
+[data-locate] {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+    animation: locate-pulse 500ms ease-in-out 3;
+}
+@media (prefers-reduced-motion: reduce) {
+    [data-locate] {
+        animation: none;
+    }
+}
+
 /*
  * OpenCode oc-2 tokens on shadcn names (development reference: opencode-parity/reference.md A3).
  * Deviations for WCAG 4.5:1 text contrast (theme.test.ts): light success/warning are darker; --faint (3.95:1) is for icons only; inactive tab titles use --muted-foreground (OpenCode uses text-faint, below 4.5:1 in light).

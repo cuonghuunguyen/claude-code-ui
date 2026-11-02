@@ -1037,3 +1037,27 @@ it("renders Vietnamese: group list, daemon rows with their hints, and select lab
     act(() => setLocalePref("system"));
   }
 });
+
+it("Shake to locate is a switch in Tabs, on by default, saved per browser (GH-517)", async () => {
+  localStorage.removeItem("claude-ui.shakeLocate");
+  const { q, pick } = await render();
+  await pick("layout");
+  expect(q("settings-tabs-shake")!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-tabs-shake")!.click());
+  expect(q("settings-tabs-shake")!.getAttribute("aria-checked")).toBe("false");
+  expect(localStorage.getItem("claude-ui.shakeLocate")).toBe("0");
+  localStorage.removeItem("claude-ui.shakeLocate");
+});
+
+it("phones show no Shake to locate row (GH-517)", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((m: string) => ({ matches: m.includes("40rem"), media: m, addEventListener() {}, removeEventListener() {} })) as never;
+  try {
+    const { q, pick } = await render();
+    await pick("layout");
+    expect(q("settings-tabs-shake")).toBeNull();
+    expect(q("settings-tabs-compact")).not.toBeNull();
+  } finally {
+    window.matchMedia = mm;
+  }
+});
