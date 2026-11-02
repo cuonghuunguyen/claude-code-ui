@@ -29,6 +29,8 @@ export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, s
   const out: Record<string, string> = Object.fromEntries(FORWARD_ENV.filter((k) => env[k] !== undefined).map((k) => [k, env[k]!]));
   // A Windows ssh path means nothing in Linux: only our own BatchMode command crosses.
   if (env.GIT_SSH_COMMAND === BATCH_SSH) out.GIT_SSH_COMMAND = BATCH_SSH;
+  // Windows git-credential-manager.exe launched from Linux sees only the variables WSLENV names. The consumers append this to the distro's own WSLENV.
+  if (out.GCM_INTERACTIVE !== undefined) out.WSLENV = "GCM_INTERACTIVE";
   for (const k of PIN_ENV) {
     const v = env[k];
     if (v === undefined) continue;
@@ -48,7 +50,7 @@ export function wslEnv(env: NodeJS.ProcessEnv, distro: string): Record<string, s
 
 /** Shell script run by bash in the distro: cd, git's env, exec git. */
 export function wslGitScript(posix: string, args: string[], env: Record<string, string>): string {
-  return [`cd -- ${q(posix)} || exit 128`, ...Object.entries(env).map(([k, v]) => `export ${k}=${q(v)}`), `exec git ${args.map(q).join(" ")}`].join("\n");
+  return [`cd -- ${q(posix)} || exit 128`, ...Object.entries(env).map(([k, v]) => `export ${k}=${q(v)}${k === "WSLENV" ? `"\${WSLENV:+:$WSLENV}"` : ""}`), `exec git ${args.map(q).join(" ")}`].join("\n");
 }
 
 /** wsl.exe arguments: the script travels base64-encoded (like `wslArgs`), bash without login files. */
@@ -101,7 +103,12 @@ export function wslGitRunner(o: WslGitOptions): GitRunner {
     } catch (e) {
       return Promise.reject(e);
     }
-    const viaExe = () => o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) });
+    // A remote operation must die with its whole process group on timeout; only the side can do that inside the distro.
+    const sideNeeded = () => {
+      const m = `The WSL side of ${w.distro} is not running; fetch, push and pull need it. Retry when it is ready (Settings › Sides).`;
+      return Object.assign(new Error(m), { stderr: m, stdout: Buffer.alloc(0) });
+    };
+    const viaExe = () => (r.killTree ? Promise.reject(sideNeeded()) : o.local({ ...r, file: "wsl.exe", cwd: homedir(), args: wslGitArgs(w.distro, wslGitScript(w.posix, args, env)), env: wslExeEnv(process.env) }));
     const id = o.side?.(w.distro);
     if (!id || !o.sideRun) return viaExe();
     return o.sideRun(id, { ...r, cwd: w.posix, args, env }).catch((e) => (e instanceof SideGone && (!e.sent || r.idempotent) ? viaExe() : Promise.reject(e)));

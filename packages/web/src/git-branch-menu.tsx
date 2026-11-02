@@ -9,7 +9,7 @@ import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 import { t, useT } from "./i18n.ts";
 
 type Client = ReturnType<typeof connect>;
-export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; exact?: true };
+export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true };
 type Kind = "push" | "force" | "pull";
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
 
@@ -81,9 +81,9 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
     const { info } = d;
     const x = name(info.ref);
     // The command the dialog showed goes with the confirm: the daemon runs it only when it computes the same.
-    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [] }, t("sidebar.git.pulled", { target: of(x) }), t("sidebar.git.pulling", { target: of(x) }));
+    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [], ...(info.upstreamHash && { tracking: info.upstreamHash }) }, t("sidebar.git.pulled", { target: of(x) }), t("sidebar.git.pulling", { target: of(x) }));
     const force = d.kind === "force";
-    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }) }, t(force ? "sidebar.git.pushedForced" : "sidebar.git.pushed", { target: of(x), remote: info.remote ?? "" }), t("sidebar.git.pushing", { target: of(x) }));
+    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }), ...(info.trackingHash && { tracking: info.trackingHash }) }, t(force ? "sidebar.git.pushedForced" : "sidebar.git.pushed", { target: of(x), remote: info.remote ?? "" }), t("sidebar.git.pushing", { target: of(x) }));
   };
   const argv = dialog && (dialog.kind === "push" ? dialog.info.push : dialog.kind === "force" ? dialog.info.forcePush : dialog.info.pull);
   const i = dialog?.info;

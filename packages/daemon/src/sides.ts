@@ -3,7 +3,7 @@
 // browser request to the side that owns its session, terminal or path; one URL, one pairing, one page for every side.
 // Frames are JSON lines. hub -> side: {c, o} opens virtual connection c, {c, m} a client message, {c, x} closes it.
 // side -> hub: {ready} once listening, {c, m} a server message, {push} a Web Push payload. Other stdout lines are ignored.
-// Git of a WSL project the hub opened by its Windows path: hub -> side {g, git: {cwd, args, env, input?, timeout?, maxBuffer?}} runs git in
+// Git of a WSL project the hub opened by its Windows path: hub -> side {g, git: {cwd, args, env, input?, timeout?, maxBuffer?, killTree?}} runs git in
 // the side; side -> hub {g, out: <base64 stdout>, err, error?: {message, code?, killed, signal?}} answers it (`wsl-git.ts`).
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
@@ -523,7 +523,7 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 }
 
 type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
-type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall> };
+type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall>; killTree?: boolean };
 
 let nextGit = 0;
 
@@ -820,7 +820,7 @@ export function createSides(opts: {
           delete s.bundle;
           delete s.fallback;
           clashed.delete(s.id);
-          Object.assign(s, { state: "ready", message: undefined });
+          Object.assign(s, { state: "ready", message: undefined, killTree: f.killTree });
           saved.set(s.id, { ...saved.get(s.id), id: s.id, key: opts.key?.() });
           persist();
           resolve();
@@ -1078,6 +1078,10 @@ export function createSides(opts: {
     git(id: string, o: GitRunOptions): Promise<GitRunOutput> {
       const s = sides.get(id);
       if (s?.state !== "ready" || !s.proc) return Promise.reject(new SideGone(`${id} is not running`));
+      if (o.killTree && !s.killTree) {
+        const m = `The WSL side of ${id.replace(/^wsl:/, "")} runs an older version and cannot end a timed-out git; restart it (Settings › Sides).`;
+        return Promise.reject(Object.assign(new Error(m), { stderr: m, stdout: Buffer.alloc(0) }));
+      }
       const gid = ++nextGit;
       return new Promise((ok, fail) => {
         const timer = setTimeout(() => {
@@ -1086,7 +1090,7 @@ export function createSides(opts: {
         }, (o.timeout ?? 30_000) + 10_000);
         timer.unref();
         s.gits.set(gid, { ok, fail, timer });
-        write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer } });
+        write(s, { g: gid, git: { cwd: o.cwd, args: o.args, env: o.env, input: o.input, timeout: o.timeout, maxBuffer: o.maxBuffer, killTree: o.killTree } });
       });
     },
     /** A manual start (Retry, Update, Open project): the exit count starts again. */
@@ -1543,7 +1547,7 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
       if (!opts.git) return answer({ out: "", err: "", error: { message: "no git" } });
       // The side's own GIT_* (a login profile may set GIT_DIR, GIT_WORK_TREE ...) is dropped, whatever it is: git gets the hub's env only,
       // like the wsl.exe path (fixed list, `wslExeEnv`). The hub sends every GIT_* variable it wants (the repository pin included).
-      opts.git({ ...f.git, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))), ...f.git.env } }).then(
+      opts.git({ ...f.git, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))), ...f.git.env, ...(f.git.env.WSLENV && { WSLENV: [f.git.env.WSLENV, process.env.WSLENV].filter(Boolean).join(":") }) } }).then(
         (r) => answer({ out: r.stdout.toString("base64"), err: r.stderr }),
         (e: Error & { stdout?: Buffer; stderr?: string; code?: string | number; killed?: boolean; signal?: string }) => answer({ out: (e.stdout ?? Buffer.alloc(0)).toString("base64"), err: e.stderr ?? "", error: { message: e.message, code: e.code, killed: !!e.killed, signal: e.signal } }),
       );
@@ -1567,7 +1571,8 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
     sockets.forEach((s) => s.close());
     opts.onEnd?.();
   });
-  write(JSON.stringify({ ready: true }));
+  // killTree: this side ends a timed-out git's process group; an older side that did not restart sends none (the hub refuses remote git to it).
+  write(JSON.stringify({ ready: true, killTree: true }));
   return {
     push: (p: PushPayload) => write(JSON.stringify({ push: p })),
     running: (on: boolean) => write(JSON.stringify({ running: on })),

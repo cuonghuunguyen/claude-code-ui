@@ -231,9 +231,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
   | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
-  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; exact?: true }
+  | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
-  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; exact?: true }
+  | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
    * Creates a worktree in `<repo>/.claude/worktrees/` (docs/spec.md "Worktrees"). `name` only: folder `<name>` on branch `worktree-<name>`; nothing: a generated
    * name. `branch` (GH-447, may contain `/`): a new Created branch, folder = `branch` with `/` → `-`; `base`: its start point (a commit-ish, the Base picker
@@ -667,6 +667,8 @@ export type GitBranchInfo = {
   tracking?: string;
   trackingHash?: string;
   upstream?: string;
+  /** Hash of the upstream's remote-tracking ref (pull's stale check). */
+  upstreamHash?: string;
   ahead?: number;
   behind?: number;
   isDefault?: boolean;

@@ -1087,6 +1087,46 @@ describe("git frames", () => {
     s.close();
   });
 
+  it("the side appends the hub's WSLENV to its own", async () => {
+    const seen: { env: Record<string, string> }[] = [];
+    const side = gitSide(((o: { env: Record<string, string> }) => (seen.push(o), Promise.resolve({ stdout: Buffer.alloc(0), stderr: "" }))) as never);
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    const old = process.env.WSLENV;
+    process.env.WSLENV = "FOO/u";
+    try {
+      await s.git("wsl:Ubuntu", { cwd: "/", args: ["version"], env: { WSLENV: "GCM_INTERACTIVE" } });
+    } finally {
+      if (old === undefined) delete process.env.WSLENV;
+      else process.env.WSLENV = old;
+    }
+    expect(seen[0]!.env.WSLENV).toBe("GCM_INTERACTIVE:FOO/u");
+    s.close();
+  });
+
+  it("killTree crosses to the side", async () => {
+    const seen: unknown[] = [];
+    const side = gitSide(((o: unknown) => (seen.push(o), Promise.resolve({ stdout: Buffer.alloc(0), stderr: "" }))) as never);
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
+    await s.start("wsl:Ubuntu");
+    await s.git("wsl:Ubuntu", { cwd: "/", args: ["version"], env: {}, killTree: true, timeout: 5000 });
+    expect(seen[0]).toMatchObject({ killTree: true, timeout: 5000 });
+    s.close();
+  });
+
+  it("a side that did not say killTree in its ready frame is refused a killTree git, never run", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const exit = new EventEmitter();
+    const proc = { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess;
+    const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => proc });
+    const started = s.start("wsl:Ubuntu");
+    stdout.write(JSON.stringify({ ready: true }) + "\n");
+    await started;
+    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: ["fetch"], env: {}, killTree: true })).rejects.toMatchObject({ message: expect.stringMatching(/older version/) });
+    s.close();
+  });
+
   it("git to a side that is not ready rejects SideGone; a side that exits fails its pending git with SideGone", async () => {
     const side = gitSide(() => new Promise(() => {}));
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
