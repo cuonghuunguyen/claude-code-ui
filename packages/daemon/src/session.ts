@@ -677,6 +677,8 @@ export class Session {
   async interrupt() {
     if (this.bashRun) return this.bashRun.kill();
     if (this.state === "idle" && (this.tasks.size || this.cliTurn)) return this.resetWorking();
+    // The own CLI can run a turn the session never saw (GH-513): Esc reaches it. A real terminal turn dropped the own query.
+    if (this.externalTurn && this.query && this.state === "idle") return void (await this.query.interrupt());
     if (!this.query || (this.state !== "running" && this.state !== "needs_input")) return;
     for (const [id, { part }] of [...this.pending]) {
       if (part.type === "question") {
@@ -857,7 +859,8 @@ export class Session {
     const chain = t.main.filter((m) => !m.parent_tool_use_id);
     // The own CLI's notice of its own background call that it only logs (queueTranscriptOnly, e.g. a run that handed its
     // report back in a message): no stream message, no turn. Own: no external turn, the live query stays.
-    const notices = chain.filter((m) => !this.known.has(m.uuid) && this.ownCalls.has(noticeCall(m) ?? ""));
+    // A notification naming no call (artifact-auto-react after an interrupt, GH-513) is the own CLI's too.
+    const notices = chain.filter((m) => !this.known.has(m.uuid) && (this.ownCalls.has(noticeCall(m) ?? "") || (isNotification(m) && noticeCall(m) === undefined)));
     for (const m of notices) this.own.add(m.uuid);
     this.logTranscript(notices, this.adapter);
     const tail = this.timeline.at(-1);
@@ -1524,6 +1527,11 @@ function turnOpen(m: SessionMessage) {
   if (typeof content === "string") return !TURN_END.test(content);
   return !(Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "text" && TURN_END.test((b as { text?: string }).text ?? "")));
 }
+
+const isNotification = (m: SessionMessage) => {
+  const content = (m.message as { content?: unknown } | undefined)?.content;
+  return m.type === "user" && typeof content === "string" && content.startsWith("<task-notification>");
+};
 
 /** Call ID (`<tool-use-id>`) of a `<task-notification>` user message; undefined for any other message. */
 function noticeCall(m: SessionMessage) {

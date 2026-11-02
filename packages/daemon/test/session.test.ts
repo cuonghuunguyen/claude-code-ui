@@ -2063,6 +2063,27 @@ describe("Session bash mode", () => {
     expect(events.filter((e) => e.part.type === "bash").map((e) => e.part.id)).toEqual(["bi", "bi"]);
   });
 
+  it("a task-notification naming no call, written by the own CLI after an interrupt, is no external turn (GH-513)", async () => {
+    const rec = (uuid: string, content: string) => ({ type: "user", uuid, session_id: "x", message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null });
+    const main = [...history, rec("int", "[Request interrupted by user]"), rec("note", "<task-notification>\n<summary>artifact auto-reply subscriptions paused by the interrupt</summary>\n</task-notification>")];
+    const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, readTranscript: async () => ({ main: main as never, runs: [] }) });
+    await s.sync();
+    expect(s.externalTurnRunning()).toBe(false);
+  });
+
+  it("Esc interrupts the own query while an unseen turn is marked external (GH-513)", async () => {
+    const s = new Session("/tmp", { query: interruptQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    await until(events, () => s.info().state === "idle");
+    (s as unknown as { setExternalTurn(r: boolean): void }).setExternalTurn(true);
+    const n = interrupts.length;
+    await s.interrupt();
+    expect(interrupts.length).toBe(n + 1);
+  });
+
   it("throttles running updates to 500 ms with a trailing update, and emits nothing for unchanged output", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
