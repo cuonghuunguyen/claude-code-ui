@@ -717,7 +717,7 @@ export function FileTree({
               data-path={entry.path}
               data-dir={entry.isDir ? "" : undefined}
               aria-busy={busyPath === entry.path || undefined}
-              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : ""} ${busyPath === entry.path ? "opacity-60" : ""}`}
+              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : "hover:bg-muted"} ${busyPath === entry.path ? "opacity-60" : ""}`}
               style={pad}
               onFocus={() => setFocused(entry.path)}
               onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}

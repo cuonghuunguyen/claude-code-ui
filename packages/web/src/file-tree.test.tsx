@@ -896,7 +896,8 @@ it("GH-525 the focused folder row keeps a selected background (not the hover one
   await act(async () => src.focus());
   await act(async () => src.click());
   expect(src.className).toContain("bg-secondary");
-  expect(src.className).not.toContain(" bg-muted");
+  expect(src.className).not.toContain("bg-muted"); // hover:bg-muted would beat bg-secondary under the pointer
+  expect(t.row("/p/README.md").className).toContain("hover:bg-muted");
   await act(async () => t.row("/p/README.md").focus());
   expect(t.row("/p/src").className).not.toContain("bg-secondary");
   expect(t.row("/p/README.md").className).toContain("bg-secondary");
