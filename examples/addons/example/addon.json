@@ -1,0 +1,44 @@
+{
+  "name": "example",
+  "version": "1.0.0",
+  "description": "Shows every addon feature: a theme, a pane, a band, a command and a renderer.",
+  "capabilities": [
+    "session.read",
+    "prompt.insert",
+    "ui.status",
+    "ui.toast",
+    "ui.pane",
+    "ui.band",
+    "ui.command",
+    "render.fence:example",
+    "render.tool:mcp__example__echo",
+    "net:https://api.github.com"
+  ],
+  "themes": [
+    {
+      "id": "dusk",
+      "name": "Example Dusk",
+      "light": {
+        "bg": "#ece8f5", "card": "#f5f2fb", "side": "#e2ddef", "fg": "#2a2540", "muted": "#4f4868", "border": "#d3cde6",
+        "primary": "#5b3fc4", "pfg": "#ffffff", "kw": "#5b2fb8", "str": "#1c6b3a", "fn": "#1f55b8", "type": "#8a4a00",
+        "num": "#a23a00", "cmt": "#5f587a", "varc": "#a0285f", "err": "#b3203a", "warn": "#7a4a00", "ok": "#1c6b3a", "info": "#1f55b8"
+      },
+      "dark": {
+        "bg": "#14111f", "card": "#1d1a2e", "side": "#262240", "fg": "#e6e1f7", "muted": "#a9a2c8", "border": "#322d4d",
+        "primary": "#a78bfa", "pfg": "#14111f", "kw": "#c4a8ff", "str": "#8fdca6", "fn": "#8ab4ff", "type": "#f2c879",
+        "num": "#ffa66b", "cmt": "#a39dc4", "varc": "#f49ac2", "err": "#ff8a9e", "warn": "#f2c879", "ok": "#8fdca6", "info": "#8ab4ff"
+      }
+    }
+  ],
+  "css": "theme.css",
+  "views": [
+    { "id": "stats", "title": "Stats", "entry": "pane.html", "kind": "pane", "phone": false },
+    { "id": "info", "title": "Info", "entry": "band.html", "kind": "band" }
+  ],
+  "commands": [{ "name": "cmd", "description": "Insert a sample prompt", "argumentHint": "[text]" }],
+  "commandsEntry": "command.html",
+  "renderers": [
+    { "fence": "example", "entry": "render.html" },
+    { "tool": "mcp__example__echo", "entry": "render.html" }
+  ]
+}

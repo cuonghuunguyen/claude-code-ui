@@ -132,6 +132,7 @@ export type CommandContext = {
   openSkills?: () => void;
   /** Opens the Manage Plugins dialog of the shown project; none without a project. */
   openPlugins?: () => void;
+  openAddons?: () => void;
 };
 
 const RECENT_SESSIONS = 5;
@@ -251,6 +252,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     // The extension's command menu section "Customize".
     c.openMcp && { id: "mcp.open", ...grp("app.cmd.groupCustomize"), keys: specOf("mcp.open"), title: t("app.cmd.mcp"), description: t("app.cmd.mcpDesc"), run: c.openMcp },
     c.openSkills && { id: "skills.open", ...grp("app.cmd.groupCustomize"), keys: specOf("skills.open"), title: t("app.cmd.skills"), description: t("app.cmd.skillsDesc"), run: c.openSkills },
+    c.openAddons && { id: "addons.open", ...grp("app.cmd.groupCustomize"), keys: specOf("addons.open"), title: t("app.cmd.addons"), description: t("app.cmd.addonsDesc"), run: c.openAddons },
     c.openPlugins && { id: "plugins.open", ...grp("app.cmd.groupCustomize"), keys: specOf("plugins.open"), title: t("app.cmd.plugins"), description: t("app.cmd.pluginsDesc"), run: c.openPlugins },
     // Newest first; the recent ones also show before anything is typed (OpenCode lists recent items there, not all).
     ...[...c.sessions]

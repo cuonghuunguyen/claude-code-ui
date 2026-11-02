@@ -1,6 +1,6 @@
 // Addons (docs/spec.md "Addons"): install from a local bare git repo or a folder, approval, serving with the addon CSP, updates, redaction.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import WebSocket from "ws";
 import type { AddonInfo, AddonUpdateCheck, AddonsListResult, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { toInfo } from "../src/addons.ts";
+import { parseManifest, toInfo } from "../src/addons.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "addons-")));
 const webRoot = join(tmp, "web");
@@ -293,6 +293,15 @@ describe("local folders, uninstall, renderer picks", () => {
     expect(await c.request({ type: "addons.pickRenderer", target: "fence:example", name: "c" })).toMatchObject({ code: "bad_request" });
     await c.request({ type: "addons.uninstall", name: "b" });
     expect((await list()).picks).toEqual({});
+  });
+});
+
+describe("the example addon", () => {
+  it("has a valid manifest that no capability leaves uncovered", () => {
+    const root = join(import.meta.dirname, "../../../examples/addons/example");
+    const m = parseManifest(JSON.parse(readFileSync(join(root, "addon.json"), "utf8")), root);
+    expect(m.capabilities).toHaveLength(10);
+    expect(m.themes[0]!.dark).toHaveProperty("bg");
   });
 });
 

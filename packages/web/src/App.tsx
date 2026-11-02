@@ -78,6 +78,8 @@ import { SkillsDialog } from "./skills-dialog.tsx";
 import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
+import { AddonsDialog } from "./addons-dialog.tsx";
+import { AddonsContext, EMPTY_ADDONS, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
@@ -305,6 +307,10 @@ export function App() {
   // Manage Plugins dialog, like `mcp`; `reloadFailed`: sessions whose last plugin reload failed (its restart banner).
   const [plugins, setPlugins] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
   const [reloadFailed, setReloadFailed] = useState<Set<string>>(new Set());
+  // Addons (GH-516, Hub-wide): the list kept for the whole app (themes, panes, commands, renderers) and the Manage addons dialog; `addonsRev` bumps on config.changed kind addons.
+  const [addons, setAddons] = useState<AddonsState>(EMPTY_ADDONS);
+  const [addonsOpen, setAddonsOpen] = useState(false);
+  const [addonsRev, setAddonsRev] = useState(0);
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
@@ -1327,6 +1333,7 @@ export function App() {
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       onConfigChanged: (m) => {
+        if (m.kind === "addons") return setAddonsRev((n) => n + 1);
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
@@ -2782,6 +2789,17 @@ export function App() {
   const projectSession = draftShown ? undefined : shown?.id;
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
   const openPlugins = () => project && setPlugins({ open: true, cwd: project, sessionId: projectSession });
+  const openAddons = () => setAddonsOpen(true);
+  useEffect(() => {
+    if (status !== "connected") return;
+    let stale = false;
+    // A daemon without addons (a Side-only setup) answers addons_unavailable: no addons, no message.
+    client.current!.request<AddonsListResult>({ type: "addons.list" }).then(
+      (r) => !stale && setAddons((s) => ({ ...s, addons: r.addons, picks: r.picks })),
+      () => !stale && setAddons((s) => ({ ...s, addons: [], picks: {} })),
+    );
+    return () => void (stale = true);
+  }, [status === "connected", addonsRev]);
   const openSkills = () => project && setSkillsDialog({ open: true, cwd: project, sessionId: projectSession });
   /** Shells list (GH-442) of session `sessionId`. */
   const openShells = (sessionId = projectSession) => sessionId && setShellsDialog({ open: true, sessionId });
@@ -2793,7 +2811,7 @@ export function App() {
     const name = projectName(projectOf(project, worktrees));
     setResumeSearch((s) => ({ text: resumeSearchText(name, arg), seq: (s?.seq ?? 0) + 1 }));
   };
-  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "resume" ? openResume(arg) : d === "shells" ? openShells() : openSkills());
+  const openDialog = (d: DialogName, arg?: string) => (d === "mcp" ? openMcp() : d === "plugins" ? openPlugins() : d === "addons" ? openAddons() : d === "resume" ? openResume(arg) : d === "shells" ? openShells() : openSkills());
   // The dialog lists the commands of its session (none on the new-session tab), plus the ones the web app handles itself.
   const dialogSession = skillsDialog?.sessionId ? views[skillsDialog.sessionId] : undefined;
   const skillsCommands = dialogSession?.commands.length ? withDialogCommands(dialogSession.commands) : [];
@@ -2978,6 +2996,7 @@ export function App() {
     openSkills: project ? openSkills : undefined,
     openShells: shown && !draftShown ? () => openShells(shown.id) : undefined,
     openPlugins: project ? openPlugins : undefined,
+    openAddons,
   });
   // Guided tour. The tour gets its key text only from here (the user's keymap, not the palette rows).
   const sessionIdle = !!shown && shownState(view) === "idle";
@@ -3274,6 +3293,7 @@ export function App() {
     </div>
   );
   return (
+    <AddonsContext value={addons}>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
@@ -4041,6 +4061,7 @@ export function App() {
           onClose={() => setShellsDialog({ ...shellsDialog, open: false })}
         />
       )}
+      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addons.log} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
       {plugins && (
         <PluginsDialog
           open={plugins.open}
@@ -4141,6 +4162,7 @@ export function App() {
     </SideState>
     </SideLabel>
     </AvatarColors>
+    </AddonsContext>
   );
 }
 

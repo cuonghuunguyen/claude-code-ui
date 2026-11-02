@@ -212,6 +212,12 @@ it("lists Background shells while a session shows", () => {
   expect(openShells).toHaveBeenCalled();
 });
 
+it("lists Manage addons in the Customize group", () => {
+  const openAddons = vi.fn();
+  expect(run(ctx({ openAddons }), "addons.open")).toMatchObject({ group: "Customize", title: "Manage addons" });
+  expect(openAddons).toHaveBeenCalled();
+});
+
 it("lists Manage plugins in the Customize group while a project is shown", () => {
   expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
   const openPlugins = vi.fn();

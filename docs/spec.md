@@ -683,6 +683,16 @@ Browsers keep Ctrl/Cmd+T, +W, +N, +Tab, +Shift+T, +1..9 and Ctrl+PageUp/PageDown
 - Prompt drafts: the unsent text of a prompt box (text only, no images, not bash mode) is kept in this browser's localStorage per session (`claude-ui.draft.<sessionId>`, `claude-ui.draft.new` for the new-session tab), saved 400 ms after the last keystroke, at once when the box is emptied (sent) and when the page goes to the background (`visibilitychange` hidden, `pagehide`), and is the box's initial text after a reload (a rewind draft replaces it). The 30 most recently saved drafts stay. They are cleared when the browser is unpaired (`unauthorized`).
 - Pairing field: a browser the daemon rejects (`unauthorized`) shows a form that takes a pairing URL (any origin), `#token=…` or the bare token, checks it with `GET /auth` (204: stored, page reloads; 401 and an unreachable daemon have their own message), so a Home Screen app on iOS (own storage, cannot read Safari's) can be paired.
 
+### Addons dialog
+
+- Opened by `/addons` typed alone (unless the session's CLI has a command of that name) and by the palette item "Manage addons" (group Customize, key `addons.open`, no default key). It needs no project: addons are Hub-wide. Component `addons-dialog.tsx`, helpers and `AddonsContext` in `addons.ts`.
+- The app keeps the list (`addons.list`) from the connect on and again on each `config.changed {kind: "addons"}`; a daemon without addons (`addons_unavailable`) gives an empty list and no message. Children read it through `AddonsContext` (`{addons, picks, log}`).
+- Install form: Git repository (URL, ref: branch, tag or SHA) or Local folder (an absolute path on the machine that runs the daemon). A fresh install shows the approval card: name, version, description, source, one plain-language line per capability (`render.fence:x` as "Draw ```x code blocks", `net:o` as "Connect to o"), themes, views, commands, renderers; "Approve and enable" sends `addons.approve` with the declared set, Cancel uninstalls.
+- Installed rows: name, version, description, source (`git: <url>@<ref or HEAD> · <sha7>` as the daemon sent it, already redacted; `folder: <path>`), state, switch (enabled or disabled rows only), "Check for updates" (git only), Uninstall (asks first). `needs_approval` rows list the added (`+`) and removed (`−`) capabilities and an approve button; `error` rows show the error. A check shows `<current> → <latest>` (7-character SHAs) with the capability diff and an Update button; nothing new shows a success line. One write runs at a time; the list is read again after each.
+- Renderer conflicts: each `fence:<lang>` or `tool:<name>` claimed by two or more enabled addons gets a select (`addons.pickRenderer`); without a pick the first name in sort order is shown as selected.
+- The log of an addon (refused calls of this browser, in memory, last 50) shows folded under its row.
+
+
 ## Security
 
 The daemon can run arbitrary shell commands; treat it as a remote shell.
