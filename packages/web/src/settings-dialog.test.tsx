@@ -29,7 +29,7 @@ async function render({ sides, docker, failGet = false, tokenReset = false, grou
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: false }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, performance: { monitor: true }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -280,15 +280,15 @@ it("shows Focus: the Next for you switch is off by default and sends its patch o
   expect(q("settings-focus-nextForYou")?.getAttribute("aria-checked")).toBe("true");
 });
 
-it("shows Usage limits: the continue switch is off by default and sends its patch only", async () => {
+it("shows Usage limits: the continue switch is on by default and sends its patch only", async () => {
   const { q, calls, pick } = await render();
   await pick("usageLimit");
   expect(q("settings-usageLimit")?.textContent).toContain("Continue automatically after a usage limit resets");
   expect(q("settings-usageLimit")?.textContent).toContain("A daemon restart drops scheduled continues");
-  expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("false");
-  await act(async () => q("settings-usageLimit-autoContinue")!.click());
-  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { usageLimit: { autoContinue: true } } });
   expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => q("settings-usageLimit-autoContinue")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { usageLimit: { autoContinue: false } } });
+  expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("false");
 });
 
 it("Default diff view is a per-browser choice: picking Uncommitted saves it and sends no settings.set", async () => {
