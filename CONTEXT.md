@@ -241,7 +241,7 @@ A Claude Code plugin, `name@marketplace`: commands, skills, agents, hooks and MC
 _Avoid_: extension, addon (different thing)
 
 **Addon**:
-A claude-ui customization that runs in the browser: a theme, panes, a band above the prompt, slash commands or renderers for messages. Installed by the owner from a git repository or a local folder, on the Hub only, and active in every browser that connects. It acts only through the capabilities it declares, and never submits a prompt by itself. Capabilities: `session.read`, `prompt.insert`, `ui.status`, `ui.toast`, `ui.pane`, `ui.band`, `ui.command`, `render.fence:<lang>`, `render.tool:<name>`, `net:<origin>`.
+A claude-ui customization that runs in the browser: a theme, panes, a band above the prompt, slash commands or renderers for messages. Installed by the owner from a git repository or a local folder, on the Hub only, and active in every browser that connects. It acts only through the capabilities it declares, and never submits a prompt by itself. Capabilities: `session.read`, `prompt.insert`, `ui.status`, `ui.toast`, `log`, `ui.pane`, `ui.band`, `ui.command`, `render.fence:<lang>`, `render.tool:<name>`, `net:<origin>`.
 _Avoid_: plugin, extension, mod, UI mod
 
 **Claude Code mod**:

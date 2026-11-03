@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { addLog, loadAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -90,5 +90,34 @@ describe("rendererFor", () => {
   it("ignores a disabled addon, and a pick of one", () => {
     expect(rendererFor({ addons: [claim("a", "disabled"), claim("b")], picks: { "fence:example": "a" } }, "fence:example")?.addon.name).toBe("b");
     expect(rendererFor({ addons: [claim("a", "needs_approval")], picks: {} }, "fence:example")).toBeUndefined();
+  });
+});
+
+describe("addon log", () => {
+  it("gate: log needs the log capability", () => {
+    expect(gate("log", ["log"])).toEqual({ ok: true });
+    expect(gate("log", EVERY)).toMatchObject({ ok: false, code: "refused", message: "log needs capability log" });
+  });
+  it("addLog keeps the last LOG_MAX entries per addon and leaves the input alone", () => {
+    let log = new Map();
+    for (let i = 0; i < LOG_MAX + 5; i++) log = addLog(log, "a", { at: i, level: "info", text: String(i) });
+    const before = log;
+    const next = addLog(log, "b", { at: 0, level: "error", text: "x" });
+    expect(log.get("a")).toHaveLength(LOG_MAX);
+    expect(log.get("a")![0]!.text).toBe("5");
+    expect(before.has("b")).toBe(false);
+    expect(next.get("b")).toEqual([{ at: 0, level: "error", text: "x" }]);
+  });
+  it("save then load round-trips; bad or missing storage gives an empty log", () => {
+    const m = new Map<string, string>();
+    const storage = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } as Storage;
+    const log = addLog(new Map(), "a", { at: 1, level: "warn", text: "t" });
+    saveAddonLog(log, storage);
+    expect(loadAddonLog(storage)).toEqual(log);
+    m.set([...m.keys()][0]!, "{bad");
+    expect(loadAddonLog(storage)).toEqual(new Map());
+    expect(loadAddonLog({ getItem: () => { throw new Error("blocked"); } } as unknown as Storage)).toEqual(new Map());
+    m.set([...m.keys()][0]!, JSON.stringify({ a: [{ at: 1, level: "warn", text: "ok" }, { at: "x" }, null], b: "no" }));
+    expect(loadAddonLog(storage)).toEqual(new Map([["a", [{ at: 1, level: "warn", text: "ok" }]]]));
   });
 });

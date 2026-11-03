@@ -14,7 +14,7 @@ import { Switch } from "./plugins-dialog.tsx";
 const INPUT = "h-9 w-full rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base";
 
 /** `changed`: bumped on `config.changed` kind addons. `log`: the refused calls of this browser, by addon. */
-export function AddonsDialog({ open, changed = 0, log, request, onClose }: { open: boolean; changed?: number; log?: Map<string, AddonLogEntry[]>; request: <T>(msg: Request) => Promise<T>; onClose: () => void }) {
+export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onClose }: { open: boolean; changed?: number; log?: Map<string, AddonLogEntry[]>; onClearLog?: (name: string) => void; request: <T>(msg: Request) => Promise<T>; onClose: () => void }) {
   const t = useT();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string>();
@@ -260,11 +260,14 @@ export function AddonsDialog({ open, changed = 0, log, request, onClose }: { ope
             <summary className="cursor-pointer text-muted-foreground">{t("addons.log", { count: entries.length })}</summary>
             <ul className="mt-1 flex flex-col gap-0.5">
               {entries.map((e, i) => (
-                <li key={i} className="[overflow-wrap:anywhere]">
-                  {new Date(e.at).toLocaleTimeString()} · {e.type} · {e.message}
+                <li key={i} className={cn("[overflow-wrap:anywhere] font-mono", e.level === "error" ? "text-destructive" : e.level === "warn" && "text-warning")} data-testid="addons-log-entry" data-level={e.level}>
+                  {new Date(e.at).toLocaleTimeString()} [{e.level}] {e.text}
                 </li>
               ))}
             </ul>
+            <Button size="sm" variant="ghost" className="mt-1 max-md:h-11" onClick={() => onClearLog?.(a.name)} data-testid="addons-log-clear">
+              {t("addons.logClear")}
+            </Button>
           </details>
         )}
       </li>

@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AddonInfo, AddonUpdateCheck, AddonsListResult } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { capabilityDiff, rendererConflicts } from "./addons.ts";
+import { capabilityDiff, rendererConflicts, type AddonLogEntry } from "./addons.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 type Handler = (msg: Request) => unknown;
-async function render(list: AddonsListResult, handlers: Record<string, Handler> = {}, log = new Map<string, { at: number; type: string; message: string }[]>()) {
+async function render(list: AddonsListResult, handlers: Record<string, Handler> = {}, log = new Map<string, AddonLogEntry[]>(), onClearLog = vi.fn()) {
   const calls: Request[] = [];
   let current = list;
   const request = vi.fn(async (msg: Request) => {
@@ -42,7 +42,7 @@ async function render(list: AddonsListResult, handlers: Record<string, Handler> 
   document.body.append(el);
   function Host() {
     const [open, set] = useState(true);
-    return <AddonsDialog open={open} log={log} request={request as never} onClose={() => set(false)} />;
+    return <AddonsDialog open={open} log={log} onClearLog={onClearLog} request={request as never} onClose={() => set(false)} />;
   }
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
@@ -160,9 +160,13 @@ it("the source URL is shown as the daemon sent it", async () => {
   expect(d.q("addons-row")!.textContent).toContain("git: https://example.com/r.git@HEAD · abcdef0");
 });
 
-it("the log of an addon lists its refused calls", async () => {
-  const d = await render({ addons: [addon("example")], picks: {} }, {}, new Map([["example", [{ at: 1, type: "prompt.submit", message: "refused" }]]]));
+it("the log of an addon lists its entries with their level, and Clear empties it", async () => {
+  const onClearLog = vi.fn();
+  const d = await render({ addons: [addon("example")], picks: {} }, {}, new Map([["example", [{ at: 1, level: "warn", text: "refused prompt.submit: no" }, { at: 2, level: "info", text: "hello" }]]]), onClearLog);
   expect(d.q("addons-log")!.textContent).toContain("prompt.submit");
+  expect(d.all("addons-log-entry").map((e) => e.dataset.level)).toEqual(["warn", "info"]);
+  await d.click(d.q("addons-log-clear"));
+  expect(onClearLog).toHaveBeenCalledWith("example");
 });
 
 it("capabilityDiff and rendererConflicts", () => {

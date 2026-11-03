@@ -2,7 +2,7 @@
 // never by origin, and it never receives the token. Every request passes the capability gate (addons.ts) before the host acts.
 import { useContext, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import type { Part } from "@claude-ui/protocol";
-import { AddonApiContext, AddonsContext, bandsOf, clampHeight, enabledAddons, gate, type AddonInfo } from "./addons.ts";
+import { AddonApiContext, AddonsContext, bandsOf, clampHeight, enabledAddons, gate, LOG_LEVELS, type AddonInfo, type AddonLogLevel } from "./addons.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { useColorTheme, useDark } from "./theme.ts";
 import { wholeParts, type SessionView } from "./store.ts";
@@ -11,6 +11,7 @@ export type AddonRole = "pane" | "band" | "command" | "render";
 const MAX_INSERT = 32 * 1024;
 const MAX_STATUS = 80;
 const MAX_TOAST = 200;
+const MAX_LOG = 2000;
 
 /** Host -> frame. The only `"*"` target: an opaque-origin frame has no other one. */
 export const postTo = (frame: HTMLIFrameElement | null, msg: object) => frame?.contentWindow?.postMessage({ v: 1, ...msg }, "*");
@@ -36,7 +37,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frame.current?.contentWindow) return;
-      const m = e.data as { v?: unknown; id?: unknown; type?: unknown; text?: unknown; height?: unknown };
+      const m = e.data as { v?: unknown; id?: unknown; type?: unknown; text?: unknown; height?: unknown; level?: unknown };
       if (!m || m.v !== 1 || typeof m.id !== "string" || typeof m.type !== "string") return;
       const { id, type } = m;
       const done = (result: unknown = {}) => postTo(frame.current, { id, ok: true, result });
@@ -44,7 +45,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       const g = gate(type, addon.approved);
       if (!g.ok) return fail(g.code, g.message);
       // A render frame belongs to a message, not to a session: nothing that needs one.
-      if (!sessionId && type !== "ui.ready" && type !== "ui.toast") return fail("refused", `${type} is not available in this frame`);
+      if (!sessionId && type !== "ui.ready" && type !== "ui.toast" && type !== "log") return fail("refused", `${type} is not available in this frame`);
       if (type === "ui.ready") {
         if (typeof m.height === "number" && Number.isFinite(m.height)) live.current.onHeight?.(clampHeight(m.height));
         return done();
@@ -62,6 +63,12 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       if (type === "ui.status") {
         if (m.text !== null && (typeof m.text !== "string" || m.text.length > MAX_STATUS)) return fail("bad_request", `text must be null or a string up to ${MAX_STATUS} characters`);
         live.current.api.status(sessionId, addon.name, m.text);
+        return done();
+      }
+      if (type === "log") {
+        const level = (m.level ?? "info") as AddonLogLevel;
+        if (!LOG_LEVELS.includes(level) || typeof m.text !== "string" || m.text.length > MAX_LOG) return fail("bad_request", `level must be info, warn or error and text a string up to ${MAX_LOG} characters`);
+        live.current.api.log(addon.name, level, m.text);
         return done();
       }
       if (typeof m.text !== "string" || m.text.length > MAX_TOAST) return fail("bad_request", `text must be a string up to ${MAX_TOAST} characters`);

@@ -340,7 +340,7 @@ describe("the example addon", () => {
   it("has a valid manifest that no capability leaves uncovered", () => {
     const root = join(import.meta.dirname, "../../../examples/addons/example");
     const m = parseManifest(JSON.parse(readFileSync(join(root, "addon.json"), "utf8")), root);
-    expect(m.capabilities).toHaveLength(10);
+    expect(m.capabilities).toHaveLength(11);
     expect(m.themes[0]!.dark).toHaveProperty("bg");
   });
 });

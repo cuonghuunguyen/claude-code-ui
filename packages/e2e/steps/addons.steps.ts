@@ -61,7 +61,7 @@ When("I open the Addons dialog", async ({ page }) => openAddons(page));
 When("I install the addon from the local folder of the example addon", async ({ page }) => installExample(page));
 
 Then("the approval card lists the capabilities of the example addon", async ({ page }) => {
-  await expect(page.getByTestId("addons-approve-card").getByTestId("addons-capability")).toHaveCount(10);
+  await expect(page.getByTestId("addons-approve-card").getByTestId("addons-capability")).toHaveCount(11);
 });
 
 When("I approve the addon", async ({ page }) => approve(page));
@@ -118,6 +118,16 @@ Then("the pane shows a refused error", async ({ page }) => {
 
 Then("the log of {string} lists {string}", async ({ page }, name: string, type: string) => {
   await expect(addonRow(page, name).getByTestId("addons-log")).toContainText(type);
+});
+
+When("I clear the log of {string}", async ({ page }, name: string) => {
+  const log = addonRow(page, name).getByTestId("addons-log");
+  await log.locator("summary").click();
+  await log.getByTestId("addons-log-clear").click();
+});
+
+Then("the addon {string} has no log", async ({ page }, name: string) => {
+  await expect(addonRow(page, name).getByTestId("addons-log")).toHaveCount(0);
 });
 
 Then("the pane switcher does not list {string}", async ({ page }, title: string) => {

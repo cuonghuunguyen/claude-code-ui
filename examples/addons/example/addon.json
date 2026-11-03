@@ -7,6 +7,7 @@
     "prompt.insert",
     "ui.status",
     "ui.toast",
+    "log",
     "ui.pane",
     "ui.band",
     "ui.command",

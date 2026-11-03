@@ -80,7 +80,7 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, addLog, EMPTY_ADDONS, enabledAddons, loadAddonLog, saveAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
@@ -311,7 +311,7 @@ export function App() {
   const [plugins, setPlugins] = useState<{ open: boolean; cwd: string; sessionId?: string }>();
   const [reloadFailed, setReloadFailed] = useState<Set<string>>(new Set());
   // Addons (GH-516, Hub-wide): the list kept for the whole app (themes, panes, commands, renderers) and the Manage addons dialog; `addonsRev` bumps on config.changed kind addons.
-  const [addons, setAddons] = useState<AddonsState>(EMPTY_ADDONS);
+  const [addons, setAddons] = useState<AddonsState>(() => ({ ...EMPTY_ADDONS, log: loadAddonLog() }));
   const [addonsOpen, setAddonsOpen] = useState(false);
   const [addonsRev, setAddonsRev] = useState(0);
   /** The first list answer arrived (or failed): addon pane tabs of an unknown addon close only then. */
@@ -2907,9 +2907,10 @@ export function App() {
     toast: (addon, text) => setToast(`${addon}: ${text}`),
     refused: (addon, type, message) => {
       console.warn(`[addon ${addon}] refused ${type}: ${message}`);
-      setAddons((s) => ({ ...s, log: new Map(s.log).set(addon, [...(s.log.get(addon) ?? []), { at: Date.now(), type, message }].slice(-50)) }));
+      setAddons((s) => ({ ...s, log: addLog(s.log, addon, { at: Date.now(), level: "warn", text: `refused ${type}: ${message}` }) }));
       if (!refusedShown.current.has(addon)) (refusedShown.current.add(addon), setToast(tr("addons.refused", { name: addon, type })));
     },
+    log: (addon, level, text) => setAddons((s) => ({ ...s, log: addLog(s.log, addon, { at: Date.now(), level, text }) })),
   };
   // Command handlers (`/addon:cmd`): one hidden frame per enabled addon with commands, for the shown session (a new frame, so a fresh `init`, on a session switch).
   const commandFrames = useRef(new Map<string, AddonHandle>());
@@ -2919,7 +2920,7 @@ export function App() {
     if (h) h.post({ type: "command.run", name: c.name, args: c.args });
     else setToast(tr("addons.commandNotReady", { name: c.addon }));
   }, []);
-  const addonApi = useMemo<AddonApi>(() => ({ insert: (...a) => addonImpl.current.insert(...a), status: (...a) => addonImpl.current.status(...a), toast: (...a) => addonImpl.current.toast(...a), refused: (...a) => addonImpl.current.refused(...a) }), []);
+  const addonApi = useMemo<AddonApi>(() => ({ insert: (...a) => addonImpl.current.insert(...a), status: (...a) => addonImpl.current.status(...a), toast: (...a) => addonImpl.current.toast(...a), refused: (...a) => addonImpl.current.refused(...a), log: (...a) => addonImpl.current.log(...a) }), []);
   useEffect(() => {
     if (status !== "connected") return;
     let stale = false;
@@ -2930,6 +2931,8 @@ export function App() {
     );
     return () => void (stale = true);
   }, [status === "connected", addonsRev]);
+  // The addon log outlives a reload (GH-520): this browser's localStorage.
+  useEffect(() => saveAddonLog(addons.log), [addons.log]);
   // Themes and CSS of the enabled addons (GH-516): the rules and links exist exactly while the addon is enabled.
   useEffect(() => {
     const on = enabledAddons(addons.addons);
@@ -4228,7 +4231,7 @@ export function App() {
             const key = `${a.name}:${commandSession}`;
             return entry && <AddonFrame key={key} handle={(h) => (h ? commandFrames.current.set(key, h) : commandFrames.current.delete(key), undefined)} addon={a} entry={entry} role="command" view="" sessionId={commandSession} hidden />;
           })}
-      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addons.log} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
+      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addons.log} onClearLog={(name) => setAddons((s) => { const log = new Map(s.log); log.delete(name); return { ...s, log }; })} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
       {plugins && (
         <PluginsDialog
           open={plugins.open}

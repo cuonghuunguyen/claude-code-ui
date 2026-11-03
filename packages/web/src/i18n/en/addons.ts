@@ -49,6 +49,7 @@ export default {
   "addons.updateError": "The new version cannot be read: {error}",
   "addons.conflicts": "Several addons draw the same thing",
   "addons.conflictFor": "{target} is drawn by",
+  "addons.logClear": "Clear log",
   "addons.log": "Log ({count})",
   "addons.cap.sessionRead": "Read the messages and tool results of the session",
   "addons.cap.promptInsert": "Put text in the prompt box (never sends it)",
@@ -60,6 +61,7 @@ export default {
   "addons.cap.fence": "Draw ```{lang} code blocks",
   "addons.cap.tool": "Draw the results of the tool {name}",
   "addons.cap.net": "Connect to {origin}",
+  "addons.cap.log": "Write to its log in the Addons dialog",
   "addons.cap.unknown": "{capability}",
   // addon host (refused call)
   "addons.commandNotReady": "Addon {name} has no command handler loaded yet. Try again in a moment.",
