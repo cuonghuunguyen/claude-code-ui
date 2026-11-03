@@ -49,23 +49,64 @@ it("useAddonLog writes once per 300 ms and keeps writing while lines keep coming
   expect(stored().a!.map((e) => e.text)).toEqual(["1", "2"]);
 });
 
-it("useAddonLog applies its own changes on top of what another tab saved, never over it", async () => {
+const otherTabSaves = (v: object) => {
+  localStorage.setItem(LOG_KEY, JSON.stringify(v));
+  act(() => void window.dispatchEvent(new StorageEvent("storage", { key: LOG_KEY })));
+};
+
+it("useAddonLog applies its own lines on top of what another tab saved, in time order", async () => {
   vi.useFakeTimers();
   const h = await mountLog();
-  act(() => h.change({ add: "a", entry: entry("mine") }));
-  // Another tab saves first: its line and its clear of addon b.
-  localStorage.setItem(LOG_KEY, JSON.stringify({ a: [entry("theirs")] }));
-  act(() => void window.dispatchEvent(new StorageEvent("storage", { key: LOG_KEY })));
+  act(() => h.change({ add: "a", entry: { ...entry("mine"), at: 2 } }));
+  otherTabSaves({ a: [{ ...entry("theirs"), at: 1 }] });
   expect(h.log.get("a")!.map((e) => e.text)).toEqual(["theirs", "mine"]);
   act(() => void vi.advanceTimersByTime(300));
   expect(stored().a!.map((e) => e.text)).toEqual(["theirs", "mine"]);
-  // A clear here is not undone by the other tab's next save of older lines.
+});
+
+it("useAddonLog: a clear in another tab stays cleared when this tab saves", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem(LOG_KEY, JSON.stringify({ b: [entry("old b")] }));
+  const h = await mountLog();
+  act(() => h.change({ add: "a", entry: entry("x") }));
+  otherTabSaves({});
+  act(() => void vi.advanceTimersByTime(300));
+  expect(stored().b).toBeUndefined();
+  expect(h.log.has("b")).toBe(false);
+  expect(stored().a).toHaveLength(1);
+});
+
+it("useAddonLog: a clear in this tab is not undone by another tab's save of older lines", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem(LOG_KEY, JSON.stringify({ a: [entry("old")] }));
+  const h = await mountLog();
   act(() => h.change({ drop: "a" }));
+  otherTabSaves({ a: [entry("old")] });
+  expect(h.log.has("a")).toBe(false);
   act(() => void vi.advanceTimersByTime(300));
   expect(stored().a).toBeUndefined();
 });
 
-it("useAddonLog flushes on pagehide and stops its timer on unmount", async () => {
+it("useAddonLog keeps every line in memory when storage is blocked or full", async () => {
+  vi.useFakeTimers();
+  for (const method of ["getItem", "setItem"] as const) {
+    const spy = vi.spyOn(Storage.prototype, method).mockImplementation(() => {
+      throw new Error(method === "getItem" ? "blocked" : "QuotaExceededError");
+    });
+    const h = await mountLog();
+    for (const t of ["1", "2", "3"]) {
+      act(() => h.change({ add: "a", entry: entry(t) }));
+      act(() => void vi.advanceTimersByTime(300));
+    }
+    expect(h.log.get("a")!.map((e) => e.text), method).toEqual(["1", "2", "3"]);
+    act(() => root!.unmount());
+    root = undefined;
+    spy.mockRestore();
+    localStorage.clear();
+  }
+});
+
+it("useAddonLog saves on pagehide and on unmount, and leaves no timer", async () => {
   vi.useFakeTimers();
   const h = await mountLog();
   act(() => h.change({ add: "a", entry: entry("x") }));
@@ -75,6 +116,7 @@ it("useAddonLog flushes on pagehide and stops its timer on unmount", async () =>
   act(() => root!.unmount());
   root = undefined;
   expect(vi.getTimerCount()).toBe(0);
+  expect(stored().a).toHaveLength(2);
 });
 
 const addon = { name: "example", source: { kind: "local", path: "/x" }, approved: ["log"], state: "enabled", base: "/addon/n/example/", manifest: { name: "example", version: "1", description: "", capabilities: ["log"], themes: [], views: [], commands: [], renderers: [] } } as AddonInfo;

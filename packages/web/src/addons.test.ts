@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addLog, logAllowed, LOG_RATE, pruneLog, loadAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { addLog, logAllowed, LOG_RATE, pruneLog, loadAddonLog, readAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -112,11 +112,13 @@ describe("addon log", () => {
     const m = new Map<string, string>();
     const storage = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } as Storage;
     const log = addLog(new Map(), "a", { at: 1, level: "warn", text: "t" });
-    saveAddonLog(log, storage);
+    expect(saveAddonLog(log, storage)).toBe(true);
     expect(loadAddonLog(storage)).toEqual(log);
     m.set([...m.keys()][0]!, "{bad");
     expect(loadAddonLog(storage)).toEqual(new Map());
     expect(loadAddonLog({ getItem: () => { throw new Error("blocked"); } } as unknown as Storage)).toEqual(new Map());
+    expect(readAddonLog({ getItem: () => { throw new Error("blocked"); } } as unknown as Storage)).toBeUndefined();
+    expect(saveAddonLog(log, { setItem: () => { throw new Error("full"); } } as unknown as Storage)).toBe(false);
     m.set([...m.keys()][0]!, JSON.stringify({ a: [{ at: 1, level: "warn", text: "ok" }, { at: "x" }, null], b: "no" }));
     expect(loadAddonLog(storage)).toEqual(new Map([["a", [{ at: 1, level: "warn", text: "ok" }]]]));
   });
