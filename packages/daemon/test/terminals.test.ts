@@ -182,12 +182,12 @@ describe("terminal backpressure", () => {
 /**
  * Runs `sleep 30` in the shell and resolves once it runs, so the shell reads no more input. Under load the shell may not
  * have read the line yet when the test writes; it would then read the test's input itself. `RE""ADY` in the echoed line
- * is not `READY`: only the command's output matches.
+ * is not `READY`: only the command's output matches. `pre` runs first (`stty raw`: see the backlog test).
  */
-async function sleeping(terminals: ReturnType<typeof createTerminals>, t: NonNullable<ReturnType<ReturnType<typeof createTerminals>["get"]>>) {
+async function sleeping(terminals: ReturnType<typeof createTerminals>, t: NonNullable<ReturnType<ReturnType<typeof createTerminals>["get"]>>, pre = "") {
   let out = "";
   const ready = new Promise<void>((r) => t.pty.onData((d) => (out += d).includes("READY") && r()));
-  terminals.write(t, 'echo RE""ADY; sleep 30\r');
+  terminals.write(t, `${pre}echo RE""ADY; sleep 30\r`);
   await ready;
 }
 
@@ -223,7 +223,8 @@ it.runIf(posix)("never writes queued input into a file that reuses the fd of a c
 it.runIf(posix)("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell to read", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const t = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
-  await sleeping(terminals, t);
+  // Raw mode: a canonical-mode macOS tty drops input past its line limit (MAX_INPUT) instead of blocking the writer, so nothing would queue.
+  await sleeping(terminals, t, "stty raw -echo; ");
   const chunk = "x".repeat(64 * 1024);
   // The kernel takes a varying part of the first chunks (PTY buffers, echo timing): count, do not predict, where it refuses.
   let accepted = 0;
