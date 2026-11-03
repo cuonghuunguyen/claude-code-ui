@@ -14,6 +14,7 @@ query:       --label ready-for-agent
 states:      started → —, implemented → —, in-review → —
 host:        github
 push:        ask
+merge:       auto   (see Merge; overrides orchestrate-tickets "never merge" for this repo)
 remote-branch: same
 ci:          none
 base:        main
@@ -25,8 +26,11 @@ acceptance:  playwright-bdd
 install:     npm ci
 test:        npm test        scoped: npx vitest run <files>
 typecheck:   npm run typecheck
-e2e:         E2E_PORT=<port> E2E_SCRATCH=<scratch>/e2e E2E_EVIDENCE_DIR=<scratch>/evidence npm run e2e -- <feature> [-g "<scenario>"]
+e2e:         E2E_PORT=<port> E2E_SCRATCH=<scratch>/e2e E2E_EVIDENCE_DIR=<scratch>/evidence npm run e2e -- -g "<Feature or scenario name>"
              (packages/e2e: Cucumber via playwright-bdd, real Claude on Haiku, own isolated daemon; see its README)
+             `-g` is the filter: `npm run e2e -- <feature>` alone runs the whole suite (~30 min). Several features: `-g "A|B"`.
+             Check the first log lines list only your scenarios. One run shares one daemon: a scenario that needs a
+             clean setting (e.g. no Jira) sets it itself.
              steps: npm run e2e:steps   (lists every step, from `bddgen export`)
 app:         mkdir -p <scratch>/ui-config; env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN XDG_CONFIG_HOME=<scratch>/ui-config PORT=<port> nohup npm start > <scratch>/app.log 2>&1 & echo $! > <scratch>/app.pid
              (the pairing URL is in the log: #token=...)   stop: kill that PID's process tree
@@ -77,7 +81,38 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
 - `notes.md`: design decisions, files, per acceptance criterion the evidence (test name,
   scenario name or screenshot), start command and port, manual steps for a UI tester,
   out-of-scope findings (report, do not fix).
-- Do not merge into main, do not comment on GitHub, do not push unless the user asks.
+- Do not merge into main, do not comment on GitHub, do not push unless the user asks. Merging
+  is the coordinator's job (Merge).
+
+## Merge
+The owner allows an automatic merge in this repo. It overrides orchestrate-tickets' "never
+merge" (`SKILL.md` §3, `adapters/github.md` forbidden calls) for `gh pr merge` only; every
+other forbidden call stays forbidden.
+
+- Who: the root coordinator, or whoever runs the issue by hand. Never a stage worker.
+- When, all of these:
+  - the PR is open on `main`;
+  - the latest review on the PR's head commit is green (no must-fix), whether a full review
+    or a delta review after fixes;
+  - acceptance is green on that commit, or only test-side commits came after it;
+  - every acceptance criterion of the issue is met. A criterion the owner must check by hand
+    (for example "user verification on Windows/WSL") holds the merge until the owner confirms it;
+  - `gh pr view <n> --json mergeable` says `MERGEABLE`.
+- How: `gh pr merge <n> --merge --delete-branch=false`. No squash or rebase: the history keeps
+  merge commits. The `Closes #<n>` line in the PR body closes the issue.
+- After, test on `main`: pull the merged `main` into a clean checkout (a worker in the main
+  checkout or a fresh worktree on `origin/main`, never one with the owner's uncommitted edits),
+  `npm ci`, `npm run typecheck`, one full `npm test`, and the issue's e2e scenarios with
+  `-g "<name>"` of every merged issue. Judge failures against the batch baseline.
+- Batch it: merge every PR that is ready at that moment, then run one test phase on `main`
+  for all of them. A PR that becomes ready while the phase runs waits for the next phase.
+- A new failure: stop further merges, find the merged PR that caused it (the failing test's
+  files, else re-run it on `main` at each merge commit), and report the test name and that PR
+  to the owner; the owner decides revert or fix-forward.
+- Then record the merge and the `main` test result in the ledger. A worktree based on an older
+  `main` rebases onto the new `main` before its next stage.
+- Merge refused or not `MERGEABLE`: do not force it. Send the conflict to the implementer
+  (rebase onto `main`, re-run scoped tests), then check again.
 
 ## Acceptance
 Scripted: each visible acceptance criterion is a Cucumber scenario in `packages/e2e/features`,
@@ -90,7 +125,7 @@ PID, and fails if anything of the run landed in the real config dir.
    shown, turn stopped), never reply wording. End each scenario with `Then I capture "<name>"`;
    cover 1440×900 and 390×844 (`scrollWidth` = viewport width) for layout criteria, and the
    daemon-restart step for the restored-transcript path.
-2. Run it: Commands › e2e with `-- <feature>`.
+2. Run it: Commands › e2e with `-g "<Feature name>"`.
 3. Green: look at every captured screenshot in `<scratch>/evidence` and record them per
    criterion in `notes.md`. For OpenCode parity, put each next to its OpenCode screenshot
    (`<nn>-<what>-claudeui.png` / `-opencode.png`).
