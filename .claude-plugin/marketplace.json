@@ -9,6 +9,13 @@
       "description": "Worker-tree ticket pipeline for claude-ui: planner, implementer, ui-tester and reviewer agent types plus the orchestrate-tickets skill.",
       "version": "0.1.0",
       "category": "development"
+    },
+    {
+      "name": "addons",
+      "source": "./plugins/addons",
+      "description": "Write claude-ui addons (themes, panes, a band, slash commands, renderers) with the typed addon SDK: the write-addon skill.",
+      "version": "0.1.0",
+      "category": "development"
     }
   ]
 }

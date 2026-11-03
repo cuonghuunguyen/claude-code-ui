@@ -74,7 +74,31 @@ A view is an HTML file that loads its own script (inline scripts are blocked). I
 | `ui.status {text}` | `ui.status` | A status bar entry up to 80 characters; `null` clears it |
 | `ui.toast {text}` | `ui.toast` | A toast up to 200 characters |
 
-Events from claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` or `render {tool: {name, input, result}}`, `session.parts`. The example's `bridge.js` wraps this in `call(type, payload)` and `on(type, fn)`. **Act only on messages whose `event.source` is `parent`:** every other frame of the page (another addon, an Artifact preview) can post to your frame too, and `bridge.js` drops such messages.
+Events from claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` or `render {tool: {name, input, result}}`, `session.parts`. **Act only on messages whose `event.source` is `parent`:** every other frame of the page (another addon, an Artifact preview) can post to your frame too. The SDK below drops such messages.
+
+## The SDK {#sdk}
+
+`packages/addon-sdk/` in the repository has two files: `claude-ui-addon.js` (plain JavaScript, no build) and `claude-ui-addon.d.ts` (its types). Copy both into your addon folder and import the first from your view's script:
+
+```js
+// @ts-check
+import { watchSession, setStatus, autoHeight } from "./claude-ui-addon.js";
+
+autoHeight(); // a band or renderer: tell claude-ui the height of the content
+watchSession((parts) => setStatus(`${parts.filter((p) => p.type === "turn_result").length} turns`));
+```
+
+| Export | Does |
+| --- | --- |
+| `call(type, payload)`, `on(type, fn)` | Any request; any event (`on` returns a function that removes the handler) |
+| `readSession()`, `insertPrompt(text)`, `setStatus(text)`, `toast(text)`, `log(text, level)`, `ready(height)` | One request each |
+| `watchSession(fn)` | Reads the session after `init`, then calls `fn` with all parts on every change |
+| `autoHeight()` | Sends the content height now and whenever it changes |
+| `AddonError` | What a refused request rejects with; `code` is `refused`, `bad_request` or `unknown` |
+
+The SDK also sets the page's `color-scheme` to the app's light or dark mode. With `// @ts-check` at the top of a script, VS Code and `tsc --checkJs` report an unknown request, a wrong payload or a field a part does not have. The types change with claude-ui: copy the files again after an update.
+
+To have Claude write an addon for you, install the `addons` plugin from this repository's marketplace (`/plugin marketplace add cuonghuunguyen/claude-code-ui`, then `/plugin install addons@claude-ui`) and ask for one: its `write-addon` skill scaffolds the folder, copies the SDK and checks the types.
 
 ## Themes {#themes}
 
@@ -92,7 +116,7 @@ A `fence` renderer draws the code blocks of one language in assistant answers an
 
 ## The example addon {#example}
 
-`examples/addons/example/` in the repository shows every feature: a theme, `theme.css`, a pane that counts the parts of the session and has a button for each bridge call, a band with the number of turns and the last tool, `/example:cmd`, and a renderer for ```` ```example ```` blocks. Install it as a local folder.
+`examples/addons/example/` in the repository uses the SDK and shows every feature: a theme, `theme.css`, a pane that counts the parts of the session and has a button for each bridge call, a band with the number of turns and the last tool, `/example:cmd`, and a renderer for ```` ```example ```` blocks. Install it as a local folder.
 
 ## Claude Code mods {#claude-code-mods}
 

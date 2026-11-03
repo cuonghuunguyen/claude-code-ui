@@ -1,0 +1,8 @@
+{
+  "name": "addons",
+  "version": "0.1.0",
+  "description": "Write claude-ui addons (themes, panes, a band, slash commands, renderers) with the typed addon SDK: the write-addon skill.",
+  "author": { "name": "claude-ui" },
+  "license": "MIT",
+  "homepage": "https://github.com/cuonghuunguyen/claude-code-ui"
+}

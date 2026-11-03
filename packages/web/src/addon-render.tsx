@@ -1,13 +1,14 @@
 // Addon renderers (GH-516, docs/spec.md "Addon host"): a code fence or a tool result drawn by an addon's frame instead of the built-in view.
 // The frame mounts only while the block is near the viewport (its last height stays as the placeholder), and "Show raw" returns the built-in view.
 import { use, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import type { FenceRender, ToolRender } from "@claude-ui/addon-sdk";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { AddonsContext, fenceLanguages, rendererFor } from "./addons.ts";
 import { useT } from "./i18n.ts";
 import { useNear } from "./lib/use-near.ts";
 
-type Payload = { fence: { lang: string; source: string } } | { tool: { name: string; input: unknown; result: unknown } };
+type Payload = FenceRender | ToolRender;
 
 /** `target`: `fence:<lang>` or `tool:<name>`; `raw`: the built-in rendering. */
 export function AddonBlock({ target, payload, raw }: { target: string; payload: Payload; raw: ReactNode }) {
