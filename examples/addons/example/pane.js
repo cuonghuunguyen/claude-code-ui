@@ -24,6 +24,7 @@ on("session.parts", (m) => {
 
 $("status").onclick = () => call("ui.status", { text: "ready" });
 $("toast").onclick = () => call("ui.toast", { text: "hello" });
+$("log").onclick = () => call("log", { level: "info", text: `pane clicked at ${new Date().toISOString()}` });
 // Never allowed: an addon cannot send a prompt. The host answers with an error and logs it.
 $("submit").onclick = () => call("prompt.submit", { text: "x" }).catch((e) => ($("refused").textContent = `Refused: ${e.message}`));
 // Allowed by net:https://api.github.com; the API must answer CORS for Origin: null.

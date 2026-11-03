@@ -7,10 +7,55 @@ import type { AddonPaneId } from "./layout.ts";
 
 export type { AddonInfo, AddonsListResult, AddonUpdateCheck } from "@claude-ui/protocol";
 
-/** One refused or failed call of an addon, kept per browser in memory (last 50 per addon). */
-export type AddonLogEntry = { at: number; type: string; message: string };
-export type AddonsState = { addons: AddonInfo[]; picks: Record<string, string>; log: Map<string, AddonLogEntry[]> };
-export const EMPTY_ADDONS: AddonsState = { addons: [], picks: {}, log: new Map() };
+/** One line of an addon's log: a refused or invalid bridge call (warn) or a `log` call of the addon. Kept per browser in localStorage, the last LOG_MAX per addon. */
+export type AddonLogLevel = "info" | "warn" | "error";
+export type AddonLogEntry = { at: number; level: AddonLogLevel; text: string };
+export type AddonLog = Map<string, AddonLogEntry[]>;
+export type AddonsState = { addons: AddonInfo[]; picks: Record<string, string> };
+export const EMPTY_ADDONS: AddonsState = { addons: [], picks: {} };
+export const LOG_MAX = 200;
+/** Log lines an addon may add per second; more are dropped (an addon must not stall the host). */
+export const LOG_RATE = 20;
+export const LOG_LEVELS: readonly AddonLogLevel[] = ["info", "warn", "error"];
+const LOG_KEY = "claude-ui.addonLog";
+
+/** `log` with `e` appended to `addon`'s entries, the oldest dropped past LOG_MAX. A new Map: React state. */
+export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].slice(-LOG_MAX));
+
+/** Per-addon rate gate: true when `addon` is under LOG_RATE lines in the second of `now`. Mutates `seen`. */
+export function logAllowed(seen: Map<string, { sec: number; n: number }>, addon: string, now: number): boolean {
+  const sec = Math.floor(now / 1000);
+  const c = seen.get(addon);
+  if (!c || c.sec !== sec) return seen.set(addon, { sec, n: 1 }), true;
+  return ++c.n <= LOG_RATE;
+}
+/** `log` without the addons not in `names` (uninstalled): their entries would never show nor be cleared. Same Map when nothing goes. */
+export function pruneLog(log: AddonLog, names: readonly string[]): AddonLog {
+  const gone = [...log.keys()].filter((k) => !names.includes(k));
+  if (!gone.length) return log;
+  const next = new Map(log);
+  for (const k of gone) next.delete(k);
+  return next;
+}
+
+const isEntry = (e: unknown): e is AddonLogEntry => !!e && typeof (e as AddonLogEntry).at === "number" && LOG_LEVELS.includes((e as AddonLogEntry).level) && typeof (e as AddonLogEntry).text === "string";
+/** The stored log; empty when storage is blocked or the value is not ours. Entries of the wrong shape are dropped. */
+export function loadAddonLog(storage: Storage = localStorage): AddonLog {
+  try {
+    const v: unknown = JSON.parse(storage.getItem(LOG_KEY) ?? "{}");
+    if (!v || typeof v !== "object" || Array.isArray(v)) return new Map();
+    return new Map(Object.entries(v).flatMap(([k, es]) => (Array.isArray(es) ? [[k, es.filter(isEntry).slice(-LOG_MAX)] as [string, AddonLogEntry[]]] : [])));
+  } catch {
+    return new Map();
+  }
+}
+export function saveAddonLog(log: AddonLog, storage: Storage = localStorage) {
+  try {
+    storage.setItem(LOG_KEY, JSON.stringify(Object.fromEntries([...log].filter(([, es]) => es.length))));
+  } catch {
+    // storage full or blocked: the log stays in memory for this page
+  }
+}
 export const AddonsContext = createContext<AddonsState>(EMPTY_ADDONS);
 
 /** Addons that run: enabled with a base URL and a manifest. */
@@ -38,6 +83,7 @@ export function capabilityLine(c: string): { key: Key; vars?: Record<string, str
     "ui.pane": "addons.cap.uiPane",
     "ui.band": "addons.cap.uiBand",
     "ui.command": "addons.cap.uiCommand",
+    log: "addons.cap.log",
   };
   return { key: fixed[c] ?? "addons.cap.unknown", vars: { capability: c } };
 }
@@ -50,7 +96,7 @@ export function rendererConflicts(addons: AddonInfo[]): Record<string, string[]>
 }
 
 /** What a bridge request needs: null = nothing, else the capability. Any type not listed (prompt.submit, fs, shell, permission, ...) is refused whatever was approved. */
-const GATE: Record<string, string | null> = { "ui.ready": null, "session.read": "session.read", "prompt.insert": "prompt.insert", "ui.status": "ui.status", "ui.toast": "ui.toast" };
+const GATE: Record<string, string | null> = { "ui.ready": null, "session.read": "session.read", "prompt.insert": "prompt.insert", "ui.status": "ui.status", "ui.toast": "ui.toast", log: "log" };
 
 /** The capability gate of the bridge (ADR 0006): pure, no DOM. */
 export function gate(type: string, approved: readonly string[]): { ok: true } | { ok: false; code: "refused" | "unknown"; message: string } {
@@ -87,8 +133,9 @@ export type AddonApi = {
   status: (sessionId: string, addon: string, text: string | null) => void;
   toast: (addon: string, text: string) => void;
   refused: (addon: string, type: string, message: string) => void;
+  log: (addon: string, level: AddonLogLevel, text: string) => void;
 };
-export const AddonApiContext = createContext<AddonApi>({ insert() {}, status() {}, toast() {}, refused() {} });
+export const AddonApiContext = createContext<AddonApi>({ insert() {}, status() {}, toast() {}, refused() {}, log() {} });
 /** Status texts by session, then addon (the status bar shows them). */
 export const AddonStatusContext = createContext<Record<string, Record<string, string>>>({});
 

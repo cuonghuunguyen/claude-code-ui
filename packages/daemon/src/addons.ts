@@ -20,7 +20,7 @@ import { createJsonFile } from "./json-file.ts";
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const FIXED = new Set(["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"]);
+const FIXED = new Set(["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command", "log"]);
 /** Capability syntax; anything else is refused. */
 export const CAPABILITY = {
   fixed: FIXED,

@@ -69,6 +69,20 @@ Feature: Addons (GH-516)
     And no new user message is shown
     And I capture "refused call"
 
+  Scenario: An addon writes to its log, which outlives a reload and can be cleared
+    Given the example addon is installed and enabled
+    And a Haiku session with one finished reply
+    When I open the "Stats" addon pane in the side panel
+    And I click "Log" in the addon pane
+    And I open the Addons dialog
+    Then the log of "example" lists "pane clicked"
+    When I reload the page
+    And I open the Addons dialog
+    Then the log of "example" lists "pane clicked"
+    And I capture "addon log"
+    When I clear the log of "example"
+    Then the addon "example" has no log
+
   Scenario: A phone:false view is hidden on a phone
     Given the example addon is installed and enabled
     And the viewport is 390x844
