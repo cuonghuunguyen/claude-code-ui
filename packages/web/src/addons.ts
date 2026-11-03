@@ -1,5 +1,5 @@
 // Addons in the web app (docs/spec.md "Frontend" › Addons dialog; ADR 0006): the list the daemon sent, shared by context, and the pure helpers on it.
-import { createContext } from "react";
+import { createContext, useCallback, useEffect, useRef, useState } from "react";
 import type { RequestType } from "@claude-ui/addon-sdk";
 import type { AddonInfo, AddonSource, SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_COMMAND, DIALOG_COMMANDS } from "./commands.ts";
@@ -18,10 +18,10 @@ export const LOG_MAX = 200;
 /** Log lines an addon may add per second; more are dropped (an addon must not stall the host). */
 export const LOG_RATE = 20;
 export const LOG_LEVELS: readonly AddonLogLevel[] = ["info", "warn", "error"];
-const LOG_KEY = "claude-ui.addonLog";
+export const LOG_KEY = "claude-ui.addonLog";
 
-/** `log` with `e` appended to `addon`'s entries, the oldest dropped past LOG_MAX. A new Map: React state. */
-export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].slice(-LOG_MAX));
+/** `log` with `e` added to `addon`'s entries in time order (a line of another tab can be older), the oldest dropped past LOG_MAX. A new Map: React state. */
+export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].sort((x, y) => x.at - y.at).slice(-LOG_MAX));
 
 /** Per-addon rate gate: true when `addon` is under LOG_RATE lines in the second of `now`. Mutates `seen`. */
 export function logAllowed(seen: Map<string, { sec: number; n: number }>, addon: string, now: number): boolean {
@@ -39,22 +39,85 @@ export function pruneLog(log: AddonLog, names: readonly string[]): AddonLog {
   return next;
 }
 
+/** One change to the log: a line added, one addon's log cleared, or only the listed addons kept. */
+export type LogOp = { add: string; entry: AddonLogEntry } | { drop: string } | { keep: readonly string[] };
+export const applyLogOps = (log: AddonLog, ops: readonly LogOp[]): AddonLog =>
+  ops.reduce((l, op) => ("add" in op ? addLog(l, op.add, op.entry) : "drop" in op ? pruneLog(l, [...l.keys()].filter((k) => k !== op.drop)) : pruneLog(l, op.keep)), log);
+
+/** The addon log of this browser, shared by its tabs: a tab keeps its unsaved changes and applies them on top of the stored log when it saves
+ * (at most every 300 ms, on pagehide and on unmount) and when another tab saved, so no tab overwrites another's lines or clears.
+ * Storage blocked or full: from then on the log of this page lives in memory only (it shows every line, no other tab's).
+ * shortcut: memory-only lasts until a reload even if the quota frees up; retry the save when that matters.
+ * shortcut: changes of two tabs within one 300 ms window merge in save order, not time order (a clear in one tab does not remove a line
+ * another tab logged just before it but saves after it; a `keep` list does not know an addon installed in that window). Upgrade with per-op times if it matters. */
+export function useAddonLog(): readonly [AddonLog, (op: LogOp) => void] {
+  const [log, setLog] = useState(() => loadAddonLog());
+  const pending = useRef<LogOp[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const memoryOnly = useRef(false);
+  const flush = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+    if (!pending.current.length) return;
+    const stored = memoryOnly.current ? undefined : readAddonLog();
+    const next = stored && applyLogOps(stored, pending.current);
+    // The shown log already has every pending change: on a storage failure it stays as it is.
+    pending.current = [];
+    if (!next || !saveAddonLog(next)) return void (memoryOnly.current = true);
+    setLog(next);
+  }, []);
+  const change = useCallback(
+    (op: LogOp) => {
+      pending.current.push(op);
+      setLog((l) => applyLogOps(l, [op]));
+      timer.current ??= setTimeout(flush, 300);
+    },
+    [flush],
+  );
+  useEffect(() => {
+    // key null: another tab cleared the whole storage.
+    const onStorage = (e: StorageEvent) => {
+      if (memoryOnly.current || (e.key !== LOG_KEY && e.key !== null)) return;
+      const stored = readAddonLog();
+      if (stored) setLog(applyLogOps(stored, pending.current));
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [flush]);
+  return [log, change] as const;
+}
+
 const isEntry = (e: unknown): e is AddonLogEntry => !!e && typeof (e as AddonLogEntry).at === "number" && LOG_LEVELS.includes((e as AddonLogEntry).level) && typeof (e as AddonLogEntry).text === "string";
 /** The stored log; empty when storage is blocked or the value is not ours. Entries of the wrong shape are dropped. */
-export function loadAddonLog(storage: Storage = localStorage): AddonLog {
+export const loadAddonLog = (storage: Storage = localStorage): AddonLog => readAddonLog(storage) ?? new Map();
+/** The stored log, or undefined when storage cannot be read (blocked); a value that is not ours is an empty log. */
+export function readAddonLog(storage: Storage = localStorage): AddonLog | undefined {
+  let raw: string | null;
   try {
-    const v: unknown = JSON.parse(storage.getItem(LOG_KEY) ?? "{}");
+    raw = storage.getItem(LOG_KEY);
+  } catch {
+    return undefined;
+  }
+  try {
+    const v: unknown = JSON.parse(raw ?? "{}");
     if (!v || typeof v !== "object" || Array.isArray(v)) return new Map();
     return new Map(Object.entries(v).flatMap(([k, es]) => (Array.isArray(es) ? [[k, es.filter(isEntry).slice(-LOG_MAX)] as [string, AddonLogEntry[]]] : [])));
   } catch {
     return new Map();
   }
 }
-export function saveAddonLog(log: AddonLog, storage: Storage = localStorage) {
+/** false when storage is full or blocked. */
+export function saveAddonLog(log: AddonLog, storage: Storage = localStorage): boolean {
   try {
     storage.setItem(LOG_KEY, JSON.stringify(Object.fromEntries([...log].filter(([, es]) => es.length))));
+    return true;
   } catch {
-    // storage full or blocked: the log stays in memory for this page
+    return false;
   }
 }
 export const AddonsContext = createContext<AddonsState>(EMPTY_ADDONS);
