@@ -312,7 +312,7 @@ export function App() {
   const [reloadFailed, setReloadFailed] = useState<Set<string>>(new Set());
   // Addons (GH-516, Hub-wide): the list kept for the whole app (themes, panes, commands, renderers) and the Manage addons dialog; `addonsRev` bumps on config.changed kind addons.
   const [addons, setAddons] = useState<AddonsState>(EMPTY_ADDONS);
-  // The addon log (GH-520): own state, not in AddonsContext, so a log line re-renders only the Addons dialog.
+  // The addon log (GH-520): own state, not in AddonsContext, so a log line does not re-render the addon frames and renderers.
   const [addonLog, setAddonLog] = useState(loadAddonLog);
   const logSeen = useRef(new Map<string, { sec: number; n: number }>());
   const [addonsOpen, setAddonsOpen] = useState(false);
@@ -2938,9 +2938,10 @@ export function App() {
   // Written at most every 300 ms (a burst of lines is one write) and on pagehide (a reload keeps the last lines).
   const addonLogRef = useRef(addonLog);
   addonLogRef.current = addonLog;
+  const logSave = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
-    const t = setTimeout(() => saveAddonLog(addonLog), 300);
-    return () => clearTimeout(t);
+    if (logSave.current) return;
+    logSave.current = setTimeout(() => ((logSave.current = undefined), saveAddonLog(addonLogRef.current)), 300);
   }, [addonLog]);
   useEffect(() => {
     const flush = () => saveAddonLog(addonLogRef.current);
