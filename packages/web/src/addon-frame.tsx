@@ -1,6 +1,7 @@
 // One sandboxed addon iframe and its bridge (docs/spec.md "Addon host", ADR 0006). The frame has an opaque origin: it is told apart by `event.source`,
 // never by origin, and it never receives the token. Every request passes the capability gate (addons.ts) before the host acts.
 import { useContext, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
+import type { ErrorCode, EventMessage, Requests } from "@claude-ui/addon-sdk";
 import type { Part } from "@claude-ui/protocol";
 import { AddonApiContext, AddonsContext, bandsOf, clampHeight, enabledAddons, gate, LOG_LEVELS, type AddonInfo, type AddonLogLevel } from "./addons.ts";
 import { usePhone } from "./lib/use-narrow.ts";
@@ -13,12 +14,13 @@ const MAX_STATUS = 80;
 const MAX_TOAST = 200;
 const MAX_LOG = 500;
 
-/** Host -> frame. The only `"*"` target: an opaque-origin frame has no other one. */
-export const postTo = (frame: HTMLIFrameElement | null, msg: object) => frame?.contentWindow?.postMessage({ v: 1, ...msg }, "*");
+type Reply = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: { code: ErrorCode; message: string } };
+/** Host -> frame. The only `"*"` target: an opaque-origin frame has no other one. Shapes from the addon SDK (packages/addon-sdk): a part or event it does not accept fails the typecheck. */
+export const postTo = (frame: HTMLIFrameElement | null, msg: EventMessage | Reply) => frame?.contentWindow?.postMessage({ v: 1, ...msg }, "*");
 
 export const frameUrl = (addon: AddonInfo, entry: string) => addon.base + entry.split("/").map(encodeURIComponent).join("/");
 
-export type AddonHandle = { post: (msg: object) => void };
+export type AddonHandle = { post: (msg: EventMessage) => void };
 
 /** `view`: the id of the view (or "" for a command handler); `session`/`sessionId`: the owner session, whose parts `session.read` returns. */
 export function AddonFrame({ addon, entry, role, view, sessionId, session, onHeight, className, style, hidden, handle }: { /** `post`: sends an event to the frame once it has loaded (queued before). */ handle?: Ref<AddonHandle>; addon: AddonInfo; entry: string; role: AddonRole; view: string; sessionId: string; session?: SessionView; onHeight?: (px: number) => void; className?: string; style?: CSSProperties; hidden?: boolean }) {
@@ -31,7 +33,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
   // The parts the frame has read: session.parts pushes only the ones that are new or changed since.
   const sent = useRef<Map<string, Part> | undefined>(undefined);
   const loaded = useRef(false);
-  const queue = useRef<object[]>([]);
+  const queue = useRef<EventMessage[]>([]);
   useImperativeHandle(handle, () => ({ post: (msg) => (loaded.current ? postTo(frame.current, msg) : void queue.current.push(msg)) }), []);
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       if (!m || m.v !== 1 || typeof m.id !== "string" || typeof m.type !== "string") return;
       const { id, type } = m;
       const done = (result: unknown = {}) => postTo(frame.current, { id, ok: true, result });
-      const fail = (code: "refused" | "bad_request" | "unknown", message: string) => (live.current.api.refused(addon.name, type, message), postTo(frame.current, { id, ok: false, error: { code, message } }));
+      const fail = (code: ErrorCode, message: string) => (live.current.api.refused(addon.name, type, message), postTo(frame.current, { id, ok: false, error: { code, message } }));
       const g = gate(type, addon.approved);
       if (!g.ok) return fail(g.code, g.message);
       // A render frame belongs to a message, not to a session: nothing that needs one.
@@ -53,7 +55,7 @@ export function AddonFrame({ addon, entry, role, view, sessionId, session, onHei
       if (type === "session.read") {
         const parts = live.current.session ? wholeParts(live.current.session) : [];
         sent.current = new Map(parts.map((p) => [p.id, p]));
-        return done({ parts });
+        return done({ parts } satisfies Requests["session.read"]["result"]);
       }
       if (type === "prompt.insert") {
         if (typeof m.text !== "string" || m.text.length > MAX_INSERT) return fail("bad_request", `text must be a string up to ${MAX_INSERT} characters`);

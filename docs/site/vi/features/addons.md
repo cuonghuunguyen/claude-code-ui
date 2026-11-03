@@ -74,7 +74,31 @@ Khung là tệp HTML nạp script riêng của nó (script nội tuyến bị ch
 | `ui.status {text}` | `ui.status` | Mục thanh trạng thái tới 80 ký tự; `null` để xóa |
 | `ui.toast {text}` | `ui.toast` | Thông báo tới 200 ký tự |
 
-Sự kiện từ claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` hoặc `render {tool: {name, input, result}}`, `session.parts`. `bridge.js` của ví dụ gói việc này thành `call(type, payload)` và `on(type, fn)`. **Chỉ xử lý thông điệp có `event.source` là `parent`:** mọi khung khác trên trang (addon khác, bản xem trước Artifact) cũng gửi được tới khung của bạn, và `bridge.js` bỏ qua các thông điệp đó.
+Sự kiện từ claude-ui: `init {addon, view, role, session, theme, mode}`, `theme.changed {theme, mode}`, `command.run {name, args}`, `render {fence: {lang, source}}` hoặc `render {tool: {name, input, result}}`, `session.parts`. **Chỉ xử lý thông điệp có `event.source` là `parent`:** mọi khung khác trên trang (addon khác, bản xem trước Artifact) cũng gửi được tới khung của bạn. SDK bên dưới bỏ qua các thông điệp đó.
+
+## SDK {#sdk}
+
+`packages/addon-sdk/` trong kho có hai tệp: `claude-ui-addon.js` (JavaScript thuần, không cần build) và `claude-ui-addon.d.ts` (kiểu của nó). Chép cả hai vào thư mục addon và import tệp đầu từ script của khung:
+
+```js
+// @ts-check
+import { watchSession, setStatus, autoHeight } from "./claude-ui-addon.js";
+
+autoHeight(); // băng hoặc bộ vẽ: báo claude-ui chiều cao nội dung
+watchSession((parts) => setStatus(`${parts.filter((p) => p.type === "turn_result").length} turns`));
+```
+
+| Export | Làm gì |
+| --- | --- |
+| `call(type, payload)`, `on(type, fn)` | Mọi yêu cầu; mọi sự kiện (`on` trả về hàm gỡ handler) |
+| `readSession()`, `insertPrompt(text)`, `setStatus(text)`, `toast(text)`, `log(text, level)`, `ready(height)` | Mỗi hàm một yêu cầu |
+| `watchSession(fn)` | Đọc phiên sau `init`, rồi gọi `fn` với mọi phần mỗi khi có thay đổi |
+| `autoHeight()` | Gửi chiều cao nội dung ngay và mỗi khi nó đổi |
+| `AddonError` | Lỗi khi yêu cầu bị từ chối; `code` là `refused`, `bad_request` hoặc `unknown` |
+
+SDK cũng đặt `color-scheme` của trang theo chế độ sáng hoặc tối của ứng dụng. Có `// @ts-check` ở đầu script thì VS Code và `tsc --checkJs` báo lỗi khi yêu cầu không tồn tại, payload sai hoặc trường mà phần không có. Kiểu đổi theo claude-ui: chép lại hai tệp sau khi cập nhật.
+
+Để Claude viết addon cho bạn, cài plugin `addons` từ marketplace của kho này (`/plugin marketplace add cuonghuunguyen/claude-code-ui`, rồi `/plugin install addons@claude-ui`) và yêu cầu: skill `write-addon` của nó tạo thư mục, chép SDK và kiểm tra kiểu.
 
 ## Giao diện màu {#themes}
 
@@ -92,7 +116,7 @@ Bộ vẽ `fence` vẽ khối mã của một ngôn ngữ trong câu trả lời
 
 ## Addon ví dụ {#example}
 
-`examples/addons/example/` trong kho minh họa mọi tính năng: giao diện màu, `theme.css`, một pane đếm số phần của phiên và có nút cho từng lời gọi cầu nối, một băng với số lượt và công cụ cuối, `/example:cmd`, và bộ vẽ cho khối ```` ```example ````. Hãy cài nó như thư mục cục bộ.
+`examples/addons/example/` trong kho dùng SDK và minh họa mọi tính năng: giao diện màu, `theme.css`, một pane đếm số phần của phiên và có nút cho từng lời gọi cầu nối, một băng với số lượt và công cụ cuối, `/example:cmd`, và bộ vẽ cho khối ```` ```example ````. Hãy cài nó như thư mục cục bộ.
 
 ## Mod của Claude Code {#claude-code-mods}
 

@@ -1,5 +1,6 @@
 // Addons in the web app (docs/spec.md "Frontend" › Addons dialog; ADR 0006): the list the daemon sent, shared by context, and the pure helpers on it.
 import { createContext } from "react";
+import type { RequestType } from "@claude-ui/addon-sdk";
 import type { AddonInfo, AddonSource, SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_COMMAND, DIALOG_COMMANDS } from "./commands.ts";
 import type { Key } from "./i18n.ts";
@@ -96,7 +97,7 @@ export function rendererConflicts(addons: AddonInfo[]): Record<string, string[]>
 }
 
 /** What a bridge request needs: null = nothing, else the capability. Any type not listed (prompt.submit, fs, shell, permission, ...) is refused whatever was approved. */
-const GATE: Record<string, string | null> = { "ui.ready": null, "session.read": "session.read", "prompt.insert": "prompt.insert", "ui.status": "ui.status", "ui.toast": "ui.toast", log: "log" };
+const GATE: Record<string, string | null> = { "ui.ready": null, "session.read": "session.read", "prompt.insert": "prompt.insert", "ui.status": "ui.status", "ui.toast": "ui.toast", log: "log" } satisfies Record<RequestType, string | null>;
 
 /** The capability gate of the bridge (ADR 0006): pure, no DOM. */
 export function gate(type: string, approved: readonly string[]): { ok: true } | { ok: false; code: "refused" | "unknown"; message: string } {

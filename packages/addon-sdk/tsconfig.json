@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": [], "allowJs": true, "checkJs": true },
+  // The example addon is checked as an author would check theirs: plain JS with the SDK's .d.ts next to it.
+  "include": ["test/types.ts", "../../examples/addons/example/*.js"],
+  "exclude": ["../../examples/addons/example/claude-ui-addon.js"]
+}

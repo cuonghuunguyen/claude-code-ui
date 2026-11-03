@@ -1,0 +1,16 @@
+{
+  "name": "@claude-ui/addon-sdk",
+  "private": true,
+  "type": "module",
+  "description": "The addon side of the claude-ui bridge: copy claude-ui-addon.js and claude-ui-addon.d.ts into an addon folder. No build.",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./claude-ui-addon.d.ts",
+      "default": "./claude-ui-addon.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}
