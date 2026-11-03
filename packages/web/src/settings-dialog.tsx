@@ -25,6 +25,7 @@ import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mod
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { saveShakeLocate, useShakeLocate } from "./locate.ts";
 import { usePhone } from "@/lib/use-narrow.ts";
+import { cn } from "@/lib/utils";
 import { IN_APP_EVENT, loadInApp, saveInApp } from "./notify.ts";
 import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
@@ -250,24 +251,34 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
         {t("settings.sides.title")}
       </h3>
       {!rows.length && <p className="border-t py-2 text-muted-foreground text-sm">{t("settings.sides.empty")}</p>}
-      {rows.map((r) => (
-        <div key={r.id} className="flex flex-col gap-1 border-t py-2" data-testid={`settings-side-${r.id}`}>
-          <div className="flex items-center gap-3 max-md:min-h-11">
-            <div className="min-w-0 flex-1">
-              <span className="block truncate text-sm">{r.label}</span>
-              <span className="block break-words text-muted-foreground text-xs">{r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "")}</span>
+      {!!rows.length && (
+        <div aria-hidden className="grid grid-cols-[1fr_5.5rem_5.5rem] gap-3 border-t pt-2 pb-1 text-center text-muted-foreground text-xs">
+          <span />
+          <span>{t("settings.sides.colStart")}</span>
+          <span>{t("settings.sides.colUpdate")}</span>
+        </div>
+      )}
+      {rows.map((r) => {
+        const status = r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
+        const dot = r.state === "ready" ? "bg-success" : r.state === "starting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
+        return (
+          <div key={r.id} className="grid grid-cols-[1fr_5.5rem_5.5rem] items-center gap-3 border-t py-2 max-md:min-h-11" data-testid={`settings-side-${r.id}`}>
+            <div className="flex min-w-0 items-start gap-2">
+              <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", dot)} />
+              <div className="min-w-0">
+                <span className="block truncate text-sm" title={r.label}>{r.label}</span>
+                <span className={cn("block break-words text-xs", r.state === "error" ? "text-destructive" : "text-muted-foreground")}>{status}</span>
+              </div>
+            </div>
+            <div className="flex justify-center">
+              <Switch on={!!r.autoStart} label={t("settings.sides.startLabel", { name: r.label })} held={false} onToggle={(on) => set(r.id, { start: on })} title={t("settings.sides.start")} testId={`settings-side-start-${r.id}`} />
+            </div>
+            <div className="flex justify-center">
+              <Switch on={r.autoUpdate !== false} label={t("settings.sides.updateLabel", { name: r.label })} held={!r.autoStart} onToggle={(on) => set(r.id, { update: on })} title={r.autoStart ? t("settings.sides.update") : t("settings.sides.needsStart")} testId={`settings-side-update-${r.id}`} />
             </div>
           </div>
-          <div className="flex items-center gap-3 max-md:min-h-11">
-            <span className="min-w-0 flex-1 text-sm">{t("settings.sides.start")}</span>
-            <Switch on={!!r.autoStart} label={t("settings.sides.startLabel", { name: r.label })} held={false} onToggle={(on) => set(r.id, { start: on })} title={t("settings.sides.start")} testId={`settings-side-start-${r.id}`} />
-          </div>
-          <div className="flex items-center gap-3 max-md:min-h-11">
-            <span className="min-w-0 flex-1 text-sm">{t("settings.sides.update")}</span>
-            <Switch on={r.autoUpdate !== false} label={t("settings.sides.updateLabel", { name: r.label })} held={!r.autoStart} onToggle={(on) => set(r.id, { update: on })} title={r.autoStart ? t("settings.sides.update") : t("settings.sides.needsStart")} testId={`settings-side-update-${r.id}`} />
-          </div>
-        </div>
-      ))}
+        );
+      })}
       <p className="pt-1 text-muted-foreground text-xs">{t("settings.sides.hint")}</p>
     </section>
   );
