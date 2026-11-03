@@ -1794,10 +1794,14 @@ describe("limiter", () => {
 describe("WSL projects opened by their UNC path", () => {
   afterEach(() => (setGitRunner(undefined), vi.restoreAllMocks()));
   const unc = (p: string) => `\\\\wsl.localhost\\X${p.replace(/\//g, "\\")}`;
-  // The script wsl.exe hands the distro's bash, decoded here: macOS bash 3.2 sources nothing from `. <(...)` (bash >= 4, as in any distro, does).
+  // The command wsl.exe hands the distro's bash. A host bash >= 4 (as in any distro) runs it as is, wrapper included; macOS bash 3.2
+  // sources nothing from `. <(...)`, so there the script is decoded here.
+  // By version: bash 3.2 sometimes sources a tiny `<(...)` (a race), so a probe run says nothing.
+  const sourcesProcSub = process.platform !== "win32" && Number(execFileSync("bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" })) >= 4;
   const distroScript = (args: string[]) => {
     expect(args.slice(0, 5)).toEqual(["-d", "X", "--exec", "bash", "-c"]);
-    return Buffer.from(/^\. <\(echo (\S+) \| base64 -d\)$/.exec(args[5]!)![1]!, "base64").toString();
+    const b64 = /^\. <\(echo (\S+) \| base64 -d\)$/.exec(args[5]!)![1]!;
+    return sourcesProcSub ? args[5]! : Buffer.from(b64, "base64").toString();
   };
 
   it("listWorktrees of a UNC WSL cwd maps the POSIX paths git prints to the same UNC form", async () => {
@@ -1823,7 +1827,7 @@ describe("WSL projects opened by their UNC path", () => {
     const local = (o: GitRunOptions) =>
       new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
         files.push(o.file);
-        execFile("bash", ["-c", distroScript(o.args)],{ encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+        execFile("bash", ["-c", distroScript(o.args)], { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
       });
     setGitRunner(wslGitRunner({ local }));
     // On Linux a UNC path is relative: resolved from a cwd outside any repository, so no host repository is pinned (Windows resolves the UNC path itself).
@@ -1853,7 +1857,7 @@ describe("WSL projects opened by their UNC path", () => {
     const local = (o: GitRunOptions) =>
       new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
         files.push(o.file);
-        execFile("bash", ["-c", distroScript(o.args)],{ encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+        execFile("bash", ["-c", distroScript(o.args)], { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
       });
     setGitRunner(wslGitRunner({ local }));
     vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));

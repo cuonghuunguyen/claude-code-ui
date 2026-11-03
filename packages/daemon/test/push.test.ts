@@ -287,11 +287,12 @@ describe("notifier: workers of one coordinator blocked on the same request (GH-1
     expect(pushed[1]!.replace).toBeUndefined();
   });
 
-  it("an escalated request of a grouped worker keeps the group tag and replaces on settle", () => {
+  it("an escalated request of a grouped worker pushes its reason with sound, keeps the group tag and replaces on settle", () => {
     block("w1");
     block("w2");
     n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w2", { escalated: true, reason: "blocked" }), "w2"));
-    expect(pushed.at(-1)!.body).toMatch(/^2 workers need input/);
+    expect(pushed.at(-1)!.body).toContain("Escalated by coordinator: blocked");
+    expect(pushed.at(-1)!.silent).toBeUndefined();
     unblock("w2");
     unblock("w1");
     expect(pushed.at(-1)!.body).toMatch(/^No longer needs input/);

@@ -56,8 +56,8 @@ export function createNotifier(opts: {
     // The first push keeps the 5 s gap; a later one only changes the count of a notification that was really shown.
     if (!g.shown && !force && Date.now() - t.lastSent < MIN_GAP_MS) return false;
     t.lastSent = Date.now();
-    // A lone worker's escalation is no count change: it pushes its reason with sound, under the group's tag.
-    const counted = g.shown && !(force && g.members.size === 1);
+    // An escalation is no count change: it pushes its reason with sound, under the group's tag (it replaces the count notification).
+    const counted = g.shown && !force;
     opts.push(id, counted ? countBody(g) : body, { tag: g.tag, titleSession: g.title, ...(counted && { silent: true, replace: true }) });
     g.shown = true;
     return true;
