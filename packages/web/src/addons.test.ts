@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addLog, loadAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { addLog, logAllowed, LOG_RATE, pruneLog, loadAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -119,5 +119,17 @@ describe("addon log", () => {
     expect(loadAddonLog({ getItem: () => { throw new Error("blocked"); } } as unknown as Storage)).toEqual(new Map());
     m.set([...m.keys()][0]!, JSON.stringify({ a: [{ at: 1, level: "warn", text: "ok" }, { at: "x" }, null], b: "no" }));
     expect(loadAddonLog(storage)).toEqual(new Map([["a", [{ at: 1, level: "warn", text: "ok" }]]]));
+  });
+  it("logAllowed lets LOG_RATE lines per addon per second through", () => {
+    const seen = new Map();
+    const n = Array.from({ length: LOG_RATE + 3 }, () => logAllowed(seen, "a", 5_000)).filter(Boolean).length;
+    expect(n).toBe(LOG_RATE);
+    expect(logAllowed(seen, "b", 5_000)).toBe(true);
+    expect(logAllowed(seen, "a", 6_000)).toBe(true);
+  });
+  it("pruneLog drops addons not listed and keeps the same Map when none go", () => {
+    const log = addLog(addLog(new Map(), "a", { at: 1, level: "info", text: "x" }), "gone", { at: 1, level: "info", text: "y" });
+    expect([...pruneLog(log, ["a"]).keys()]).toEqual(["a"]);
+    expect(pruneLog(log, ["a", "gone"])).toBe(log);
   });
 });

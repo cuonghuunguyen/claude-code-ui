@@ -13,7 +13,7 @@ import { Switch } from "./plugins-dialog.tsx";
 
 const INPUT = "h-9 w-full rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base";
 
-/** `changed`: bumped on `config.changed` kind addons. `log`: the refused calls of this browser, by addon. */
+/** `changed`: bumped on `config.changed` kind addons. `log`: the addon logs of this browser (`log` calls and refused calls), by addon. */
 export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onClose }: { open: boolean; changed?: number; log?: Map<string, AddonLogEntry[]>; onClearLog?: (name: string) => void; request: <T>(msg: Request) => Promise<T>; onClose: () => void }) {
   const t = useT();
   const [loading, setLoading] = useState(true);

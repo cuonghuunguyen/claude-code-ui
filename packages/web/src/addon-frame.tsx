@@ -11,7 +11,7 @@ export type AddonRole = "pane" | "band" | "command" | "render";
 const MAX_INSERT = 32 * 1024;
 const MAX_STATUS = 80;
 const MAX_TOAST = 200;
-const MAX_LOG = 2000;
+const MAX_LOG = 500;
 
 /** Host -> frame. The only `"*"` target: an opaque-origin frame has no other one. */
 export const postTo = (frame: HTMLIFrameElement | null, msg: object) => frame?.contentWindow?.postMessage({ v: 1, ...msg }, "*");
