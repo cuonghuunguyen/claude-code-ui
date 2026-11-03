@@ -887,6 +887,7 @@ it("Force push asks first: the dialog shows the exact command; Cancel runs nothi
   const dlg = byId("git-force-push-dialog");
   expect(dlg.textContent).toContain(`git push --force-with-lease=refs/heads/main:${hash(2)} origin ${MAIN_ARGV}`);
   expect(byId("git-command").textContent).toContain("--force-with-lease");
+  expect(dlg.textContent).toContain(`${hash(2).slice(0, 7)} → ${hash(3).slice(0, 7)}: 1 commit on the remote will be lost. Refused if the remote moved since your last fetch.`);
   await act(async () => byId("git-force-push-cancel").click());
   await flush();
   expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
@@ -924,7 +925,7 @@ it("a branch not checked out here says so in the menu and the dialog; one in ano
   await menuAt(chip("refs/heads/main"));
   expect(document.body.textContent).toContain("not checked out here");
   await act(async () => byId("branch-push").click());
-  expect(byId("git-push-dialog").textContent).toContain("main is not checked out here");
+  expect(byId("git-push-dialog").textContent).toContain("Not checked out here.");
   await act(async () => byId("git-push-cancel").click());
   await flush();
   branchInfo = () => infoMain({ checkedOut: "/work/wt", pull: undefined, why: { pull: "Checked out in /work/wt: pull there" } });

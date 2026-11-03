@@ -22,7 +22,7 @@ const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const command = (argv: string[]) => `git ${argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
 /** Where the branch is checked out, as a short note (absent: in the session's worktree). */
 const note = (i: GitBranchInfo) => (i.checkedOut === "here" ? undefined : i.checkedOut ? t("sidebar.git.checkedOutIn", { name: base(i.checkedOut) }) : t("sidebar.git.notCheckedOut"));
-const ownerSentence = (i: GitBranchInfo) => (i.checkedOut === "here" ? "" : ` ${i.checkedOut ? t("sidebar.git.ownerIn", { branch: name(i.ref), path: i.checkedOut }) : t("sidebar.git.ownerNone", { branch: name(i.ref) })}`);
+const ownerSentence = (i: GitBranchInfo) => (i.checkedOut === "here" ? "" : ` ${i.checkedOut ? t("sidebar.git.ownerIn", { name: base(i.checkedOut) }) : t("sidebar.git.ownerNone")}`);
 const short7 = (h?: string) => (h ?? "").slice(0, 7);
 const commits = (count: number) => t("sidebar.git.commits", { count });
 
@@ -89,11 +89,15 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
   const i = dialog?.info;
   const x = i ? name(i.ref) : "";
   const target = i?.tracking ? i.tracking.replace(/^refs\/remotes\//, "") : i?.remote;
+  // The title names the branch and the remote; the text adds only what the title does not: hashes, counts, where the remote
+  // branch lands when its name differs, and where the branch is checked out.
+  const lands = i && target && target !== `${i.remote}/${x}` ? ` ${t("sidebar.git.lands", { target })}` : "";
   const text = !i || !dialog ? "" : dialog.kind === "force"
-    ? `${t("sidebar.git.forceText", { target: target ?? "", remoteHash: short7(i.trackingHash), branch: x, localHash: short7(i.local), commits: commits(i.behind ?? 0) })}${i.isDefault ? ` ${t("sidebar.git.defaultBranch")}` : ""}${ownerSentence(i)}`
+    ? `${t("sidebar.git.forceText", { remoteHash: short7(i.trackingHash), localHash: short7(i.local), commits: commits(i.behind ?? 0) })}${lands}${i.isDefault ? ` ${t("sidebar.git.defaultBranch")}` : ""}${ownerSentence(i)}`
     : dialog.kind === "push"
-      ? t(i.ahead !== undefined ? "sidebar.git.pushTextCounts" : "sidebar.git.pushText", { branch: x, localHash: short7(i.local), target: target ?? i.remote ?? "", ahead: commits(i.ahead ?? 0), behind: i.behind ?? 0 }) + ownerSentence(i)
-      : `${t(i.checkedOut ? "sidebar.git.pullDiverge" : "sidebar.git.pullNotCheckedOut")} ${i.upstream ?? ""}`.trim() + ownerSentence(i);
+      ? t(i.ahead !== undefined ? "sidebar.git.pushTextCounts" : "sidebar.git.pushText", { localHash: short7(i.local), ahead: commits(i.ahead ?? 0), behind: i.behind ?? 0 }) + lands + ownerSentence(i)
+      : // Pull is unavailable from another worktree, so its text covers both cases left.
+        t(i.checkedOut ? "sidebar.git.pullDiverge" : "sidebar.git.pullNotCheckedOut", { upstream: i.upstream ?? "" });
   const title = !i || !dialog ? "" : dialog.kind === "pull" ? t("sidebar.git.titlePull", { branch: x }) : t(dialog.kind === "force" ? "sidebar.git.titleForce" : "sidebar.git.titlePush", { branch: x, remote: i.remote ?? "" });
   const many = entries.length > 1;
   return (
@@ -141,7 +145,7 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
         testId={dialog?.kind === "force" ? "git-force-push" : dialog?.kind === "pull" ? "git-pull" : "git-push"}
       >
         {argv && (
-          <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-xs" data-testid="git-command">
+          <pre className="max-h-24 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-muted-foreground text-xs" data-testid="git-command">
             {command(argv)}
           </pre>
         )}
