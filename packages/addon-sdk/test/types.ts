@@ -1,5 +1,5 @@
 // Type tests, run by `npm run typecheck` (tsconfig.json of this package): each @ts-expect-error must be an error.
-import { call, on, setStatus } from "../claude-ui-addon.js";
+import { call, log, on, setStatus } from "../claude-ui-addon.js";
 
 void call("ui.toast", { text: "ok" });
 void call("session.read").then((r) => r.parts.filter((p) => p.type === "tool_call").map((p) => p.tool));
@@ -17,3 +17,6 @@ on("command.run", (m) => {
   // @ts-expect-error command.run has name and args, no text
   void m.text;
 });
+void log("x", "warn");
+// @ts-expect-error level must be info, warn or error
+void log("x", "debug");

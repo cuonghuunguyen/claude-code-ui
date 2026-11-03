@@ -33,7 +33,14 @@ Map each wish to a part and the capabilities it needs. Ask only when the wish fi
 | Draw a tool's result | `renderers[] {tool}` | `render.tool:<tool name>` |
 | Read the session's messages and tool calls | in a pane, band or command | `session.read` |
 | Status bar text, toasts | | `ui.status`, `ui.toast` |
+| Debug lines the owner can read in the Addons dialog | `log(text, level)` | `log` |
 | Call an HTTP API | `fetch` from a view | `net:<origin>` (the API must allow CORS for `Origin: null`) |
+
+Where code runs decides when it runs. A pane frame loads lazily: nothing runs until the user first
+shows the pane, and a pane tab in the main area runs only while that tab exists. A band and the
+hidden command frame load with the session that shows. Status text that must be current before the
+pane was ever opened belongs in a band (or, with commands, the command frame). Choose the frame by
+that, and tell the user which you chose and why.
 
 Impossible, whatever is approved: send a prompt, read or write files, run shell or git, answer
 permissions, read the session from a renderer (renderers get only `ui.ready` and `ui.toast`).
@@ -106,7 +113,7 @@ Each `.html` loads its script as a module and has no inline script or style:
 `jsconfig.json`:
 
 ```json
-{ "compilerOptions": { "checkJs": true, "strict": true, "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2023", "DOM", "DOM.Iterable"], "noEmit": true }, "exclude": ["claude-ui-addon.js"] }
+{ "compilerOptions": { "checkJs": true, "strict": true, "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2023", "DOM", "DOM.Iterable"], "noEmit": true }, "exclude": ["claude-ui-addon.js", "*.test.mjs"] }
 ```
 
 ## 3. Write the views with the SDK
@@ -122,6 +129,7 @@ Start every script with `// @ts-check` and import from `./claude-ui-addon.js`.
 | `autoHeight()` | Every band and renderer: keeps the frame as tall as the content (band 24-160 px, renderer up to 480) |
 | `insertPrompt(text)` | Fill the prompt box (≤ 32 KiB); the user sends it |
 | `setStatus(text \| null)`, `toast(text)` | ≤ 80 and ≤ 200 characters |
+| `log(text, level?)` | A line in the addon's log (≤ 500 characters, 20 per second); works in renderers too |
 | `call(type, payload)` | Any request; rejects with `AddonError` (`code`: `refused`, `bad_request`, `unknown`) |
 
 Parts: narrow by `p.type`. The useful ones: `user_text` and `assistant_text` (`text`),
@@ -137,14 +145,18 @@ Rules:
 - The SDK sets `color-scheme` from the app's mode; use `light-dark()` or
   `@media (prefers-color-scheme)` in CSS for your own colours.
 - Keep a pane usable at 390 px wide: no fixed widths, wrap text.
+- Put logic that is more than glue (a parser, sums, formatting) in its own module without DOM or
+  bridge calls, and check it with a small `node:assert` script (`node <name>.test.mjs`). A frame
+  is hard to debug: catching a parsing bug there costs a page reload and a guess.
 
 ## 4. Check
 
 1. Types: `npx -y -p typescript tsc -p jsconfig.json` in the addon folder. Fix every error; never silence one
    with `any` or `@ts-ignore`.
-2. Manifest: every path exists; every view, command and renderer has its capability; no unused
+2. Logic: run each `*.test.mjs`.
+3. Manifest: every path exists; every view, command and renderer has its capability; no unused
    capability.
-3. Run it (needs the user's claude-ui running; ask before touching their install): `/addons` in the
+4. Run it (needs the user's claude-ui running; ask before touching their install): `/addons` in the
    prompt box › **Local folder** › absolute path of the addon › **Install** › **Approve and
    enable**. A local folder is re-read when the dialog opens: after an edit, reopen the dialog
    (and reload the page for view scripts). A row in **Error** names what failed; a refused call
