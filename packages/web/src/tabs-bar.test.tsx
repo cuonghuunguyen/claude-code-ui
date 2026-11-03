@@ -265,6 +265,9 @@ it("Escape on the tab context menu returns focus to that tab", async () => {
     btn("b").focus();
     await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    // Base UI moves focus into the menu on the next animation frame (jsdom: a 16 ms timer); without the wait the result depends on machine speed.
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(document.querySelector('[role="menu"]')!.contains(document.activeElement)).toBe(true);
     await act(async () => void (document.activeElement ?? document).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await act(async () => {});
     expect(document.querySelector('[role="menu"]')).toBeNull();

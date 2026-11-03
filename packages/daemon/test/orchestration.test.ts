@@ -1189,10 +1189,14 @@ describe("orchestration", () => {
     const c2 = await client((d.address() as AddressInfo).port);
     try {
       const coord: string = (await c2.request({ type: "session.create", cwd: dirA, coordinator: true })).result.session.id;
-      await c2.request({ type: "session.prompt", sessionId: coord, text: "hi" });
+      // worker_start runs inside the coordinator's turn, as a real tool call: an idle coordinator could be closed while the call
+      // is still on its way (under load it takes longer than the 150 ms idle close), before any worker exists.
+      await c2.request({ type: "session.prompt", sessionId: coord, text: "hold" });
       await until(() => runsOf(coord).at(-1)?.texts.length);
       const w = await call(coord, "worker_start", { name: "idle-c", cwd: dirB, prompt: "hold" }, {}, d);
       await until(() => runsOf(w.sessionId)[0]?.texts.length);
+      await c2.request({ type: "session.prompt", sessionId: coord, text: "turn end" });
+      await until(() => runsOf(coord).at(-1)?.texts.includes("turn end"));
       await new Promise((r) => setTimeout(r, 600));
       expect(runsOf(coord).every((r) => !r.closed)).toBe(true);
       await call(coord, "worker_send", { name: "idle-c", text: "end" }, {}, d);

@@ -46,7 +46,8 @@ const added = (...cwds: string[]) => {
 const posix = process.platform !== "win32";
 // Git for Windows takes 0.2-0.6 s per process, so tests that drive many git commands (worktrees) exceed the 15 s default there.
 if (!posix) vi.setConfig({ testTimeout: 120_000 });
-const webRoot = mkdtempSync(join(tmpdir(), "web-"));
+// Real path: roots are canonical (macOS tmpdir /var is a link to /private/var).
+const webRoot = realpathSync(mkdtempSync(join(tmpdir(), "web-")));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const uploadParent = join(mkdtempSync(join(tmpdir(), "up-")), "claude-ui-uploads");
@@ -4316,7 +4317,7 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
   /** A daemon with its own Claude user dir and project dir (a root, so cwd is allowed). */
   async function setup(allowBypass = false) {
     const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
-    const project = mkdtempSync(join(tmpdir(), "proj-"));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
     const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, history: { listSessions: (async () => []) as never } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);

@@ -1,6 +1,6 @@
 // GH-254: a CLI that starts in a session without one (e.g. worker_send on a worker restored after a restart) is announced: sessions.changed.
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ServerMessage } from "@claude-
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery, history } from "./fake-query.ts";
 
-const webRoot = mkdtempSync(join(tmpdir(), "rv-web-"));
+const webRoot = realpathSync(mkdtempSync(join(tmpdir(), "rv-web-")));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 
