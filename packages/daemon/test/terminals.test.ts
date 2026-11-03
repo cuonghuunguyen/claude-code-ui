@@ -238,7 +238,9 @@ it.runIf(posix)("refuses input while MAX_PENDING_INPUT_BYTES wait for the shell 
 });
 
 // Every PTY master has the inode of /dev/ptmx, so a check by fd number and inode took terminal B's master for A's.
-it.runIf(posix)("never sends input or a resize of a terminal whose master closed to the terminal that reuses its fd", { timeout: 30_000 }, async () => {
+// Not on macOS: there the master reads as closed only once the shell (the session leader) exits, and a shell cannot leave its
+// controlling tty (TIOCNOTTY is refused), so "master closed, shell still running" cannot happen and the setup cannot be made.
+it.runIf(posix && process.platform !== "darwin")("never sends input or a resize of a terminal whose master closed to the terminal that reuses its fd", { timeout: 30_000 }, async () => {
   const terminals = createTerminals();
   const a = terminals.get(terminals.create(tmpdir(), 80, 24, {}).id)!;
   const fd = (a.pty as unknown as { fd: number }).fd;
