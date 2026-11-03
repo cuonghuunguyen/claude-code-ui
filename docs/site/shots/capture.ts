@@ -4,13 +4,16 @@ import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { createServer } from "vite";
-import { SCENES } from "../../../docs/site/shots/index.ts";
+import { SCENES as DOCS, TIKTOK } from "../../../docs/site/shots/index.ts";
 
-const out = fileURLToPath(new URL("../public/screenshots/", import.meta.url));
+// `--tiktok`: the TikTok video stills instead of the docs screenshots, written to $SHOTS_OUT (default .tiktok-assets/ at the repo root).
+const tiktok = process.argv.includes("--tiktok");
+const SCENES = tiktok ? TIKTOK : DOCS;
+const out = tiktok ? `${process.env.SHOTS_OUT ?? fileURLToPath(new URL("../../../.tiktok-assets", import.meta.url))}/` : fileURLToPath(new URL("../public/screenshots/", import.meta.url));
 // The page clock is fixed to the scenes' "now" (shots/demo.ts NOW), so relative times read the same on every run.
 const NOW = new Date("2026-03-12T10:30:00Z");
 
-const wanted = process.argv.slice(2);
+const wanted = process.argv.slice(2).filter((a) => a !== "--tiktok");
 const unknown = wanted.filter((n) => !SCENES[n]);
 if (unknown.length) {
   console.error(`unknown scene ${unknown.join(", ")}; known: ${Object.keys(SCENES).join(", ")}`);
@@ -29,7 +32,7 @@ try {
     const scene = SCENES[name]!;
     for (const theme of scene.themes ?? ["light"]) {
       const file = `${name}${theme === "dark" ? "-dark" : ""}.png`;
-      const context = await browser.newContext({ viewport: scene.viewport ?? { width: 1440, height: 900 }, deviceScaleFactor: 1, colorScheme: theme, reducedMotion: "reduce" });
+      const context = await browser.newContext({ viewport: scene.viewport ?? { width: 1440, height: 900 }, deviceScaleFactor: scene.scale ?? 1, colorScheme: theme, reducedMotion: "reduce" });
       const page = await context.newPage();
       const problems: string[] = [];
       page.on("response", (r) => { if (r.status() === 404 && process.env.SHOTS_DEBUG) console.log("  404 " + r.url()); });

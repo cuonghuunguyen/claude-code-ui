@@ -7,10 +7,11 @@ import { GUIDE_KEY, takeFirstUseSnapshot } from "../../../packages/web/src/guide
 import "./shots.css";
 import { applyTheme } from "../../../packages/web/src/theme.ts";
 import { daemonFor } from "./defaults.ts";
-import { SCENES } from "./index.ts";
+import { SCENES as DOCS, TIKTOK } from "./index.ts";
 
 const params = new URLSearchParams(location.search);
 const name = params.get("scene") ?? "";
+const SCENES = { ...DOCS, ...TIKTOK };
 const scene = SCENES[name];
 if (!scene) throw new Error(`unknown scene "${name}"; known: ${Object.keys(SCENES).join(", ")}`);
 

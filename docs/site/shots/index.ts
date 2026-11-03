@@ -10,3 +10,5 @@ import { scene as permissions } from "./scenes/permissions.ts";
 import { scene as settings } from "./scenes/settings.ts";
 
 export const SCENES: Record<string, Scene> = { permissions, focus, "new-session": newSession, files, terminal, sessions: sessionsScene, "group-menu": groupMenu, settings };
+
+export { TIKTOK } from "./tiktok.ts";

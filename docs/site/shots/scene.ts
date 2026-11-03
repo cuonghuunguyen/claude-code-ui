@@ -10,6 +10,8 @@ export type SceneSession = { info: SessionListItem; parts: Part[] };
 export type Scene = {
   /** Default 1440x900. */
   viewport?: { width: number; height: number };
+  /** Device scale factor, default 1. */
+  scale?: number;
   /** Default ["light"]; each one makes a PNG (`<name>-dark.png` for dark). */
   themes?: Theme[];
   /** localStorage seeded before the app boots (the guide and theme keys are added for you). */

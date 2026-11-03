@@ -17,3 +17,5 @@ __pycache__/
 
 # VitePress docs site (docs/site): build output is dist/ (ignored above), plus its cache
 docs/site/.vitepress/cache/
+.claude/memory.db*
+.claude/scout-report.json
