@@ -20,8 +20,8 @@ export const LOG_RATE = 20;
 export const LOG_LEVELS: readonly AddonLogLevel[] = ["info", "warn", "error"];
 export const LOG_KEY = "claude-ui.addonLog";
 
-/** `log` with `e` appended to `addon`'s entries, the oldest dropped past LOG_MAX. A new Map: React state. */
-export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].slice(-LOG_MAX));
+/** `log` with `e` added to `addon`'s entries in time order (a line of another tab can be older), the oldest dropped past LOG_MAX. A new Map: React state. */
+export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].sort((x, y) => x.at - y.at).slice(-LOG_MAX));
 
 /** Per-addon rate gate: true when `addon` is under LOG_RATE lines in the second of `now`. Mutates `seen`. */
 export function logAllowed(seen: Map<string, { sec: number; n: number }>, addon: string, now: number): boolean {
@@ -43,12 +43,11 @@ export function pruneLog(log: AddonLog, names: readonly string[]): AddonLog {
 export type LogOp = { add: string; entry: AddonLogEntry } | { drop: string } | { keep: readonly string[] };
 export const applyLogOps = (log: AddonLog, ops: readonly LogOp[]): AddonLog =>
   ops.reduce((l, op) => ("add" in op ? addLog(l, op.add, op.entry) : "drop" in op ? pruneLog(l, [...l.keys()].filter((k) => k !== op.drop)) : pruneLog(l, op.keep)), log);
-/** Each addon's lines by time: lines of two tabs merged are not in order otherwise. */
-const byTime = (log: AddonLog): AddonLog => new Map([...log].map(([k, es]) => [k, [...es].sort((a, b) => a.at - b.at)]));
 
 /** The addon log of this browser, shared by its tabs: a tab keeps its unsaved changes and applies them on top of the stored log when it saves
  * (at most every 300 ms, on pagehide and on unmount) and when another tab saved, so no tab overwrites another's lines or clears.
  * Storage blocked or full: from then on the log of this page lives in memory only (it shows every line, no other tab's).
+ * shortcut: memory-only lasts until a reload even if the quota frees up; retry the save when that matters.
  * shortcut: changes of two tabs within one 300 ms window merge in save order, not time order (a clear in one tab does not remove a line
  * another tab logged just before it but saves after it; a `keep` list does not know an addon installed in that window). Upgrade with per-op times if it matters. */
 export function useAddonLog(): readonly [AddonLog, (op: LogOp) => void] {
@@ -61,7 +60,7 @@ export function useAddonLog(): readonly [AddonLog, (op: LogOp) => void] {
     timer.current = undefined;
     if (!pending.current.length) return;
     const stored = memoryOnly.current ? undefined : readAddonLog();
-    const next = stored && byTime(applyLogOps(stored, pending.current));
+    const next = stored && applyLogOps(stored, pending.current);
     // The shown log already has every pending change: on a storage failure it stays as it is.
     pending.current = [];
     if (!next || !saveAddonLog(next)) return void (memoryOnly.current = true);
@@ -80,7 +79,7 @@ export function useAddonLog(): readonly [AddonLog, (op: LogOp) => void] {
     const onStorage = (e: StorageEvent) => {
       if (memoryOnly.current || (e.key !== LOG_KEY && e.key !== null)) return;
       const stored = readAddonLog();
-      if (stored) setLog(byTime(applyLogOps(stored, pending.current)));
+      if (stored) setLog(applyLogOps(stored, pending.current));
     };
     window.addEventListener("storage", onStorage);
     window.addEventListener("pagehide", flush);

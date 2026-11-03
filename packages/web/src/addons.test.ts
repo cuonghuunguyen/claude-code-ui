@@ -108,6 +108,15 @@ describe("addon log", () => {
     expect(before.has("b")).toBe(false);
     expect(next.get("b")).toEqual([{ at: 0, level: "error", text: "x" }]);
   });
+  it("addLog keeps time order and drops the oldest, not the last added", () => {
+    let log = new Map();
+    for (let i = 1; i <= LOG_MAX; i++) log = addLog(log, "a", { at: i * 10, level: "info", text: String(i) });
+    const stale = addLog(log, "a", { at: 5, level: "info", text: "stale" });
+    expect(stale.get("a")![0]!.text).toBe("1");
+    expect(stale.get("a")).toHaveLength(LOG_MAX);
+    const mid = addLog(log, "a", { at: 15, level: "info", text: "mid" });
+    expect(mid.get("a")!.slice(0, 2).map((e) => e.text)).toEqual(["mid", "2"]);
+  });
   it("save then load round-trips; bad or missing storage gives an empty log", () => {
     const m = new Map<string, string>();
     const storage = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } as Storage;
