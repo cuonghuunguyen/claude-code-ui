@@ -1794,6 +1794,11 @@ describe("limiter", () => {
 describe("WSL projects opened by their UNC path", () => {
   afterEach(() => (setGitRunner(undefined), vi.restoreAllMocks()));
   const unc = (p: string) => `\\\\wsl.localhost\\X${p.replace(/\//g, "\\")}`;
+  // The script wsl.exe hands the distro's bash, decoded here: macOS bash 3.2 sources nothing from `. <(...)` (bash >= 4, as in any distro, does).
+  const distroScript = (args: string[]) => {
+    expect(args.slice(0, 5)).toEqual(["-d", "X", "--exec", "bash", "-c"]);
+    return Buffer.from(/^\. <\(echo (\S+) \| base64 -d\)$/.exec(args[5]!)![1]!, "base64").toString();
+  };
 
   it("listWorktrees of a UNC WSL cwd maps the POSIX paths git prints to the same UNC form", async () => {
     const out = "worktree /home/me/repo\0HEAD abcdef1234\0branch refs/heads/main\0\0worktree /mnt/c/wt\0HEAD abcdef1234\0detached\0\0";
@@ -1818,7 +1823,7 @@ describe("WSL projects opened by their UNC path", () => {
     const local = (o: GitRunOptions) =>
       new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
         files.push(o.file);
-        execFile("bash", o.args.slice(4), { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+        execFile("bash", ["-c", distroScript(o.args)],{ encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
       });
     setGitRunner(wslGitRunner({ local }));
     // On Linux a UNC path is relative: resolved from a cwd outside any repository, so no host repository is pinned (Windows resolves the UNC path itself).
@@ -1848,7 +1853,7 @@ describe("WSL projects opened by their UNC path", () => {
     const local = (o: GitRunOptions) =>
       new Promise<{ stdout: Buffer; stderr: string }>((ok, fail) => {
         files.push(o.file);
-        execFile("bash", o.args.slice(4), { encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
+        execFile("bash", ["-c", distroScript(o.args)],{ encoding: "buffer" }, (err, stdout, stderr) => (err ? fail(Object.assign(err, { stderr: String(stderr) })) : ok({ stdout, stderr: String(stderr) })));
       });
     setGitRunner(wslGitRunner({ local }));
     vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));
