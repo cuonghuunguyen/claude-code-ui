@@ -1796,7 +1796,8 @@ describe("WSL projects opened by their UNC path", () => {
   const unc = (p: string) => `\\\\wsl.localhost\\X${p.replace(/\//g, "\\")}`;
   // The command wsl.exe hands the distro's bash. A host bash >= 4 (as in any distro) runs it as is, wrapper included; macOS bash 3.2
   // sources nothing from `. <(...)`, so there the script is decoded here.
-  // By version: bash 3.2 sometimes sources a tiny `<(...)` (a race), so a probe run says nothing.
+  // By version: bash 3.2 sometimes sources a tiny `<(...)` (a race), so a probe run says nothing. Not on Windows: `bash` there can be
+  // WSL's System32\bash.exe, which would run the script in a real distro instead of the faked one.
   const sourcesProcSub = process.platform !== "win32" && Number(execFileSync("bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" })) >= 4;
   const distroScript = (args: string[]) => {
     expect(args.slice(0, 5)).toEqual(["-d", "X", "--exec", "bash", "-c"]);

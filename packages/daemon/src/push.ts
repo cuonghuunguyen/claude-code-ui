@@ -58,7 +58,8 @@ export function createNotifier(opts: {
     t.lastSent = Date.now();
     // An escalation is no count change: it pushes its reason with sound, under the group's tag (it replaces the count notification).
     const counted = g.shown && !force;
-    opts.push(id, counted ? countBody(g) : body, { tag: g.tag, titleSession: g.title, ...(counted && { silent: true, replace: true }) });
+    const text = counted ? countBody(g) : force && g.members.size > 1 ? `${body} · ${g.members.size} workers need input` : body;
+    opts.push(id, text, { tag: g.tag, titleSession: g.title, ...(counted && { silent: true, replace: true }) });
     g.shown = true;
     return true;
   }
