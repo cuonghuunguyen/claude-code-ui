@@ -2,6 +2,38 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.1.0 - 2026-11-03
+
+### Added
+
+- Addons: browser customizations installed from a git repository or a local folder on the Hub. Type `/addons` or run "Manage addons" in the palette (also Settings › Addons › **Manage…**). An addon can add colour themes to the theme picker, panes in the side panel, the bottom panel or the main area, a band above the prompt box, slash commands `/<addon>:<command>` that put text in the prompt box, and drawings for code blocks of one language or the results of one tool (each with **Show raw**). Nothing runs before you approve the capabilities it asks for; an update that asks for more stays off until you approve again. **Check for updates** shows the new commit and the changed capabilities; the switch turns an addon off, **Uninstall** removes it. An addon in a project folder is never run ([#516](https://github.com/cuonghuunguyen/claude-code-ui/issues/516)).
+- Addon log: each addon has a log in the Addons dialog, like VS Code's output channel, that the addon can write to. It keeps the newest 200 lines across reloads, is shared by the tabs of a browser, can be cleared, and is removed when the addon is uninstalled ([#520](https://github.com/cuonghuunguyen/claude-code-ui/issues/520)).
+- Addon SDK: typed definitions for the addon API, and a `write-addon` skill that helps Claude write and test an addon ([#541](https://github.com/cuonghuunguyen/claude-code-ui/issues/541)).
+- Vietnamese: Settings › General › **Language** switches the app between English and Vietnamese (System follows the browser; kept per browser). Every UI string, relative time and keyboard shortcut name is translated. The docs site has a Vietnamese version under `/vi/` with a language switcher ([#510](https://github.com/cuonghuunguyen/claude-code-ui/issues/510)).
+- Claude in Chrome: Settings can turn on **Claude in Chrome**, so sessions can use your Chrome through the Claude in Chrome extension, like `claude --chrome` (palette: "Toggle Claude in Chrome"). It needs Chrome with the extension on the daemon's computer. It applies to sessions started or resumed after the change, never to orchestration workers. Screenshots taken by an MCP tool show in its tool card ([#514](https://github.com/cuonghuunguyen/claude-code-ui/issues/514)).
+- Keep computer awake: Settings › General › Screen › **Keep computer awake** stops idle sleep of the daemon's computer while a session runs, on macOS and Linux. Closing the lid can still sleep a laptop. After the computer slept during a run, the app offers to turn it on ([#523](https://github.com/cuonghuunguyen/claude-code-ui/issues/523)).
+- Recommendations: a setting or feature is suggested once in a toast, at the moment it helps (for example cleanup and compact tabs, the Jira hint in Create worktree, push notifications after a phone reconnects, a half-full context). At most 5 a day; Settings › General › **Show recommendations** turns them off ([#518](https://github.com/cuonghuunguyen/claude-code-ui/issues/518)).
+- Shake to locate: a quick left-right shake of the mouse scrolls to the active tab and session row and outlines them. Settings › Layout › Tabs › **Shake mouse to locate the active session** turns it off; it stays quiet behind a confirm dialog ([#517](https://github.com/cuonghuunguyen/claude-code-ui/issues/517)).
+- Git graph: the branch menu has **Push**, **Force push…** (with lease) and **Pull**. They refuse a remote branch that moved meanwhile and work in WSL projects; the Windows credential manager never prompts for a WSL repository ([#309](https://github.com/cuonghuunguyen/claude-code-ui/issues/309)).
+- Artifacts: a link to an artifact offers **Preview**, **Open in tab** and **Open on claude.ai**. Pane tabs that do not fit, also on a phone, move into a more-panes menu ([#512](https://github.com/cuonghuunguyen/claude-code-ui/issues/512)).
+- Git graph: a ref chip shows its full name on hover.
+
+### Changed
+
+- Auto-continue after a usage limit resets is on by default ([#524](https://github.com/cuonghuunguyen/claude-code-ui/issues/524)).
+- Sidebar: the project menu no longer has **New worktree**; **Create worktree…** stays ([#527](https://github.com/cuonghuunguyen/claude-code-ui/issues/527)).
+- Settings › Sides: one row per side with a status dot and **Auto-start** and **Auto-update** columns.
+- Push, Force push and Pull dialogs: shorter text; the command box keeps the exact command but scrolls.
+- Files tree: the clicked or focused row keeps a selected background, different from hover ([#525](https://github.com/cuonghuunguyen/claude-code-ui/issues/525)).
+- Orchestration: an escalation of a grouped worker pushes its reason with sound, and a grouped push puts the worker count first.
+
+### Fixed
+
+- Esc after an interrupt: Esc stops a turn the CLI starts after an interrupt, and the CLI's own notification is no longer shown as a terminal CLI turn ([#513](https://github.com/cuonghuunguyen/claude-code-ui/issues/513), [#539](https://github.com/cuonghuunguyen/claude-code-ui/issues/539)).
+- A taken-back or rewound prompt no longer comes back as a draft on each tab switch.
+- The breadcrumb is hidden for a file at the session root, where it showed only the file name.
+- An outdated page is told to reload.
+
 ## 1.0.0 - 2026-10-30
 
 ### Added
