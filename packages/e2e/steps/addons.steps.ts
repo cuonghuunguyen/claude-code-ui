@@ -105,6 +105,8 @@ Then("the addon pane shows the part counts of the session", async ({ page }) => 
 });
 
 When("I click {string} in the addon pane", async ({ page }, label: string) => {
+  // pane.js attaches the click handlers; the part counts show once it has run (a cold first load can be slower than the buttons).
+  await expect(paneFrame(page).getByTestId("example-parts")).not.toHaveText("…");
   await paneFrame(page).getByRole("button", { name: label, exact: true }).click();
 });
 
