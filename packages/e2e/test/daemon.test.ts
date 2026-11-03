@@ -183,7 +183,9 @@ describe("assertUploadsIsolated", () => {
 
 describe("stop", () => {
   it("matches a command line that holds the run folder in any slash style or case", () => {
-    expect(commandLineMentions(["node main.ts --roots C:", "Tmp", "Run-1", "projects"].join(String.fromCharCode(92)), "c:/tmp/run-1")).toBe(true);
+    // A drive path is absolute only on Windows (`resolve` puts the cwd before it elsewhere).
+    const drive = process.platform === "win32" ? "C:" : "";
+    expect(commandLineMentions([`node main.ts --roots ${drive}`, "Tmp", "Run-1", "projects"].join(String.fromCharCode(92)), `${drive.toLowerCase()}/tmp/run-1`)).toBe(true);
     expect(commandLineMentions("node main.ts --roots /other/projects", "/tmp/run-1")).toBe(false);
     expect(commandLineMentions("node main.ts --roots /tmp/run-10/projects", "/tmp/run-1")).toBe(false);
     expect(commandLineMentions("", "/tmp/run-1")).toBe(false);

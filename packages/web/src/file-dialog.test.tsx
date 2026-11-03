@@ -166,8 +166,9 @@ it("on touch Pop out leaves the editor unfocused (the soft keyboard stays closed
   q<HTMLElement>("[data-testid=files-popout]")!.focus();
   await click("[data-testid=files-popout]");
   await flush();
+  // Base UI moves the initial focus in a later frame (as the mouse case above waits for).
+  await vi.waitFor(() => expect(dlg()!.contains(document.activeElement)).toBe(true));
   expect(document.activeElement).not.toBe(cmView(dlg()!).contentDOM);
-  expect(dlg()!.contains(document.activeElement)).toBe(true);
   act(() => root.render(null));
   pointer(true);
   try {
