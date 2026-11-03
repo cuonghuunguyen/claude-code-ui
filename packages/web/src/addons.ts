@@ -1,5 +1,5 @@
 // Addons in the web app (docs/spec.md "Frontend" › Addons dialog; ADR 0006): the list the daemon sent, shared by context, and the pure helpers on it.
-import { createContext } from "react";
+import { createContext, useCallback, useEffect, useRef, useState } from "react";
 import type { RequestType } from "@claude-ui/addon-sdk";
 import type { AddonInfo, AddonSource, SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_COMMAND, DIALOG_COMMANDS } from "./commands.ts";
@@ -18,7 +18,7 @@ export const LOG_MAX = 200;
 /** Log lines an addon may add per second; more are dropped (an addon must not stall the host). */
 export const LOG_RATE = 20;
 export const LOG_LEVELS: readonly AddonLogLevel[] = ["info", "warn", "error"];
-const LOG_KEY = "claude-ui.addonLog";
+export const LOG_KEY = "claude-ui.addonLog";
 
 /** `log` with `e` appended to `addon`'s entries, the oldest dropped past LOG_MAX. A new Map: React state. */
 export const addLog = (log: AddonLog, addon: string, e: AddonLogEntry): AddonLog => new Map(log).set(addon, [...(log.get(addon) ?? []), e].slice(-LOG_MAX));
@@ -37,6 +37,48 @@ export function pruneLog(log: AddonLog, names: readonly string[]): AddonLog {
   const next = new Map(log);
   for (const k of gone) next.delete(k);
   return next;
+}
+
+/** One change to the log: a line added, one addon's log cleared, or only the listed addons kept. */
+export type LogOp = { add: string; entry: AddonLogEntry } | { drop: string } | { keep: readonly string[] };
+export const applyLogOps = (log: AddonLog, ops: readonly LogOp[]): AddonLog =>
+  ops.reduce((l, op) => ("add" in op ? addLog(l, op.add, op.entry) : "drop" in op ? pruneLog(l, [...l.keys()].filter((k) => k !== op.drop)) : pruneLog(l, op.keep)), log);
+
+/** The addon log of this browser, shared by its tabs: a tab keeps its unsaved changes and applies them on top of the stored log when it saves
+ * (at most every 300 ms, and on pagehide) and when another tab saved, so no tab overwrites another's lines or clears. */
+export function useAddonLog(): readonly [AddonLog, (op: LogOp) => void] {
+  const [log, setLog] = useState(() => loadAddonLog());
+  const pending = useRef<LogOp[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const flush = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+    if (!pending.current.length) return;
+    const next = applyLogOps(loadAddonLog(), pending.current.splice(0));
+    saveAddonLog(next);
+    setLog(next);
+  }, []);
+  const change = useCallback(
+    (op: LogOp) => {
+      pending.current.push(op);
+      setLog((l) => applyLogOps(l, [op]));
+      timer.current ??= setTimeout(flush, 300);
+    },
+    [flush],
+  );
+  useEffect(() => {
+    // key null: another tab cleared the whole storage.
+    const onStorage = (e: StorageEvent) => (e.key === LOG_KEY || e.key === null) && setLog(applyLogOps(loadAddonLog(), pending.current));
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pagehide", flush);
+      clearTimeout(timer.current);
+      timer.current = undefined;
+    };
+  }, [flush]);
+  return [log, change] as const;
 }
 
 const isEntry = (e: unknown): e is AddonLogEntry => !!e && typeof (e as AddonLogEntry).at === "number" && LOG_LEVELS.includes((e as AddonLogEntry).level) && typeof (e as AddonLogEntry).text === "string";

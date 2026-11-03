@@ -80,7 +80,7 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, addLog, EMPTY_ADDONS, enabledAddons, loadAddonLog, logAllowed, pruneLog, saveAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
+import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, logAllowed, useAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { nextReloadFailed } from "./plugins.ts";
@@ -313,7 +313,7 @@ export function App() {
   // Addons (GH-516, Hub-wide): the list kept for the whole app (themes, panes, commands, renderers) and the Manage addons dialog; `addonsRev` bumps on config.changed kind addons.
   const [addons, setAddons] = useState<AddonsState>(EMPTY_ADDONS);
   // The addon log (GH-520): own state, not in AddonsContext, so a log line does not re-render the addon frames and renderers.
-  const [addonLog, setAddonLog] = useState(loadAddonLog);
+  const [addonLog, changeAddonLog] = useAddonLog();
   const logSeen = useRef(new Map<string, { sec: number; n: number }>());
   const [addonsOpen, setAddonsOpen] = useState(false);
   const [addonsRev, setAddonsRev] = useState(0);
@@ -2910,10 +2910,10 @@ export function App() {
     toast: (addon, text) => setToast(`${addon}: ${text}`),
     refused: (addon, type, message) => {
       console.warn(`[addon ${addon}] refused ${type}: ${message}`);
-      if (logAllowed(logSeen.current, addon, Date.now())) setAddonLog((l) => addLog(l, addon, { at: Date.now(), level: "warn", text: `refused ${type}: ${message}` }));
+      if (logAllowed(logSeen.current, addon, Date.now())) changeAddonLog({ add: addon, entry: { at: Date.now(), level: "warn", text: `refused ${type}: ${message}` } });
       if (!refusedShown.current.has(addon)) (refusedShown.current.add(addon), setToast(tr("addons.refused", { name: addon, type })));
     },
-    log: (addon, level, text) => logAllowed(logSeen.current, addon, Date.now()) && setAddonLog((l) => addLog(l, addon, { at: Date.now(), level, text })),
+    log: (addon, level, text) => logAllowed(logSeen.current, addon, Date.now()) && changeAddonLog({ add: addon, entry: { at: Date.now(), level, text } }),
   };
   // Command handlers (`/addon:cmd`): one hidden frame per enabled addon with commands, for the shown session (a new frame, so a fresh `init`, on a session switch).
   const commandFrames = useRef(new Map<string, AddonHandle>());
@@ -2929,25 +2929,12 @@ export function App() {
     let stale = false;
     // A daemon without addons (a Side-only setup) answers addons_unavailable: no addons, no message.
     client.current!.request<AddonsListResult>({ type: "addons.list" }).then(
-      (r) => !stale && (setAddons({ addons: r.addons ?? [], picks: r.picks ?? {} }), setAddonLog((l) => pruneLog(l, (r.addons ?? []).map((a) => a.name))), setAddonsReady(true)),
+      (r) => !stale && (setAddons({ addons: r.addons ?? [], picks: r.picks ?? {} }), changeAddonLog({ keep: (r.addons ?? []).map((a) => a.name) }), setAddonsReady(true)),
       () => !stale && (setAddons(EMPTY_ADDONS), setAddonsReady(true)),
     );
     return () => void (stale = true);
   }, [status === "connected", addonsRev]);
   // The addon log outlives a reload (GH-520): this browser's localStorage.
-  // Written at most every 300 ms (a burst of lines is one write) and on pagehide (a reload keeps the last lines).
-  const addonLogRef = useRef(addonLog);
-  addonLogRef.current = addonLog;
-  const logSave = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => {
-    if (logSave.current) return;
-    logSave.current = setTimeout(() => ((logSave.current = undefined), saveAddonLog(addonLogRef.current)), 300);
-  }, [addonLog]);
-  useEffect(() => {
-    const flush = () => saveAddonLog(addonLogRef.current);
-    window.addEventListener("pagehide", flush);
-    return () => window.removeEventListener("pagehide", flush);
-  }, []);
   // Themes and CSS of the enabled addons (GH-516): the rules and links exist exactly while the addon is enabled.
   useEffect(() => {
     const on = enabledAddons(addons.addons);
@@ -4246,7 +4233,7 @@ export function App() {
             const key = `${a.name}:${commandSession}`;
             return entry && <AddonFrame key={key} handle={(h) => (h ? commandFrames.current.set(key, h) : commandFrames.current.delete(key), undefined)} addon={a} entry={entry} role="command" view="" sessionId={commandSession} hidden />;
           })}
-      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addonLog} onClearLog={(name) => setAddonLog((l) => pruneLog(l, [...l.keys()].filter((k) => k !== name)))} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
+      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addonLog} onClearLog={(name) => changeAddonLog({ drop: name })} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
       {plugins && (
         <PluginsDialog
           open={plugins.open}
