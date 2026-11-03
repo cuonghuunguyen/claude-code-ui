@@ -592,6 +592,24 @@ function KeyboardSection({ onShortcuts }: { onShortcuts: () => void }) {
   );
 }
 
+/** A way to the Addons dialog from Settings (it installs, approves and updates; Settings only links to it). */
+function AddonsSection({ onAddons }: { onAddons: () => void }) {
+  const t = useT();
+  return (
+    <Section id="addons" title={t("settings.addons.title")}>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span id="settings-addons-label" className="block text-sm">{t("settings.addons.label")}</span>
+          <span id="settings-addons-hint" className="block text-muted-foreground text-xs">{t("settings.addons.hint")}</span>
+        </div>
+        <button type="button" onClick={onAddons} aria-describedby="settings-addons-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-manage-addons">
+          {t("settings.addons.manage")}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
@@ -665,7 +683,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onRestartGuide, push, sides, docker }: { sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker }: { sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -823,6 +841,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     },
     { id: "notifications", title: t("settings.group.notifications"), category: "App", body: <NotificationsSection push={push} settings={settings} daemon={daemon} saving={saving} save={save} /> },
     ...(onShortcuts ? [{ id: "keyboard", title: t("settings.group.keyboard"), category: "App" as const, body: <KeyboardSection onShortcuts={onShortcuts} /> }] : []),
+    ...(onAddons ? [{ id: "addons", title: t("settings.group.addons"), category: "App" as const, body: <AddonsSection onAddons={onAddons} /> }] : []),
     ...(orchestration ? [{ id: "orchestration", title: sectionTitle(orchestration.id), category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(usageLimit

@@ -29,6 +29,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabCompact = vi.fn();
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
+  const onAddons = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
   if (legacy) delete (settings as Partial<Settings>).power;
   let refuse: string | undefined;
@@ -70,6 +71,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
         sides={sides}
         docker={docker}
         onShortcuts={onShortcuts}
+        onAddons={onAddons}
         push={{ ...push, toggle }}
         request={request as never}
         onClose={() => set(false)}
@@ -96,7 +98,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onRestartGuide };
+  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onAddons, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -380,7 +382,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -514,6 +516,14 @@ it("the Keyboard section's Customize button opens the shortcuts dialog", async (
   expect(onShortcuts).toHaveBeenCalledOnce();
 });
 
+it("the Addons section's Manage button opens the Addons dialog", async () => {
+  const { q, onAddons, pick } = await render();
+  await pick("addons");
+  expect(q("settings-addons")?.textContent).toContain("Addons");
+  await act(async () => q("settings-manage-addons")!.click());
+  expect(onAddons).toHaveBeenCalledOnce();
+});
+
 it("Keyboard has a Show shortcut tips switch, on by default, kept in this browser", async () => {
   localStorage.removeItem("claude-ui.key-tips");
   const { q, pick } = await render();
@@ -562,7 +572,8 @@ it("arrow keys move through the groups (roving tabindex), Home and End jump, and
   expect(q("settings-notifications")).not.toBeNull();
   await key("ArrowDown");
   await key("ArrowDown");
-  // The category heading between Keyboard and Orchestration is skipped.
+  await key("ArrowDown");
+  // The category heading between Addons and Orchestration is skipped.
   expect(document.activeElement).toBe(q("settings-group-orchestration"));
   await key("End");
   expect(document.activeElement).toBe(q("settings-group-about"));
