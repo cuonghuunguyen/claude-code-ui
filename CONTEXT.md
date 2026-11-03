@@ -13,8 +13,16 @@ The Daemon the browser connects to. It routes each request to itself or to the S
 _Avoid_: main daemon, host daemon
 
 **Side**:
-A Daemon run with `--side` inside a WSL distro or a Docker container, reached by the Hub over stdio. Never the side panel.
+A Daemon run with `--side` inside a WSL distro, a Docker container or a machine reached over SSH (an **SSH Side**), reached by the Hub over stdio. Never the side panel.
 _Avoid_: remote, node, side panel (different thing)
+
+**SSH host**:
+A `Host` entry of the user's ssh config, listed as an SSH Side under its alias. Adding one adds a `Host` entry to the ssh config.
+_Avoid_: server, remote, machine
+
+**Grace period**:
+How long an SSH Side keeps running with no Hub attached (30 min by default, per host); counted only while nothing runs. A Hub that reattaches within it finds turns and terminals as they were.
+_Avoid_: timeout, keep-alive (the heartbeat that detects a dropped pipe)
 
 **Relay**:
 A self-hosted server that forwards traffic between browsers and the Hubs of its users, one hostname per Hub. Session content crosses it end-to-end encrypted only.
