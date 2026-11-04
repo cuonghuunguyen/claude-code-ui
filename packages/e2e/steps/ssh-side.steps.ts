@@ -36,9 +36,10 @@ When("I install the SSH host and record the phases", async ({ page }) => {
   await expect(page.getByTestId("folder-input")).toBeVisible({ timeout: 240_000 });
 });
 
-Then("the phases include packing, copying into the host and starting", async ({ page }) => {
+Then("the phases include preparing and unpacking in the host", async ({ page }) => {
   const phases = await page.evaluate(() => (window as unknown as { __phases: string[] }).__phases);
-  for (const p of [/Packing/, /Copying into the host/, /Starting/]) expect(phases.some((x) => p.test(x)), `phases seen: ${phases.join(" | ")}`).toBe(true);
+  // "Copying into the host" can pass between two DOM updates on a fast pipe: not required.
+  for (const p of [/Preparing/, /Unpacking claude-ui in the host/]) expect(phases.some((x) => p.test(x)), `phases seen: ${phases.join(" | ")}`).toBe(true);
 });
 
 When("I open the remote project folder", async ({ page }) => {
@@ -56,12 +57,17 @@ Then("the sidebar shows the project under the side {string}", async ({ page }, l
 });
 
 Then("the Files pane lists {string}", async ({ page }, name: string) => {
+  // pickPane does not wait: the side panel renders a moment after the project opens.
+  await expect(page.locator('[role="tab"][data-testid="pane-files"]:visible, [data-testid="pane-overflow"]:visible').first()).toBeVisible({ timeout: 30_000 });
   await pickPane(page, "files");
   await expect(page.locator(`[data-testid="tree-entry"][data-path$="/${name}"]`).first()).toBeVisible({ timeout: 60_000 });
 });
 
 Then("the Changes pane lists {string}", async ({ page }, name: string) => {
   await pickPane(page, "changes");
+  // The default "Session changes" mode lists only Claude's edits; hello.txt is an untracked file of the repo.
+  await page.getByTestId("diff-mode").click();
+  await page.getByRole("option", { name: "Uncommitted" }).click();
   await expect(page.getByTestId("changed-file").filter({ hasText: name }).first()).toBeVisible({ timeout: 60_000 });
 });
 

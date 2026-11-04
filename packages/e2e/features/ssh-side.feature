@@ -8,7 +8,7 @@ Feature: Open a project on an SSH host
     Given a throwaway SSH host
     When I choose the SSH host "e2e-ok" in Open project
     And I install the SSH host and record the phases
-    Then the phases include packing, copying into the host and starting
+    Then the phases include preparing and unpacking in the host
     And I capture "ssh-installed"
 
   Scenario: A project on the SSH host has its file tree, git changes, Terminal and cwd routing
