@@ -3781,12 +3781,14 @@ describe("GH-394: the file dialog", () => {
   });
 
   it("a file reference in assistant text opens the file dialog with the cursor on its line", async () => {
+    replies["fs.search"] = { paths: ["a.ts"] }; // a bare name is looked up first
     await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "assistant_text", id: "a1", text: "See `/p/demo/a.ts:12` now.", streaming: false } }));
     const ref = el.querySelector<HTMLElement>("button[title='Open in file dialog']")!;
     await act(async () => ref.click());
     await act(async () => {});
     expect(fileDialog()).not.toBeNull();
     expect(await cursorLine()).toBe(12);
+    replies["fs.search"] = { paths: [] };
   });
 
   it("git.repos gets the open editor tab paths as openFiles", async () => {
@@ -6165,6 +6167,9 @@ describe("GH-401 docked session", () => {
 
   // GH-503: the docked pane has the contexts of the strip tabs.
   const OTHERCWD = "/p/other";
+  // A bare name (the file at the folder's root) is looked up first; the root file is among the hits.
+  beforeEach(() => void (replies["fs.search"] = { paths: ["a.ts"] }));
+  afterEach(() => void (replies["fs.search"] = { paths: [] }));
   const withOtherCwd = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third", cwd: OTHERCWD }, { ...session, id: S4, title: "Fourth" }];
   const dockedCall = (id: string, tool: string, input: unknown) => act(async () => emit({ type: "event", sessionId: id, seq: 1, part: { type: "tool_call", id: "t1", toolUseId: "t1", tool, input, status: "done" } }));
   const inDock = (sel: string) => el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] ${sel}`);
