@@ -1,7 +1,7 @@
 // GH-549 / ADR 0007: Hub restart reattach, takeover and updates of an SSH Side. In-process Side Daemons through the attach seam, fake timers, no ssh.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { safeKey } from "../src/side-bundle.ts";
-import { createSides } from "../src/sides.ts";
+import { createSides, isNewerBuild } from "../src/sides.ts";
 import { sideTarget } from "../src/side-kinds.ts";
 import { daemon, hub, noDaemon, pipe } from "./ssh-side-harness.ts";
 
@@ -231,5 +231,36 @@ describe("update pending", () => {
     await vi.advanceTimersByTimeAsync(60 * MIN);
     expect(h.spawned.length).toBe(3);
     h.sides.close();
+  });
+
+  const check = (install: object | undefined, installed = "none") => () => Promise.resolve({ verdict: "install", key: "new", facts: { reachable: true, running: false, installed, ...(install && { install }) } } as never);
+
+  it("no usable bundle on this machine: the old Daemon is not ended (the launch would find nothing installed), no more tries", async () => {
+    const old = daemon({ build: "old" });
+    const h = updHub([old.d], { check: check({ method: "npm", reason: "no bundle" }) });
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
+    expect(h.pipes[0]!.sent.join("")).not.toContain('{"grace":1}');
+    expect(h.spawned.length).toBe(1);
+    expect(old.st.exited).toBe(0);
+    h.sides.close();
+  });
+
+  it("a usable bundle: the update goes on as usual", async () => {
+    const old = daemon({ build: "old" });
+    const h = updHub([old.d, daemon({ build: safeKey("new") }).d], { check: check({ method: "bundle" }) });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.spawned[1]).toMatchObject({ setup: "needed", bundleOnly: true });
+    expect(h.row().updatePending).toBeUndefined();
+    h.sides.close();
+  });
+
+  it("only an older Daemon is updated: an older Hub does not downgrade a newer Daemon", () => {
+    expect(isNewerBuild("1.2.0-5", "1.1.0-9")).toBe(true);
+    expect(isNewerBuild("1.2.0-9", "1.2.0-5")).toBe(true);
+    expect(isNewerBuild("1.2.0-5", "1.2.0-5")).toBe(false);
+    expect(isNewerBuild("1.1.0-9", "1.2.0-1")).toBe(false);
+    expect(isNewerBuild("1.2.0-5", undefined)).toBe(true);
+    expect(isNewerBuild("new", "old")).toBe(true);
   });
 });

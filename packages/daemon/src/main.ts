@@ -101,11 +101,11 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-// An SSH Side Daemon may share its machine with a normal claude-ui Hub: it keeps its own state beside its socket (a dot name, which the install sweep skips)
+// An SSH Side Daemon may share its machine with a normal claude-ui Hub: it keeps its own state beside its socket (a dot name in the install root, which the install sweep skips)
 // and never reads or writes the Hub's config folder (daemon.json, token, settings, sessions, versions/).
 const sideListen = side ? process.env.CLAUDE_UI_SIDE_LISTEN : undefined;
 // Every kind of Side (WSL, Docker too: the distro or container may run its own Hub) uses it; WSL/Docker have no socket, so it sits in the install root.
-const stateDir = side ? join(sideListen ? dirname(sideListen) : join(homedir(), ".local", "share", "claude-ui", "side"), ".data") : configDir();
+const stateDir = side ? join(homedir(), ".local", "share", "claude-ui", "side", ".data") : configDir(); // not beside the socket: that may be a temporary folder
 const state = { uploadDir: side ? join(stateDir, "uploads") : defaultUploadsDir(), settingsFile: join(stateDir, "sessions.json"), projects: createProjects({ file: join(stateDir, "projects.json") }), appSettings: createSettings({ file: join(stateDir, "settings.json") }), secrets: createSecrets({ file: join(stateDir, "secrets.json") }) };
 
 if (side) {

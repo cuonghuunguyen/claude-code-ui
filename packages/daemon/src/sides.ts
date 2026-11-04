@@ -100,6 +100,15 @@ export function setupMessage(code: string, detail: string, side: string, kind: b
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
 /** The install sweep of a setup script: removes the other builds under `$root` (our own install root, never the Hub's `versions/`) except `$dir` and the build a running Side Daemon records in `$root/.live`. */
+/** The Daemon's build (install folder name `<version>-<mtime>`) is older than `hub`'s, or unknown (a Daemon of the previous build names none; unparsable names differ). */
+export function isNewerBuild(hub: string, daemon: string | undefined): boolean {
+  if (daemon === undefined) return true;
+  const n = (b: string) => /^(\d+)\.(\d+)\.(\d+)(?:[^-]*)(?:-(\d+))?$/.exec(b)?.slice(1).map((x) => Number(x ?? 0));
+  const [h, d] = [n(hub), n(daemon)];
+  if (!h || !d) return hub !== daemon;
+  for (let i = 0; i < 4; i++) if (h[i]! !== d[i]!) return h[i]! > d[i]!;
+  return false;
+}
 export const SWEEP_LINE = '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"; done';
 /** `runArgs`: what the installed cli runs at the end (default `--side`; an SSH Side runs the bridge to its Side Daemon, `sshRunArgs`). */
 export function setupScript(source: string, key: string, kind: "wsl" | "docker" | "ssh" = "wsl", mode: SideSetup = "needed", bundle?: SideBundle, runArgs = "--side") {
@@ -811,8 +820,18 @@ export function createSides(opts: {
     if (!s.updatePending || s.state !== "ready" || s.running !== false || s.terminals || s.updating || (s.updates ?? 0) >= 2) return;
     s.updates = (s.updates ?? 0) + 1;
     s.updating = true;
-    write(s, { grace: 1 });
-    s.proc?.kill();
+    const go = () => {
+      // Checked again: the look at the host took a while.
+      if (!s.updating || s.state !== "ready" || s.running !== false || s.terminals) return void delete s.updating;
+      write(s, { grace: 1 });
+      s.proc?.kill();
+    };
+    // The old Daemon ends only when this build can be installed from the bundle: else the launch finds nothing installed and the host would go off.
+    if (!opts.check) return go();
+    opts.check(s.id).then(
+      (r) => (r.facts.install?.method === "bundle" || r.facts.installed === "current" ? go() : (delete s.updating, (s.updates = 2))),
+      () => void delete s.updating,
+    );
   }
 
   function start(id: string, setup: SideSetup = "needed", nodeNote?: string, bundleOnly?: boolean, attach?: boolean): Promise<void> {
@@ -921,7 +940,7 @@ export function createSides(opts: {
           if (survivesPipe(s.id)) {
             setAttached(s.id, true);
             // Another build (a Daemon of the previous build names none): updated once nothing runs. Not with "Update automatically" off.
-            if (opts.key && saved.get(s.id)?.update !== false && f.build !== safeKey(opts.key())) s.updatePending = true;
+            if (opts.key && saved.get(s.id)?.update !== false && isNewerBuild(safeKey(opts.key()), f.build)) s.updatePending = true;
           }
           clearInterval(s.beat);
           if (f.hb) {
