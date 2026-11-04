@@ -656,8 +656,8 @@ export function createSides(opts: {
     const e = saved.get(id);
     if (!e || closing) return;
     const same = (e.key !== undefined && e.key === opts.key?.()) || e.update === false;
-    // An SSH Side Daemon is never started at hub start: the hub attaches to the one that still runs.
-    start(id, same ? "never" : "needed", undefined, !same, survivesPipe(id)).catch((err) => {
+    // An SSH Side Daemon is not started at hub start: the hub attaches to the one that still runs. Only an automatic update (another build) launches.
+    start(id, same ? "never" : "needed", undefined, !same, survivesPipe(id) && same).catch((err) => {
       console.error(`starting ${id} failed:`, (err as Error).message);
       if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
     });
