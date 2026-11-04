@@ -13,7 +13,7 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { createSideDaemon } from "./side-daemon.ts";
-import { listenPrivate, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
+import { listenPrivate, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
@@ -129,7 +129,9 @@ if (side) {
       probe.once("error", () => (rmSync(listen, { force: true }), listenOn()));
     });
     listenOn();
-    process.on("exit", () => rmSync(listen, { force: true }));
+    const live = liveInstall(process.argv[1] ?? "");
+    if (live) writeFileSync(live.file, live.dir);
+    process.on("exit", () => (rmSync(listen, { force: true }), live && rmSync(live.file, { force: true })));
   } else {
     const io = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) });
     push = io.push;

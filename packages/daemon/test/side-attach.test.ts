@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { chmodSync, statSync } from "node:fs";
-import { prepareSockDir, runAttach, sideSocketPath } from "../src/side-attach.ts";
+import { liveInstall, prepareSockDir, runAttach, sideSocketPath } from "../src/side-attach.ts";
 
 let dir: string;
 let server: Server | undefined;
@@ -66,6 +66,11 @@ it("a too long path falls back to XDG_RUNTIME_DIR, else /tmp/claude-ui-<uid>", (
   expect(sideSocketPath({}, at(104), 1, "darwin")).toBe("/tmp/claude-ui-1/side.sock");
   expect(sideSocketPath({}, at(107), 1, "linux")).toContain(".local/share");
   expect(sideSocketPath({}, at(108), 1, "linux")).toBe("/tmp/claude-ui-1/side.sock");
+});
+
+it("a Daemon records its install folder next to the installs, for the sweep", () => {
+  expect(liveInstall("/h/.local/share/claude-ui/side/1.2-3/node_modules/claude-code-ui/dist/cli.js")).toEqual({ file: "/h/.local/share/claude-ui/side/.live", dir: "/h/.local/share/claude-ui/side/1.2-3" });
+  expect(liveInstall("/src/packages/daemon/src/main.ts")).toBeUndefined();
 });
 
 it("the socket folder is made mode 0700 and a folder of another user is refused", () => {

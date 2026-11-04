@@ -2,7 +2,7 @@
 // later reattach run it; it never speaks the protocol.
 import { connect as netConnect, type Server, type Socket } from "node:net";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 /** Where the Side Daemon listens: next to the installs (the install sweep never touches a dot name), so a newer build finds an older Daemon. */
@@ -23,6 +23,18 @@ export function listenPrivate(server: Server, path: string) {
   outer ??= prev;
   server.once("listening", () => (process.umask(outer!), (outer = undefined)));
   server.listen(path);
+}
+
+/**
+ * Where a running Side Daemon records its install folder (`<root>/.live`, read by the install sweep so an update never deletes the build a
+ * Daemon still runs on): from the cli path `<root>/<key>/node_modules/claude-code-ui/dist/cli.js`; undefined for any other layout (a source checkout).
+ */
+export function liveInstall(cli: string): { file: string; dir: string } | undefined {
+  const tail = ["node_modules", "claude-code-ui", "dist", "cli.js"];
+  const parts = cli.split(sep);
+  if (tail.some((t, i) => parts.at(i - 4) !== t)) return undefined;
+  const dir = parts.slice(0, -4).join(sep);
+  return { file: join(dirname(dir), ".live"), dir };
 }
 
 /** Makes the socket's folder (mode 0700); a folder another user owns is refused (a shared /tmp). */

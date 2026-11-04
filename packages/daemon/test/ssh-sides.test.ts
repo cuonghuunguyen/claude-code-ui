@@ -94,14 +94,14 @@ describe("SSH Side: Add SSH host and updates", () => {
   it("Update automatically off keeps the installed build: the saved SSH Side starts with setup never; on, an update runs bundle-only", async () => {
     const setups: unknown[] = [];
     const start = async (saved: SavedSide) => {
-      const sides = createSides({ targets: [sideTarget("ssh", "box")], key: () => "new", saved: [saved], spawn: (_id, o) => (setups.push([o.setup, !!o.bundleOnly]), proc()), save: () => {} });
+      const sides = createSides({ targets: [sideTarget("ssh", "box")], key: () => "new", saved: [saved], spawn: (_id, o) => (setups.push([o.setup, !!o.bundleOnly, !!o.attach]), proc()), save: () => {} });
       await vi_waitFor(() => row(sides, "ssh:box").state === "ready");
       sides.close();
     };
     await start({ id: "ssh:box", key: "old", update: false });
     await start({ id: "ssh:box", key: "old" });
     await start({ id: "ssh:box", key: "new" });
-    expect(setups).toEqual([["never", false], ["needed", true], ["never", false]]);
+    expect(setups).toEqual([["never", false, true], ["needed", true, false], ["never", false, true]]);
   });
 });
 

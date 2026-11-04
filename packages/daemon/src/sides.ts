@@ -160,7 +160,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
     '  rm -rf "$old"',
     // Earlier versions and builds, leftovers of killed runs.
-    '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
+    // A running Side Daemon (ADR 0007) records its install folder in "$root/.live": that folder stays while it runs.
+    '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "$d" = "$live" ] || rm -rf "$d"; done',
     "fi",
     ]),
     ...(docker && !never ? ['rm -f "$src" 2>/dev/null'] : []),
@@ -221,7 +222,8 @@ function finishLines(found: boolean, before: string[] = []) {
     '  if [ -e "$dir" ]; then mv "$dir" "$old" || fail "the old install could not be moved aside"; fi',
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
     '  rm -rf "$old"',
-    '  for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || rm -rf "$d"; done',
+    // A running Side Daemon (ADR 0007) records its install folder in "$root/.live": that folder stays while it runs.
+    '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "$d" = "$live" ] || rm -rf "$d"; done',
   ];
 }
 
