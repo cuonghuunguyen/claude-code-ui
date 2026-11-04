@@ -57,6 +57,10 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
     } else if (text === "mute") {
       // A turn the CLI never runs: only the echo of the prompt, no reply until the next prompt (or an interrupt) arrives.
       await new Promise<string>((r) => (held = r));
+    } else if (text === "compact") {
+      // The CLI compacts the conversation before it answers: a status, then nothing until the next prompt.
+      emit({ type: "system", subtype: "status", status: "compacting", uuid: randomUUID(), session_id: sid });
+      await new Promise<string>((r) => (held = r));
     } else if (text === "hold") {
       reply("holding");
       reply(`released by ${await new Promise<string>((r) => (held = r))}`);
@@ -2236,6 +2240,18 @@ describe("stall watchdog", () => {
     expect(await stalls(coord)).toEqual([expect.objectContaining({ reason: "no_start" })]);
     await call(coord, "worker_send", { name: "ns1", text: "end" });
     await settle(w.sessionId);
+  });
+
+  it("a new turn that starts with compaction raises no no_start", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ns3", cwd: dirB, prompt: "ok" });
+    await settle(w.sessionId);
+    await call(coord, "worker_send", { name: "ns3", text: "compact" });
+    await new Promise((r) => setTimeout(r, 50));
+    later(121_000);
+    expect(await stalls(coord)).toEqual([]);
+    await call(coord, "worker_close", { name: "ns3" });
   });
 
   it("a worker whose CLI answers before 2 minutes raises no no_start", async () => {

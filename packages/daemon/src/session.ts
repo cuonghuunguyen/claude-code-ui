@@ -225,7 +225,7 @@ export class Session {
   private received = 0;
   /** Date.now() of the last stream message (or of this object): the stall watchdog reads it with `received` (activity()). */
   private receivedAt = Date.now();
-  /** Assistant, result, stream and tool progress messages received so far (activity()). */
+  /** Assistant, result, stream, tool progress, compaction status and prompt hook messages received so far (activity()). */
   private progress = 0;
   /** The first stale check that found the turn ended: the transcript size and message count it saw; a second one must see the same. */
   private staleSeen?: { size: number; received: number };
@@ -1220,7 +1220,8 @@ export class Session {
   private receive(m: SDKMessage, q: Query) {
     this.received++;
     this.receivedAt = Date.now();
-    if (["assistant", "result", "stream_event", "tool_progress"].includes(m.type)) this.progress++;
+    // Compaction and a prompt hook run before the first reply of a healthy turn: they count, so no_start does not fire on them.
+    if (["assistant", "result", "stream_event", "tool_progress"].includes(m.type) || (m.type === "system" && (m.subtype === "status" || m.subtype === "compact_boundary" || (m.subtype === "hook_started" && m.hook_event === "UserPromptSubmit")))) this.progress++;
     this.armStale();
     if ((m.type === "user" || m.type === "assistant") && m.uuid) {
       this.known.add(m.uuid);
