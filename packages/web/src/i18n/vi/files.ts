@@ -33,6 +33,7 @@ export default {
   "files.loadingFile": "Đang tải tệp…",
   "files.reloadFromDisk": "Tải lại từ đĩa",
   "files.openInDialog": "Mở trong hộp thoại tệp",
+  "files.notFound": "Không tìm thấy tệp: {name}",
   "files.diffView": "Kiểu xem diff",
   "files.diffUnified": "Diff gộp",
   "files.diffSplit": "Diff chia đôi",
