@@ -316,6 +316,21 @@ describe("update pending", () => {
     h.sides.close();
   });
 
+  it("the pipe drops while the host is looked at before the update: the reconnect runs, not an update", async () => {
+    const old = daemon({ build: "old" });
+    let release!: (v: never) => void;
+    const slow = () => new Promise<never>((r) => (release = r));
+    const h = updHub([old.d], { check: slow, reconnectMs: [1_000] });
+    await vi.advanceTimersByTimeAsync(50);
+    h.pipes[0]!.drop();
+    expect(h.row().state).toBe("reconnecting");
+    release({ facts: { installed: "none", install: { method: "bundle" } } } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(h.spawned[1]).toMatchObject({ attach: true, setup: "never" }); // a reattach, not the update launch
+    expect(h.row().state).toBe("ready");
+    h.sides.close();
+  });
+
   it("only an older Daemon is updated: an older Hub does not downgrade a newer Daemon", () => {
     expect(isNewerBuild("1.2.0-5", "1.1.0-9")).toBe(true);
     expect(isNewerBuild("1.2.0-9", "1.2.0-5")).toBe(true);

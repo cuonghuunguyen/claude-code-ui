@@ -570,7 +570,7 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 }
 
 type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
-type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall>; killTree?: boolean; /** `reconnecting`: when the pipe dropped, and the attach tries since. */ lost?: { at: number; tries: number }; /** Update tries of this Hub run. */ updates?: number; /** The update is under way: the pipe ends on purpose. */ updating?: boolean; /** Open terminals of the remote Side Daemon (`terminals` frame; a Daemon of the previous build sends none). */ terminals?: number; beat?: ReturnType<typeof setInterval> };
+type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall>; killTree?: boolean; /** `reconnecting`: when the pipe dropped, and the attach tries since. */ lost?: { at: number; tries: number }; /** Update tries of this Hub run. */ updates?: number; /** The update is under way: the pipe ends on purpose. */ updating?: boolean; /** The look at the host before an update is running. */ checking?: boolean; /** Open terminals of the remote Side Daemon (`terminals` frame; a Daemon of the previous build sends none). */ terminals?: number; beat?: ReturnType<typeof setInterval> };
 
 let nextGit = 0;
 
@@ -819,20 +819,22 @@ export function createSides(opts: {
    * shortcut: a Daemon of the previous build reports no terminals, so its open terminals end with the update; upgrade when that build is out of use.
    */
   function maybeUpdate(s: Side) {
-    if (!s.updatePending || s.state !== "ready" || s.running !== false || s.terminals || s.updating || (s.updates ?? 0) >= 2) return;
+    if (!s.updatePending || s.state !== "ready" || s.running !== false || s.terminals || s.updating || s.checking || (s.updates ?? 0) >= 2) return;
     s.updates = (s.updates ?? 0) + 1;
-    s.updating = true;
+    s.checking = true;
     const go = () => {
-      // Checked again: the look at the host took a while.
-      if (!s.updating || s.state !== "ready" || s.running !== false || s.terminals) return void delete s.updating;
+      delete s.checking;
+      // Checked again: the look at the host took a while (the pipe may have dropped meanwhile: then the reconnect runs, not an update).
+      if (s.state !== "ready" || s.running !== false || s.terminals) return;
+      s.updating = true;
       write(s, { grace: 1 });
       s.proc?.kill();
     };
     // The old Daemon ends only when this build can be installed from the bundle: else the launch finds nothing installed and the host would go off.
     if (!opts.check) return go();
     opts.check(s.id).then(
-      (r) => (r.facts.install?.method === "bundle" || r.facts.installed === "current" ? go() : (delete s.updating, (s.updates = 2))),
-      () => void delete s.updating,
+      (r) => (r.facts.install?.method === "bundle" || r.facts.installed === "current" ? go() : (delete s.checking, (s.updates = 2))),
+      () => void delete s.checking,
     );
   }
 
@@ -846,6 +848,7 @@ export function createSides(opts: {
     timers.delete(id);
     delete s.update;
     delete s.updatePending;
+    delete s.checking;
     delete s.phase;
     delete s.bundle;
     delete s.fallback;
