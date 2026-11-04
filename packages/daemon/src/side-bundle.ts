@@ -56,7 +56,7 @@ export const NODE_OK_JS =
 /** What NODE_OK_JS prints: the shell compares the output, not the exit code (a shim whose execPath is /bin/true exits 0 and prints nothing). */
 export const NODE_OK_TOKEN = "claude-ui-node-ok";
 /** `ver <node> <cli.js>`: the side's `--version` must print a version (a digit first), not just exit 0. */
-export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*) return 0;; esac; return 1; }';
+export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*|dev) return 0;; esac; return 1; }';
 
 /**
  * `usable_node <arch>`: sets `n` to the real binary of the `node` found by `command -v` (its `process.execPath`, not a shim) when

@@ -183,3 +183,12 @@ describe("prepareSshSide: ssh failing during the copy", () => {
     expect(copies).toBe(1);
   });
 });
+
+describe("the side's version check", () => {
+  it.skipIf(process.platform === "win32")("accepts a release number and the `dev` of a source checkout, nothing else", async () => {
+    const { VER_FN } = await import("../src/side-bundle.ts");
+    const { execFileSync } = await import("node:child_process");
+    const ok = (out: string) => { try { execFileSync("sh", ["-c", `${VER_FN}\nv() { echo "$OUT"; }\nver v x`], { stdio: "ignore", env: { OUT: out } }); return true; } catch { return false; } };
+    expect([ok("1.2.3"), ok("dev"), ok("error"), ok("")]).toEqual([true, true, false, false]);
+  });
+});

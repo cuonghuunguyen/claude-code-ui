@@ -84,7 +84,7 @@ export async function prepareSshSide(o: {
     return r;
   };
   const sent = await sendBundle(
-    { noun: "host", probe: () => run(DOCKER_PROBE, [], 30_000), send: (file, name) => streamTo((s, a, ms, f) => run(s, a, ms, f), label, file, name, "host") },
+    { noun: "host", probe: () => run(DOCKER_PROBE, [], 30_000), send: (file, name) => streamTo(run, label, file, name, "host") },
     { pinned: o.pinned, pkgDir: o.pkgDir, key: o.key, onPhase: o.onPhase, onInstall: o.onInstall },
     o.bundle,
   );
