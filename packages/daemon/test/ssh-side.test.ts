@@ -301,6 +301,9 @@ describe("parseSshCommand", () => {
     expect(() => parseSshCommand("ssh -J -oX host")).toThrow("characters that are not allowed");
     expect(() => parseSshCommand('ssh -i "k\nProxyCommand x" host')).toThrow("not allowed");
     expect(() => parseSshCommand("ssh o'b@example.com")).toThrow("not allowed");
+    expect(() => parseSshCommand("ssh a%r@example.com")).toThrow("not allowed");
+    expect(() => parseSshCommand("ssh -i ${HOME}/k example.com")).toThrow("not allowed");
+    expect(() => parseSshCommand("ssh fe80::1%en0")).toThrow("not a valid host");
     expect(() => parseSshCommand('ssh -i "/home/o\'b/key" example.com')).toThrow("not allowed");
     expect(() => parseSshCommand("ssh -J a\\b host")).toThrow("not allowed");
   });
@@ -341,6 +344,7 @@ describe("addSshHost", () => {
     expect(() => addSshHost({ command: "ssh -X host", home })).toThrow("not supported");
     expect(() => addSshHost({ command: "ssh host", alias: "a b", home })).toThrow("cannot be a host alias");
     expect(() => addSshHost({ command: "ssh host", alias: "*", home })).toThrow("cannot be a host alias");
+    expect(() => addSshHost({ command: "ssh host", alias: "a;b", home })).toThrow("cannot be a host alias");
     expect(() => addSshHost({ command: "ssh host", alias: "-oX", home })).toThrow("cannot be a host alias");
     expect(existsSync(cfg)).toBe(false);
   });
@@ -371,7 +375,7 @@ describe("checkSshSide: hosts the bundle does not cover", () => {
     expect(await check({ node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
     expect(await check({ npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
     expect(await check({ writable: "/tmp" })).toMatchObject({ reason: "no_writable_path" });
-    expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("home folder are not writable") });
+    expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("no writable home folder") });
   });
   it("a macOS Node.js is usable (the posix rule): the check script asks for it", () => {
     expect(checkScript("k", "ssh")).toContain('usable_node "$na" posix &&');

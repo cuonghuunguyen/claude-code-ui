@@ -435,7 +435,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
     case "windows_host":
       return `${side}: Windows SSH hosts are not supported yet.`;
     case "no_writable_path":
-      if (o.noun === "host") return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are not writable. Make the home folder writable there, then check again.`;
+      if (o.noun === "host") return `${side} has no writable home folder: claude-ui is installed in $HOME/.local/share/claude-ui (a writable /tmp does not help). Make the home folder writable there, then check again.`;
       return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
     case "check_failed":
       return `The check of ${side} did not finish${d ? `: ${d}` : ""}. Check again.`;

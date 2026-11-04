@@ -9,7 +9,7 @@ import { blockedCheck, checkScript, hasBuild, parseCheck, shq, verdictOf, type S
 import type { Runner } from "./update.ts";
 
 /** A usable alias: no wildcard or negation, not read by `ssh` as an option, no whitespace, quote or control character. */
-const isAlias = (a: string) => !!a && !/[*?!#"']/.test(a) && !a.startsWith("-") && !/[\s\x00-\x1f\x7f]/.test(a);
+const isAlias = (a: string) => !!a && !/[*?!#"'\\$;&()|<>{},`%]/.test(a) && !a.startsWith("-") && !/[\s\x00-\x1f\x7f]/.test(a);
 
 /** The `Host` aliases and `Include` patterns of a config text, in order. Quoted tokens keep their spaces; an unquoted # starts a comment. */
 function configItems(text: string): ({ host: string } | { include: string })[] {
@@ -117,9 +117,9 @@ export function parseSshCommand(text: string): SshTarget {
   const at = dest.lastIndexOf("@");
   const user = at >= 0 ? dest.slice(0, at) : o["-l"];
   const host = at >= 0 ? dest.slice(at + 1) : dest;
-  if (!/^[A-Za-z0-9_][\w.:%-]*$/.test(host)) throw new Error(`"${host}" is not a valid host name.`);
+  if (!/^[A-Za-z0-9_][\w.:-]*$/.test(host)) throw new Error(`"${host}" is not a valid host name.`);
   const clean = (v: string | undefined, what: string, spaces = false) => {
-    if (v !== undefined && (/[\x00-\x1f\x7f"'\\#]/.test(v) || (!spaces && /\s/.test(v)) || v.startsWith("-"))) throw new Error(`The ${what} "${v}" has characters that are not allowed.`);
+    if (v !== undefined && (/[\x00-\x1f\x7f"'\\#%$]/.test(v) || v.startsWith("=") || (!spaces && /\s/.test(v)) || v.startsWith("-"))) throw new Error(`The ${what} "${v}" has characters that are not allowed.`);
     return v;
   };
   const port = o["-p"] === undefined ? undefined : Number(o["-p"]);
@@ -135,7 +135,7 @@ export function parseSshCommand(text: string): SshTarget {
 export function addSshHost(o: { command: string; alias?: string; config?: string; home?: string; fs?: Partial<ConfigFs> }): string {
   const t = parseSshCommand(o.command);
   const alias = o.alias?.trim() || t.host;
-  if (!isAlias(alias)) throw new Error(`"${alias}" cannot be a host alias: no spaces, quotes or the characters * ? ! #, and no leading -.`);
+  if (!isAlias(alias)) throw new Error(`"${alias}" cannot be a host alias: no spaces, quotes or the characters * ? ! # % $ \\ ; & ( ) | < > { } , and no leading -.`);
   if (listSshHosts(o.config, o.fs, o.home).includes(alias)) throw new Error(`The host "${alias}" already exists in the ssh config. Pick another alias.`);
   const file = o.config ?? join(o.home ?? homedir(), ".ssh", "config");
   const old = (o.fs?.read ?? realFs.read)(file) ?? "";
