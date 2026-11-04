@@ -2630,8 +2630,10 @@ export function createDaemon(opts: {
               );
               continue;
             }
-            if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery())
+            if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery()) {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
+              orchestration.released(s.id);
+            }
           }
         }, Math.min(IDLE_CHECK_MS, idleCloseMs)).unref()
       : undefined;
