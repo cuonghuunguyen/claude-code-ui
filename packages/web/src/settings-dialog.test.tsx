@@ -30,7 +30,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
   if (legacy) delete (settings as Partial<Settings>).power;
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -43,7 +43,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) } };
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
@@ -382,7 +382,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1000,15 +1000,31 @@ it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does
 
 const LOCAL = { id: "local", label: "Windows", state: "ready" } as const;
 
-it("Sides group: shown only with a non-local side or docker", async () => {
-  expect((await render({ sides: [LOCAL] })).q("settings-group-sides")).toBeNull();
+it("Sides group: always shown with the row of this machine; a daemon that lists no side gets a fallback row", async () => {
+  const none = await render({});
+  await none.pick("sides");
+  expect(none.q("settings-side-local")?.textContent).toContain("This machine");
   document.body.innerHTML = "";
-  expect((await render({})).q("settings-group-sides")).toBeNull();
-  document.body.innerHTML = "";
-  const a = await render({ sides: [LOCAL], docker: "empty" });
-  expect(a.q("settings-group-sides")).not.toBeNull();
+  const a = await render({ sides: [LOCAL] });
   await a.pick("sides");
+  expect(a.q("settings-side-local")?.textContent).toContain("Windows");
+  expect(a.q("settings-side-start-local")).toBeNull();
   expect(a.q("settings-sides")?.textContent).toContain("No WSL distro or container");
+});
+
+it("Sides group (GH-515): the pencil opens the Label dialog; Save patches the whole sides map and the row shows the new name", async () => {
+  const { q, pick, calls } = await render({ sides: [LOCAL, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready", autoStart: true }] });
+  await pick("sides");
+  await act(async () => q("settings-side-edit-local")!.click());
+  const name = q("label-name") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Laptop");
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("label-save")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { labels: { sides: { local: { name: "Laptop" } } } } });
+  expect(q("settings-side-local")?.textContent).toContain("Laptop");
+  expect(q("settings-side-local")?.textContent).toContain("Windows");
 });
 
 it("Sides group: a row per side with state; the switches send side.prefs; Update automatically is held while start is off", async () => {
@@ -1092,4 +1108,12 @@ it("phones show no Shake to locate row (GH-517)", async () => {
   } finally {
     window.matchMedia = mm;
   }
+});
+
+it("Sides group: an SSH host row has the pencil and shows its custom name (GH-515)", async () => {
+  const { q, pick } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "off" }] });
+  await pick("sides");
+  expect(q("settings-side-ssh:box")?.textContent).toContain("SSH: box");
+  expect(q("settings-side-ssh:box")?.querySelector("button[aria-label*='box']")).not.toBeNull();
+  expect(q("settings-side-start-ssh:box")?.getAttribute("aria-checked")).toBe("false");
 });

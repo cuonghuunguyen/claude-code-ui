@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, labels: { projects: {}, sides: {} } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -268,4 +268,51 @@ it("power.keepAwake defaults off, is saved and refused unless on or off (GH-523)
   s.set({ power: { keepAwake: true } });
   expect(createSettings({ file: f }).get().power.keepAwake).toBe(true);
   expect(() => s.set({ power: { keepAwake: "yes" as never } })).toThrow("Keep computer awake must be on or off");
+});
+
+const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+it("labels: a valid map is saved, read back, and {} removes it from the file", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  const projects = { "/work/app": { name: "App", icon: "🚀" }, "/work/img": { icon: PNG } };
+  expect(s.set({ labels: { projects } }).labels).toEqual({ projects, sides: {} });
+  expect(createSettings({ file: f }).get().labels.projects).toEqual(projects);
+  s.set({ labels: { projects: {} } });
+  expect(JSON.parse(readFileSync(f, "utf8")).labels?.projects).toBeUndefined();
+});
+
+it("labels: invalid entries are refused", () => {
+  const bad: unknown[] = [
+    { "/a": { icon: "data:image/svg+xml;base64,PHN2Zz4=" } },
+    { "/a": { icon: "data:image/png;base64,AAAA" + "A".repeat(32_000) } },
+    { "/a": { name: "x".repeat(61) } },
+    { "/a": { name: "   " } },
+    { "/a": { name: "a\nb" } },
+    { "/a": { icon: "a b" } },
+    { "/a": { icon: "x".repeat(17) } },
+    { "/a": { name: "ok", extra: 1 } },
+    { "/a": {} },
+    { "": { name: "ok" } },
+    Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`/p${i}`, { name: "n" }])),
+    [],
+  ];
+  const s = createSettings({ file: file() });
+  for (const projects of bad) expect(() => s.set({ labels: { projects } as never })).toThrow(/Project names and icons must be/);
+  expect(() => s.set({ labels: { sides: { local: { name: 1 } } } as never })).toThrow(/Machine names and icons must be/);
+});
+
+it("labels: a __proto__ key does not leak into other objects", () => {
+  const f = file();
+  writeFileSync(f, '{"labels":{"projects":{"__proto__":{"name":"x"}}}}');
+  const s = createSettings({ file: f });
+  expect(({} as Record<string, unknown>).name).toBeUndefined();
+  expect(Object.keys(s.get().labels.projects)).toEqual(["__proto__"]);
+  expect(({} as Record<string, unknown>).name).toBeUndefined();
+});
+
+it("labels: a hand-edited invalid map falls back to {}", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ labels: { projects: { "/a": { name: 5 } }, sides: { local: { name: "Mac" } } } }));
+  expect(createSettings({ file: f }).get().labels).toEqual({ projects: {}, sides: { local: { name: "Mac" } } });
 });

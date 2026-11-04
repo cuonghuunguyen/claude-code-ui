@@ -24,6 +24,10 @@ _Avoid_: server, remote, machine
 How long an SSH Side keeps running with no Hub attached (30 min by default, per host); counted only while nothing runs. A Hub that reattaches within it finds turns and terminals as they were.
 _Avoid_: timeout, keep-alive (the heartbeat that detects a dropped pipe)
 
+**Label**:
+The name and icon a user chose for a Project or a Side, stored in the Daemon settings and shared by all browsers. It replaces the folder name or machine label in the UI only; the folder name still finds the project.
+_Avoid_: alias, nickname
+
 **Relay**:
 A self-hosted server that forwards traffic between browsers and the Hubs of its users, one hostname per Hub. Session content crosses it end-to-end encrypted only.
 _Avoid_: proxy, tunnel service, gateway

@@ -17,7 +17,10 @@ import { isImeKey } from "./ime.ts";
 import { timeAgo } from "./sessions.ts";
 import { t, useT } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
-import { defaultTarget, DOCKER_HINT, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, localIsWindows, saveSide, saveSideFor, SideBadge, sideKind, sideName, type SideKind } from "./sides.tsx";
+import { baseName } from "./paths.ts";
+import { LabelIcon } from "./label-icon.tsx";
+import { useLabels } from "./labels.ts";
+import { defaultTarget, DOCKER_HINT, fromMnt, fromWslUnc, kindsOf, loadSide, loadSideFor, localIsWindows, saveSide, saveSideFor, SideBadge, sideKind, sideName, sideNameOf, sideTitle, type SideKind } from "./sides.tsx";
 
 /**
  * `list()`: the roots; `list(path)`: the entries of a directory inside them; `side`: of that side. `onPick` rejects when the
@@ -248,22 +251,24 @@ function SidePicker({
     const p = panels[s.id];
     return isReady(s) ? undefined : p?.busy || s.state === "starting" ? t("sidebar.op.settingUp") : p?.error || s.state === "error" ? t("sidebar.op.error") : t("sidebar.op.notSetUp");
   };
-  const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? t("sidebar.op.thisMachine")) : k === "wsl" ? "WSL" : k === "ssh" ? "SSH" : "Docker");
+  const names = useLabels().sides;
+  const localSide = sides.find((s) => s.id === LOCAL_SIDE);
+  const kindLabel = (k: SideKind) => (k === "local" ? ((localSide && sideTitle(localSide, names)) ?? t("sidebar.op.thisMachine")) : k === "wsl" ? "WSL" : k === "ssh" ? "SSH" : "Docker");
   return (
     <>
       <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
-        <KindRow kinds={kinds} kind={kind} label={kindLabel} onChoose={chooseKind} />
+        <KindRow kinds={kinds} kind={kind} label={kindLabel} localIcon={names[LOCAL_SIDE]?.icon} onChoose={chooseKind} />
       </div>
       {kind !== "local" && current && (
         <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
           <Select value={side ?? null} onValueChange={(id) => id && choose(id)} open={targetOpen} onOpenChange={setTargetOpen}>
             <SelectTrigger ref={targetTrigger} aria-label={t(kind === "wsl" ? "sidebar.op.wslDistro" : kind === "ssh" ? "sidebar.op.sshHost" : "sidebar.op.dockerContainer")} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
-              <span className="truncate">{sideName(current)}</span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate">{names[current.id]?.icon && <LabelIcon icon={names[current.id]!.icon!} className="size-4 text-[13px]" />}{sideNameOf(current, names)}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5" onKeyDown={onPopupKey}>
               {members.map((s) => (
                 <SelectItem key={s.id} value={s.id} className="h-8 max-md:h-11" data-testid="side-target-item">
-                  <span className="min-w-0 flex-1 truncate">{sideName(s)}</span>
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">{names[s.id]?.icon && <LabelIcon icon={names[s.id]!.icon!} className="size-4 text-[13px]" />}{sideNameOf(s, names)}</span>
                   {stateWord(s) && <span className="text-muted-foreground text-xs leading-none">{stateWord(s)}</span>}
                 </SelectItem>
               ))}
@@ -304,7 +309,7 @@ function SidePicker({
 }
 
 /** One chip per kind (the machine, WSL, Docker). Arrows move the focus between them, Enter or Space picks: moving never sets a side up. */
-function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: SideKind; label: (k: SideKind) => string; onChoose: (k: SideKind) => void }) {
+function KindRow({ kinds, kind, label, localIcon, onChoose }: { kinds: SideKind[]; kind: SideKind; label: (k: SideKind) => string; localIcon?: string; onChoose: (k: SideKind) => void }) {
   const t = useT();
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKeyDown = (e: KeyboardEvent, i: number) => {
@@ -330,6 +335,7 @@ function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: Si
           )}
           data-testid="side-kind"
         >
+          {k === "local" && localIcon && <LabelIcon icon={localIcon} className="mr-1.5 inline-grid size-4 align-text-bottom text-[13px]" />}
           {label(k)}
         </button>
       ))}
@@ -498,7 +504,7 @@ function Browser({
 
   // Only at the start level; the typed text filters them by name. They never take Tab or Enter from the typed folder (below).
   const q = prefix.toLowerCase();
-  const recents = atStart ? recent.filter((r) => projectName(r.cwd).toLowerCase().includes(q)).slice(0, prefix ? undefined : RECENT_SHOWN) : [];
+  const recents = atStart ? recent.filter((r) => `${projectName(r.cwd)}\n${baseName(r.cwd)}`.toLowerCase().includes(q)).slice(0, prefix ? undefined : RECENT_SHOWN) : [];
   // Idle: a recent project is not listed again as a folder. Typed: the folder row stays, it is what Tab and Enter act on.
   const folders = matchFolders(entries, prefix).filter((e) => prefix || !recents.some((r) => r.cwd === e.path));
   // One keyboard list: recent projects first, then folders.
@@ -585,7 +591,7 @@ function Browser({
             return (
               <Fragment key={`${row.recent ? "recent" : "folder"}:${row.path}`}>
                 {i === 0 && row.recent && heading(t("sidebar.op.recentProjects"), "recent-label")}
-                {i === recents.length && row.entry && heading(dir ? t("sidebar.op.foldersIn", { name: projectName(dir) }) : t("sidebar.op.allowedRoots"), "folder-list-label")}
+                {i === recents.length && row.entry && heading(dir ? t("sidebar.op.foldersIn", { name: baseName(dir) }) : t("sidebar.op.allowedRoots"), "folder-list-label")}
                 {row.recent ? (
                   <li
                     {...common}
@@ -633,7 +639,7 @@ function Browser({
           {error ? <span className="text-destructive">{error}</span> : <span className="text-muted-foreground">{dir}</span>}
         </p>
         <Button size="sm" disabled={!dir || busy} onClick={() => dir && pick(dir)} data-testid="open-folder" className="max-md:h-11">
-          {dir ? t("sidebar.op.openNamed", { name: projectName(dir) }) : t("sidebar.op.open")}
+          {dir ? t("sidebar.op.openNamed", { name: baseName(dir) }) : t("sidebar.op.open")}
         </Button>
       </div>
     </>

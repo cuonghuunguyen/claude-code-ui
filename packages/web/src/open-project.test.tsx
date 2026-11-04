@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
+import { setLabels } from "./labels.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -381,6 +382,19 @@ describe("side chooser", () => {
     expect(onStartSide).not.toHaveBeenCalled();
     expect(target()!.textContent).toBe("lab");
     expect(byId("docker-hint")).toBeNull();
+  });
+
+  it("a custom name and icon (GH-515) show on the chosen SSH host", async () => {
+    setLabels({ projects: {}, sides: { "ssh:box": { name: "Lab", icon: "🧪" } } });
+    try {
+      const { kind, click, filter, press, target } = await renderSides([S("local", "Linux"), S("ssh:box", "SSH: box", "off")]);
+      await click(kind("SSH"));
+      await press(filter(), "Enter");
+      expect(target()!.textContent).toContain("Lab");
+      expect(target()!.textContent).toContain("🧪");
+    } finally {
+      setLabels(undefined);
+    }
   });
 
   it("no SSH sides: no SSH chip", async () => {

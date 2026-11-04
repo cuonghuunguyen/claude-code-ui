@@ -1,4 +1,5 @@
 // Tabs bar (docs/spec.md "Layout"): open sessions as browser-like tabs, plus one new-session tab. Order persists per browser.
+import { projectLabel } from "./labels.ts";
 import { baseName } from "./paths.ts";
 import { ownerOf, parseRef } from "./pane-ref.ts";
 
@@ -184,7 +185,8 @@ export const runFromHash = (hash: string) => {
 };
 export const runHash = (id: string, run?: string) => tabHash(id) + (run ? `/agent/${encodeURIComponent(run)}` : "");
 
-export const projectName = baseName;
+/** The project's custom name (GH-515), else its folder name. */
+export const projectName = (cwd: string) => projectLabel(cwd)?.name ?? baseName(cwd);
 
 const KEY = "claude-ui.tabs";
 

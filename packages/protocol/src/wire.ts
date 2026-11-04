@@ -693,6 +693,17 @@ export type WorkerModeSetting = (typeof WORKER_MODES)[number];
 export const AUTO_REPOSITORY_DETECTION = [true, false, "subFolders", "openEditors"] as const;
 /** `git.openRepositoryInParentFolders` values (VS Code's git extension). */
 export const PARENT_FOLDER_MODES = ["always", "never", "prompt"] as const;
+/** Custom name and icon of a project or a side (GH-515). `icon`: emoji text, or a png/webp/jpeg data URL (no svg). */
+export type Label = { name?: string; icon?: string };
+export const LABEL_NAME_MAX = 60;
+/** UTF-16 units. */
+export const LABEL_EMOJI_MAX = 16;
+/** Data URL characters. */
+export const LABEL_ICON_MAX = 32_000;
+/** Entries per map. */
+export const LABEL_ENTRIES_MAX = 200;
+/** Side of the saved square image icon, in pixels. */
+export const LABEL_ICON_PX = 64;
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
@@ -718,6 +729,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     ignoreSubmodules: boolean;
     openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
   };
+  /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
+  labels: { projects: Record<string, Label>; sides: Record<string, Label> };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */

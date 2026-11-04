@@ -64,6 +64,16 @@ describe("groupEntries", () => {
     expect(e.find((x) => x.kind === "item" && x.id === "g-cleanup")).toMatchObject({ label: "Clean up…" });
     expect(ids(groupEntries(base)).includes("g-cleanup")).toBe(false);
   });
+  it("GH-515 rename: Change name and icon… right after Copy path, only when given", () => {
+    const rename = vi.fn();
+    const e = groupEntries({ ...base, newSession: () => {}, copyPath: () => {}, rename });
+    expect(ids(e).slice(0, 4)).toEqual(["g-new-session", "-", "g-copy-path", "g-rename"]);
+    expect(e.find((x) => x.kind === "item" && x.id === "g-rename")).toMatchObject({ label: "Change name and icon…" });
+    (e.find((x) => x.kind === "item" && x.id === "g-rename") as { onSelect: () => void }).onSelect();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(ids(groupEntries({ ...base, rename })).slice(0, 2)).toEqual(["g-rename", "-"]);
+    expect(ids(groupEntries({ ...base, copyPath: () => {} })).includes("g-rename")).toBe(false);
+  });
   it("workerEntries adds Clean up workers…", () => {
     const c = { finished: [], closed: [] };
     expect(workerEntries("w-", c, { close: () => {}, remove: () => {} }).map((x) => (x as { id: string }).id)).toEqual(["w-close-finished", "w-remove-closed"]);

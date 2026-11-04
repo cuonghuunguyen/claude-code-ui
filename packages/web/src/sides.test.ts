@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SideInfo } from "@claude-ui/protocol";
-import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName, sideStatus } from "./sides.tsx";
+import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName, sideNameOf, sideStatus, sideTitle } from "./sides.tsx";
 
 it("reads a WSL path written the Windows way as its distro's POSIX path", () => {
   expect(fromWslUnc("\\\\wsl.localhost\\Ubuntu\\home\\me")).toEqual({ side: "wsl:Ubuntu", path: "/home/me" });
@@ -87,4 +87,23 @@ it("SSH sides: kind, name, chip order, short badge (alias when several), opens o
   const cwds = { "/a": "ssh:a" };
   expect(sideLookup([local, S("ssh:a", "SSH: a")], cwds).badge("/a")?.short).toBe("SSH");
   expect(sideLookup(sides, cwds).badge("/a")?.short).toBe("a");
+  // GH-515: a custom name and icon apply to an SSH Side like any other.
+  const l = sideLookup([local, S("ssh:a", "SSH: a")], cwds, { "ssh:a": { name: "Lab", icon: "🧪" } });
+  expect(l.badge("/a")).toEqual({ label: "Lab", short: "Lab", icon: "🧪" });
+  expect(sideNameOf(S("ssh:a", "SSH: a"), { "ssh:a": { name: "Lab" } })).toBe("Lab");
+  expect(sideNameOf(S("ssh:a", "SSH: a"), {})).toBe("a");
+});
+
+it("a custom side name replaces label and short, the icon is returned, the Windows short form stays without a name (GH-515)", () => {
+  const sides = [{ id: "local", label: "Windows", state: "ready" as const }, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" as const }];
+  const cwds = { "/home/me/p": "wsl:Ubuntu" };
+  const l = sideLookup(sides, cwds, { "wsl:Ubuntu": { name: "Dev box", icon: "🐧" }, local: { icon: "💻" } });
+  expect(l.badge("/home/me/p")).toEqual({ label: "Dev box", short: "Dev box", icon: "🐧" });
+  expect(l.label("/home/me/p")).toBe("Dev box");
+  expect(l.badge("C:\\p")).toEqual({ label: "Windows", short: "Win", icon: "💻" });
+  expect(sideLookup(sides, cwds).badge("C:\\p")).toEqual({ label: "Windows", short: "Win" });
+  expect(sideTitle(sides[1]!, { "wsl:Ubuntu": { name: "Dev box" } })).toBe("Dev box");
+  expect(sideTitle(sides[1]!, {})).toBe("WSL: Ubuntu");
+  expect(sideNameOf(sides[1]!, { "wsl:Ubuntu": { name: "Dev box" } })).toBe("Dev box");
+  expect(sideNameOf(sides[1]!, { "wsl:Ubuntu": { icon: "🐧" } })).toBe("Ubuntu");
 });

@@ -1,5 +1,6 @@
 // Sidebar helpers for the session list (docs/spec.md "Layout").
 import type { SessionListItem, SessionState, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
+import { baseName } from "./paths.ts";
 import { projectName } from "./tabs.ts";
 import { t, type Key } from "./i18n.ts";
 
@@ -89,6 +90,9 @@ export function resumeSearchText(name: string, text = "") {
   return `@project=${name} ${text}`;
 }
 
+/** `@project=` match (GH-515): the custom name or the folder name, case-insensitive. */
+export const projectIs = (cwd: string, name: string) => [projectName(cwd), baseName(cwd)].some((n) => n.toLowerCase() === name.toLowerCase());
+
 /**
  * One group per working directory (per repository with `worktrees`) whatever the input order; groups and sessions newest first.
  * `@project=<name>` in the query (parseSessionQuery) keeps only the group with a project (its main checkout or an added worktree) of that name (case-insensitive), worktree rows included; with several tokens the first one counts.
@@ -100,7 +104,7 @@ export function resumeSearchText(name: string, text = "") {
 export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false, worktrees: Record<string, Worktree[]> = {}, workers?: Map<string, SessionListItem[]>): SessionGroup[] {
   const { project, text } = parseSessionQuery(query);
   const q = text.toLowerCase();
-  const inScope = (g: SessionGroup) => !project || [g.cwd, ...g.members].some((c) => projectName(c).toLowerCase() === project.toLowerCase());
+  const inScope = (g: SessionGroup) => !project || [g.cwd, ...g.members].some((c) => projectIs(c, project));
   const has = (text: string | undefined) => !!text && text.toLowerCase().includes(q);
   const groups = new Map<string, SessionGroup>();
   // Session cwd → its group and worktree row.
@@ -126,11 +130,11 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
     const found = at.get(cwd) ?? (projects ? undefined : add(cwd));
     if (!found) continue;
     if (!inScope(found.g)) continue;
-    if (q && !has(s.title) && !has(projectName(found.g.cwd)) && !has(found.row?.branch) && !workers?.get(s.id)?.some((w) => has(w.title) || has(w.workerName))) continue;
+    if (q && !has(s.title) && !has(projectName(found.g.cwd)) && !has(baseName(found.g.cwd)) && !has(found.row?.branch) && !workers?.get(s.id)?.some((w) => has(w.title) || has(w.workerName))) continue;
     (found.row ?? found.g).sessions.push(s);
   }
   return [...groups.values()].filter(inScope).flatMap((g) => {
-    const named = !q || has(projectName(g.cwd));
+    const named = !q || has(projectName(g.cwd)) || has(baseName(g.cwd));
     // Empty rows show unless archived; while searching, only those the project name or branch matches.
     const rows = g.worktrees.filter((r) => r.sessions.length || (!archived && (named || has(r.branch))));
     const count = g.sessions.length + rows.reduce((n, r) => n + r.sessions.length, 0);

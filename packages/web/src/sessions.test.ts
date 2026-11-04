@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setLocalePref } from "./i18n.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName, displayTitle } from "./sessions.ts";
+import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName, displayTitle, projectIs } from "./sessions.ts";
+import { setLabels } from "./labels.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
   id,
@@ -426,5 +427,18 @@ describe("displayTitle", () => {
     expect([displayTitle("New session"), displayTitle("Untitled"), displayTitle("Fix login"), displayTitle("")]).toEqual(["New session", "Untitled", "Fix login", ""]);
     setLocalePref("vi");
     expect([displayTitle("New session"), displayTitle("Untitled"), displayTitle("Fix login")]).toEqual(["Phiên mới", "Chưa đặt tên", "Fix login"]);
+  });
+});
+
+describe("custom project name (GH-515)", () => {
+  afterEach(() => setLabels(undefined));
+  it("search and @project= find a project by its custom name and by its folder name", () => {
+    setLabels({ projects: { "/w/app": { name: "Shop" } }, sides: {} });
+    const list = [item("a", "/w/app", 1, "one"), item("b", "/w/other", 2, "two")];
+    for (const q of ["shop", "app"]) expect(groupByCwd(list, q).flatMap((g) => g.sessions.map((s) => s.id))).toEqual(["a"]);
+    expect(groupByCwd(list, "@project=Shop").flatMap((g) => g.sessions.map((s) => s.id))).toEqual(["a"]);
+    expect(groupByCwd(list, "@project=app").flatMap((g) => g.sessions.map((s) => s.id))).toEqual(["a"]);
+    expect(projectIs("/w/app", "SHOP")).toBe(true);
+    expect(projectIs("/w/other", "shop")).toBe(false);
   });
 });

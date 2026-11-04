@@ -9,9 +9,10 @@ import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protoco
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, projectIs, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { useNow } from "./plan-meter.tsx";
+import { useLabels } from "./labels.ts";
 import { projectName } from "./tabs.ts";
 import { ICON_BUTTON, IconButton, ProjectAvatar } from "./tabs-bar.tsx";
 import { ITEM, POPUP, RenameInput, SessionContextMenu, SessionMenu, type ActionTarget, type SessionAction } from "./session-actions.tsx";
@@ -41,7 +42,7 @@ type Depth = 0 | 1 | 2;
 function emptySearch(query: string, archived: boolean, projects: string[]) {
   const { project, text } = parseSessionQuery(query);
   if (!project) return t(archived ? "sidebar.noMatchArchived" : "sidebar.noMatchSession", { text });
-  if (!projects.some((p) => projectName(p).toLowerCase() === project.toLowerCase())) return t("sidebar.noProjectNamed", { project });
+  if (!projects.some((p) => projectIs(p, project))) return t("sidebar.noProjectNamed", { project });
   return text ? t(archived ? "sidebar.noInProjectMatchArchived" : "sidebar.noInProjectMatch", { project, text }) : t(archived ? "sidebar.noInProjectArchived" : "sidebar.noInProject", { project });
 }
 
@@ -131,6 +132,7 @@ export function SessionList({
   onWarmWorktree,
   removing,
   onCleanUp,
+  onEditProject,
   onOpenProject,
   renaming,
   renamingFromMenu,
@@ -169,6 +171,8 @@ export function SessionList({
   removing?: (path: string) => boolean;
   /** Opens the Clean up dialog (GH-377) for a project's repository or a coordinator's workers. */
   onCleanUp?: (scope: CleanupScope) => void;
+  /** "Change name and icon…" of a project (GH-515). */
+  onEditProject?: (cwd: string) => void;
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
@@ -191,6 +195,7 @@ export function SessionList({
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
   const t = useT();
+  useLabels();
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
   // Stable for the memo rows: a tab switch re-renders only the two rows whose active mark changes.
@@ -299,6 +304,7 @@ export function SessionList({
       newSession: () => onNew(g.cwd),
       copyPath: onCopy && (() => onCopy(g.cwd, "path")),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
+      rename: onEditProject && (() => onEditProject(g.cwd)),
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(g.cwd) },
     });

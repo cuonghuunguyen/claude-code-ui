@@ -5,7 +5,10 @@
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
-import { sideStatus } from "./sides.tsx";
+import { sideStatus, sideTitle } from "./sides.tsx";
+import { LabelDialog } from "./label-dialog.tsx";
+import { LabelIcon } from "./label-icon.tsx";
+import { saveLabel, useLabels } from "./labels.ts";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -31,7 +34,7 @@ import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts";
-import { ChevronLeftIcon } from "lucide-react";
+import { ChevronLeftIcon, PencilIcon } from "lucide-react";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
@@ -240,9 +243,11 @@ function AppearanceSection() {
   );
 }
 
-/** The Sides group (GH-458): per WSL distro and container, "Start with Claude UI" and "Update automatically" (daemon side.prefs). */
+/** The Sides group (GH-458): per WSL distro and container, "Start with Claude UI" and "Update automatically" (daemon side.prefs); every machine incl. this one has a custom name and icon (GH-515). */
 function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request: <T>(msg: Request) => Promise<T>; onError: (m: string) => void }) {
   const t = useT();
+  const names = useLabels().sides;
+  const [editing, setEditing] = useState<SideInfo>();
   const rows = sides.filter((x) => x.id !== LOCAL_SIDE);
   const set = (side: string, patch: { start?: boolean; update?: boolean }) => void request({ type: "side.prefs", side, ...patch }).catch((e: Error) => onError(e.message));
   return (
@@ -250,7 +255,6 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
       <h3 id="settings-sides" className="pb-1 font-medium text-[13px] text-muted-foreground">
         {t("settings.sides.title")}
       </h3>
-      {!rows.length && <p className="border-t py-2 text-muted-foreground text-sm">{t("settings.sides.empty")}</p>}
       {!!rows.length && (
         <div aria-hidden className="grid grid-cols-[1fr_5.5rem_5.5rem] gap-3 border-t pt-2 pb-1 text-center text-muted-foreground text-xs">
           <span />
@@ -258,28 +262,48 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
           <span>{t("settings.sides.colUpdate")}</span>
         </div>
       )}
-      {rows.map((r) => {
-        const status = r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
+      {sides.map((r) => {
+        const local = r.id === LOCAL_SIDE;
+        const title = sideTitle(r, names);
+        const status = local ? "" : r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
         const dot = r.state === "ready" ? "bg-success" : r.state === "starting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
+        const sub = title !== r.label ? [r.label, status].filter(Boolean).join(" · ") : status;
         return (
-          <div key={r.id} className="grid grid-cols-[1fr_5.5rem_5.5rem] items-center gap-3 border-t py-2 max-md:min-h-11" data-testid={`settings-side-${r.id}`}>
+          <div key={r.id} className={cn("grid items-center gap-3 border-t py-2 max-md:min-h-11", local && !rows.length ? "grid-cols-1" : "grid-cols-[1fr_5.5rem_5.5rem]")} data-testid={`settings-side-${r.id}`}>
             <div className="flex min-w-0 items-start gap-2">
-              <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", dot)} />
-              <div className="min-w-0">
-                <span className="block truncate text-sm" title={r.label}>{r.label}</span>
-                <span className={cn("block break-words text-xs", r.state === "error" ? "text-destructive" : "text-muted-foreground")}>{status}</span>
+              {local ? <span aria-hidden className="mt-1.5 size-2 shrink-0" /> : <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", dot)} />}
+              {names[r.id]?.icon && <LabelIcon icon={names[r.id]!.icon!} className="mt-0.5 size-4 text-[13px]" />}
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-sm" title={title} data-testid="settings-side-name">{title}</span>
+                {sub && <span className={cn("block break-words text-xs", r.state === "error" ? "text-destructive" : "text-muted-foreground")}>{sub}</span>}
               </div>
+              <button type="button" aria-label={t("settings.sides.edit", { name: title })} title={t("sidebar.menu.rename")} onClick={() => setEditing(r)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`settings-side-edit-${r.id}`}>
+                <PencilIcon className="size-3.5" />
+              </button>
             </div>
-            <div className="flex justify-center">
-              <Switch on={!!r.autoStart} label={t("settings.sides.startLabel", { name: r.label })} held={false} onToggle={(on) => set(r.id, { start: on })} title={t("settings.sides.start")} testId={`settings-side-start-${r.id}`} />
-            </div>
-            <div className="flex justify-center">
-              <Switch on={r.autoUpdate !== false} label={t("settings.sides.updateLabel", { name: r.label })} held={!r.autoStart} onToggle={(on) => set(r.id, { update: on })} title={r.autoStart ? t("settings.sides.update") : t("settings.sides.needsStart")} testId={`settings-side-update-${r.id}`} />
-            </div>
+            {!local && (
+              <>
+                <div className="flex justify-center">
+                  <Switch on={!!r.autoStart} label={t("settings.sides.startLabel", { name: title })} held={false} onToggle={(on) => set(r.id, { start: on })} title={t("settings.sides.start")} testId={`settings-side-start-${r.id}`} />
+                </div>
+                <div className="flex justify-center">
+                  <Switch on={r.autoUpdate !== false} label={t("settings.sides.updateLabel", { name: title })} held={!r.autoStart} onToggle={(on) => set(r.id, { update: on })} title={r.autoStart ? t("settings.sides.update") : t("settings.sides.needsStart")} testId={`settings-side-update-${r.id}`} />
+                </div>
+              </>
+            )}
           </div>
         );
       })}
+      {!rows.length && <p className="border-t py-2 text-muted-foreground text-sm">{t("settings.sides.empty")}</p>}
       <p className="pt-1 text-muted-foreground text-xs">{t("settings.sides.hint")}</p>
+      <LabelDialog
+        open={!!editing}
+        title={t("label.machineTitle", { name: editing ? sideTitle(editing, names) : "" })}
+        fallbackName={editing?.label ?? ""}
+        label={editing && Object.hasOwn(names, editing.id) ? names[editing.id] : undefined}
+        onSave={(l) => saveLabel(request, "sides", editing!.id, l)}
+        onClose={() => setEditing(undefined)}
+      />
     </section>
   );
 }
@@ -876,7 +900,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
-    ...(sides?.some((x) => x.id !== LOCAL_SIDE) || docker ? [{ id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
+    { id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides?.length ? sides : [{ id: LOCAL_SIDE, label: t("settings.sides.local"), state: "ready" }]} request={request} onError={setError} /> },
     ...(performance
       ? [
           {
