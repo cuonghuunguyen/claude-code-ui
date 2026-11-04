@@ -4,6 +4,7 @@
 // whose folders it lists (VS Code's "Connect to WSL", then the folder); Docker lists the containers first.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
+import { AddSshHost } from "./add-ssh-host.tsx";
 import { BoxIcon, FolderIcon, SearchIcon, XIcon } from "lucide-react";
 import { LOCAL_SIDE, type FsEntry, type RecentProject, type DockerState, type SideCheck, type SideInfo, type SideSetup } from "@claude-ui/protocol";
 import { SidePanel, type PanelState, type RunMode } from "./side-panel.tsx";
@@ -36,6 +37,8 @@ export function OpenProjectDialog({
   finalFocus,
   sides: listed,
   docker,
+  ssh,
+  onAddSshHost,
   onStartSide,
   onCheckSide,
   sideOf = () => LOCAL_SIDE,
@@ -47,6 +50,9 @@ export function OpenProjectDialog({
   sides?: SideInfo[];
   /** The Docker engine as the hub sees it: any value shows the Docker kind (even with no container), absent: no docker command or an older daemon. */
   docker?: DockerState;
+  /** The hub has ssh: the SSH kind shows with no host, and its list offers Add SSH host (`onAddSshHost`, rejecting with the reason). */
+  ssh?: boolean;
+  onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   /** Side of a recent project. */
@@ -94,8 +100,8 @@ export function OpenProjectDialog({
               <XIcon className="size-4" />
             </Dialog.Close>
           </div>
-          {sides && (sides.length > 1 || docker) ? (
-            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} docker={docker} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
+          {sides && (sides.length > 1 || docker || ssh) ? (
+            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} docker={docker} ssh={ssh} onAddSshHost={onAddSshHost} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
           ) : (
             <Browser input={input} list={list} onPick={pick} recent={recent} />
           )}
@@ -118,6 +124,8 @@ function SidePicker({
   recent = [],
   sides,
   docker,
+  ssh,
+  onAddSshHost,
   onStartSide,
   onCheckSide,
   sideOf,
@@ -128,6 +136,8 @@ function SidePicker({
   recent?: RecentProject[];
   sides: SideInfo[];
   docker?: DockerState;
+  ssh?: boolean;
+  onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   sideOf: (cwd: string) => string;
@@ -148,7 +158,7 @@ function SidePicker({
   const focusInput = useRef(false);
   const [targetOpen, setTargetOpen] = useState(false);
   const targetTrigger = useRef<HTMLButtonElement>(null);
-  const kinds = kindsOf(sides, docker);
+  const kinds = kindsOf(sides, docker, ssh);
   // A kind or container that left the list falls back: the machine itself, or the container list.
   const info = chosen.kind === "local" ? sides.find((s) => s.id === LOCAL_SIDE) : sides.find((s) => s.id === chosen.target && sideKind(s.id) === chosen.kind);
   const kind: SideKind = kinds.includes(chosen.kind) && (info || LIST_FIRST.includes(chosen.kind)) ? chosen.kind : "local";
@@ -281,7 +291,7 @@ function SidePicker({
           {DOCKER_HINT[docker]}
         </p>
       ) : !current ? (
-        <ContainerStep kind={kind} input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
+        <ContainerStep kind={kind} input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} onAddHost={kind === "ssh" ? onAddSshHost : undefined} />
       ) : !ready ? (
         <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
       ) : (
@@ -354,6 +364,7 @@ function ContainerStep({
   stateWord,
   isReady,
   onPick,
+  onAddHost,
 }: {
   kind: SideKind;
   input: React.RefObject<HTMLInputElement | null>;
@@ -361,6 +372,7 @@ function ContainerStep({
   stateWord: (s: SideInfo) => string | undefined;
   isReady: (s: SideInfo) => boolean;
   onPick: (id: string) => void;
+  onAddHost?: (command: string) => Promise<string>;
 }) {
   const t = useT();
   const ssh = kind === "ssh";
@@ -368,10 +380,18 @@ function ContainerStep({
   const [query, setQuery] = useState("");
   // The first match is highlighted: with a single container Enter confirms it, it never starts on its own.
   const [at, setAt] = useState(0);
+  // A host just added: once the list has it, it is the highlighted row (the filter is cleared).
+  const [added, setAdded] = useState<string>();
   useEffect(() => input.current?.focus(), []);
   const q = query.trim().toLowerCase();
   const rows = [...containers.filter((c) => isReady(c)), ...containers.filter((c) => !isReady(c))].filter((c) => `${sideNameOf(c, names)} ${sideName(c)}`.toLowerCase().includes(q));
   const selected = Math.min(at, rows.length - 1);
+  const addedAt = added === undefined ? -1 : rows.findIndex((c) => c.id === added);
+  useEffect(() => {
+    if (addedAt < 0) return;
+    setAt(addedAt);
+    setAdded(undefined);
+  }, [addedAt]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (isImeKey(e.nativeEvent)) return;
     const keys: Record<string, (() => unknown) | undefined> = {
@@ -430,6 +450,7 @@ function ContainerStep({
           ))}
         </ul>
         {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t(ssh ? "sidebar.op.noHost" : "sidebar.op.noContainer")}</p>}
+        {onAddHost && <AddSshHost onAdd={onAddHost} onAdded={(id) => (setQuery(""), setAdded(id))} focusAfterAdd={() => input.current} />}
       </div>
     </>
   );
