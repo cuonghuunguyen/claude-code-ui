@@ -1,8 +1,8 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { connect as netConnect, createServer as netServer, type AddressInfo } from "node:net";
 import { homedir, networkInterfaces, release } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
@@ -12,6 +12,8 @@ import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
+import { createSideDaemon } from "./side-daemon.ts";
+import { listenPrivate, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
@@ -20,7 +22,7 @@ import { wslGitRunner } from "./wsl-git.ts";
 import { prepareWslSide } from "./wsl-side.ts";
 import { addSshHost, checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshConfigPath, sshError } from "./ssh-side.ts";
 import { kindOf, nameOf, sideTarget, type SideKindImpl } from "./side-kinds.ts";
-import { checkWslSide, createSides, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
+import { checkWslSide, createSides, sshRunArgs, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
@@ -53,6 +55,22 @@ if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n${USAGE_HIN
 if (cli.kind === "client") {
   // A client command only talks to a running daemon: no token creation, sides or update check. Never exits 75.
   process.exit(await runClient(cli, { env: process.env, dir: configDir(), stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), openUrl: openInBrowser }));
+}
+if (cli.kind === "attach") {
+  // The bridge of an SSH Side (side-attach.ts); `--start` first starts a detached Side Daemon (this same build) when none listens.
+  const sock = sideSocketPath(process.env, homedir());
+  const start = () => {
+    try {
+      prepareSockDir(dirname(sock));
+    } catch (e) {
+      // The hub reads this as a setup error (a folder of another user), not a crash.
+      process.stdout.write(`CLAUDE_UI_SETUP install_failed ${(e as Error).message}\n`);
+      process.exit(3);
+    }
+    const log = openSync(join(dirname(sock), ".side.log"), "a", 0o600);
+    spawn(process.execPath, [process.argv[1]!, "--side"], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, CLAUDE_UI_SIDE_LISTEN: sock } }).unref();
+  };
+  process.exit(await runAttach({ sock, stdin: process.stdin, stdout: process.stdout, ...(cli.start && { start }) }));
 }
 /** Registry of the update check and install; a mirror, or a fake one in tests. */
 let registry: string | undefined;
@@ -95,13 +113,37 @@ if (side) {
   // The hub holds the sleep inhibitor (a side runs on its machine): a side only reports whether a session runs.
   let running: (on: boolean) => void = () => {};
   const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, onRunning: (on) => running(on), ...state });
-  const io = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) });
-  push = io.push;
-  running = io.running;
+  const listen = process.env.CLAUDE_UI_SIDE_LISTEN;
+  if (listen) {
+    // An SSH Side Daemon (ADR 0007): detached, outlives the pipe. Pipes arrive on the Unix socket (mode 0600), one at a time; it exits after its Grace period.
+    const sd = createSideDaemon({ accept: daemon.accept, git: runGit, busy: daemon.busy, stopIdle: daemon.stopAll, exit: () => process.exit(0) });
+    push = sd.push;
+    running = sd.running;
+    const server = netServer((c) => sd.attach(c, c));
+    const listenOn = () => listenPrivate(server, listen);
+    server.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code !== "EADDRINUSE") return (console.error(`claude-ui side: ${e.message}`), process.exit(1));
+      // A live Daemon owns it (a second start lost the race): leave. A stale socket file of a dead one: remove it and listen.
+      const probe = netConnect(listen);
+      probe.once("connect", () => process.exit(0));
+      probe.once("error", () => (rmSync(listen, { force: true }), listenOn()));
+    });
+    listenOn();
+    const live = liveInstall(process.argv[1] ?? "");
+    // Only once this process owns the socket: a second start that loses the race must touch neither the socket nor the running Daemon's record.
+    let owned = false;
+    server.once("listening", () => ((owned = true), live && writeFileSync(live.file, live.dir)));
+    process.on("exit", () => owned && (rmSync(listen, { force: true }), live && rmSync(live.file, { force: true })));
+  } else {
+    const io = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) });
+    push = io.push;
+    running = io.running;
+  }
 } else {
   const token = loadToken();
   const sidesFile = join(configDir(), "sides.json");
   const listsFile = join(configDir(), "side-lists.json");
+  const graceFile = join(configDir(), "side-grace.json");
   const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
@@ -123,17 +165,18 @@ if (side) {
     return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle)), { stdio: "pipe", windowsHide: true }));
   };
   /** SSH side: the bundle (a covered Linux host) or the npm tarball (any other POSIX host) goes through ssh stdin, then `ssh <alias>` runs the setup script. */
-  const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
+  const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, attach?: boolean): Promise<SideProcess> => {
     const key = sideKey();
+    // A reattach installs and starts nothing: it only bridges to the Side Daemon that runs (setup never: no probe, no bundle).
     const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
-    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "ssh", sent.never ? "never" : effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle), [], sshConfig), { stdio: "pipe", windowsHide: true }));
+    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "ssh", sent.never ? "never" : effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle, sshRunArgs(!!attach)), [], sshConfig), { stdio: "pipe", windowsHide: true }));
   };
   const bundle = () => ({ cacheRoot: sideCacheDir(), version, registry });
   // One entry per Side kind: start one (probe, install, launch) and check it read-only (side.check).
   const kinds: Record<"wsl" | "docker" | "ssh", SideKindImpl> = {
     wsl: { spawn: (n, o) => spawnWsl(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkWslSide({ distro: n, pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: bundle() }) },
     docker: { spawn: (n, o) => spawnDocker(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkDockerSide({ name: n, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
-    ssh: { spawn: (n, o) => spawnSsh(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkSshSide({ alias: n, config: sshConfig, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
+    ssh: { spawn: (n, o) => spawnSsh(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly, o.attach), check: (n) => checkSshSide({ alias: n, config: sshConfig, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
   };
   let dockerState: DockerState | undefined;
   const sides =
@@ -157,7 +200,8 @@ if (side) {
             ...(docker && { dockerState: () => dockerState }),
           }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id, { setup, phase, install, pinned, bundleOnly }) => kinds[kindOf(id)!].spawn(nameOf(id), { setup, phase, install, pinned, bundleOnly }),
+          spawn: (id, { setup, phase, install, pinned, bundleOnly, attach }) => kinds[kindOf(id)!].spawn(nameOf(id), { setup, phase, install, pinned, bundleOnly, attach }),
+          grace: { read: () => ((g) => (g && typeof g === "object" && !Array.isArray(g) ? Object.fromEntries(Object.entries(g).filter(([, v]) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10_080) as [string, number][]) : {}))(readJson(graceFile)), write: (g) => writeFileSync(graceFile, JSON.stringify(g)) },
           key: sideKey,
           ...(ssh && { addSshHost: (command: string, alias?: string) => addSshHost({ command, alias, config: sshConfig }) }),
           check: (id) => kinds[kindOf(id)!].check(nameOf(id)),

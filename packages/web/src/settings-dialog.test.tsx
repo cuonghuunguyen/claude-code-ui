@@ -1052,6 +1052,28 @@ it("Sides group: a row per side with state; the switches send side.prefs; Update
   expect(calls).toHaveLength(n);
 });
 
+it("Sides group: an SSH Side has a Grace period field (default 30 min) that sends side.prefs graceMinutes; other kinds have none", async () => {
+  const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "reconnecting" }, { id: "ssh:two", label: "SSH: two", state: "ready", graceMinutes: 45 }, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" }] });
+  await pick("sides");
+  expect(q("settings-side-ssh:box")?.textContent).toContain("Reconnecting…");
+  const box = q("settings-side-grace-ssh:box") as HTMLInputElement;
+  expect(box.value).toBe("30");
+  expect((q("settings-side-grace-ssh:two") as HTMLInputElement).value).toBe("45");
+  expect(q("settings-side-grace-wsl:Ubuntu")).toBeNull();
+  const type = async (el: HTMLInputElement, v: string) =>
+    act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+  await type(box, "90");
+  expect(calls.at(-1)).toEqual({ type: "side.prefs", side: "ssh:box", graceMinutes: 90 });
+  const n = calls.length;
+  await type(box, "0");
+  expect(calls).toHaveLength(n);
+  expect(box.value).toBe("30");
+});
+
 it("Appearance (GH-510): Language offers System, English, Tiếng Việt; a pick applies at once and is kept", async () => {
   localStorage.clear();
   const { q } = await render();

@@ -50,7 +50,10 @@ export type SideStatus = { text: string; action?: "retry" | "update" };
 export function sideStatus(side: SideInfo | undefined): SideStatus | undefined {
   if (!side || side.id === LOCAL_SIDE || side.state === "ready") return undefined;
   if (side.state === "starting") return { text: t("side.starting") };
+  if (side.state === "reconnecting") return { text: t("side.reconnecting") };
   if (side.state === "error") return { text: side.message ?? t("side.couldNotStart"), action: "retry" };
+  // An SSH Side Daemon that ended (Grace period): off with the way back, until the next start.
+  if (side.state === "off" && side.message) return { text: side.message, action: "retry" };
   return side.update ? { text: t("side.needsUpdate"), action: "update" } : { text: t("side.notRunning") };
 }
 

@@ -44,7 +44,7 @@ export const USAGE_HINT = "Usage: claude-ui [options] | claude-ui update | claud
 export const PHONE_HINT = "Phone: open the link, then Install app (Android Chrome) or Share > Add to Home Screen (iOS Safari); on iOS paste the link into the app's pairing field.";
 
 /** `side`: run as a WSL side of a Windows daemon (sides.ts): wire protocol over stdio, no HTTP. Not in HELP: the Windows daemon starts it. */
-export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; side?: boolean; updateCheck?: false; osNotify?: false; open?: false } | { kind: "update" } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
+export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; side?: boolean; updateCheck?: false; osNotify?: false; open?: false } | { kind: "update" } | { kind: "attach"; start: boolean } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
 
 export type ClientCmd = "status" | "open" | "sessions" | "projects" | "workers";
 const CLIENT_CMDS: Record<string, ClientCmd> = { status: "status", open: "open", sessions: "sessions", ls: "sessions", projects: "projects", workers: "workers" };
@@ -68,7 +68,7 @@ export function isDaemonRun(argv: string[]) {
   return true;
 }
 const VALUE_FLAGS = ["--port", "--roots", "--hostname", "--token-file", "--project", "--state"];
-const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update"];
+const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update", "side"];
 const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "no-open", "side"];
 
 export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): Cli {
@@ -78,7 +78,7 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
     const r = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { "no-update-check": { type: "boolean" }, "no-os-notify": { type: "boolean" }, "no-open": { type: "boolean" }, port: { type: "string" }, roots: { type: "string" }, hostname: { type: "string" }, tailscale: { type: "boolean" }, lan: { type: "boolean" }, "allow-bypass": { type: "boolean" }, json: { type: "boolean" }, "token-file": { type: "string" }, print: { type: "boolean" }, project: { type: "string" }, state: { type: "string" }, archived: { type: "boolean" }, side: { type: "boolean" }, version: { type: "boolean", short: "v" }, help: { type: "boolean", short: "h" } },
+      options: { "no-update-check": { type: "boolean" }, "no-os-notify": { type: "boolean" }, "no-open": { type: "boolean" }, port: { type: "string" }, roots: { type: "string" }, hostname: { type: "string" }, tailscale: { type: "boolean" }, lan: { type: "boolean" }, "allow-bypass": { type: "boolean" }, json: { type: "boolean" }, "token-file": { type: "string" }, print: { type: "boolean" }, project: { type: "string" }, state: { type: "string" }, archived: { type: "boolean" }, side: { type: "boolean" }, attach: { type: "boolean" }, start: { type: "boolean" }, version: { type: "boolean", short: "v" }, help: { type: "boolean", short: "h" } },
     });
     values = r.values;
     positionals = r.positionals;
@@ -88,6 +88,8 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
   const word = positionals[0];
   if (values.help) return { kind: "help" };
   if (values.version) return { kind: "version" };
+  // `side --attach [--start]`: the bridge to an SSH Side Daemon (side-attach.ts); run by the hub over ssh, not in HELP.
+  if (word === "side") return values.attach && positionals.length === 1 ? { kind: "attach", start: values.start === true } : { kind: "error", message: "side needs --attach" };
   const cmd = word === undefined ? undefined : CLIENT_CMDS[word];
   if (word !== undefined && word !== "update" && !cmd) return { kind: "error", message: RESERVED.includes(word) ? `'${word}' is not implemented yet` : `unknown command '${word}'` };
   if (cmd) {

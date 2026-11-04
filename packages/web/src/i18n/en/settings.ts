@@ -46,6 +46,9 @@ export default {
   "settings.sides.update": "Update automatically",
   "settings.sides.updateLabel": "Update {name} automatically",
   "settings.sides.needsStart": "Needs Auto-start",
+  "settings.sides.grace": "Keep running without Claude UI (minutes)",
+  "settings.sides.graceLabel": "Minutes {name} keeps running without Claude UI",
+  "settings.sides.graceHint": "The host keeps its sessions and terminals while Claude UI is away. The time counts only while no turn runs.",
   "settings.sides.hint": "Auto-start (start with Claude UI) takes effect at the next start of Claude UI. Off also removes the projects of the side from the sidebar. Auto-update installs a new Claude UI build from the bundle only; npm is never run inside a side.",
   "settings.screen.title": "Screen",
   "settings.screen.awake": "Keep screen awake",
@@ -279,6 +282,7 @@ export default {
 
   // sides.tsx
   "side.starting": "Starting…",
+  "side.reconnecting": "Reconnecting…",
   "side.couldNotStart": "Could not start",
   "side.needsUpdate": "Needs an update",
   "side.notRunning": "Not running",

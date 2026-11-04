@@ -133,7 +133,7 @@ export function SidePanel({
   const { label } = side;
   const retry = useRef<HTMLButtonElement>(null);
   const region = useRef<HTMLDivElement>(null);
-  const error = state.error ?? (side.state === "error" ? (side.message ?? t("app.sidePanel.notRunning", { side: label })) : undefined);
+  const error = state.error ?? (side.state === "error" ? (side.message ?? t("app.sidePanel.notRunning", { side: label })) : side.state === "off" ? side.message : undefined);
   // Retry sends the mode that failed. An error the dialog did not cause (a stopped container) only starts what is installed.
   const failed = state.failed;
   const inProgress = !!state.busy || side.state === "starting";

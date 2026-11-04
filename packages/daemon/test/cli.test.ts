@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { HELP, PHONE_HINT, USAGE_HINT, isDaemonRun, parseCli, autoOpen, RESTARTED_ENV } from "../src/cli.ts";
 
 describe("parseCli", () => {
+  it("side --attach [--start]: the bridge to an SSH Side Daemon; side alone is an error and is no daemon start", () => {
+    expect(parseCli(["side", "--attach"], {}, "/h")).toEqual({ kind: "attach", start: false });
+    expect(parseCli(["side", "--attach", "--start"], {}, "/h")).toEqual({ kind: "attach", start: true });
+    expect(parseCli(["side"], {}, "/h")).toMatchObject({ kind: "error" });
+    expect(isDaemonRun(["side", "--attach"])).toBe(false);
+  });
   it("defaults: port 4280, home root, no hostname, bypass off", () => {
     const r = parseCli([], {}, "/home/u");
     expect(r).toEqual({ kind: "run", port: 4280, roots: ["/home/u"], hostname: undefined, lan: false, allowBypass: false, idleCloseMinutes: 10 });

@@ -392,7 +392,7 @@ describe("setup script of a host", () => {
     expect(s).toContain("command -v npm >/dev/null 2>&1 || say npm_missing");
     expect(s).toContain('mkdir -p "$root" 2>/dev/null && [ -w "$root" ] || say home_not_writable');
     expect(s).toContain("claude-agent-sdk-*-*");
-    expect(s).toContain('[ "$d" = "$dir" ] || rm -rf "$d"');
+    expect(s).toContain('[ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"'); // the build of a running Side Daemon (.live) stays
   });
   it("bundle install checks the home folder too; never reads only; Docker and WSL scripts are unchanged", () => {
     const b = { target: "linux-x64" as const, claudePackage: "claude-agent-sdk-linux-x64" };
