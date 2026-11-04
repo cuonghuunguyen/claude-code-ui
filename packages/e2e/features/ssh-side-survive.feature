@@ -42,7 +42,7 @@ Feature: An SSH Side survives a dropped pipe
     Then the Settings row of the SSH host "e2e-ok" says "Reconnecting"
     When the Side Daemon of the SSH host ended
     And the SSH host "e2e-ok" becomes reachable again
-    Then the Settings row of the SSH host "e2e-ok" says "Not running"
+    Then the Settings row of the SSH host "e2e-ok" says "Grace period ran out"
     And I capture "side-off-no-daemon"
     When I close Settings
     And I open Open project on the last chosen host
