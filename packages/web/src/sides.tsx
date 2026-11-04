@@ -111,8 +111,8 @@ export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL
 /** `sideName` with the custom name (GH-515) in front. */
 export const sideNameOf = (s: Pick<SideInfo, "id" | "label">, names: Record<string, Label>) => (Object.hasOwn(names, s.id) ? names[s.id]?.name : undefined) ?? sideName(s);
 /** The kinds that have members, in chooser order: local first. */
-export const kindsOf = (sides: SideInfo[], docker?: DockerState): SideKind[] =>
-  (["local", "wsl", "docker", "ssh"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));
+export const kindsOf = (sides: SideInfo[], docker?: DockerState, ssh?: boolean): SideKind[] =>
+  (["local", "wsl", "docker", "ssh"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker) || (k === "ssh" && !!ssh));
 /** What the Docker tab says when there is no container to list (the engine is not running, or runs nothing). */
 export const DOCKER_HINT: Record<"down" | "empty", string> = {
   get down() {

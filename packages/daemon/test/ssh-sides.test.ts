@@ -66,6 +66,45 @@ describe("SSH Side in the registry", () => {
   });
 });
 
+describe("SSH Side: Add SSH host and updates", () => {
+  it("a host added shows up in the list at once, as SSH: <alias>; an alias that exists is refused", async () => {
+    const hosts: string[] = [];
+    const sides = createSides({
+      targets: [],
+      spawn: () => proc(),
+      discover: async () => hosts.map((h) => sideTarget("ssh", h)),
+      discoverMs: 0,
+      addSshHost: (command, alias) => {
+        const a = alias ?? command.split(" ").at(-1)!;
+        if (hosts.includes(a)) throw new Error(`The host "${a}" already exists in the ssh config.`);
+        hosts.push(a);
+        return a;
+      },
+    });
+    expect(await sides.addSshHost("ssh box")).toBe("ssh:box");
+    expect(sides.list().map((x) => x.label)).toContain("SSH: box");
+    await expect(sides.addSshHost("ssh box")).rejects.toThrow("already exists");
+    sides.close();
+  });
+  it("without ssh on the machine there is no Add SSH host", async () => {
+    const sides = createSides({ targets: [], spawn: () => proc() });
+    await expect(sides.addSshHost("ssh box")).rejects.toThrow("ssh is not available");
+    sides.close();
+  });
+  it("Update automatically off keeps the installed build: the saved SSH Side starts with setup never; on, an update runs bundle-only", async () => {
+    const setups: unknown[] = [];
+    const start = async (saved: SavedSide) => {
+      const sides = createSides({ targets: [sideTarget("ssh", "box")], key: () => "new", saved: [saved], spawn: (_id, o) => (setups.push([o.setup, !!o.bundleOnly]), proc()), save: () => {} });
+      await vi_waitFor(() => row(sides, "ssh:box").state === "ready");
+      sides.close();
+    };
+    await start({ id: "ssh:box", key: "old", update: false });
+    await start({ id: "ssh:box", key: "old" });
+    await start({ id: "ssh:box", key: "new" });
+    expect(setups).toEqual([["never", false], ["needed", true], ["never", false]]);
+  });
+});
+
 async function vi_waitFor(cond: () => boolean) {
   for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
   expect(cond()).toBe(true);

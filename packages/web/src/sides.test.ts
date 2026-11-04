@@ -83,6 +83,8 @@ it("SSH sides: kind, name, chip order, short badge (alias when several), opens o
   const local = S("local", "Linux");
   expect(kindsOf([local, S("ssh:a", "SSH: a"), S("docker:d", "Docker: d"), S("wsl:U", "WSL: U")])).toEqual(["local", "wsl", "docker", "ssh"]);
   expect(kindsOf([local], "ok")).toEqual(["local", "docker"]);
+  expect(kindsOf([local], undefined, true)).toEqual(["local", "ssh"]);
+  expect(kindsOf([local])).toEqual(["local"]);
   const sides = [local, S("ssh:a", "SSH: a", "off"), S("ssh:b", "SSH: b", "off")];
   expect(defaultTarget("ssh", sides)).toBeUndefined();
   expect(defaultTarget("ssh", sides, "ssh:b")?.id).toBe("ssh:b");

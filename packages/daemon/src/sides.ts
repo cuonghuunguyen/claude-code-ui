@@ -11,12 +11,12 @@ import { homedir } from "node:os";
 import { join, posix } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { perf, type PerfSpanHandle } from "./perf.ts";
-import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
+import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type SshAddResult, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
 import { kindOf, nameOf, NOUN, sideTarget, startOptIn, survivesPipe } from "./side-kinds.ts";
-import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
+import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, TARGET_PROBE_LINES_POSIX, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame } from "./side-frame.ts";
@@ -63,10 +63,16 @@ const kindName = (id: string) => ({ docker: "Docker", ssh: "SSH", wsl: "WSL" })[
 const isDocker = (id: string) => kindOf(id) === "docker";
 
 /** Setup errors the side's start script reports as `CLAUDE_UI_SETUP <code> <detail>`. */
-export function setupMessage(code: string, detail: string, side: string, docker = false) {
+export function setupMessage(code: string, detail: string, side: string, kind: boolean | "host" = false) {
+  const host = kind === "host";
+  const docker = kind === true;
   switch (code) {
+    case "npm_missing":
+      return `npm is not installed on ${side}. Install Node.js with npm there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`;
+    case "home_not_writable":
+      return `${side} has no writable home folder: claude-ui is installed in $HOME/.local/share/claude-ui. Make the home folder writable there, then retry.`;
     case "node_missing":
-      return docker ? `Node.js ${NODE_MIN} or newer is not installed in ${side}. Use an image with Node.js ${NODE_MIN_MAJOR}+ (e.g. node:${NODE_MIN_MAJOR}) or install it in the container, then retry.` : `Node.js ${NODE_MIN} or newer is not installed in ${side}. Install it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`;
+      return host ? `Node.js ${NODE_MIN} or newer is not installed on ${side}. Install it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.` : docker ? `Node.js ${NODE_MIN} or newer is not installed in ${side}. Use an image with Node.js ${NODE_MIN_MAJOR}+ (e.g. node:${NODE_MIN_MAJOR}) or install it in the container, then retry.` : `Node.js ${NODE_MIN} or newer is not installed in ${side}. Install it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`;
     case "node_changed":
       return `The Node.js in ${side} changed while it started. Retry: claude-ui then brings its own Node.js.`;
     case "node_old":
@@ -78,7 +84,7 @@ export function setupMessage(code: string, detail: string, side: string, docker 
     case "not_installed":
       return `claude-ui is not installed in ${side} yet. Install it first.`;
     case "unpack_tools_missing":
-      return `${side} needs ${detail.trim() ? detail.trim().split(/\s+/).join(" and ") : "tar and gzip"} to unpack claude-ui. Install ${detail.trim().includes(" ") ? "them" : "it"} in the ${docker ? "container" : "distro"} (Debian or Ubuntu: apt-get install -y tar gzip), then retry.`;
+      return `${side} needs ${detail.trim() ? detail.trim().split(/\s+/).join(" and ") : "tar and gzip"} to unpack claude-ui. Install ${detail.trim().includes(" ") ? "them" : "it"} ${host ? "on the host" : `in the ${docker ? "container" : "distro"}`} (Debian or Ubuntu: apt-get install -y tar gzip), then retry.`;
     case "install_failed":
       return `Installing claude-ui in ${side} failed${detail ? `: ${detail}` : ""}. Check its network and npm, then retry.`;
     default:
@@ -93,11 +99,12 @@ export function setupMessage(code: string, detail: string, side: string, docker 
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
 /** `runArgs`: what the installed cli runs at the end (default `--side`; an SSH Side runs the bridge to its Side Daemon, `sshRunArgs`). */
-export function setupScript(source: string, key: string, kind: "wsl" | "docker" = "wsl", mode: SideSetup = "needed", bundle?: SideBundle, runArgs = "--side") {
-  const docker = kind === "docker";
+export function setupScript(source: string, key: string, kind: "wsl" | "docker" | "ssh" = "wsl", mode: SideSetup = "needed", bundle?: SideBundle, runArgs = "--side") {
+  const docker = kind !== "wsl";
+  const host = kind === "ssh";
   // never: only an installed build runs (else `not_installed`, the side stays off); force: installed again whatever is there.
   const never = mode === "never";
-  if (docker && bundle && !never) return bundleScript(source, key, mode, bundle, runArgs);
+  if (docker && bundle && !never) return bundleScript(source, key, mode, bundle, host, runArgs);
   if (!docker && bundle?.host && !never) return wslBundleScript(key, mode, bundle, bundle.host);
   const src = shq(source);
   return [
@@ -105,17 +112,18 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     ...(docker ? [NVM_LINE] : []),
     USABLE_NODE_FN,
     'root="$HOME/.local/share/claude-ui/side"',
+    ...(host && !never ? [HOME_CHECK] : []),
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
     // models (no auto mode) and runs no query. Such an install is installed again: into an empty temp folder next to the old
     // install (npm does not fetch a missing optional dependency into an existing node_modules), checked there (dist/cli.js and the
     // binary), then swapped in. On any failure the old install stays (disk: both exist while npm runs).
-    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    sdkFn(host),
     // A bundle install of this build carries its own Node.js; running it needs none in the container or distro (force reinstalls with npm: it does).
     ...(mode !== "force" ? ['if [ -x "$dir/node/bin/node" ] && [ -f "$cli" ] && sdk "$dir"; then :; else'] : []),
     // The side runs on the real binary of the found node (`$n`), never on a shim.
-    '  usable_node "" || { command -v node >/dev/null 2>&1 && say node_old "$(node -v 2>/dev/null)"; say node_missing; }',
+    `  usable_node "" ${host ? "posix " : ""}|| { command -v node >/dev/null 2>&1 && say node_old "$(node -v 2>/dev/null)"; say node_missing; }`,
     ...(mode !== "force" ? ["fi"] : []),
     ...(docker && !never ? [`src=${src}`] : []),
     ...(never
@@ -126,6 +134,7 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
       ? `  [ -f "$src" ] || say install_failed "the claude-ui package was not copied in"`
       : `  src=$(wslpath -u ${src}) && [ -f "$src/dist/cli.js" ] || say install_failed "the Windows claude-ui package was not found"`,
     "  printf 'CLAUDE_UI_PHASE %s\\n' installing",
+    ...(host ? ["  command -v npm >/dev/null 2>&1 || say npm_missing"] : []),
     // node-pty has no Linux prebuilds: npm install compiles it.
     "  { command -v make && command -v python3 && { command -v g++ || command -v c++; }; } >/dev/null 2>&1 || say build_tools_missing",
     // Dot names: the sweep of earlier versions below ("$root"/*) never matches them.
@@ -171,6 +180,10 @@ export type SideBundle = {
 
 /** `v` as one single-quoted POSIX shell word (a quote inside becomes `'\''`): paths with an apostrophe or a space stay intact. */
 export const shq = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
+/** `sdk <dir>`: the install has the Agent SDK's native binary package. A host may be macOS or BSD (npm install): any platform's, else Linux's. */
+const sdkFn = (host: boolean) => `sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-${host ? "*-*" : "linux-*"}; do [ -d "$b" ] && return 0; done; return 1; }`;
+/** An SSH host's install folder must be creatable: the one message when the home folder is read-only or missing. */
+const HOME_CHECK = 'mkdir -p "$root" 2>/dev/null && [ -w "$root" ] || say home_not_writable';
 /** Roots, then the side runs on its own Node.js when the install carries one (a bundle install), else on the container's. */
 /** The cli arguments of an SSH Side's run: the bridge between ssh stdio and the Side Daemon's socket; `--start` starts the Daemon when none runs (a launch; a reattach never does). */
 export const sshRunArgs = (attachOnly: boolean) => (attachOnly ? "side --attach" : "side --attach --start");
@@ -223,11 +236,12 @@ const keepCondition = (b: SideBundle) => `if [ ! -f "$cli" ] || ! sdk "$dir" || 
  * target's prebuild, the Claude Code binary package, the Agent SDK package, the side JS), checks that it starts on its own Node.js, then swaps it in like
  * the npm install. An install of this build that carries its Node.js is kept (needed); force unpacks again.
  */
-function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundle, runArgs = "--side") {
+function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundle, host = false, runArgs = "--side") {
   const q = shq;
   return [
     "say() { printf 'CLAUDE_UI_SETUP %s\\n' \"$*\"; exit 3; }",
     'root="$HOME/.local/share/claude-ui/side"',
+    ...(host && mode !== "never" ? [HOME_CHECK] : []),
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `src=${q(source)}; ${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
@@ -314,8 +328,10 @@ export const hasBuild = (pkgDir: string, docker: boolean) => existsSync(join(pkg
  * writes, copies, starts the side, reads a file's contents or prints an environment variable's value: HOME, PATH and NVM_DIR only
  * name places (a writable home folder is reported as the text $HOME).
  */
-export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
-  const docker = kind === "docker";
+export function checkScript(key: string, kind: "wsl" | "docker" | "ssh", source = "") {
+  const docker = kind !== "wsl";
+  const host = kind === "ssh";
+  const probe = host ? TARGET_PROBE_LINES_POSIX : TARGET_PROBE_LINES;
   return [
     "emit() { printf 'CLAUDE_UI_CHECK %s=%s\\n' \"$1\" \"$2\"; }",
     ...(docker ? [NVM_LINE] : []),
@@ -327,26 +343,28 @@ export function checkScript(key: string, kind: "wsl" | "docker", source = "") {
       ? [
           `w=; wr() { [ -d "$1" ] && [ -w "$1" ] && w="$w\${w:+,}$2"; }; wr /tmp /tmp; wr /dev/shm /dev/shm; wr "$HOME" '$HOME'; emit writable "$w"`,
           // The bundle's target (arch, libc, libstdc++) and the other items of "What this container needs".
-          ...TARGET_PROBE_LINES.slice(1),
+          ...probe.slice(1),
           "for t in tar gzip git npm; do command -v $t >/dev/null 2>&1 && emit $t 1 || emit $t 0; done",
         ]
       : [
           `src=$(wslpath -u ${shq(source)} 2>/dev/null) && [ -f "$src/dist/cli.js" ] && emit package 1 || emit package 0`,
           // Same facts as a container: the bundle needs a covered target, tar and gzip.
-          ...TARGET_PROBE_LINES.slice(1),
+          ...probe.slice(1),
           "for t in tar gzip git npm; do command -v $t >/dev/null 2>&1 && emit $t 1 || emit $t 0; done",
         ]),
     'root="$HOME/.local/share/claude-ui/side"',
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     '[ -x "$dir/node/bin/node" ] && emit bundled 1 || emit bundled 0',
-    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
-    // Same test as the setup script: a build without the SDK's Linux binary is not installed.
+    sdkFn(host),
+    // Same test as the setup script: a build without the SDK's native binary is not installed.
     'if [ -f "$dir/node_modules/claude-code-ui/dist/cli.js" ] && sdk "$dir"; then emit installed current',
     'else o=; for d in "$root"/*; do [ -d "$d" ] && [ "$d" != "$dir" ] && o="${d##*/}" && break; done',
     '  if [ -n "$o" ]; then emit installed other; emit installedKey "$o"',
     '  elif [ -d "$dir" ]; then emit installed other; emit installedKey "${dir##*/}"',
     "  else emit installed none; fi",
     "fi",
+    // An SSH host may run anything: the probe of its OS tells a Windows host (not supported) from a POSIX one.
+    ...(host ? ['emit os "$(uname -s 2>/dev/null)"'] : []),
   ].join("\n");
 }
 
@@ -417,7 +435,12 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
       return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
     case "unpack_tools_missing":
       return `${side} needs ${d || "tar and gzip"} to unpack claude-ui. Install ${d.includes(" and ") || !d ? "them" : "it"} in the ${o.noun ?? (o.docker ? "container" : "distro")} (Debian or Ubuntu: apt-get install -y tar gzip). Then check again.`;
+    case "npm_missing":
+      return `npm is not installed on ${side}. Install Node.js with npm there (for example nvm install ${NODE_MIN_MAJOR}). Then check again.`;
+    case "windows_host":
+      return `${side}: Windows SSH hosts are not supported yet.`;
     case "no_writable_path":
+      if (o.noun === "host") return `${side} has no writable home folder: claude-ui is installed in $HOME/.local/share/claude-ui (a writable /tmp does not help). Make the home folder writable there, then check again.`;
       return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
     case "check_failed":
       return `The check of ${side} did not finish${d ? `: ${d}` : ""}. Check again.`;
@@ -428,7 +451,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
  * The verdict for a side that runs: first hard blocks (no build, Node.js, and only when an install is needed: no writable folder,
  * build tools, the package unreadable), then an installed side, then install or update. `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
  */
-export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; noun?: string; name?: string; build: boolean; checked: Checked; cpUsable?: boolean; install?: { method: "bundle" | "npm"; reason?: string }; network?: boolean }): SideCheck {
+export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker" | "ssh"; noun?: string; name?: string; build: boolean; checked: Checked; cpUsable?: boolean; install?: { method: "bundle" | "npm"; reason?: string }; network?: boolean }): SideCheck {
   const { checked: c, key, label } = o;
   const docker = o.kind === "docker";
   const bundleInstall = o.install?.method === "bundle";
@@ -458,11 +481,12 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
   if (!ownNode && !c.node) return blocked("node_missing");
   if (!ownNode && !nodeOk) return blocked("node_old", c.node);
   if (needsInstall) {
-    if (docker && o.cpUsable === false && c.writable && c.writable.length === 0) return blocked("no_writable_path");
+    if (((docker && o.cpUsable === false) && c.writable && c.writable.length === 0) || (o.kind === "ssh" && c.writable && !c.writable.includes("$HOME"))) return blocked("no_writable_path");
     if (bundleInstall) {
       const gone = [c.tools && !c.tools.tar && "tar", c.tools && !c.tools.gzip && "gzip"].filter(Boolean) as string[];
       if (gone.length) return blocked("unpack_tools_missing", gone.join(" and "));
     } else {
+      if (o.kind === "ssh" && c.tools && !c.tools.npm) return blocked("npm_missing");
       const missing = [!c.make && "make", !c.python3 && "python3", !c.cxx && "g++"].filter(Boolean) as string[];
       if (missing.length) return blocked("build_tools_missing", missing.join(", "));
     }
@@ -552,6 +576,8 @@ export function createSides(opts: {
   targets: SideTarget[];
   /** `install`: a Docker start says how it installs: the bundle, or npm in the container and why (`fallback`). */
   spawn: (id: string, o: { setup: SideSetup; /** SSH: attach to the running Side Daemon only. */ attach?: boolean; phase: (p: SidePhase) => void; /** The Node.js found there did not start claude-ui: use the pinned one. */ pinned?: boolean; /** Install from the bundle only: when it is not usable the side runs what is installed (setup never), no npm. */ bundleOnly?: boolean; install?: (i: { bundle: true } | { fallback: string }) => void }) => SideProcess | Promise<SideProcess>;
+  /** Writes an SSH host to the ssh config from an `ssh ...` command (`ssh.add`): resolves with the alias; throws the reason. Absent: no ssh on this machine. */
+  addSshHost?: (command: string, alias?: string) => string;
   /** Read-only look at a side that is not running (`side.check`); this claude-ui's build key is `key`. */
   check?: (id: string) => Promise<SideCheck>;
   key?: () => string;
@@ -819,7 +845,7 @@ export function createSides(opts: {
         const phase = /^CLAUDE_UI_PHASE (installing|starting)$/.exec(line.trim());
         if (phase) return setPhase(s, phase[1] as SidePhase);
         const setup = /^CLAUDE_UI_SETUP (\S+) ?(.*)$/.exec(line.trim());
-        if (setup) return void ((setupCode = setup[1]), (setupDetail = setup[2]!.trim()), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, isDocker(s.id))));
+        if (setup) return void ((setupCode = setup[1]), (setupDetail = setup[2]!.trim()), (setupError = setupMessage(setup[1]!, setup[2]!, s.label, kindOf(s.id) === "ssh" ? "host" : isDocker(s.id))));
         const parsed = parseSideFrame(line);
         if ("error" in parsed) {
           // Before the first frame this is shell start-up output (motd, .bashrc): not logged. Later lines are logged, at most 20 per run.
@@ -1147,6 +1173,15 @@ export function createSides(opts: {
     /** A manual start (Retry, Update, Open project): the exit count starts again. */
     start: (id: string, setup?: SideSetup) => (exits.delete(id), start(id, setup)),
     refresh,
+    /** `ssh.add`: the host is written, then listed at once (the list is read again, not waited for). Resolves with the Side id. */
+    async addSshHost(command: string, alias?: string): Promise<string> {
+      if (!opts.addSshHost) throw new Error("ssh is not available on this machine.");
+      const a = opts.addSshHost(command, alias);
+      await refresh(true);
+      return sideTarget("ssh", a).id;
+    },
+    /** The hub can add SSH hosts, so the web shows the SSH kind with no host yet. */
+    sshAvailable: !!opts.addSshHost,
     posixLocal: !!opts.posixLocal,
     open,
     learn,
@@ -1442,7 +1477,7 @@ export function createRouter(opts: {
     merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), cwdSides } };
+    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides } };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {
@@ -1469,6 +1504,14 @@ export function createRouter(opts: {
         if (!ok(msg.start) || !ok(msg.update) || (msg.start === undefined && msg.update === undefined && grace === undefined)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "start and update must be booleans, at least one" });
         sides.prefs(msg.side, { start: msg.start as boolean | undefined, update: msg.update as boolean | undefined, graceMinutes: grace as number | undefined });
         return send({ type: "reply", reqId: msg.reqId, result: {} });
+      }
+      case "ssh.add": {
+        if (typeof msg.command !== "string" || (msg.alias !== undefined && typeof msg.alias !== "string")) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "command must be a string and alias a string" });
+        try {
+          return send({ type: "reply", reqId: msg.reqId, result: { side: await sides.addSshHost(msg.command, msg.alias) } satisfies SshAddResult });
+        } catch (e) {
+          return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: (e as Error).message });
+        }
       }
       case "side.check": {
         // Read-only and the hub's own: never forwarded to a side.
