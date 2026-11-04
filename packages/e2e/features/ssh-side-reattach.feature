@@ -63,3 +63,5 @@ Feature: An SSH Side after a Hub restart
     Then the claude-ui Hub in the SSH host is unchanged
     When the SSH host "e2e-ok" becomes reachable again
     And I capture "remote-hub-untouched"
+    # the Grace period is a shared setting: leave the default for the next feature
+    When I set the Grace period of the SSH host "e2e-ok" to "30"
