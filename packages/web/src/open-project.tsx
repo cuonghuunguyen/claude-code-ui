@@ -440,8 +440,9 @@ function ContainerStep({
           ))}
         </ul>
         {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t(ssh ? "sidebar.op.noHost" : "sidebar.op.noContainer")}</p>}
+        {/* Inside the scroll area: the form with its error and buttons must stay reachable in a short dialog (390x844). */}
+        {onAddHost && <AddSshHost onAdd={onAddHost} />}
       </div>
-      {onAddHost && <AddSshHost onAdd={onAddHost} />}
     </>
   );
 }
