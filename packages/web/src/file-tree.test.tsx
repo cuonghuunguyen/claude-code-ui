@@ -194,11 +194,12 @@ it("collapse all clears the expanded dirs; reveal expands the ancestors of a pat
   t.unmount();
 });
 
-it("reveal keeps the row below the sticky filter box (scroll-margin-top = its height)", async () => {
+it("reveal keeps the row below the sticky filter box (scroll-margin-top = its bottom edge in the scroller)", async () => {
   const t = setup();
   await t.render();
   const box = t.el.querySelector<HTMLElement>("input[type=search]")!.parentElement!;
-  Object.defineProperty(box, "offsetHeight", { value: 37 });
+  box.getBoundingClientRect = () => ({ bottom: 41 }) as DOMRect;
+  box.parentElement!.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
   const seen: string[] = [];
   const orig = Element.prototype.scrollIntoView;
   Element.prototype.scrollIntoView = function (this: HTMLElement) {
@@ -206,7 +207,7 @@ it("reveal keeps the row below the sticky filter box (scroll-margin-top = its he
   };
   await act(async () => t.handle.current!.reveal("/p/README.md", false));
   Element.prototype.scrollIntoView = orig;
-  expect(seen.at(-1)).toBe("37px");
+  expect(seen.at(-1)).toBe("41px");
   t.unmount();
 });
 

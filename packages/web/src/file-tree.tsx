@@ -380,7 +380,8 @@ export function FileTree({
     if (!p || !el) return;
     pending.current = undefined;
     // The sticky filter box covers the top of the scroller: keep the row below it.
-    el.style.scrollMarginTop = `${filterBox.current?.offsetHeight ?? 0}px`;
+    const box = filterBox.current;
+    el.style.scrollMarginTop = box ? `${box.getBoundingClientRect().bottom - box.parentElement!.getBoundingClientRect().top}px` : "0px"; // includes the scroller's padding above the box
     el.scrollIntoView?.({ block: "nearest" });
     if (p.focus) el.focus();
   });
