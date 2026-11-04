@@ -222,9 +222,50 @@ describe("createUpdater", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
-  it("refuses an install without an available version", async () => {
+  it("install checks the registry when nothing is available yet", async () => {
     const { u } = setup();
+    expect(await u.install()).toBe("0.2.1");
+  });
+
+  it("install rejects when the registry has nothing newer", async () => {
+    const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: answer({ version: "0.2.0" }), run: fakeNpm(), busy: () => ({ sessions: 0, terminals: 0 }), exit: vi.fn(), broadcast: () => {} });
     await expect(u.install()).rejects.toThrow("no update available");
+  });
+
+  describe("retire (an attach-started Hub)", () => {
+    const retiring = (busy = { sessions: 0, terminals: 0 }) => {
+      const order: string[] = [];
+      const exit = vi.fn((c: number) => void order.push(`exit ${c}`));
+      const run = vi.fn(fakeNpm());
+      const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: answer({ version: "0.2.1" }), run, busy: () => busy, exit, broadcast: () => {}, pollMs: 100, retire: { onRetire: () => void order.push("retire") } });
+      return { u, exit, busy, order, run };
+    };
+    it("install resolves current at once, nothing is installed", async () => {
+      const { u, run } = retiring();
+      expect(await u.install()).toBe("0.2.0");
+      expect(run).not.toHaveBeenCalled();
+    });
+    it("restart exits 0 at once when no session works; retire is called first", () => {
+      const { u, order } = retiring();
+      expect(u.restart()).toBe(0);
+      expect(order).toEqual(["retire", "exit 0"]);
+    });
+    it("open terminals do not hold it", () => {
+      const { u, exit } = retiring({ sessions: 0, terminals: 3 });
+      expect(u.restart()).toBe(0);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+    it("a running session holds it until idle; retire is called before the wait", () => {
+      vi.useFakeTimers();
+      const { u, exit, busy, order } = retiring({ sessions: 2, terminals: 1 });
+      expect(u.restart()).toBe(2);
+      expect(order).toEqual(["retire"]);
+      vi.advanceTimersByTime(500);
+      expect(exit).not.toHaveBeenCalled();
+      busy.sessions = 0;
+      vi.advanceTimersByTime(200);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
   });
 });
 

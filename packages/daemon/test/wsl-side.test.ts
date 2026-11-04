@@ -177,7 +177,7 @@ describe("setupScript for a WSL distro: bundle, npm fallback, never", () => {
       expect(s).not.toMatch(/npm install|node_missing|node_old|build_tools_missing|command -v node|--install-links|\$src/);
       // Only the install's own temp and old folders are removed: nothing under the part folder.
       for (const l of s.split("\n").filter((l) => /\brm\b/.test(l))) expect(l, l).not.toMatch(/\$pd|\$sd/);
-      expect(s).toContain('exec "$dir/node/bin/node" "$cli" --side');
+      expect(s).toContain('exec "$dir/node/bin/node" "$cli" side --attach --start');
       expect(s).toContain("CLAUDE_UI_PHASE %s\\n' installing");
       expect(s).toContain("CLAUDE_UI_PHASE %s\\n' starting");
       expect(s).not.toContain("not_logged_in");
@@ -199,11 +199,11 @@ describe("setupScript for a WSL distro: bundle, npm fallback, never", () => {
     expect(npm).toContain("npm install");
     expect(npm).toContain("build_tools_missing");
     expect(npm).toContain('if [ -x "$dir/node/bin/node" ] && [ -f "$cli" ] && sdk "$dir"; then :; else');
-    expect(npm).toContain('exec "${n:-node}" "$cli" --side');
+    expect(npm).toContain('exec "${n:-node}" "$cli" side --attach --start');
     const never = setupScript("C:\\pkg", "1.0.0-1", "wsl", "never", bundle);
     expect(never).toBe(setupScript("C:\\pkg", "1.0.0-1", "wsl", "never"));
     expect(never).toContain("say not_installed");
-    expect(never).toContain('exec "$dir/node/bin/node" "$cli" --side');
+    expect(never).toContain('exec "$dir/node/bin/node" "$cli" side --attach --start');
     expect(setupScript("C:\\pkg", "1.0.0-1", "wsl", "force")).toContain("npm install");
     for (const s of [npm, never, setupScript("C:\\pkg", "k", "wsl", "needed", bundle)]) if (hasTools) expect(spawnSync("bash", ["-n", "-c", s]).status).toBe(0);
   });

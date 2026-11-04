@@ -24,7 +24,7 @@ async function setup(o: { before?: string; maxLineChars?: number } = {}) {
     ...(o.maxLineChars && { maxLineChars: o.maxLineChars }),
   });
   if (o.before) stdout.write(o.before);
-  stdout.write('{"ready":true}\n');
+  stdout.write('{"ready":true,"schema":[1,1],"version":"1.0.0"}\n');
   await sides.start("wsl:Ubuntu");
   const got: ServerMessage[] = [];
   const conn = sides.open("wsl:Ubuntu", (m) => got.push(m))!;
@@ -200,7 +200,7 @@ describe("side frames (GH-278)", () => {
     const input = new PassThrough();
     const output = new PassThrough();
     const accepted: unknown[] = [];
-    runSide({ input, output, accept: (ws) => accepted.push(ws) });
+    runSide({ ready: { schema: [1, 1], version: "1.0.0" },  input, output, accept: (ws) => accepted.push(ws) });
     expect(() => input.write('null\n42\n[1]\n"s"\n{"c":1,"o":1}\n')).not.toThrow();
     await new Promise((r) => setTimeout(r, 20));
     expect(accepted).toHaveLength(1);

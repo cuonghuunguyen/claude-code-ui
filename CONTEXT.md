@@ -21,7 +21,7 @@ A `Host` entry of the user's ssh config, listed as an SSH Side under its alias. 
 _Avoid_: server, remote, machine
 
 **Grace period**:
-How long an SSH Side keeps running with no Hub attached (30 min by default, per host); counted only while nothing runs. A Hub that reattaches within it finds turns and terminals as they were.
+How long a Hub that an attach started keeps running with no Hub attached, no browser connected and no turn running (30 min by default, per Side). A Hub the user started never ends by it. A Hub that reattaches within it finds turns and terminals as they were.
 _Avoid_: timeout, keep-alive (the heartbeat that detects a dropped pipe)
 
 **Label**:

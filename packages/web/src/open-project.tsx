@@ -259,7 +259,7 @@ function SidePicker({
   const members = sides.filter((s) => sideKind(s.id) === kind);
   const stateWord = (s: SideInfo) => {
     const p = panels[s.id];
-    // An SSH Side Daemon that ended: its reason (off with a message) shows until the next start.
+    // The Hub there ended: its reason (off with a message) shows until the next start.
     if (!isReady(s) && !p?.busy && s.state === "off" && s.message) return s.message;
     return isReady(s) ? undefined : p?.busy || s.state === "starting" ? t("sidebar.op.settingUp") : p?.error || s.state === "error" ? t("sidebar.op.error") : t("sidebar.op.notSetUp");
   };

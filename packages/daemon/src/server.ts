@@ -2612,7 +2612,8 @@ export function createDaemon(opts: {
 
   /** Serves a connection that is not a WebSocket of this server: a side's virtual connection (sides.ts runSide). */
   // Typed as Conn, so a SideSocket without what the handler uses (ping, terminate, ...) fails to compile.
-  const accept = (ws: Conn) => void wss.emit("connection", ws, undefined);
+  const virtual = new Set<Conn>();
+  const accept = (ws: Conn) => (virtual.add(ws), ws.on("close", () => virtual.delete(ws)), void wss.emit("connection", ws, undefined));
   // A blocked worker_wait ends with a tool error instead of hanging until the CLI is gone.
   const idleCloseMs = opts.idleCloseMs ?? IDLE_CLOSE_MS;
   // ponytail: one scan per minute over all sessions; fine for tens of sessions.
@@ -2653,11 +2654,11 @@ export function createDaemon(opts: {
     accept,
     transcriptCaches: () => [...caches.keys()],
     orchestration,
-    /** SSH Side Daemon (ADR 0007): a turn runs. A turn that waits on a permission prompt or a question is idle (`needs_input`). */
+    /** Attach server (ADR 0009): a turn runs. A turn that waits on a permission prompt or a question is idle (`needs_input`). */
     busy: () => [...sessions.values()].some((s) => s.info().state === "running"),
-    /** SSH Side Daemon: open terminals (an update of the Side Daemon would end them). */
-    terminals: () => terminals.count(),
-    /** SSH Side Daemon at the end of its Grace period: closes every session (the CLI ends, pending requests are abandoned) and terminal. */
+    /** Browser connections: the real WebSocket clients, not the virtual connections of attached Hubs. */
+    browsers: () => connections.size - virtual.size,
+    /** An attach-started Hub at the end of its Grace period: closes every session (the CLI ends, pending requests are abandoned) and terminal. */
     stopAll: async () => {
       await Promise.all([...sessions.values()].map((s) => s.close().catch(() => {})));
       await terminals.closeIn(() => true);

@@ -141,12 +141,13 @@ describe("keep computer awake with a Side (GH-523)", { timeout: 20_000 }, () => 
     const procs: { stdout: PassThrough; exit: EventEmitter }[] = [];
     const held: (EventEmitter & { kill: ReturnType<typeof vi.fn> })[] = [];
     const sides = createSides({
+      reconnectMs: [10],
       targets: [wslSide("Ubuntu")],
       restartMs: [10],
       spawn: async () => {
         const stdout = new PassThrough();
         const exit = new EventEmitter();
-        stdout.write(JSON.stringify({ ready: true }) + "\n");
+        stdout.write(JSON.stringify({ ready: true, schema: [1, 1] }) + "\n");
         procs.push({ stdout, exit });
         return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) } satisfies SideProcess;
       },

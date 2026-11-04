@@ -7,6 +7,7 @@ describe("parseCli", () => {
     expect(parseCli(["side", "--attach"], {}, "/h")).toEqual({ kind: "attach", start: false });
     expect(parseCli(["side", "--attach", "--start"], {}, "/h")).toEqual({ kind: "attach", start: true });
     expect(parseCli(["side"], {}, "/h")).toMatchObject({ kind: "error" });
+    expect(parseCli(["--side"], {}, "/h")).toMatchObject({ kind: "error" });
     expect(isDaemonRun(["side", "--attach"])).toBe(false);
   });
   it("defaults: port 4280, home root, no hostname, bypass off", () => {

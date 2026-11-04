@@ -25,7 +25,7 @@ const wslRoot = dir("wsl-");
 const sideSession = "5d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6";
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 
-/** A side daemon in this process, wired like `wsl.exe ... claude-ui --side`. */
+/** A side daemon in this process, wired like the attach server of a Hub (`claude-ui side --attach`). */
 function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: ReturnType<typeof createDaemon>) => void): SideProcess {
   const side = createDaemon({
     webRoot,
@@ -45,7 +45,7 @@ function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: Ret
   stdin.on("data", (d) => void sideFrames.push(String(d)));
   const stdout = new PassThrough();
   const exit = new EventEmitter();
-  const host = runSide({ input: stdin, output: stdout, accept: side.accept, onEnd: () => exit.emit("exit", 0) });
+  const host = runSide({ ready: { schema: [1, 1], version: "1.0.0", startedBy: "attach" }, input: stdin, output: stdout, accept: side.accept, onEnd: () => exit.emit("exit", 0) });
   sidePush = host.push;
   return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
 }
@@ -121,7 +121,7 @@ describe("sides", () => {
     const script = Buffer.from(/echo (\S+) \|/.exec(args[5]!)![1]!, "base64").toString();
     expect(script).toContain("wslpath -u 'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\claude-code-ui'");
     expect(script).toContain('dir="$root/1.2.3-1700000000000"');
-    expect(script).toContain('exec "${n:-node}" "$cli" --side');
+    expect(script).toContain('exec "${n:-node}" "$cli" side --attach --start');
   });
 
   it("the setup script installs into a temp folder, checks it, and only then moves it over the old install", () => {
@@ -139,7 +139,7 @@ describe("sides", () => {
 
   it("the docker setup script runs in plain sh: the tarball, no wslpath, roots from the working dir", () => {
     const s = setupScript("/tmp/claude-ui-side-0.2.0-1.tgz", "0.2.0-1", "docker");
-    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", 'exec "${n:-node}" "$cli" --side', 'rm -f "$src"']) expect(s).toContain(part);
+    for (const part of ["src='/tmp/claude-ui-side-0.2.0-1.tgz'", 'CLAUDE_UI_ROOTS="$HOME:$PWD"', "say build_tools_missing", 'exec "${n:-node}" "$cli" side --attach --start', 'rm -f "$src"']) expect(s).toContain(part);
     expect(s).not.toContain("not_logged_in");
     for (const part of ["wslpath", "<(", "[[", "--install-links", "-exec"]) expect(s).not.toContain(part);
     expect(dockerExecArgs("dev", s)).toEqual(["exec", "-i", "dev", "sh", "-c", s]);
@@ -816,12 +816,12 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     c.ws.close();
   });
 
-  it("a stopped container puts its side in error", async () => {
+  it("a stopped container: the pipe is gone, the side shows reconnecting", async () => {
     const c = await client(await dport());
     devProc.kill();
     await expect
       .poll(async () => (await c.request({ type: "session.list" })).result.sides.find((s: { id: string }) => s.id === "docker:dev"))
-      .toEqual({ id: "docker:dev", label: "Docker: dev", state: "error", autoStart: true, message: "Docker: dev stopped (exit code 0). Retry to start it again." });
+      .toEqual({ id: "docker:dev", label: "Docker: dev", state: "reconnecting", autoStart: true });
     c.ws.close();
   });
 });
@@ -854,7 +854,7 @@ describe("a side's running frames (GH-523)", () => {
   it("drive anyRunning and onRunning; its exit clears it", async () => {
     const stdout = new PassThrough();
     const exit = new EventEmitter();
-    stdout.write(JSON.stringify({ ready: true }) + "\n");
+    stdout.write(JSON.stringify({ ready: true, schema: [1, 1], version: "1.0.0" }) + "\n");
     const proc: SideProcess = { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => proc });
     const heard = vi.fn();
@@ -871,13 +871,12 @@ describe("a side's running frames (GH-523)", () => {
   });
 });
 
-describe("a ready side that exits (GH-263)", () => {
-  /** A ready side that writes `stderrText` and exits with `code` once `die()` is called. */
+describe("a side that crashes while starting (GH-263; a ready side that drops is reconnecting)", () => {
+  /** A side that writes `stderrText` and exits with `code` once `die()` is called. */
   function dyingSide(stderrText: string | string[], code: number) {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const exit = new EventEmitter();
-    stdout.write(JSON.stringify({ ready: true }) + "\n");
     const proc: SideProcess = { stdin: new PassThrough(), stdout, stderr, kill: () => {}, on: (e, l) => exit.on(e, l) };
     return { proc, die: () => ([stderrText].flat().forEach((c) => stderr.write(c)), setTimeout(() => exit.emit("exit", code), 10)) };
   }
@@ -886,9 +885,9 @@ describe("a ready side that exits (GH-263)", () => {
   async function messageAfter(stderrText: string | string[], code = 1) {
     const side = dyingSide(stderrText, code);
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
-    await s.start("wsl:Ubuntu");
+    const started = s.start("wsl:Ubuntu").catch(() => {});
     side.die();
-    await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
+    await started;
     const message = s.list().find((x) => x.id === "wsl:Ubuntu")?.message;
     s.close();
     return message;
@@ -910,39 +909,39 @@ describe("a ready side that exits (GH-263)", () => {
       "Node.js v22.0.0",
       "",
     ].join("\n");
-    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
+    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu could not start (exit code 1): TypeError: ws.ping is not a function.");
   });
 
   it("a crash line followed by more than 2000 characters of stack frames still names the error", async () => {
     const frames = Array.from({ length: 60 }, (_, i) => `    at frame${i} (file:///home/u/cli.js:${i}:1)`).join("\n");
     expect(frames.length).toBeGreaterThan(2000);
     const stderr = ["claude-ui daemon: uncaughtException: TypeError: ws.ping is not a function", frames, "claude-ui daemon: exit, code 1", "", "Node.js v22.0.0", ""].join("\n");
-    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: ws.ping is not a function. Retry to start it again.");
+    expect(await messageAfter(stderr)).toBe("WSL: Ubuntu could not start (exit code 1): TypeError: ws.ping is not a function.");
   });
 
   it("a crash line split across stderr chunks is found, and the latest one wins", async () => {
     const frames = "    at x (file:///home/u/cli.js:1:1)\n".repeat(80);
     const message = await messageAfter(["claude-ui daemon: unhandledRejection: first\n", "claude-ui daemon: uncaughtExc", "eption: TypeError: split in two\n", frames]);
-    expect(message).toBe("WSL: Ubuntu stopped (exit code 1): TypeError: split in two. Retry to start it again.");
+    expect(message).toBe("WSL: Ubuntu could not start (exit code 1): TypeError: split in two.");
   });
 
   it("without a daemon crash line the last three non-blank lines are named, minus shell noise and the Node trailer", async () => {
     const message = await messageAfter(["bash: cannot set terminal process group (1): x", "no job control in this shell", "a", "b", "", "c", "d", "", "Node.js v22.0.0", ""].join("\n"));
-    expect(message).toBe("WSL: Ubuntu stopped (exit code 1): b c d. Retry to start it again.");
+    expect(message).toBe("WSL: Ubuntu could not start (exit code 1): b c d.");
   });
 
   it("the tail is capped at 300 characters", async () => {
     const message = (await messageAfter("x".repeat(1000)))!;
-    expect(message).toBe(`WSL: Ubuntu stopped (exit code 1): ${"x".repeat(300)}. Retry to start it again.`);
+    expect(message).toBe(`WSL: Ubuntu could not start (exit code 1): ${"x".repeat(300)}.`);
   });
 
   it("a non-zero exit with no stderr keeps the short message", async () => {
     const side = dyingSide("", 1);
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
-    await s.start("wsl:Ubuntu");
+    const started = s.start("wsl:Ubuntu").catch(() => {});
     side.die();
-    await expect.poll(() => s.list().find((x) => x.id === "wsl:Ubuntu")?.state).toBe("error");
-    expect(s.list().find((x) => x.id === "wsl:Ubuntu")?.message).toBe("WSL: Ubuntu stopped (exit code 1). Retry to start it again.");
+    await started;
+    expect(s.list().find((x) => x.id === "wsl:Ubuntu")?.message).toBe("WSL: Ubuntu could not start (exit code 1).");
     s.close();
   });
 });
@@ -962,7 +961,7 @@ function scriptedSide(answer: (m: { type: string }) => unknown): SideProcess {
       if (f.m) stdout.write(JSON.stringify({ c: f.c, m: { type: "reply", reqId: f.m.reqId, result: answer(f.m) } }) + "\n");
     }
   });
-  stdout.write(JSON.stringify({ ready: true }) + "\n");
+  stdout.write(JSON.stringify({ ready: true, schema: [1, 1], version: "1.0.0" }) + "\n");
   return { stdin, stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
 }
 
@@ -1027,7 +1026,7 @@ describe("local cwds on a POSIX hub", () => {
     const s = createSides({ targets: [], localLabel: "Linux", posixLocal: true, discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => {
       // A side that is ready and never answers.
       const stdout = new PassThrough();
-      stdout.write(JSON.stringify({ ready: true }) + "\n");
+      stdout.write(JSON.stringify({ ready: true, schema: [1, 1], version: "1.0.0" }) + "\n");
       return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} } as unknown as SideProcess;
     } });
     await s.refresh();
@@ -1069,7 +1068,7 @@ describe("git frames", () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const exit = new EventEmitter();
-    runSide({ input: stdin, output: stdout, accept: () => {}, ...(git && { git: git as never }) });
+    runSide({ ready: { schema: [1, 1], version: "1.0.0" },  input: stdin, output: stdout, accept: () => {}, ...(git && { git: git as never }) });
     return { proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess, exit };
   };
 
@@ -1121,7 +1120,7 @@ describe("git frames", () => {
     const proc = { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess;
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => proc });
     const started = s.start("wsl:Ubuntu");
-    stdout.write(JSON.stringify({ ready: true }) + "\n");
+    stdout.write(JSON.stringify({ ready: true, schema: [1, 1], version: "1.0.0" }) + "\n");
     await started;
     await expect(s.git("wsl:Ubuntu", { cwd: "/", args: ["fetch"], env: {}, killTree: true })).rejects.toMatchObject({ message: expect.stringMatching(/older version/) });
     s.close();

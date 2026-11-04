@@ -10,7 +10,7 @@ import type { ListResult, SessionListItem } from "@claude-ui/protocol";
 import { parseCli, type Cli } from "../src/cli.ts";
 import { claimDaemonFile, daemonFile, readDaemonFile, removeDaemonFile, writeDaemonFile } from "../src/ctl/daemon-file.ts";
 import { readToken, resolvePort, request } from "../src/ctl/connect.ts";
-import { runClient, runOpener, type ClientIo } from "../src/ctl/commands.ts";
+import { runClient, runOpener, updateLiveHub, type ClientIo } from "../src/ctl/commands.ts";
 import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
@@ -334,5 +334,41 @@ describe("robustness (review)", () => {
     const n = await run(["status"], { env: { PORT: "1" } });
     expect(n.err).not.toContain("claude-ui: claude-ui");
     expect(r.err).not.toContain("claude-ui: claude-ui");
+  });
+});
+
+describe("updateLiveHub", () => {
+  it("asks the live Hub for update.install then update.restart and says so", async () => {
+    const seen: string[] = [];
+    const http = createServer();
+    new WebSocketServer({ server: http }).on("connection", (ws) =>
+      ws.on("message", (d) => {
+        const m = JSON.parse(String(d));
+        seen.push(m.type);
+        ws.send(JSON.stringify({ type: "reply", reqId: m.reqId, result: m.type === "update.install" ? { installed: "9.9.9" } : { waitingFor: 2 } }));
+      }),
+    );
+    const p = await listen(http);
+    const d = tmp("cu-ulh-");
+    writeFileSync(join(d, "token"), token + "\n", { mode: 0o600 });
+    writeDaemonFile(d, { port: p, pid: process.pid, version: "1", startedAt: "a" });
+    const out: string[] = [];
+    const code = await updateLiveHub({ dir: d, env: {}, stdout: (s) => out.push(s), stderr: () => {} });
+    http.close();
+    expect(code).toBe(0);
+    expect(seen).toEqual(["update.install", "update.restart"]);
+    expect(out.join("")).toBe(`Installed 9.9.9; the running Claude UI (pid ${process.pid}) restarts when 2 session(s) are idle.\n`);
+  });
+  it("no live daemon.json: undefined, nothing asked", async () => {
+    expect(await updateLiveHub({ dir: tmp("cu-ulh-"), env: {}, stdout: () => {}, stderr: () => {} })).toBeUndefined();
+  });
+});
+
+describe("daemon.json extra fields", () => {
+  it("attach, schema and startedBy round-trip", () => {
+    const d = tmp("cu-df-");
+    const info = { port: 1, pid: 2, version: "v", startedAt: "a", attach: "/tmp/s.sock", schema: [1, 2] as [number, number], startedBy: "attach" as const };
+    writeDaemonFile(d, info);
+    expect(readDaemonFile(d)).toEqual(info);
   });
 });

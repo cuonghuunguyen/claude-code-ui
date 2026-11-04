@@ -2,7 +2,8 @@
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type DaemonInfo = { port: number; pid: number; version: string; startedAt: string };
+/** `attach`: this Hub's attach socket (POSIX); `schema`: the side frame schema range it speaks; `startedBy: "attach"`: another Hub's attach started it (ADR 0009). */
+export type DaemonInfo = { port: number; pid: number; version: string; startedAt: string; attach?: string; schema?: [number, number]; startedBy?: "attach" };
 
 export const daemonFile = (dir: string) => join(dir, "daemon.json");
 

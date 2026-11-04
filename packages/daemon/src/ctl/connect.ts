@@ -20,7 +20,7 @@ export class CtlError extends Error {
   }
 }
 
-const pidAlive = (pid: number) => {
+export const pidAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
     return true;

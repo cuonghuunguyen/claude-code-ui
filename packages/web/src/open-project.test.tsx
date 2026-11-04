@@ -367,8 +367,8 @@ describe("side chooser", () => {
     expect(document.querySelector('[data-testid="side-notice"]')).toBeNull();
   });
 
-  it("an SSH host whose Side Daemon ended shows the reason in its row, and in the side panel, until the next start", async () => {
-    const why = "The Side Daemon of SSH: box has ended (its Grace period ran out). Open the host again to start a new one.";
+  it("an SSH host whose remote Hub ended shows the reason in its row, and in the side panel, until the next start", async () => {
+    const why = "SSH: box has ended (its Grace period ran out). Open the host again to start it.";
     const { kind, click, containers } = await renderSides([S("local", "Linux"), { ...S("ssh:box", "SSH: box", "off"), message: why } as SideInfo, S("ssh:lab", "SSH: lab", "off")]);
     await click(kind("SSH"));
     expect(containers()).toEqual([`box${why}`, "labNot set up"]);

@@ -11,7 +11,7 @@ function proc(o: { ready?: boolean; code?: number; stderr?: string } = {}): Side
   const stderr = new PassThrough();
   const exit = new EventEmitter();
   setTimeout(() => {
-    if (o.ready !== false) stdout.write('{"ready":true}\n');
+    if (o.ready !== false) stdout.write('{"ready":true,"schema":[1,1],"version":"1.0.0"}\n');
     else (stderr.write(o.stderr ?? ""), setTimeout(() => exit.emit("exit", o.code ?? 255), 5));
   }, 5);
   return { stdin: new PassThrough(), stdout, stderr, kill: () => exit.emit("exit", 0), on: (e, l) => exit.on(e, l) };

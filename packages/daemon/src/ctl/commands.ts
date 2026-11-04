@@ -5,7 +5,7 @@ import { release } from "node:os";
 import { resolve } from "node:path";
 import type { ListResult, SessionListItem } from "@claude-ui/protocol";
 import type { Cli } from "../cli.ts";
-import { CtlError, probe, readToken, request, resolvePort, tokenPath } from "./connect.ts";
+import { CtlError, pidAlive, probe, readToken, request, resolvePort, tokenPath } from "./connect.ts";
 import { readDaemonFile } from "./daemon-file.ts";
 
 export type ClientIo = {
@@ -140,4 +140,28 @@ export function openInBrowser(url: string): Promise<void> {
   const [cmd, args]: [string, string[]] =
     process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : wsl ? ["cmd.exe", ["/c", "start", "", url]] : ["xdg-open", [url]];
   return runOpener(cmd, args);
+}
+
+/** Asks a running Hub to install its update and restart once idle (an attach-started Hub: to retire). The calls behind `claude-ui update` and a user start's retire. */
+export async function askUpdate(port: number, token: string): Promise<{ installed: string; waitingFor: number }> {
+  const { installed } = await request<{ installed: string }>(port, token, { type: "update.install" });
+  const { waitingFor } = await request<{ waitingFor: number }>(port, token, { type: "update.restart" });
+  return { installed, waitingFor };
+}
+
+/** `claude-ui update` with a Hub running here: the Hub installs and restarts itself. Resolves with the exit code; undefined when no Hub answers (then the caller installs). */
+export async function updateLiveHub(io: { dir: string; env: NodeJS.ProcessEnv; stdout: (s: string) => void; stderr: (s: string) => void }): Promise<number | undefined> {
+  const d = readDaemonFile(io.dir);
+  if (!d || !pidAlive(d.pid)) return undefined;
+  try {
+    const tp = tokenPath({ env: io.env, dir: io.dir });
+    const r = await askUpdate(d.port, readToken(tp.file, tp.explicit));
+    io.stdout(`Installed ${r.installed}; the running Claude UI (pid ${d.pid}) ${r.waitingFor ? `restarts when ${r.waitingFor} session(s) are idle` : "restarts now"}.\n`);
+    return 0;
+  } catch (e) {
+    if (!(e instanceof CtlError)) throw e;
+    if (e.exit === 3) return undefined;
+    io.stderr(`claude-ui: ${e.message}\n`);
+    return 1;
+  }
 }

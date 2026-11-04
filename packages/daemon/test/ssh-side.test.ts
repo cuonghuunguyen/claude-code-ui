@@ -9,7 +9,7 @@ import type { Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 import { kindOf, nameOf, sideTarget, startOptIn } from "../src/side-kinds.ts";
 import { addSshHost, checkSshSide, includeFiles, isWindowsHost, listSshHosts, parseSshCommand, parseSshConfig, prepareSshSide, sshArgs, sshConfigPath, sshError } from "../src/ssh-side.ts";
-import { checkScript, setupMessage, setupScript, SWEEP_LINE, sshRunArgs } from "../src/sides.ts";
+import { checkScript, setupMessage, setupScript, SWEEP_LINE, attachArgs } from "../src/sides.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const decode = (remote: string) => Buffer.from(/echo (\S+) \|/.exec(remote)![1]!, "base64").toString();
@@ -437,7 +437,7 @@ describe.skipIf(process.platform === "win32")("remote install root: sweep and ru
   });
   it("a reattach bridges from the build named by .live (a newer Hub, an older Daemon); without .live it says no_daemon at once", () => {
     const home = dir("attach-");
-    const script = setupScript("", "hub-key", "ssh", "never", undefined, sshRunArgs(true));
+    const script = setupScript("", "hub-key", "ssh", "never", undefined, attachArgs(true));
     expect(sh(script, { HOME: home })).toEqual({ out: "CLAUDE_UI_SETUP no_daemon\n", code: 3 });
     const root = join(home, ".local/share/claude-ui/side");
     const live = join(root, "old-key");
@@ -452,7 +452,7 @@ describe.skipIf(process.platform === "win32")("remote install root: sweep and ru
     expect(existsSync(join(root, "hub-key"))).toBe(false); // this Hub's own build folder is not needed
   });
   it("a launch ends in `side --attach --start`, a reattach in `side --attach`", () => {
-    expect(setupScript("", "k", "ssh", "never", undefined, sshRunArgs(false))).toContain('"$cli" side --attach --start');
-    expect(setupScript("", "k", "ssh", "never", undefined, sshRunArgs(true))).toMatch(/"\$cli" side --attach$/);
+    expect(setupScript("", "k", "ssh", "never", undefined, attachArgs(false))).toContain('"$cli" side --attach --start');
+    expect(setupScript("", "k", "ssh", "never", undefined, attachArgs(true))).toMatch(/"\$cli" side --attach$/);
   });
 });

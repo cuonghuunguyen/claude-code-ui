@@ -450,6 +450,6 @@ describe("side.check in the hub", () => {
 function fakeReady(frames: string[] = []): SideProcess {
   const stdout = new PassThrough();
   const side = fakeSide(frames);
-  setTimeout(() => stdout.write('{"ready":true}\n'), 1);
+  setTimeout(() => stdout.write('{"ready":true,"schema":[1,1],"version":"1.0.0"}\n'), 1);
   return { ...side, stdout };
 }
