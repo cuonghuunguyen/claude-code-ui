@@ -104,8 +104,9 @@ const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../
 // An SSH Side Daemon may share its machine with a normal claude-ui Hub: it keeps its own state beside its socket (a dot name, which the install sweep skips)
 // and never reads or writes the Hub's config folder (daemon.json, token, settings, sessions, versions/).
 const sideListen = side ? process.env.CLAUDE_UI_SIDE_LISTEN : undefined;
-const stateDir = sideListen ? join(dirname(sideListen), ".data") : configDir();
-const state = { uploadDir: sideListen ? join(stateDir, "uploads") : defaultUploadsDir(), settingsFile: join(stateDir, "sessions.json"), projects: createProjects({ file: join(stateDir, "projects.json") }), appSettings: createSettings({ file: join(stateDir, "settings.json") }), secrets: createSecrets({ file: join(stateDir, "secrets.json") }) };
+// Every kind of Side (WSL, Docker too: the distro or container may run its own Hub) uses it; WSL/Docker have no socket, so it sits in the install root.
+const stateDir = side ? join(sideListen ? dirname(sideListen) : join(homedir(), ".local", "share", "claude-ui", "side"), ".data") : configDir();
+const state = { uploadDir: side ? join(stateDir, "uploads") : defaultUploadsDir(), settingsFile: join(stateDir, "sessions.json"), projects: createProjects({ file: join(stateDir, "projects.json") }), appSettings: createSettings({ file: join(stateDir, "settings.json") }), secrets: createSecrets({ file: join(stateDir, "secrets.json") }) };
 
 if (side) {
   // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none (an SSH Side Daemon uses its own `stateDir`).
