@@ -37,9 +37,9 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
   const b = use(SideLabel)(cwd);
   if (!b) return null;
   return (
-    <span className="shrink-0 whitespace-nowrap rounded bg-muted px-1.5 py-px font-normal text-muted-foreground text-xs" title={b.label} aria-label={b.label} data-testid="side-badge">
-      {b.icon && <LabelIcon icon={b.icon} className="mr-1 inline-grid size-3 align-middle text-[10px]" />}
-      {short ? b.short : b.label}
+    <span className="inline-flex h-4 max-w-40 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tracking-[0.05px] tabular-nums" title={b.label} aria-label={b.label} data-testid="side-badge">
+      {b.icon && <LabelIcon icon={b.icon} className="inline-grid size-3 shrink-0 text-[10px]" />}
+      <span className="min-w-0 truncate">{short ? b.short : b.label}</span>
     </span>
   );
 }
