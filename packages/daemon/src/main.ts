@@ -13,7 +13,7 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { createSideDaemon } from "./side-daemon.ts";
-import { prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
+import { listenPrivate, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
@@ -60,7 +60,13 @@ if (cli.kind === "attach") {
   // The bridge of an SSH Side (side-attach.ts); `--start` first starts a detached Side Daemon (this same build) when none listens.
   const sock = sideSocketPath(process.env, homedir());
   const start = () => {
-    prepareSockDir(dirname(sock));
+    try {
+      prepareSockDir(dirname(sock));
+    } catch (e) {
+      // The hub reads this as a setup error (a folder of another user), not a crash.
+      process.stdout.write(`CLAUDE_UI_SETUP install_failed ${(e as Error).message}\n`);
+      process.exit(3);
+    }
     const log = openSync(join(dirname(sock), ".side.log"), "a", 0o600);
     spawn(process.execPath, [process.argv[1]!, "--side"], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, CLAUDE_UI_SIDE_LISTEN: sock } }).unref();
   };
@@ -113,9 +119,8 @@ if (side) {
     const sd = createSideDaemon({ accept: daemon.accept, git: runGit, busy: daemon.busy, stopIdle: daemon.stopAll, exit: () => process.exit(0) });
     push = sd.push;
     running = sd.running;
-    process.umask(0o177);
     const server = netServer((c) => sd.attach(c, c));
-    const listenOn = () => server.listen(listen);
+    const listenOn = () => listenPrivate(server, listen);
     server.on("error", (e: NodeJS.ErrnoException) => {
       if (e.code !== "EADDRINUSE") return (console.error(`claude-ui side: ${e.message}`), process.exit(1));
       // A live Daemon owns it (a second start lost the race): leave. A stale socket file of a dead one: remove it and listen.

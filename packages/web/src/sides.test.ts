@@ -73,6 +73,7 @@ describe("sideStatus", () => {
     expect(sideStatus(side({ state: "error", message: "WSL: U stopped (exit code 1). Retry to start it again." }))).toEqual({ text: "WSL: U stopped (exit code 1). Retry to start it again.", action: "retry" });
     expect(sideStatus(side({ state: "off", update: true }))).toEqual({ text: "Needs an update", action: "update" });
     expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });
+    expect(sideStatus(side({ state: "off", message: "The Side Daemon has ended." }))).toEqual({ text: "The Side Daemon has ended.", action: "retry" });
   });
 });
 

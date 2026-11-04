@@ -77,3 +77,14 @@ it("the socket folder is made mode 0700 and a folder of another user is refused"
   expect(statSync(d).mode & 0o777).toBe(0o700);
   expect(() => prepareSockDir(d, process.getuid!() + 1)).toThrow("another user");
 });
+
+it("listenPrivate: the socket is 0600 and the process umask is restored (children must not inherit 0177)", async () => {
+  const before = process.umask();
+  const { listenPrivate } = await import("../src/side-attach.ts");
+  const { statSync } = await import("node:fs");
+  const sock = join(dir, "p.sock");
+  server = createServer();
+  await new Promise<void>((ok) => (listenPrivate(server!, sock), server!.once("listening", ok)));
+  expect(statSync(sock).mode & 0o777).toBe(0o600);
+  expect(process.umask()).toBe(before);
+});

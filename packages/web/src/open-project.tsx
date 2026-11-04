@@ -249,6 +249,8 @@ function SidePicker({
   const members = sides.filter((s) => sideKind(s.id) === kind);
   const stateWord = (s: SideInfo) => {
     const p = panels[s.id];
+    // An SSH Side Daemon that ended: its reason (off with a message) shows until the next start.
+    if (!isReady(s) && !p?.busy && s.state === "off" && s.message) return s.message;
     return isReady(s) ? undefined : p?.busy || s.state === "starting" ? t("sidebar.op.settingUp") : p?.error || s.state === "error" ? t("sidebar.op.error") : t("sidebar.op.notSetUp");
   };
   const names = useLabels().sides;
@@ -269,7 +271,7 @@ function SidePicker({
               {members.map((s) => (
                 <SelectItem key={s.id} value={s.id} className="h-8 max-md:h-11" data-testid="side-target-item">
                   <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">{names[s.id]?.icon && <LabelIcon icon={names[s.id]!.icon!} className="size-4 text-[13px]" />}{sideNameOf(s, names)}</span>
-                  {stateWord(s) && <span className="text-muted-foreground text-xs leading-none">{stateWord(s)}</span>}
+                  {stateWord(s) && <span className="min-w-0 max-w-56 truncate text-muted-foreground text-xs leading-none" title={stateWord(s)}>{stateWord(s)}</span>}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -425,7 +427,7 @@ function ContainerStep({
               {names[c.id]?.icon ? <LabelIcon icon={names[c.id]!.icon!} className="size-4 text-[13px]" /> : <BoxIcon className="size-4 shrink-0 text-faint" aria-hidden />}
               <span className="min-w-0 flex-1 truncate font-medium">{sideNameOf(c, names)}</span>
               {sideNameOf(c, names) !== sideName(c) && <span className="min-w-0 max-w-1/2 shrink truncate text-muted-foreground text-xs" data-testid="container-raw-name">{sideName(c)}</span>}
-              {stateWord(c) && <span className="shrink-0 text-muted-foreground text-xs">{stateWord(c)}</span>}
+              {stateWord(c) && <span className="min-w-0 max-w-56 truncate text-muted-foreground text-xs" title={stateWord(c)}>{stateWord(c)}</span>}
             </li>
           ))}
         </ul>

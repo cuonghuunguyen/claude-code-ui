@@ -1,6 +1,6 @@
 // `claude-ui side --attach` (ADR 0007): a thin bridge between ssh stdio and the Side Daemon's Unix socket. The launching ssh and every
 // later reattach run it; it never speaks the protocol.
-import { connect as netConnect, type Socket } from "node:net";
+import { connect as netConnect, type Server, type Socket } from "node:net";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -14,6 +14,15 @@ export function sideSocketPath(env: NodeJS.ProcessEnv, home: string, uid: number
   if (Buffer.byteLength(long) <= max) return long;
   const run = env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "claude-ui-side.sock") : "";
   return run && Buffer.byteLength(run) <= max ? run : join("/tmp", `claude-ui-${uid}`, "side.sock");
+}
+
+let outer: number | undefined;
+/** Listens on a Unix socket created with mode 0600. The umask is process-wide and children inherit it (the Claude CLI, terminals, git), so it is restored once listening. */
+export function listenPrivate(server: Server, path: string) {
+  const prev = process.umask(0o177);
+  outer ??= prev;
+  server.once("listening", () => (process.umask(outer!), (outer = undefined)));
+  server.listen(path);
 }
 
 /** Makes the socket's folder (mode 0700); a folder another user owns is refused (a shared /tmp). */
