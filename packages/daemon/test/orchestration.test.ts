@@ -1669,6 +1669,38 @@ describe("orchestration", () => {
     expect(bounded.at(-2)).toMatch(/^reply: done: y+/);
   });
 
+  it("a reply longer than 4000 characters names the worker_read call; the pages hold the whole text", async () => {
+    enable();
+    const coord = await coordinator();
+    const prompt = "z".repeat(30_000);
+    const full = `done: ${prompt}`;
+    await call(coord, "worker_start", { name: "r", cwd: dirB, prompt });
+    const result = (await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: 5000 })).events[0].result as string;
+    const m = result.match(/^(.{4000})… \[26006 more characters\] read them: worker_read \{"name":"r","part":"([^"]+)","offset":4000\}$/s);
+    expect(m).toBeTruthy();
+    const part = m![2];
+    expect(m![1]).toBe(full.slice(0, 4000));
+    for (const [start, sizes] of [[0, [16_000, 14_006]], [4000, [16_000, 10_006]]] as const) {
+      let text = start ? m![1] : "";
+      let offset: number | undefined = start;
+      const got: number[] = [];
+      while (offset !== undefined) {
+        const r = await call(coord, "worker_read", { name: "r", part, offset });
+        expect(r).toMatchObject({ part, offset, total: 30_006 });
+        got.push(r.text.length);
+        text += r.text;
+        offset = r.nextOffset;
+      }
+      expect(got).toEqual(sizes);
+      expect(text).toBe(full);
+    }
+    expect((await call(coord, "worker_read", { name: "r", part, offset: 40_000 })).text).toBe("");
+    expect((await call(coord, "worker_read", { name: "r", part: "nope" })).error).toMatch(/no reply part/);
+    const prompts = (await call(coord, "worker_read", { name: "r" })).entries as string[];
+    expect(prompts[0]).toMatch(/^prompt: z{4000}… \[26000 more characters\]$/);
+    expect(prompts[1]).toMatch(/^reply: .*read them: worker_read /s);
+  });
+
   it("a worker linked to another port but loaded here is driven here, and its link takes this port", async () => {
     enable();
     const coord = await coordinator();
