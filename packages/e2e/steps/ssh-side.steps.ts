@@ -42,7 +42,10 @@ Then("the phases include packing, copying into the host and starting", async ({ 
 });
 
 When("I open the remote project folder", async ({ page }) => {
-  // An installed Side starts by itself once chosen; the first scenario installed it.
+  // An installed Side starts by itself once chosen; a fresh container (a new worker) shows Install first.
+  const install = page.getByTestId("side-install");
+  await expect(install.or(page.getByTestId("folder-input"))).toBeVisible({ timeout: 120_000 });
+  if (await install.isVisible()) await install.click();
   await expect(page.getByTestId("folder-input")).toBeVisible({ timeout: 240_000 });
   await openProject(page, REMOTE_PROJECT);
 });

@@ -164,3 +164,22 @@ describe("checkSshSide", () => {
     expect(await check({ code: 0, stdout: "hello" })).toMatchObject({ verdict: "blocked", reason: "check_failed" });
   });
 });
+
+describe("prepareSshSide: ssh failing during the copy", () => {
+  it("is reported as the ssh message, not retried as no writable path", async () => {
+    const d = dir("pkg-");
+    mkdirSync(join(d, "dist", "side"), { recursive: true });
+    mkdirSync(join(d, "dist", "web"));
+    for (const [f, c] of [["cli.js", ""], ["web/index.html", ""], ["side/cli.js", "side"], ["side/side.json", '{"sdk":"0.3.1"}']] as const) writeFileSync(join(d, "dist", f), c);
+    let copies = 0;
+    const exec: Exec = async (_c, args) => {
+      const script = decode(args.at(-1)!);
+      if (script.includes("uname -m")) return { code: 0, stdout: ["arch=x86_64", "libc=glibc", "glibc=2.36", "cxxrt=1"].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n"), stderr: "" };
+      copies++;
+      return { code: 255, stdout: "", stderr: "Connection reset by peer" };
+    };
+    const sha = createHash("sha256").update("node").digest("hex");
+    await expect(prepareSshSide({ alias: "box", pkgDir: d, key: "k", exec, bundle: { cacheRoot: join(dir("h-"), "claude-ui", "side"), version: "1.0.0", fetch: (async () => new Response("node")) as unknown as typeof fetch, parts: () => [{ file: "node.tar.gz", label: "Node.js", url: "https://n/node", sha256: sha }] } })).rejects.toThrow("is not reachable: Connection reset by peer");
+    expect(copies).toBe(1);
+  });
+});

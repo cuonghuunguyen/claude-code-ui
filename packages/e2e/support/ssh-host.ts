@@ -2,7 +2,7 @@
 // no Claude login. Everything ssh reads lives under <run>/ssh (the config the daemon gets as CLAUDE_UI_SSH_CONFIG, the keys, known_hosts): the owner's ~/.ssh is never touched.
 // Pure Node (no Playwright import). Needs `docker`, `ssh`, `ssh-keygen`, `ssh-keyscan` on PATH and network for the image and apt.
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sshDir } from "./paths.ts";
 
@@ -43,6 +43,8 @@ export type SshHost = { name: string; port: number; config: string; stop(): void
 export async function startSshHost(run: string): Promise<SshHost> {
   const dir = sshDir(run);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // A worker that restarts (a retry) finds the keys of the first one: ssh-keygen would ask to overwrite.
+  for (const k of ["id_ok", "id_ok.pub", "id_bad", "id_bad.pub"]) rmSync(join(dir, k), { force: true });
   for (const k of ["id_ok", "id_bad"]) sh("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", join(dir, k)]);
   const name = `claude-ui-e2e-sshd-${process.pid}`;
   sh("docker", ["run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::22", "-e", `PUBKEY=${readFileSync(join(dir, "id_ok.pub"), "utf8").trim()}`, "debian:bookworm-slim", "sh", "-c", BOOT], 120_000);
