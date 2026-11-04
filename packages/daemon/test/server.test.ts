@@ -4656,11 +4656,12 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
   async function setup(allowBypass = false) {
     const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
     const project = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
-    const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, history: { listSessions: (async () => []) as never } as never });
+    const appSettings = createSettings();
+    const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, appSettings, history: { listSessions: (async () => []) as never } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);
     const mode = async (cwd = project) => ((await c.request({ type: "session.defaultMode", cwd })) as { result: { mode: string } }).result.mode;
-    return { claudeDir, project, d, c, mode, user: join(claudeDir, "settings.json"), shared: join(project, ".claude", "settings.json"), local: join(project, ".claude", "settings.local.json") };
+    return { claudeDir, project, d, c, mode, appSettings, user: join(claudeDir, "settings.json"), shared: join(project, ".claude", "settings.json"), local: join(project, ".claude", "settings.local.json") };
   }
 
   it("user settings give the mode; unset, invalid or unreadable settings give default", async () => {
@@ -4766,6 +4767,19 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     expect((await create("haiku")).permissionMode).toBe("default");
     write(t.shared, "plan");
     expect((await create("sonnet")).permissionMode).toBe("plan");
+    t.d.close();
+  });
+
+  it("without Claude settings, Settings sessions.defaultMode decides (default auto); Claude settings win", async () => {
+    const t = await setup();
+    const create = async () => ((await t.c.request({ type: "session.create", cwd: t.project, model: "sonnet" })) as { result: { session: { permissionMode: string } } }).result.session.permissionMode;
+    expect(await create()).toBe("auto");
+    t.appSettings.set({ sessions: { defaultMode: "plan" } });
+    expect(await create()).toBe("plan");
+    expect(await t.mode()).toBe("plan");
+    write(t.user, "acceptEdits");
+    expect(await create()).toBe("acceptEdits");
+    expect(() => t.appSettings.set({ sessions: { defaultMode: "bypassPermissions" as never } })).toThrow(/Default permission mode/);
     t.d.close();
   });
 });

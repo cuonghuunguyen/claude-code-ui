@@ -783,6 +783,21 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "sessions",
+    rows: [
+      {
+        key: "defaultMode",
+        kind: "select",
+        options: [
+          { value: "default", label: "settings.workerMode.default" },
+          { value: "acceptEdits", label: "settings.workerMode.acceptEdits" },
+          { value: "plan", label: "settings.workerMode.plan" },
+          { value: "auto", label: "settings.workerMode.auto" },
+        ],
+      },
+    ],
+  },
+  {
     id: "focus",
     rows: [
       { key: "nextForYou", kind: "switch" },
@@ -986,6 +1001,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const performance = daemonGroup("performance");
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
+  const sessions = daemonGroup("sessions");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
   const localHistory = daemonGroup("history");
@@ -1022,6 +1038,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(onShortcuts ? [{ id: "keyboard", title: t("settings.group.keyboard"), category: "App" as const, body: <KeyboardSection onShortcuts={onShortcuts} /> }] : []),
     ...(onAddons ? [{ id: "addons", title: t("settings.group.addons"), category: "App" as const, body: <AddonsSection onAddons={onAddons} /> }] : []),
     ...(orchestration ? [{ id: "orchestration", title: sectionTitle(orchestration.id), category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
+    ...(sessions ? [{ id: "sessions", title: sectionTitle(sessions.id), category: "Sessions" as const, body: daemonSection(sessions) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(usageLimit
       ? [

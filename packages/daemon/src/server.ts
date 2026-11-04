@@ -1123,9 +1123,9 @@ export function createDaemon(opts: {
     };
   }
 
-  /** `permissions.defaultMode` of the Claude settings for `cwd`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
+  /** `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
   const defaultModeFor = (cwd: string, model = "default") => {
-    const mode = readDefaultMode(claudeDir, cwd);
+    const mode = readDefaultMode(claudeDir, cwd) ?? appSettings.get().sessions.defaultMode;
     return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
   };
 
