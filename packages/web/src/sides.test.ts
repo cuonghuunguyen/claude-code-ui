@@ -69,6 +69,7 @@ describe("sideStatus", () => {
     expect(sideStatus(side({ state: "ready" }))).toBeUndefined();
     expect(sideStatus({ id: "local", label: "Windows", state: "ready" })).toBeUndefined();
     expect(sideStatus(side({ state: "starting" }))).toEqual({ text: "Starting…" });
+    expect(sideStatus(side({ state: "reconnecting" }))).toEqual({ text: "Reconnecting…" });
     expect(sideStatus(side({ state: "error", message: "WSL: U stopped (exit code 1). Retry to start it again." }))).toEqual({ text: "WSL: U stopped (exit code 1). Retry to start it again.", action: "retry" });
     expect(sideStatus(side({ state: "off", update: true }))).toEqual({ text: "Needs an update", action: "update" });
     expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });

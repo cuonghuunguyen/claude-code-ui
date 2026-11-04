@@ -48,6 +48,9 @@ export default {
   "settings.sides.update": "Tự động cập nhật",
   "settings.sides.updateLabel": "Tự động cập nhật {name}",
   "settings.sides.needsStart": "Cần bật Tự khởi động",
+  "settings.sides.grace": "Giữ chạy khi không có Claude UI (phút)",
+  "settings.sides.graceLabel": "Số phút {name} giữ chạy khi không có Claude UI",
+  "settings.sides.graceHint": "Máy chủ giữ phiên và terminal khi Claude UI vắng mặt. Thời gian chỉ tính khi không có lượt nào đang chạy.",
   "settings.sides.hint": "Tự khởi động (khởi động cùng Claude UI) có hiệu lực ở lần khởi động Claude UI tiếp theo. Tắt cũng gỡ các dự án của môi trường khỏi thanh bên. Tự cập nhật chỉ cài bản Claude UI mới từ gói; npm không bao giờ chạy trong side.",
   "settings.screen.title": "Màn hình",
   "settings.screen.awake": "Giữ màn hình sáng",
@@ -281,6 +284,7 @@ export default {
 
   // sides.tsx
   "side.starting": "Đang khởi động…",
+  "side.reconnecting": "Đang kết nối lại…",
   "side.couldNotStart": "Không khởi động được",
   "side.needsUpdate": "Cần cập nhật",
   "side.notRunning": "Không chạy",

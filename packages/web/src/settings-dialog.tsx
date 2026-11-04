@@ -249,7 +249,7 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
   const names = useLabels().sides;
   const [editing, setEditing] = useState<SideInfo>();
   const rows = sides.filter((x) => x.id !== LOCAL_SIDE);
-  const set = (side: string, patch: { start?: boolean; update?: boolean }) => void request({ type: "side.prefs", side, ...patch }).catch((e: Error) => onError(e.message));
+  const set = (side: string, patch: { start?: boolean; update?: boolean; graceMinutes?: number }) => void request({ type: "side.prefs", side, ...patch }).catch((e: Error) => onError(e.message));
   return (
     <section aria-labelledby="settings-sides" className="flex flex-col" data-testid="settings-sides">
       <h3 id="settings-sides" className="pb-1 font-medium text-[13px] text-muted-foreground">
@@ -266,7 +266,7 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
         const local = r.id === LOCAL_SIDE;
         const title = sideTitle(r, names);
         const status = local ? "" : r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
-        const dot = r.state === "ready" ? "bg-success" : r.state === "starting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
+        const dot = r.state === "ready" ? "bg-success" : r.state === "starting" || r.state === "reconnecting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
         const sub = title !== r.label ? [r.label, status].filter(Boolean).join(" · ") : status;
         return (
           <div key={r.id} className={cn("grid items-center gap-3 border-t py-2 max-md:min-h-11", local && !rows.length ? "grid-cols-1" : "grid-cols-[1fr_5.5rem_5.5rem]")} data-testid={`settings-side-${r.id}`}>
@@ -276,6 +276,30 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
               <div className="min-w-0 flex-1">
                 <span className="block truncate text-sm" title={title} data-testid="settings-side-name">{title}</span>
                 {sub && <span className={cn("block break-words text-xs", r.state === "error" ? "text-destructive" : "text-muted-foreground")}>{sub}</span>}
+                {r.id.startsWith("ssh:") && (
+                  <label className="mt-1 flex items-center gap-2 text-muted-foreground text-xs" title={t("settings.sides.graceHint")}>
+                    <span>{t("settings.sides.grace")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      step={1}
+                      inputMode="numeric"
+                      key={r.graceMinutes ?? 30}
+                      defaultValue={r.graceMinutes ?? 30}
+                      aria-label={t("settings.sides.graceLabel", { name: title })}
+                      onBlur={(e) => {
+                        const n = Number(e.currentTarget.value);
+                        if (Number.isInteger(n) && n >= 1 && n <= 10080) {
+                          if (n !== (r.graceMinutes ?? 30)) set(r.id, { graceMinutes: n });
+                        } else e.currentTarget.value = String(r.graceMinutes ?? 30);
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                      className="h-7 w-20 rounded-md border bg-background px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
+                      data-testid={`settings-side-grace-${r.id}`}
+                    />
+                  </label>
+                )}
               </div>
               <button type="button" aria-label={t("settings.sides.edit", { name: title })} title={t("sidebar.menu.rename")} onClick={() => setEditing(r)} className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:size-11" data-testid={`settings-side-edit-${r.id}`}>
                 <PencilIcon className="size-3.5" />

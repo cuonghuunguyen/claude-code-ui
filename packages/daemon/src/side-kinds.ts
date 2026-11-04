@@ -14,9 +14,11 @@ export const kindOf = (id: string): SideKindName | undefined => {
 export const nameOf = (id: string) => id.slice(id.indexOf(":") + 1);
 export const sideTarget = (kind: SideKindName, name: string): SideTarget => ({ id: `${kind}:${name}`, label: `${LABEL[kind]}: ${name}` });
 /** A Side of this kind that reaches `ready` is not started with the Hub until the owner turns "Start with Claude UI" on. */
+/** An SSH Side Daemon outlives the pipe (ADR 0007); the other kinds die with it and restart. */
+export const survivesPipe = (id: string) => kindOf(id) === "ssh";
 export const startOptIn = (id: string) => kindOf(id) === "ssh";
 
-export type SpawnArgs = { setup: SideSetup; phase: (p: SidePhase) => void; install?: (i: { bundle: true } | { fallback: string }) => void; pinned?: boolean; bundleOnly?: boolean };
+export type SpawnArgs = { setup: SideSetup; phase: (p: SidePhase) => void; install?: (i: { bundle: true } | { fallback: string }) => void; pinned?: boolean; bundleOnly?: boolean; /** SSH: attach to the running Side Daemon only; never install or start one. */ attach?: boolean };
 /** What the Hub needs of a kind: start one Side (probe, install, launch) and check it read-only. */
 export type SideKindImpl = {
   spawn(name: string, o: SpawnArgs): Promise<SideProcess>;

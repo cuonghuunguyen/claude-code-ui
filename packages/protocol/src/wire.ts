@@ -161,7 +161,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Read-only look at a side (nothing is installed or started; the hub answers it, a side never sees it): reply `SideCheck`, error `unknown_side`. */
   | { type: "side.check"; side: string }
   /** "Start with Claude UI" (`start`: the hub starts the side with itself) and "Update automatically" (`update`) of a side; reply `{}`; error `unknown_side`, `bad_request`. */
-  | { type: "side.prefs"; side: string; start?: boolean; update?: boolean }
+  | { type: "side.prefs"; side: string; start?: boolean; update?: boolean; /** SSH Side: the Grace period in minutes. */ graceMinutes?: number }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
@@ -521,7 +521,8 @@ export function worktreeNameError(name: string): string | undefined {
 export type SideInfo = {
   id: string;
   label: string;
-  state: "off" | "starting" | "ready" | "error";
+  /** `reconnecting`: an SSH Side whose pipe dropped; its Side Daemon keeps running and the hub attaches again. */
+  state: "off" | "starting" | "ready" | "reconnecting" | "error";
   message?: string;
   phase?: SidePhase;
   /** Docker, while starting: the install uses the host-assembled bundle (no npm in the container). */
@@ -534,6 +535,8 @@ export type SideInfo = {
   autoStart?: true;
   /** Only `false`: the hub does not update this side's claude-ui by itself. */
   autoUpdate?: false;
+  /** SSH Side: minutes the remote Side Daemon keeps running with no hub attached (Grace period; default 30). */
+  graceMinutes?: number;
   /** `off` and the installed claude-ui is not this build: an update is needed (Update). */
   update?: true;
   /** A saved side the hub does not list now (a Docker container that is not running); named for Settings and the sidebar. */

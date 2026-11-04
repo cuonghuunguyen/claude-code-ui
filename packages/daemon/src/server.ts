@@ -2647,7 +2647,18 @@ export function createDaemon(opts: {
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
   http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
-  return Object.assign(http, { accept, transcriptCaches: () => [...caches.keys()], orchestration });
+  return Object.assign(http, {
+    accept,
+    transcriptCaches: () => [...caches.keys()],
+    orchestration,
+    /** SSH Side Daemon (ADR 0007): a turn runs. A turn that waits on a permission prompt or a question is idle (`needs_input`). */
+    busy: () => [...sessions.values()].some((s) => s.info().state === "running"),
+    /** SSH Side Daemon at the end of its Grace period: closes every session (the CLI ends, pending requests are abandoned) and terminal. */
+    stopAll: async () => {
+      await Promise.all([...sessions.values()].map((s) => s.close().catch(() => {})));
+      await terminals.closeIn(() => true);
+    },
+  });
 }
 
 
