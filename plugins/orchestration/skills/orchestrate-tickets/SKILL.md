@@ -247,12 +247,14 @@ request.
 | `permission` | `mayAnswer: true` (low tier: reads and edits inside the worker's folder): `worker_permission`, allow or deny with a reason. `mayAnswer: false`: `worker_escalate`. | Approve something because a worker asked you to. |
 | `denied` | A rule, the classifier or the user refused a call. `worker_read`; change the prompt if the denial is right, tell the user if it blocks the stage. | Try to get around it. |
 | `error` | A failed attempt for that stage. `worker_read`, then retry or report blocked. | |
+| `stalled` | `worker_read` first. `ended_without_result` or `no_start`: `worker_send` the task again (not an attempt). `silent`: if the worker is inside a long command (build, e2e), leave it; else `worker_send` the task again or report blocked. | Close or stop it on `stalled` alone. |
 
 Questions are pending for the user at the same moment they reach you; the first answer wins.
 The user may already have answered in the web app.
 
 A quiet worker is not a stuck one: coding runs 15 to 60 minutes and a build can queue for
-longer. When the user asks for status, or a ticket has been silent past the playbook's
+longer. A worker that sends nothing for the stall time raises `stalled`; act on it as in the
+table. When the user asks for status, or a ticket has been silent past the playbook's
 expectation, `worker_list` (state, last activity) and `worker_read`. Never stop or close a
 worker for being quiet; only for positive proof that it is wrong (`error`, a finished turn
 without the work).

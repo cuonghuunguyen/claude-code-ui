@@ -71,6 +71,7 @@ already sent a notice, the events are there: call it with no `timeoutMs` and do 
 | `permission` | `requestId`, `tool`, `input`, `tier`, `mayAnswer` | Low tier = reads and edits inside the worker folder. Every command is high. `mayAnswer` is false for high, and for everything while the user's "coordinator permissions" setting is off (its default). |
 | `denied` | `tool`, `toolUseId`, `input` | The auto-mode classifier, a rule or the user refused a call. Cannot be undone. |
 | `error` | | The session hit an error state. |
+| `stalled` | `reason` (`ended_without_result`, `no_start`, `silent`), `lastActivity` | Report only: the worker is not stopped. One event per stall; its next message ends it. |
 
 Escalated requests never come back as events.
 

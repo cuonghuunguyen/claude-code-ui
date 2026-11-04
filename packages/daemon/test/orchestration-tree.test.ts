@@ -10,6 +10,7 @@ function fakeSession(id: string, live = true): any {
     cwd: "/tmp",
     isLive: () => true,
     liveQuery: () => (f.live ? {} : undefined),
+    activity: () => ({ received: 0, at: 0 }),
     info: () => ({ state: f.state, permissionMode: f.mode }),
     working: () => f.works,
     permissionTier: async () => "low",

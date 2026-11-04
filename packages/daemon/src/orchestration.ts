@@ -41,7 +41,10 @@ export function workerMode(coordinator: PermissionMode, requested: PermissionMod
   if (!listLoaded) return { mode: "default", wanted, note: "the model list is not loaded yet, so auto is not available: the worker runs in default" };
   return { mode: "default", wanted, note: fromSetting ? "Settings > Orchestration > Worker mode is auto, but auto is not available for this model: the worker runs in default" : "auto is not available for this model: the worker runs in default" };
 }
-const EVENT_TYPES = ["question", "permission", "denied", "turn_end", "error"] as const;
+const EVENT_TYPES = ["question", "permission", "denied", "turn_end", "error", "stalled"] as const;
+/** A new turn whose CLI sent no message at all after this long: the prompt was lost. */
+const NO_START_MS = 120_000;
+const SWEEP_MS = 15_000;
 type EventType = (typeof EVENT_TYPES)[number];
 
 /** The coordinator's tools that run without a permission request; worker_start asks the user like any tool. worker_permission settles `low` requests only. */
@@ -76,6 +79,10 @@ export type WorkerEvent = {
   result?: string;
   isError?: boolean;
   interrupted?: boolean;
+  /** stalled: ended_without_result (the CLI ended in the middle of a turn), no_start (a new turn got no CLI message), silent (running, no CLI message for the stall time). Report only: the worker is not stopped. */
+  reason?: "ended_without_result" | "no_start" | "silent";
+  /** stalled: ISO time of the last CLI message. */
+  lastActivity?: string;
 };
 
 type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -189,6 +196,17 @@ export function createOrchestration(deps: OrchestrationDeps) {
   /** Last main-thread reply text per session, for the turn_end result. */
   const lastText = new Map<string, string>();
   const lastActivity = new Map<string, number>();
+  /** Workers with a turn open (running, or waiting for input): since when. */
+  const open = new Map<string, number>();
+  /** Workers whose new turn has had no CLI message yet: when it was sent and the message count then. */
+  const noStart = new Map<string, { at: number; received: number }>();
+  /** Workers reported as stalled, with the CLI message count then: the next CLI message ends the stall and re-arms the watchdog. */
+  const stalled = new Map<string, { reason: NonNullable<WorkerEvent["reason"]>; received: number }>();
+  const stallOf = (id: string) => {
+    const st = stalled.get(id);
+    if (st && deps.sessions.get(id)?.activity().received !== st.received) stalled.delete(id);
+    return stalled.get(id)?.reason;
+  };
   /** Workers between a cap check and their first prompt (worker_start, worker_send of a closed worker): they count toward the cap. */
   const starting = new Set<string>();
   /** worker_start calls between their checks and their link (a worktree is being created): they count toward the cap and hold the name. */
@@ -403,6 +421,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "user_text" && !p.parentId) return void lastText.delete(s.id);
     // The CLI ended by itself (closed) or failed: the tree's running count dropped.
     if (p.type === "session_state" && (p.state === "closed" || p.state === "error")) wake(s.id);
+    if (p.type === "session_state" && p.state === "running" && !open.has(s.id)) open.set(s.id, Date.now());
+    if (p.type === "turn_result" || p.type === "turn_interrupted" || (p.type === "session_state" && p.state !== "running" && p.state !== "needs_input")) {
+      // A CLI that ended in the middle of a turn: no result will come.
+      if (p.type === "session_state" && p.state === "closed" && open.has(s.id) && !quiet.has(s.id) && !stallOf(s.id)) stall(s, "ended_without_result");
+      open.delete(s.id);
+      noStart.delete(s.id);
+    }
     const type: EventType | undefined =
       p.type === "turn_result" || p.type === "turn_interrupted"
         ? "turn_end"
@@ -458,10 +483,42 @@ export function createOrchestration(deps: OrchestrationDeps) {
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
     }
-    const captured = l.coordinatorId;
-    if (ordered.has(s.id)) inOrder(s.id, async () => deliver(resolve(linkOf(s.id)?.coordinatorId ?? captured), e));
-    else deliver(captured, e);
+    route(s.id, l.coordinatorId, e);
   }
+
+  function route(id: string, coordinator: string, e: WorkerEvent) {
+    if (ordered.has(id)) inOrder(id, async () => deliver(resolve(linkOf(id)?.coordinatorId ?? coordinator), e));
+    else deliver(coordinator, e);
+  }
+
+  /** One stalled event per stall; the worker is not touched. */
+  function stall(s: Session, reason: NonNullable<WorkerEvent["reason"]>) {
+    const l = linkOf(s.id);
+    if (!l?.coordinatorId || !l.name) return;
+    const { received, at } = s.activity();
+    stalled.set(s.id, { reason, received });
+    route(s.id, l.coordinatorId, { name: l.name, sessionId: s.id, type: "stalled", at: Date.now(), reason, lastActivity: new Date(at).toISOString() });
+  }
+
+  /** Arms no_start for a new turn sent to `s` (`received` taken before the prompt). */
+  const armNoStart = (s: Session, received: number) => noStart.set(s.id, { at: Date.now(), received });
+
+  /** Looks for stalls: a new turn the CLI never started, a running worker that sends nothing for `stallMinutes`. */
+  function sweep(now = Date.now()) {
+    const minutes = deps.settings().stallMinutes;
+    for (const [id, since] of open) {
+      const s = deps.sessions.get(id);
+      if (!s || stallOf(id)) continue;
+      const { received, at } = s.activity();
+      let n = noStart.get(id);
+      if (n && n.received !== received) (noStart.delete(id), (n = undefined));
+      if (n) {
+        if (now - n.at >= NO_START_MS) stall(s, "no_start");
+      } else if (minutes > 0 && s.info().state === "running" && now - Math.max(at, since) >= minutes * 60_000) stall(s, "silent");
+    }
+  }
+  const timer = setInterval(() => sweep(), SWEEP_MS);
+  timer.unref();
 
   /** Request IDs already turned into an event; false for one seen before. Bounded: the oldest are forgotten. */
   const delivered = new Set<string>();
@@ -620,8 +677,10 @@ export function createOrchestration(deps: OrchestrationDeps) {
             reserved.delete(`${cur()}\0${a.name}`);
           }
           try {
+            const before = s!.activity().received;
             const err = await deps.prompt(s!, a.prompt);
             if (err) throw new ToolError(`Worker ${a.name} was created but its first prompt failed: ${err}`);
+            armNoStart(s!, before);
           } finally {
             starting.delete(s!.id);
           }
@@ -647,12 +706,14 @@ export function createOrchestration(deps: OrchestrationDeps) {
           }
           const steering = ["running", "needs_input"].includes(s.info().state);
           let err: string | undefined;
+          const before = s.activity().received;
           try {
             err = await deps.prompt(s, a.text);
           } finally {
             if (start) starting.delete(s.id);
           }
           if (err) throw new ToolError(`Not sent to ${a.name}: ${err}`);
+          if (!steering) armNoStart(s, before);
           return { name: a.name, delivered: steering ? "steering" : "new turn" };
         },
       ),
@@ -721,7 +782,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_wait",
-        `Wait for worker events: question, permission (with \`tier\` and \`mayAnswer\`: true = you may answer it with worker_permission, false = only the user), denied (a worker tool call denied by the auto-mode classifier, a rule or the user; you cannot undo it), turn_end (with the turn's result text), error. Requests you escalated are not returned. Returns the events not read yet at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, at most ${MAX_WAIT_MS}); none by then gives an empty list.`,
+        `Wait for worker events: question, permission (with \`tier\` and \`mayAnswer\`: true = you may answer it with worker_permission, false = only the user), denied (a worker tool call denied by the auto-mode classifier, a rule or the user; you cannot undo it), turn_end (with the turn's result text), error, stalled (with \`reason\` and \`lastActivity\`: ended_without_result = the CLI ended in the middle of a turn; no_start = a new turn got no CLI message; silent = running with no CLI message for the stall time; a report only, the worker is not stopped; once per stall). Requests you escalated are not returned. Returns the events not read yet at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, at most ${MAX_WAIT_MS}); none by then gives an empty list.`,
         {
           names: z.array(name).max(50).optional(),
           types: z.array(z.enum(EVENT_TYPES)).max(EVENT_TYPES.length).optional(),
@@ -785,7 +846,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_list",
-        "List your workers: name, session ID, agent type, cwd, state (running, idle, needs_input, error, closed, not_loaded), whether its CLI process runs, last activity. With `tree: true` every worker below you at any depth: also `path` (the name chain a/b that worker_read takes), `coordinator` (the name of the worker that started it; absent for your own) and `depth`. daemonNote: the daemon runs older code than is installed; tell the user.",
+        "List your workers: name, session ID, agent type, cwd, state (running, idle, needs_input, error, closed, not_loaded), whether its CLI process runs, last activity, `stalled` (the reason, while a stalled event is not cleared by the worker's next message). With `tree: true` every worker below you at any depth: also `path` (the name chain a/b that worker_read takes), `coordinator` (the name of the worker that started it; absent for your own) and `depth`. daemonNote: the daemon runs older code than is installed; tell the user.",
         { tree: z.boolean().optional() },
         async (a) => {
           const coordinator = cur();
@@ -794,7 +855,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
             const s = deps.sessions.get(w.id);
             const at = lastActivity.get(w.id);
             const agent = linkOf(w.id)?.agent;
-            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}) };
+            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}), ...(stallOf(w.id) && { stalled: stallOf(w.id) }) };
           };
           return {
             workers: a.tree ? descendants(coordinator).map((d) => ({ ...row({ ...d, cwd: linkOf(d.id)?.cwd }), path: d.path, ...(d.coordinator && { coordinator: d.coordinator }), depth: d.depth })) : workers(coordinator).map(row),
@@ -943,6 +1004,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         for (const m of [lastText, lastActivity] as Map<string, unknown>[]) {
           if (m.has(from)) m.set(to, m.get(from));
         }
+        for (const m of [open, noStart, stalled] as Map<string, unknown>[]) m.delete(from);
       }
     },
     /**
@@ -1002,11 +1064,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
     },
     /** A deleted session leaves no state behind. */
     forget(id: string) {
-      for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity] as Map<string, unknown>[]) m.delete(id);
+      for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity, open, noStart, stalled] as Map<string, unknown>[]) m.delete(id);
       for (const set of [served, notified, renoticed]) set.delete(id);
     },
     /** Daemon stop: every blocked worker_wait ends with a tool error. */
+    sweep,
     shutdown() {
+      clearInterval(timer);
       for (const w of [...waiters]) w.done(new ToolError("The claude-ui daemon stopped while waiting. After it is back, call worker_list, then worker_send to resume workers."));
     },
   };

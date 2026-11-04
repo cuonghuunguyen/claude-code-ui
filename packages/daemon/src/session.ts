@@ -223,6 +223,8 @@ export class Session {
   private staleTimer?: NodeJS.Timeout;
   /** Stream messages received so far: a stale check that sees a newer one keeps the turn. */
   private received = 0;
+  /** Date.now() of the last stream message (or of this object): the stall watchdog reads it with `received` (activity()). */
+  private receivedAt = Date.now();
   /** The first stale check that found the turn ended: the transcript size and message count it saw; a second one must see the same. */
   private staleSeen?: { size: number; received: number };
   /** The CLI compacts the conversation (status compacting until compact_boundary or another status): a silent turn. */
@@ -449,6 +451,11 @@ export class Session {
   }
 
   /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
+  /** How many messages the CLI sent and when the last came: a tool call that runs long still sends a heartbeat every 30 s. */
+  activity() {
+    return { received: this.received, at: this.receivedAt };
+  }
+
   liveQuery(): Query | undefined {
     return this.isLive() ? this.query : undefined;
   }
@@ -1207,6 +1214,7 @@ export class Session {
   /** One SDK message of this session's live query. */
   private receive(m: SDKMessage, q: Query) {
     this.received++;
+    this.receivedAt = Date.now();
     this.armStale();
     if ((m.type === "user" || m.type === "assistant") && m.uuid) {
       this.known.add(m.uuid);

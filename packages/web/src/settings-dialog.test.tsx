@@ -30,7 +30,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
   if (legacy) delete (settings as Partial<Settings>).power;
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -151,6 +151,20 @@ it("Orchestration shows Maximum tree depth and Maximum workers per coordinator a
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { maxDepth: 3 } } });
+});
+
+it("Orchestration shows Stall alert after (minutes) and saves it", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  expect((q("settings-orchestration-stallMinutes") as HTMLInputElement).value).toBe("20");
+  expect(document.querySelector('label[for="settings-orchestration-stallMinutes"]')?.textContent).toBe("Stall alert after (minutes)");
+  const input = q("settings-orchestration-stallMinutes") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "0");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { stallMinutes: 0 } } });
 });
 
 it("two number fields edited before the refetch of the first save both keep their edit (GH-498)", async () => {

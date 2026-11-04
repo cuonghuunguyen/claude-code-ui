@@ -54,6 +54,9 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
       // A turn an interrupt does not end (a CLI that ignores it).
       reply("stuck");
       await new Promise(() => {});
+    } else if (text === "mute") {
+      // A turn the CLI never starts: no message at all until the next prompt (or an interrupt) arrives.
+      await new Promise<string>((r) => (held = r));
     } else if (text === "hold") {
       reply("holding");
       reply(`released by ${await new Promise<string>((r) => (held = r))}`);
@@ -101,7 +104,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
         emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sid, is_error: false, duration_ms: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [], result: "" });
         continue;
       }
-      emit({ ...m, session_id: sid, isReplay: true });
+      if (text !== "mute") emit({ ...m, session_id: sid, isReplay: true });
       if (held) {
         const h = held;
         held = undefined;
@@ -2137,5 +2140,121 @@ describe("orchestration /clear (GH-334)", () => {
     await settle(coord);
     const heir = await clear(coord);
     expect((await call(heir, "worker_start", input)).mode).toBe("acceptEdits");
+  });
+});
+
+describe("stall watchdog", () => {
+  const SILENT = 21 * 60_000;
+  const settle = async (id: string) => {
+    for (let i = 0; i < 400 && (await state(id)) !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(await state(id)).toBe("idle");
+  };
+  const stalls = async (coord: string, names?: string[]) => (await call(coord, "worker_wait", { names, types: ["stalled"], timeoutMs: 0 })).events as { name: string; reason: string; lastActivity: string }[];
+  const row = async (coord: string, n: string) => (await call(coord, "worker_list")).workers.find((w: { name: string }) => w.name === n);
+  const later = (ms: number) => daemon.orchestration.sweep(Date.now() + ms);
+
+  it("a CLI that ends in the middle of a turn raises one stalled ended_without_result and a notice", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ex1", cwd: dirB, prompt: "ok" });
+    await settle(w.sessionId);
+    await call(coord, "worker_send", { name: "ex1", text: "exit" });
+    await until(() => runsOf(coord).at(-1)?.texts.some((t) => /Worker ex1: stalled\./.test(t)));
+    expect(await row(coord, "ex1")).toMatchObject({ stalled: "ended_without_result" });
+    const [e] = await stalls(coord);
+    expect(e).toMatchObject({ name: "ex1", reason: "ended_without_result" });
+    expect(Date.parse(e!.lastActivity)).not.toBeNaN();
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([]);
+  });
+
+  it("worker_stop and worker_close of a running worker, and a finished turn, raise no stalled", async () => {
+    enable();
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "st1", cwd: dirB, prompt: "hold" });
+    await call(coord, "worker_start", { name: "st2", cwd: dirB, prompt: "hold" });
+    await call(coord, "worker_start", { name: "st3", cwd: dirB, prompt: "ok" });
+    await until(() => runsIn(dirB).length >= 3);
+    await call(coord, "worker_stop", { name: "st1" });
+    await call(coord, "worker_close", { name: "st2" });
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([]);
+    expect(await row(coord, "st1")).not.toHaveProperty("stalled");
+  });
+
+  it("a new turn the CLI never starts raises one no_start after 2 minutes; a CLI message clears it and re-arms", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ns1", cwd: dirB, prompt: "ok" });
+    await settle(w.sessionId);
+    expect(await call(coord, "worker_send", { name: "ns1", text: "mute" })).toMatchObject({ delivered: "new turn" });
+    later(60_000);
+    expect(await stalls(coord)).toEqual([]);
+    later(121_000);
+    expect(await stalls(coord)).toEqual([expect.objectContaining({ name: "ns1", reason: "no_start" })]);
+    later(122_000);
+    expect(await stalls(coord)).toEqual([]);
+    expect(await row(coord, "ns1")).toMatchObject({ stalled: "no_start" });
+    // The next prompt reaches the CLI: it answers, the stall clears.
+    await call(coord, "worker_send", { name: "ns1", text: "go on" });
+    await settle(w.sessionId);
+    expect(await row(coord, "ns1")).not.toHaveProperty("stalled");
+    await call(coord, "worker_send", { name: "ns1", text: "mute" });
+    later(121_000);
+    expect(await stalls(coord)).toEqual([expect.objectContaining({ reason: "no_start" })]);
+    await call(coord, "worker_send", { name: "ns1", text: "end" });
+    await settle(w.sessionId);
+  });
+
+  it("a worker whose CLI answers before 2 minutes raises no no_start", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "ns2", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    await new Promise((r) => setTimeout(r, 50));
+    later(121_000);
+    expect(await stalls(coord)).toEqual([]);
+    await call(coord, "worker_close", { name: "ns2" });
+  });
+
+  it("a running worker that sends nothing for stallMinutes raises one silent; the next CLI message clears it and re-arms", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "sl1", cwd: dirB, prompt: "hold" });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    await new Promise((r) => setTimeout(r, 50));
+    later(19 * 60_000);
+    expect(await stalls(coord)).toEqual([]);
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([expect.objectContaining({ name: "sl1", reason: "silent" })]);
+    later(SILENT + 60_000);
+    expect(await stalls(coord)).toEqual([]);
+    expect(await row(coord, "sl1")).toMatchObject({ stalled: "silent" });
+    await call(coord, "worker_send", { name: "sl1", text: "go on" });
+    await settle(w.sessionId);
+    expect(await row(coord, "sl1")).not.toHaveProperty("stalled");
+    await call(coord, "worker_send", { name: "sl1", text: "hold" });
+    await until(async () => (await row(coord, "sl1")).state === "running");
+    await new Promise((r) => setTimeout(r, 50));
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([expect.objectContaining({ reason: "silent" })]);
+    await call(coord, "worker_close", { name: "sl1" });
+  });
+
+  it("stallMinutes 0 turns silent off; a worker that needs input is not silent", async () => {
+    enable({ stallMinutes: 0 });
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "off1", cwd: dirB, prompt: "hold" });
+    await until(() => runsIn(dirB).length);
+    later(240 * 60_000);
+    expect(await stalls(coord)).toEqual([]);
+    await call(coord, "worker_close", { name: "off1" });
+    enable({ stallMinutes: 20 });
+    const w = await call(coord, "worker_start", { name: "ni1", cwd: dirB, prompt: "ask" });
+    for (let i = 0; i < 400 && (await state(w.sessionId)) !== "needs_input"; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(await state(w.sessionId)).toBe("needs_input");
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([]);
+    await call(coord, "worker_close", { name: "ni1" });
   });
 });
