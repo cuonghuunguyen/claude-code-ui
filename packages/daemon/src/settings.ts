@@ -1,9 +1,9 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -16,6 +16,7 @@ const jiraUrl = (v: unknown) => {
     return false;
   }
 };
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const bool = (label: string): Check => ({ valid: (v) => typeof v === "boolean", label, rule: "on or off" });
 const strings = (label: string, item: (s: string) => boolean = () => true, rule = "at most 50 entries of at most 260 characters"): Check => ({
   valid: (v) => Array.isArray(v) && v.length <= 50 && v.every((s) => typeof s === "string" && s.length >= 1 && s.length <= 260 && !s.includes("\0") && item(s)),
@@ -23,6 +24,21 @@ const strings = (label: string, item: (s: string) => boolean = () => true, rule 
   rule,
 });
 const relativeEntry = (s: string) => !/^([\\/]|[A-Za-z]:)/.test(s) && s.split(/[\\/]/).every((seg) => seg !== ".." && seg.toLowerCase() !== ".git") && s.split(/[\\/]/).some((seg) => seg !== "" && seg !== ".");
+const DATA_ICON = /^data:image\/(png|webp|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
+const labelOk = (l: unknown) => {
+  if (!isObj(l) || !Object.keys(l).length || Object.keys(l).some((k) => k !== "name" && k !== "icon")) return false;
+  const { name, icon } = l;
+  if (name !== undefined && !(typeof name === "string" && name.length <= LABEL_NAME_MAX && name.trim() !== "" && !/[\0-\x1f\x7f]/.test(name))) return false;
+  if (icon === undefined) return true;
+  if (typeof icon !== "string") return false;
+  return icon.startsWith("data:") ? icon.length <= LABEL_ICON_MAX && DATA_ICON.test(icon) : icon.length >= 1 && icon.length <= LABEL_EMOJI_MAX && !/[\s\0-\x1f\x7f]/.test(icon);
+};
+// shortcut: the whole map is one setting (up to 200 x 32 KB) and a patch replaces it, so two browsers saving at the same instant lose one entry; split into per-key patches if it shows up.
+const labels = (label: string): Check => ({
+  valid: (v) => isObj(v) && Object.keys(v).length <= LABEL_ENTRIES_MAX && Object.entries(v).every(([k, l]) => k.length >= 1 && k.length <= 4096 && !k.includes("\0") && labelOk(l)),
+  label,
+  rule: `at most ${LABEL_ENTRIES_MAX} entries, each with a name (1 to ${LABEL_NAME_MAX} characters) and/or an icon (an emoji or a small png, webp or jpeg image)`,
+});
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
@@ -59,11 +75,12 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     ignoreSubmodules: bool("Ignore submodules"),
     openRepositoryInParentFolders: { valid: (v) => (PARENT_FOLDER_MODES as readonly unknown[]).includes(v), label: "Open repository in parent folders", rule: `one of ${PARENT_FOLDER_MODES.join(", ")}` },
   },
+  labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
 };
-const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : a === b);
-const copy = (v: unknown) => (Array.isArray(v) ? [...v] : v);
+const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
+// Entries are replaced, never mutated: a shallow copy of a map is enough.
+const copy = (v: unknown) => (Array.isArray(v) ? [...v] : isObj(v) ? { ...v } : v);
 const checks = CHECKS as Record<string, Record<string, Check>>;
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 /** Own property only: "__proto__", "toString" and the like are never a section or field. */
 const own = (o: Record<string, unknown>, k: string) => (Object.hasOwn(o, k) ? o[k] : undefined);
 

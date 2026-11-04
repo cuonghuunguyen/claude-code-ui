@@ -11,6 +11,8 @@ import { AppWindowIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, Colu
 import type { SessionState } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
+import { LabelIcon } from "./label-icon.tsx";
+import { useLabels } from "./labels.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColor, closeMany, closeTab, closeTargets, groupTabs, pinOrder, loadCollapsed, projectName, saveCollapsed, stepNoWrap, type AvatarColor } from "./tabs.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -76,13 +78,14 @@ export const AvatarColors = createContext(new Map<string, AvatarColor>());
 /** 16px project initial on the project's color (OpenCode project-avatar-v2). */
 export function ProjectAvatar({ cwd, unread }: { cwd: string; unread?: boolean }) {
   const c = avatarColor(cwd, use(AvatarColors));
+  const icon = useLabels().projects[cwd]?.icon;
   return (
     <span
-      className="relative grid size-4 shrink-0 place-items-center rounded-sm bg-(--av) font-medium text-(--av-fg) text-[11px] leading-none tabular-nums shadow-[inset_0_0_0_0.5px_var(--border)]"
+      className={cn("relative grid size-4 shrink-0 place-items-center rounded-sm font-medium text-(--av-fg) text-[11px] leading-none tabular-nums shadow-[inset_0_0_0_0.5px_var(--border)]", !icon && "bg-(--av)")}
       style={{ "--av": `var(--avatar-${c})`, "--av-fg": `var(--avatar-${c}-fg)` } as CSSProperties}
       aria-hidden
     >
-      {[...projectName(cwd)][0]?.toUpperCase()}
+      {icon ? <LabelIcon icon={icon} className="size-4 text-[12px]" /> : [...projectName(cwd)][0]?.toUpperCase()}
       {unread && <span data-dot="unread" className="-top-0.5 -right-0.5 absolute size-1.5 rounded-full bg-info ring-2 ring-background" />}
     </span>
   );
