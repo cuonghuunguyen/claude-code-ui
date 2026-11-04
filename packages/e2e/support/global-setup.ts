@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./daemon.ts";
 import { assertIsolated } from "./isolation.ts";
@@ -18,4 +18,10 @@ export default function globalSetup() {
   // The daemon serves packages/web/dist; build it once per run.
   const res = spawnSync("npm run build -w @claude-ui/web", { cwd: REPO_ROOT, shell: true, encoding: "utf8" });
   if (res.status !== 0) throw new Error(`web build failed:\n${res.stdout}\n${res.stderr}`);
+  // The Side features (SSH, Docker, WSL) install the claude-ui package into a host: without packages/claude-ui/dist (cli.js, side/) the hub reports "no complete build" and offers no Install.
+  // shortcut: only a missing dist is built; a stale one is the owner's to rebuild (npm run build), as for npm start.
+  if (["cli.js", "side/cli.js"].some((f) => !existsSync(join(REPO_ROOT, "packages", "claude-ui", "dist", f)))) {
+    const pkg = spawnSync("npm run build -w claude-code-ui", { cwd: REPO_ROOT, shell: true, encoding: "utf8" });
+    if (pkg.status !== 0) throw new Error(`claude-ui package build failed:\n${pkg.stdout}\n${pkg.stderr}`);
+  }
 }
