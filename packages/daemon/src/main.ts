@@ -13,7 +13,7 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { createSideDaemon } from "./side-daemon.ts";
-import { runAttach, sideSocketPath } from "./side-attach.ts";
+import { prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
@@ -60,7 +60,7 @@ if (cli.kind === "attach") {
   // The bridge of an SSH Side (side-attach.ts); `--start` first starts a detached Side Daemon (this same build) when none listens.
   const sock = sideSocketPath(process.env, homedir());
   const start = () => {
-    mkdirSync(dirname(sock), { recursive: true });
+    prepareSockDir(dirname(sock));
     const log = openSync(join(dirname(sock), ".side.log"), "a", 0o600);
     spawn(process.execPath, [process.argv[1]!, "--side"], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, CLAUDE_UI_SIDE_LISTEN: sock } }).unref();
   };

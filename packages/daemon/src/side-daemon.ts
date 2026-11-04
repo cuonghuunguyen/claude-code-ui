@@ -31,8 +31,8 @@ export function createSideDaemon(o: {
     const now = Date.now();
     const dt = now - last;
     last = now;
-    // A running turn pauses the count; an attached Hub holds it at 0.
-    if (pipe || o.busy() || expired) return;
+    // An attached Hub or a running turn holds the count at 0: the full Grace period starts when the Daemon is idle again.
+    if (pipe || o.busy() || expired) return void (idleMs = 0);
     idleMs += dt;
     if (idleMs >= graceMs) {
       expired = true;

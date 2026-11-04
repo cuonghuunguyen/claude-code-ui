@@ -77,6 +77,20 @@ describe("Side Daemon: the Grace period", () => {
     d.close();
   });
 
+  it("the Grace period restarts from full when a long unattended turn ends", async () => {
+    const { d, st } = daemon({ graceMs: 30 * MIN });
+    pipe(d).drop();
+    await vi.advanceTimersByTimeAsync(20 * MIN);
+    st.busy = true; // a turn starts while unattended
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    st.busy = false; // it lands: not 10 min left but the full 30
+    await vi.advanceTimersByTimeAsync(29 * MIN);
+    expect(st.exited).toBe(0);
+    await vi.advanceTimersByTimeAsync(2 * MIN);
+    expect(st.exited).toBe(1);
+    d.close();
+  });
+
   it("a Hub that attaches within the Grace period starts the count over", async () => {
     const { d, st } = daemon({ graceMs: 30 * MIN });
     pipe(d).drop();

@@ -1,11 +1,27 @@
 // `claude-ui side --attach` (ADR 0007): a thin bridge between ssh stdio and the Side Daemon's Unix socket. The launching ssh and every
 // later reattach run it; it never speaks the protocol.
 import { connect as netConnect, type Socket } from "node:net";
+import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 /** Where the Side Daemon listens: next to the installs (the install sweep never touches a dot name), so a newer build finds an older Daemon. */
-export const sideSocketPath = (env: NodeJS.ProcessEnv, home: string) => env.CLAUDE_UI_SIDE_SOCK || join(home, ".local", "share", "claude-ui", "side", ".side.sock");
+export function sideSocketPath(env: NodeJS.ProcessEnv, home: string, uid: number = process.getuid?.() ?? 0, platform: string = process.platform) {
+  if (env.CLAUDE_UI_SIDE_SOCK) return env.CLAUDE_UI_SIDE_SOCK;
+  // sun_path holds 104 bytes on macOS, 108 on Linux, with the NUL.
+  const max = platform === "darwin" ? 103 : 107;
+  const long = join(home, ".local", "share", "claude-ui", "side", ".side.sock");
+  if (Buffer.byteLength(long) <= max) return long;
+  const run = env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "claude-ui-side.sock") : "";
+  return run && Buffer.byteLength(run) <= max ? run : join("/tmp", `claude-ui-${uid}`, "side.sock");
+}
+
+/** Makes the socket's folder (mode 0700); a folder another user owns is refused (a shared /tmp). */
+export function prepareSockDir(dir: string, uid: number | undefined = process.getuid?.()) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (uid !== undefined && statSync(dir).uid !== uid) throw new Error(`${dir} is owned by another user`);
+  if (uid !== undefined) chmodSync(dir, 0o700);
+}
 
 const tryConnect = (path: string, connect: (p: string) => Socket) =>
   new Promise<Socket | undefined>((resolve) => {
