@@ -1,4 +1,4 @@
-// Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro or a Docker container.
+// Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro, a Docker container or an SSH host.
 import { createContext, use } from "react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 import { t, useT } from "./i18n.ts";
@@ -25,7 +25,7 @@ export function sideLookup(sides: SideInfo[] | undefined, cwdSides: Record<strin
     if (!l) return undefined;
     const side = sideOf(cwd);
     const short =
-      side === LOCAL_SIDE ? (l === "Windows" ? "Win" : l) : side.startsWith("docker:") ? (count("docker:") > 1 ? side.slice("docker:".length) : "Docker") : count("wsl:") > 1 ? side.slice("wsl:".length) : "WSL";
+      side === LOCAL_SIDE ? (l === "Windows" ? "Win" : l) : side.startsWith("docker:") ? (count("docker:") > 1 ? side.slice("docker:".length) : "Docker") : side.startsWith("ssh:") ? (count("ssh:") > 1 ? side.slice("ssh:".length) : "SSH") : count("wsl:") > 1 ? side.slice("wsl:".length) : "WSL";
     const c = custom(cwd);
     return { label: l, short: c?.name ?? short, ...(c?.icon && { icon: c.icon }) };
   };
@@ -100,15 +100,15 @@ export const saveSide = (id: string) => {
 };
 
 /** The kinds of side Open project offers: the machine itself, WSL distros, Docker containers. */
-export type SideKind = "local" | "wsl" | "docker";
-export const sideKind = (id: string): SideKind => (id.startsWith("wsl:") ? "wsl" : id.startsWith("docker:") ? "docker" : "local");
+export type SideKind = "local" | "wsl" | "docker" | "ssh";
+export const sideKind = (id: string): SideKind => (id.startsWith("wsl:") ? "wsl" : id.startsWith("docker:") ? "docker" : id.startsWith("ssh:") ? "ssh" : "local");
 /** Distro or container name: the label without its `WSL: ` / `Docker: ` prefix. */
-export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL|Docker): /, "");
+export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL|Docker|SSH): /, "");
 /** `sideName` with the custom name (GH-515) in front. */
 export const sideNameOf = (s: Pick<SideInfo, "id" | "label">, names: Record<string, Label>) => (Object.hasOwn(names, s.id) ? names[s.id]?.name : undefined) ?? sideName(s);
 /** The kinds that have members, in chooser order: local first. */
 export const kindsOf = (sides: SideInfo[], docker?: DockerState): SideKind[] =>
-  (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));
+  (["local", "wsl", "docker", "ssh"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));
 /** What the Docker tab says when there is no container to list (the engine is not running, or runs nothing). */
 export const DOCKER_HINT: Record<"down" | "empty", string> = {
   get down() {
@@ -120,7 +120,7 @@ export const DOCKER_HINT: Record<"down" | "empty", string> = {
 };
 /**
  * The side a kind opens on: the remembered one when still listed; for WSL else the first ready distro, else the first; for
- * Docker none (the user picks the container: nothing is set up for an unpicked one).
+ * Docker and SSH none (the user picks the container or host: nothing is set up for an unpicked one).
  */
 export function defaultTarget(kind: SideKind, sides: SideInfo[], remembered?: string): SideInfo | undefined {
   const members = sides.filter((s) => sideKind(s.id) === kind);

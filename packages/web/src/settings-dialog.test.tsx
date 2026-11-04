@@ -1109,3 +1109,11 @@ it("phones show no Shake to locate row (GH-517)", async () => {
     window.matchMedia = mm;
   }
 });
+
+it("Sides group: an SSH host row has the pencil and shows its custom name (GH-515)", async () => {
+  const { q, pick } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "off" }] });
+  await pick("sides");
+  expect(q("settings-side-ssh:box")?.textContent).toContain("SSH: box");
+  expect(q("settings-side-ssh:box")?.querySelector("button[aria-label*='box']")).not.toBeNull();
+  expect(q("settings-side-start-ssh:box")?.getAttribute("aria-checked")).toBe("false");
+});

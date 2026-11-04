@@ -75,6 +75,25 @@ describe("sideStatus", () => {
   });
 });
 
+it("SSH sides: kind, name, chip order, short badge (alias when several), opens on none until picked", () => {
+  expect(sideKind("ssh:box")).toBe("ssh");
+  expect(sideName(S("ssh:box", "SSH: box"))).toBe("box");
+  const local = S("local", "Linux");
+  expect(kindsOf([local, S("ssh:a", "SSH: a"), S("docker:d", "Docker: d"), S("wsl:U", "WSL: U")])).toEqual(["local", "wsl", "docker", "ssh"]);
+  expect(kindsOf([local], "ok")).toEqual(["local", "docker"]);
+  const sides = [local, S("ssh:a", "SSH: a", "off"), S("ssh:b", "SSH: b", "off")];
+  expect(defaultTarget("ssh", sides)).toBeUndefined();
+  expect(defaultTarget("ssh", sides, "ssh:b")?.id).toBe("ssh:b");
+  const cwds = { "/a": "ssh:a" };
+  expect(sideLookup([local, S("ssh:a", "SSH: a")], cwds).badge("/a")?.short).toBe("SSH");
+  expect(sideLookup(sides, cwds).badge("/a")?.short).toBe("a");
+  // GH-515: a custom name and icon apply to an SSH Side like any other.
+  const l = sideLookup([local, S("ssh:a", "SSH: a")], cwds, { "ssh:a": { name: "Lab", icon: "🧪" } });
+  expect(l.badge("/a")).toEqual({ label: "Lab", short: "Lab", icon: "🧪" });
+  expect(sideNameOf(S("ssh:a", "SSH: a"), { "ssh:a": { name: "Lab" } })).toBe("Lab");
+  expect(sideNameOf(S("ssh:a", "SSH: a"), {})).toBe("a");
+});
+
 it("a custom side name replaces label and short, the icon is returned, the Windows short form stays without a name (GH-515)", () => {
   const sides = [{ id: "local", label: "Windows", state: "ready" as const }, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" as const }];
   const cwds = { "/home/me/p": "wsl:Ubuntu" };

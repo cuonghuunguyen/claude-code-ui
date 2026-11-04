@@ -22,6 +22,8 @@ export const cacheHome = (run: string) => join(run, "cache");
 export const daemonConfigDir = (run: string) => join(configHome(run), "claude-ui");
 /** Windows only: the daemon keeps its uploads under LOCALAPPDATA, so the run gets its own. */
 export const localAppData = (run: string) => join(run, "localappdata");
+/** The run's ssh files: `config` (the daemon's CLAUDE_UI_SSH_CONFIG, never ~/.ssh/config), keys, known_hosts. */
+export const sshDir = (run: string) => join(run, "ssh");
 export const projectsRoot = (run: string) => join(run, "projects");
 export const evidenceDir = (run: string, env: NodeJS.ProcessEnv = process.env) => env.E2E_EVIDENCE_DIR || join(run, "evidence");
 

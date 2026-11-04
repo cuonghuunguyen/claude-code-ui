@@ -15,6 +15,7 @@ import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayl
 import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
+import { kindOf, nameOf, NOUN, sideTarget, startOptIn } from "./side-kinds.ts";
 import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
@@ -37,7 +38,7 @@ export function parseDistros(out: Buffer) {
 }
 
 /** Appended to a failed Docker start that installed with npm: why the bundle was not used. */
-const fallbackNote = (s: { id: string; fallback?: string }) => (s.fallback ? `\nclaude-ui used npm in the ${isDocker(s.id) ? "container" : "distro"} because ${s.fallback}.` : "");
+const fallbackNote = (s: { id: string; fallback?: string }) => (s.fallback ? `\nclaude-ui used npm in the ${NOUN[kindOf(s.id) ?? "wsl"]} because ${s.fallback}.` : "");
 
 /** A side started with the hub ("Start with Claude UI"): `key`: the claude-ui build it last ran; `update: false`: no automatic update. */
 export type SavedSide = { id: string; key?: string; update?: false };
@@ -56,9 +57,10 @@ export const effectiveSetup = (setup: SideSetup, bundleOnly: boolean | undefined
 
 /** A side the hub can start. */
 export type SideTarget = { id: string; label: string };
-export const wslSide = (distro: string): SideTarget => ({ id: `wsl:${distro}`, label: `WSL: ${distro}` });
-export const dockerSide = (name: string): SideTarget => ({ id: `docker:${name}`, label: `Docker: ${name}` });
-const isDocker = (id: string) => id.startsWith("docker:");
+export const wslSide = (distro: string) => sideTarget("wsl", distro);
+export const dockerSide = (name: string) => sideTarget("docker", name);
+const kindName = (id: string) => ({ docker: "Docker", ssh: "SSH", wsl: "WSL" })[kindOf(id) ?? "wsl"];
+const isDocker = (id: string) => kindOf(id) === "docker";
 
 /** Setup errors the side's start script reports as `CLAUDE_UI_SETUP <code> <detail>`. */
 export function setupMessage(code: string, detail: string, side: string, docker = false) {
@@ -389,7 +391,7 @@ export function parseCheck(out: string): Checked | undefined {
 }
 
 /** The user's next step for a blocked check, in plain words (same source as `setupMessage`). `side`: the label; `detail`: a version, a name or a short reason. */
-export function checkMessage(reason: SideCheckReason, side: string, o: { docker?: boolean; detail?: string; name?: string } = {}) {
+export function checkMessage(reason: SideCheckReason, side: string, o: { docker?: boolean; detail?: string; name?: string; noun?: string } = {}) {
   const d = o.detail ?? "";
   switch (reason) {
     case "gone":
@@ -409,7 +411,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
     case "build_tools_missing":
       return `${side} needs ${d || "make, python3 and g++"} to install the terminal support. Install ${d ? "it" : "them"} there (Debian or Ubuntu: apt-get install -y make python3 g++; Alpine: apk add make python3 g++). Then check again.`;
     case "unpack_tools_missing":
-      return `${side} needs ${d || "tar and gzip"} to unpack claude-ui. Install ${d.includes(" and ") || !d ? "them" : "it"} in the ${o.docker ? "container" : "distro"} (Debian or Ubuntu: apt-get install -y tar gzip). Then check again.`;
+      return `${side} needs ${d || "tar and gzip"} to unpack claude-ui. Install ${d.includes(" and ") || !d ? "them" : "it"} in the ${o.noun ?? (o.docker ? "container" : "distro")} (Debian or Ubuntu: apt-get install -y tar gzip). Then check again.`;
     case "no_writable_path":
       return `${side} has no folder claude-ui can be put in: /tmp, /dev/shm and the home folder are read-only. Start the container with a writable /tmp (docker run --tmpfs /tmp), then check again.`;
     case "check_failed":
@@ -421,7 +423,7 @@ export function checkMessage(reason: SideCheckReason, side: string, o: { docker?
  * The verdict for a side that runs: first hard blocks (no build, Node.js, and only when an install is needed: no writable folder,
  * build tools, the package unreadable), then an installed side, then install or update. `cpUsable` (Docker): whether `docker cp` can write; with a writable folder one of the two copies the package in.
  */
-export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; name?: string; build: boolean; checked: Checked; cpUsable?: boolean; install?: { method: "bundle" | "npm"; reason?: string }; network?: boolean }): SideCheck {
+export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker"; noun?: string; name?: string; build: boolean; checked: Checked; cpUsable?: boolean; install?: { method: "bundle" | "npm"; reason?: string }; network?: boolean }): SideCheck {
   const { checked: c, key, label } = o;
   const docker = o.kind === "docker";
   const bundleInstall = o.install?.method === "bundle";
@@ -442,7 +444,7 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
   };
   // A Node.js or build-tools block on the npm path says why the bundle is not used.
   const why = o.install?.method === "npm" && o.install.reason ? ` (claude-ui installs with npm here: ${o.install.reason}.)` : "";
-  const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name }) + (reason === "node_missing" || reason === "node_old" || reason === "build_tools_missing" ? why : ""), key, facts });
+  const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name, noun: o.noun }) + (reason === "node_missing" || reason === "node_old" || reason === "build_tools_missing" ? why : ""), key, facts });
   const needsInstall = c.installed !== "current";
   // The container's Node.js matters only when the side runs on it: not for a bundle install, nor for an installed build that carries its own.
   // An installed build on a bundle target is not blocked when its Node.js is gone: the start installs the pinned one.
@@ -467,7 +469,7 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
 }
 
 /** A blocked verdict for a side that could not be asked (no answer, gone, not running). */
-export const blockedCheck = (key: string, label: string, reason: SideCheckReason, o: { docker?: boolean; detail?: string; name?: string; reachable?: boolean; running?: boolean } = {}): SideCheck => ({
+export const blockedCheck = (key: string, label: string, reason: SideCheckReason, o: { docker?: boolean; detail?: string; name?: string; noun?: string; reachable?: boolean; running?: boolean } = {}): SideCheck => ({
   verdict: "blocked",
   reason,
   message: checkMessage(reason, label, o),
@@ -554,6 +556,8 @@ export function createSides(opts: {
   localLabel?: string;
   /** Dynamic sides (Docker containers), called by refresh(); never rejects (returns [] on failure). */
   discover?: () => Promise<SideTarget[]>;
+  /** A kind's own wording for a Side process that ended before or after ready (SSH: why the login or host failed); undefined: the generic message. */
+  exitMessage?: (id: string, code: number | null, stderr: string) => string | undefined;
   /** The Docker engine state found by the last discover() (`session.list` reply `docker`); undefined: unknown yet or no docker command. */
   dockerState?: () => DockerState | undefined;
   /** Minimum ms between two discover() runs (default 5000; tests 0). */
@@ -821,8 +825,8 @@ export function createSides(opts: {
           delete s.fallback;
           clashed.delete(s.id);
           Object.assign(s, { state: "ready", message: undefined, killTree: f.killTree });
-          saved.set(s.id, { ...saved.get(s.id), id: s.id, key: opts.key?.() });
-          persist();
+          // An opt-in kind (SSH) is remembered only once "Start with Claude UI" is on; a saved one keeps its key fresh.
+          if (!startOptIn(s.id) || saved.has(s.id)) (saved.set(s.id, { ...saved.get(s.id), id: s.id, key: opts.key?.() }), persist());
           resolve();
           routers.forEach((r) => r.attach(s.id));
           changed();
@@ -852,6 +856,7 @@ export function createSides(opts: {
           .slice(0, 300);
         const message =
           (setupError ??
+          opts.exitMessage?.(s.id, code, stderr) ??
           (wasReady
             ? `${s.label} stopped (exit code ${code})${code && tail ? `: ${tail}` : ""}. Retry to start it again.`
             : `${s.label} could not start (exit code ${code})${tail ? `: ${tail}` : ""}.`)) + (wasReady ? "" : fallbackNote(s));
@@ -1027,7 +1032,7 @@ export function createSides(opts: {
   poll?.unref();
 
   /** The side row of a saved ID the hub does not list. */
-  const missingRow = (id: string): SideInfo => ({ id, label: (isDocker(id) ? dockerSide(id.slice(7)) : wslSide(id.slice(4))).label, state: "off", missing: true, autoStart: true });
+  const missingRow = (id: string): SideInfo => ({ id, label: sideTarget(kindOf(id) ?? "wsl", nameOf(id)).label, state: "off", missing: true, autoStart: true });
 
   return {
     /** Every side, local first. */
@@ -1456,7 +1461,7 @@ export function createRouter(opts: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) return opts.local(msg);
-        if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+        if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${kindName(id)}` });
         const { side: _side, ...rest } = msg;
         return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
       }
@@ -1464,7 +1469,7 @@ export function createRouter(opts: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) return opts.local(msg);
-        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${id.startsWith("docker:") ? "Docker" : "WSL"}` });
+        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${kindName(id)}` });
       }
       default: {
         const id = await target(msg);

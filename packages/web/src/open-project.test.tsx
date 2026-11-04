@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@claude-ui/protocol";
 import { OpenProjectDialog } from "./open-project.tsx";
+import { setLabels } from "./labels.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -364,6 +365,41 @@ describe("side chooser", () => {
     await plain.click(plain.kind("WSL"));
     expect(document.querySelector('[data-testid="folder-input"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="side-notice"]')).toBeNull();
+  });
+
+  it("an SSH chip shows with ssh sides: the host list comes first, picking one only checks it", async () => {
+    const hosts = [S("ssh:box", "SSH: box", "off"), S("ssh:lab", "SSH: lab", "off")];
+    const { kinds, kind, click, containers, filter, typeIn, press, onCheckSide, onStartSide, target, byId } = await renderSides([S("local", "Linux"), ...hosts]);
+    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "SSH"]);
+    await click(kind("SSH"));
+    expect(containers()).toEqual(["boxNot set up", "labNot set up"]);
+    expect(filter().getAttribute("aria-label")).toContain("hosts");
+    expect(onCheckSide).not.toHaveBeenCalled();
+    await typeIn(filter, "la");
+    expect(containers()).toEqual(["labNot set up"]);
+    await press(filter(), "Enter");
+    expect(onCheckSide.mock.calls).toEqual([["ssh:lab"]]);
+    expect(onStartSide).not.toHaveBeenCalled();
+    expect(target()!.textContent).toBe("lab");
+    expect(byId("docker-hint")).toBeNull();
+  });
+
+  it("a custom name and icon (GH-515) show on the chosen SSH host", async () => {
+    setLabels({ projects: {}, sides: { "ssh:box": { name: "Lab", icon: "🧪" } } });
+    try {
+      const { kind, click, filter, press, target } = await renderSides([S("local", "Linux"), S("ssh:box", "SSH: box", "off")]);
+      await click(kind("SSH"));
+      await press(filter(), "Enter");
+      expect(target()!.textContent).toContain("Lab");
+      expect(target()!.textContent).toContain("🧪");
+    } finally {
+      setLabels(undefined);
+    }
+  });
+
+  it("no SSH sides: no SSH chip", async () => {
+    const { kinds } = await renderSides([S("local", "Linux"), ...docker("dev")]);
+    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
   });
 
   it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {

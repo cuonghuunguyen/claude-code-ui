@@ -56,7 +56,7 @@ export const NODE_OK_JS =
 /** What NODE_OK_JS prints: the shell compares the output, not the exit code (a shim whose execPath is /bin/true exits 0 and prints nothing). */
 export const NODE_OK_TOKEN = "claude-ui-node-ok";
 /** `ver <node> <cli.js>`: the side's `--version` must print a version (a digit first), not just exit 0. */
-export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*) return 0;; esac; return 1; }';
+export const VER_FN = 'ver() { case "$("$1" "$2" --version 2>/dev/null)" in [0-9]*|dev) return 0;; esac; return 1; }';
 
 /**
  * `usable_node <arch>`: sets `n` to the real binary of the `node` found by `command -v` (its `process.execPath`, not a shim) when
@@ -87,7 +87,7 @@ export function parseTarget(out: string): ContainerTarget | undefined {
 }
 
 /** The bundle that runs in a container, or why none does (a plain phrase: "the container uses musl ..."): then the side installs with npm. */
-export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | "distro" = "container"): { target: BundleTarget } | { reason: string } {
+export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | "distro" | "host" = "container"): { target: BundleTarget } | { reason: string } {
   const arch = t.arch === "x86_64" || t.arch === "amd64" ? "x64" : t.arch === "aarch64" || t.arch === "arm64" ? "arm64" : undefined;
   if (!arch) return { reason: `the ${noun}'s CPU (${t.arch || "unknown"}) has no bundle (x86_64 and aarch64 only)` };
   if (t.libc === "musl") return { reason: `the ${noun} uses musl (for example Alpine); the bundle needs glibc` };
@@ -100,7 +100,7 @@ export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | 
 }
 
 /** Why a container or distro installs with npm when the bundle is not used, or the bundle target. `build`: this claude-ui's dist/side. */
-export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean, noun: "container" | "distro" = "container"): { method: "bundle"; target: BundleTarget; node: "found" | "pinned" } | { method: "npm"; reason: string } {
+export function installMethodOf(target: Partial<ContainerTarget> | undefined, build: boolean, noun: "container" | "distro" | "host" = "container"): { method: "bundle"; target: BundleTarget; node: "found" | "pinned" } | { method: "npm"; reason: string } {
   if (!build) return { method: "npm", reason: `this claude-ui build has no ${noun} bundle (build it again with npm start or npm run build)` };
   const t = bundleTargetOf(target ?? {}, noun);
   return "target" in t ? { method: "bundle", target: t.target, node: target?.node ? "found" : "pinned" } : { method: "npm", reason: t.reason };
@@ -262,7 +262,7 @@ export function bundleParts(src: { cacheRoot: string; version: string; parts?: t
 }
 
 /** The reason text of a probe that did not run (`code` null: no answer in time): wsl.exe or docker exec failed, not "target not covered". */
-export function probeFailReason(probe: { code: number | null; stderr: string }, noun: "container" | "distro"): string {
+export function probeFailReason(probe: { code: number | null; stderr: string }, noun: "container" | "distro" | "host"): string {
   const err = probe.stderr.replace(/\0/g, "").trim().split(/\r?\n/).pop()?.trim().replace(/\.$/, "");
   return `the ${noun} did not answer the target probe (${probe.code === null ? err || "no answer in time" : err || `exit code ${probe.code}`})`;
 }

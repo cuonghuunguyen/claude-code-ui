@@ -26,7 +26,7 @@ export type PanelState = {
   failed?: RunMode;
 };
 
-const phaseText = (p: SidePhase) => t(`app.sidePanel.phase.${p}`);
+const phaseText = (p: SidePhase, host = false) => t(host && p === "copying" ? "app.sidePanel.phase.copyingHost" : `app.sidePanel.phase.${p}`);
 
 const verdictText = (v: SideCheck["verdict"], label: string): string => t(`app.sidePanel.verdict.${v}`, { side: label });
 
@@ -66,7 +66,7 @@ function fixText(check: SideCheck, label: string): string | undefined {
 const missingTools = (tools?: { make: boolean; python3: boolean; cxx: boolean }) => (tools ? ([!tools.make && "make", !tools.python3 && "python3", !tools.cxx && "g++"].filter(Boolean) as string[]) : []);
 
 type Row = { name: string; value: string; status: "ok" | "missing" | "na" };
-function rowsOf(c: SideCheck, docker = true): Row[] {
+function rowsOf(c: SideCheck, noun: "container" | "distro" | "host" = "container"): Row[] {
   const f = c.facts;
   const na = (name: string): Row => ({ name, value: t("app.sidePanel.row.notChecked"), status: "na" });
   const reachable = t("app.sidePanel.row.reachable");
@@ -81,7 +81,7 @@ function rowsOf(c: SideCheck, docker = true): Row[] {
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const tg = f.target;
     const target = tg ? `${tg.arch}, ${tg.libc}${tg.glibc ? ` ${tg.glibc}` : ""}` : "Linux";
-    return [up, { name: t(docker ? "app.sidePanel.row.container" : "app.sidePanel.row.distro"), value: f.install?.method === "bundle" ? t(f.install.parts === "download" ? "app.sidePanel.row.bundleDownload" : "app.sidePanel.row.bundle", { target }) : target, status: "ok" }, build];
+    return [up, { name: t(`app.sidePanel.row.${noun}`), value: f.install?.method === "bundle" ? t(f.install.parts === "download" ? "app.sidePanel.row.bundleDownload" : "app.sidePanel.row.bundle", { target }) : target, status: "ok" }, build];
   }
   return [
     up,
@@ -140,10 +140,11 @@ export function SidePanel({
   const mode = state.busy?.mode ?? "needed";
   const phase = side.phase ?? (state.check?.verdict === "starting" ? state.check.phase : undefined) ?? (mode === "never" ? "starting" : "installing");
   const docker = side.id.startsWith("docker:");
-  const noun = t(docker ? "app.sidePanel.noun.container" : "app.sidePanel.noun.distro");
+  const kindNoun = docker ? "container" : side.id.startsWith("ssh:") ? "host" : "distro";
+  const noun = t(`app.sidePanel.noun.${kindNoun}`);
   // Installing from the bundle only unpacks; npm (WSL, or a Docker fallback) can take minutes.
   // An install first looks at the container or distro (which install, which parts): no phase yet.
-  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase);
+  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase, kindNoun === "host");
   // A failed run puts the focus on Retry.
   useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.
@@ -223,7 +224,7 @@ export function SidePanel({
           {check && !state.checking && (
             <div className="flex w-full max-w-md shrink-0 flex-col gap-2 text-left" data-testid="side-check">
               <ul className="flex flex-col gap-1">
-                {rowsOf(check, docker).map((r) => (
+                {rowsOf(check, kindNoun).map((r) => (
                   <li key={r.name} className="flex flex-wrap items-baseline gap-x-2 [overflow-wrap:anywhere]" data-testid="side-check-row" data-status={r.status}>
                     {r.status === "ok" ? <CheckIcon className="size-4 shrink-0 self-center text-success" aria-hidden /> : r.status === "missing" ? <TriangleAlertIcon className="size-4 shrink-0 self-center text-destructive" aria-hidden /> : <MinusIcon className="size-4 shrink-0 self-center text-faint" aria-hidden />}
                     <span className="font-medium">{r.name}</span>
