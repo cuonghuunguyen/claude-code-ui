@@ -366,6 +366,28 @@ describe("side chooser", () => {
     expect(document.querySelector('[data-testid="side-notice"]')).toBeNull();
   });
 
+  it("an SSH chip shows with ssh sides: the host list comes first, picking one only checks it", async () => {
+    const hosts = [S("ssh:box", "SSH: box", "off"), S("ssh:lab", "SSH: lab", "off")];
+    const { kinds, kind, click, containers, filter, typeIn, press, onCheckSide, onStartSide, target, byId } = await renderSides([S("local", "Linux"), ...hosts]);
+    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "SSH"]);
+    await click(kind("SSH"));
+    expect(containers()).toEqual(["boxNot set up", "labNot set up"]);
+    expect(filter().getAttribute("aria-label")).toContain("hosts");
+    expect(onCheckSide).not.toHaveBeenCalled();
+    await typeIn(filter, "la");
+    expect(containers()).toEqual(["labNot set up"]);
+    await press(filter(), "Enter");
+    expect(onCheckSide.mock.calls).toEqual([["ssh:lab"]]);
+    expect(onStartSide).not.toHaveBeenCalled();
+    expect(target()!.textContent).toBe("lab");
+    expect(byId("docker-hint")).toBeNull();
+  });
+
+  it("no SSH sides: no SSH chip", async () => {
+    const { kinds } = await renderSides([S("local", "Linux"), ...docker("dev")]);
+    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
+  });
+
   it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {
     const { checked, target, type } = await renderSides([S("local", "Windows"), ...docker("dev"), S("wsl:Ubuntu", "WSL: Ubuntu")]);
     await type("/home/u/cl");

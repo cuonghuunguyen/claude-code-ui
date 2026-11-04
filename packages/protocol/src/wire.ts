@@ -515,7 +515,7 @@ export function worktreeNameError(name: string): string | undefined {
   if (name === "." || name.includes("..") || name.toLowerCase() === ".git") return "Name cannot be ., .git or contain ..";
 }
 /**
- * One Claude Code install the daemon reaches: its own (`local`), a WSL distro (`wsl:<distro>`) or a running Docker container (`docker:<name>`), each with its own login,
+ * One Claude Code install the daemon reaches: its own (`local`), a WSL distro (`wsl:<distro>`), a running Docker container (`docker:<name>`) or an SSH host (`ssh:<alias>`), each with its own login,
  * transcripts, settings, MCP servers and plugins. `off`: not started yet (side.start sets it up); `error`: `message` says what to do.
  */
 export type SideInfo = {

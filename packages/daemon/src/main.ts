@@ -18,6 +18,8 @@ import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide }
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
 import { prepareWslSide } from "./wsl-side.ts";
+import { checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshError } from "./ssh-side.ts";
+import { kindOf, nameOf, sideTarget, type SideKindImpl } from "./side-kinds.ts";
 import { checkWslSide, createSides, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
@@ -105,6 +107,7 @@ if (side) {
   const sidePackage = sidePackageDir();
   const sideKey = () => sideKeyOf(sidePackage);
   const docker = dockerCli();
+  const ssh = sshCli();
   // A hub that never starts a side keeps its parts from another hub's prune (7 days unused).
   if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(), safeKey(version));
   /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
@@ -118,26 +121,46 @@ if (side) {
     const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
     return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle)), { stdio: "pipe", windowsHide: true }));
   };
+  /** SSH side: the bundle streams through ssh stdin to a covered Linux host, then `ssh <alias>` runs the setup script. */
+  const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
+    const key = sideKey();
+    const sent = await prepareSshSide({ alias, pkgDir: sidePackage, key, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle)), { stdio: "pipe", windowsHide: true }));
+  };
+  const bundle = () => ({ cacheRoot: sideCacheDir(), version, registry });
+  // One entry per Side kind: start one (probe, install, launch) and check it read-only (side.check).
+  const kinds: Record<"wsl" | "docker" | "ssh", SideKindImpl> = {
+    wsl: { spawn: (n, o) => spawnWsl(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkWslSide({ distro: n, pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: bundle() }) },
+    docker: { spawn: (n, o) => spawnDocker(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkDockerSide({ name: n, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
+    ssh: { spawn: (n, o) => spawnSsh(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkSshSide({ alias: n, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
+  };
   let dockerState: DockerState | undefined;
   const sides =
-    distros.length || docker
+    distros.length || docker || ssh
       ? createSides({
           targets: distros.map(wslSide),
           localLabel: process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux",
           posixLocal: process.platform !== "win32",
           localDirs: [homedir(), ...roots].flatMap((p) => [p, realOr(p)]),
-          ...(docker && { discover: async () => {
-              const s = await dockerStatus();
-              dockerState = s.state;
-              return s.containers.map(dockerSide);
+          // Dynamic kinds list on refresh: Docker containers (and the engine state), ssh config hosts.
+          ...((docker || ssh) && { discover: async () => {
+              const found: ReturnType<typeof sideTarget>[] = [];
+              if (docker) {
+                const s = await dockerStatus();
+                dockerState = s.state;
+                found.push(...s.containers.map(dockerSide));
+              }
+              if (ssh) found.push(...listSshHosts().map((h) => sideTarget("ssh", h)));
+              return found;
             },
-            dockerState: () => dockerState,
+            ...(docker && { dockerState: () => dockerState }),
           }),
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
-          spawn: (id, { setup, phase, install, pinned, bundleOnly }) => (id.startsWith("docker:") ? spawnDocker(id.slice("docker:".length), setup, phase, install, pinned, bundleOnly) : spawnWsl(id.slice("wsl:".length), setup, phase, install, pinned, bundleOnly)),
-          // side.check: read-only (docker inspect + one docker exec, or one wsl.exe run of the check script).
+          spawn: (id, { setup, phase, install, pinned, bundleOnly }) => kinds[kindOf(id)!].spawn(nameOf(id), { setup, phase, install, pinned, bundleOnly }),
           key: sideKey,
-          check: (id) => (id.startsWith("docker:") ? checkDockerSide({ name: id.slice("docker:".length), pkgDir: sidePackage, key: sideKey(), bundle: { cacheRoot: sideCacheDir(), version, registry } }) : checkWslSide({ distro: id.slice("wsl:".length), pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: { cacheRoot: sideCacheDir(), version, registry } })),
+          check: (id) => kinds[kindOf(id)!].check(nameOf(id)),
+          // A start that ssh itself ended (login, host key, network): the message says what to do.
+          exitMessage: (id, code, stderr) => (kindOf(id) === "ssh" ? sshError(nameOf(id), { code, stderr }) : undefined),
           onPush: forwardSidePush(push),
           saved: parseSaved(readJson(sidesFile)),
           save: (list: SavedSide[]) => writeFileSync(sidesFile, JSON.stringify({ sides: list })),
@@ -228,6 +251,16 @@ function sideChild(child: ChildProcess): SideProcess {
 function dockerCli() {
   try {
     execFileSync("docker", ["--version"], { timeout: 5_000, windowsHide: true, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the ssh command is on PATH (`ssh -V` prints to stderr; no ssh: no SSH Sides, no error). */
+function sshCli() {
+  try {
+    execFileSync("ssh", ["-V"], { timeout: 5_000, windowsHide: true, stdio: "ignore" });
     return true;
   } catch {
     return false;

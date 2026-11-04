@@ -148,7 +148,7 @@ function SidePicker({
   const kinds = kindsOf(sides, docker);
   // A kind or container that left the list falls back: the machine itself, or the container list.
   const info = chosen.kind === "local" ? sides.find((s) => s.id === LOCAL_SIDE) : sides.find((s) => s.id === chosen.target && sideKind(s.id) === chosen.kind);
-  const kind: SideKind = kinds.includes(chosen.kind) && (info || chosen.kind === "docker") ? chosen.kind : "local";
+  const kind: SideKind = kinds.includes(chosen.kind) && (info || LIST_FIRST.includes(chosen.kind)) ? chosen.kind : "local";
   const current = kind === chosen.kind ? info : sides.find((s) => s.id === LOCAL_SIDE);
   const side = current?.id;
   const isReady = (s: SideInfo) => s.id === LOCAL_SIDE || started.has(s.id) || s.state === "ready";
@@ -248,7 +248,7 @@ function SidePicker({
     const p = panels[s.id];
     return isReady(s) ? undefined : p?.busy || s.state === "starting" ? t("sidebar.op.settingUp") : p?.error || s.state === "error" ? t("sidebar.op.error") : t("sidebar.op.notSetUp");
   };
-  const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? t("sidebar.op.thisMachine")) : k === "wsl" ? "WSL" : "Docker");
+  const kindLabel = (k: SideKind) => (k === "local" ? (sides.find((s) => s.id === LOCAL_SIDE)?.label ?? t("sidebar.op.thisMachine")) : k === "wsl" ? "WSL" : k === "ssh" ? "SSH" : "Docker");
   return (
     <>
       <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
@@ -257,7 +257,7 @@ function SidePicker({
       {kind !== "local" && current && (
         <div className="flex items-center gap-1 px-3 pb-2 max-md:flex-wrap">
           <Select value={side ?? null} onValueChange={(id) => id && choose(id)} open={targetOpen} onOpenChange={setTargetOpen}>
-            <SelectTrigger ref={targetTrigger} aria-label={t(kind === "wsl" ? "sidebar.op.wslDistro" : "sidebar.op.dockerContainer")} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
+            <SelectTrigger ref={targetTrigger} aria-label={t(kind === "wsl" ? "sidebar.op.wslDistro" : kind === "ssh" ? "sidebar.op.sshHost" : "sidebar.op.dockerContainer")} size="sm" className="min-w-0 max-w-full max-md:h-11! max-md:flex-1" data-testid="side-target">
               <span className="truncate">{sideName(current)}</span>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)] rounded-md p-0.5" onKeyDown={onPopupKey}>
@@ -271,12 +271,12 @@ function SidePicker({
           </Select>
         </div>
       )}
-      {!current && !members.length && docker && docker !== "ok" ? (
+      {!current && !members.length && kind === "docker" && docker && docker !== "ok" ? (
         <p role="status" className="px-4 py-3 text-sm text-muted-foreground" data-testid="docker-hint">
           {DOCKER_HINT[docker]}
         </p>
       ) : !current ? (
-        <ContainerStep input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
+        <ContainerStep kind={kind} input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} />
       ) : !ready ? (
         <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
       ) : (
@@ -337,14 +337,19 @@ function KindRow({ kinds, kind, label, onChoose }: { kinds: SideKind[]; kind: Si
   );
 }
 
-/** The Docker container list: filter by name, pick one (Enter on the highlighted row). Nothing is set up until then. */
+/** Kinds that list their members first (the user picks one): nothing is set up for an unpicked one. */
+const LIST_FIRST: SideKind[] = ["docker", "ssh"];
+
+/** The Docker container or SSH host list: filter by name, pick one (Enter on the highlighted row). Nothing is set up until then. */
 function ContainerStep({
+  kind,
   input,
   containers,
   stateWord,
   isReady,
   onPick,
 }: {
+  kind: SideKind;
   input: React.RefObject<HTMLInputElement | null>;
   containers: SideInfo[];
   stateWord: (s: SideInfo) => string | undefined;
@@ -352,6 +357,7 @@ function ContainerStep({
   onPick: (id: string) => void;
 }) {
   const t = useT();
+  const ssh = kind === "ssh";
   const [query, setQuery] = useState("");
   // The first match is highlighted: with a single container Enter confirms it, it never starts on its own.
   const [at, setAt] = useState(0);
@@ -382,20 +388,20 @@ function ContainerStep({
             aria-expanded
             aria-controls="container-list"
             aria-activedescendant={rows[selected] ? `container-${selected}` : undefined}
-            aria-label={t("sidebar.op.filterContainersAria")}
+            aria-label={t(ssh ? "sidebar.op.filterHostsAria" : "sidebar.op.filterContainersAria")}
             autoComplete="off"
             spellCheck={false}
             value={query}
             onChange={(e) => (setQuery(e.target.value), setAt(0))}
             onKeyDown={onKeyDown}
-            placeholder={t("sidebar.op.filterContainers")}
+            placeholder={t(ssh ? "sidebar.op.filterHosts" : "sidebar.op.filterContainers")}
             className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:text-base"
             data-testid="container-filter"
           />
         </label>
       </div>
       <div className="flex min-h-30 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
-        <ul id="container-list" role="listbox" aria-label={t("sidebar.op.runningContainers")} className="flex flex-col gap-px" data-testid="container-list">
+        <ul id="container-list" role="listbox" aria-label={t(ssh ? "sidebar.op.sshHosts" : "sidebar.op.runningContainers")} className="flex flex-col gap-px" data-testid="container-list">
           {rows.map((c, i) => (
             <li
               key={c.id}
@@ -415,7 +421,7 @@ function ContainerStep({
             </li>
           ))}
         </ul>
-        {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t("sidebar.op.noContainer")}</p>}
+        {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t(ssh ? "sidebar.op.noHost" : "sidebar.op.noContainer")}</p>}
       </div>
     </>
   );

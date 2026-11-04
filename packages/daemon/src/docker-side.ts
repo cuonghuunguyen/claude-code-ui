@@ -56,7 +56,7 @@ export async function listContainers(exec: Exec = execRun): Promise<string[]> {
   return (await dockerStatus(exec)).containers;
 }
 
-const lastLines = (s: string, n = 1) => s.trim().split(/\r?\n/).slice(-n).join(" ").trim();
+export const lastLines = (s: string, n = 1) => s.trim().split(/\r?\n/).slice(-n).join(" ").trim();
 const WAIT = "If a build is running, wait for the build to finish, then retry.";
 /** The file npm could not read: its `path` line, else the quoted path after "no such file or directory". */
 export function missingFile(output: string): string | undefined {
@@ -138,7 +138,7 @@ export async function prepareDockerSide(o: {
   // never: only an installed build runs, so nothing is packed or copied ("" : the setup script does not use a tarball).
   if (o.setup === "never") return { path: "" };
   if (o.bundle) {
-    const sent = await sendBundle(exec, o, o.bundle, label);
+    const sent = await sendBundle(dockerIo(exec, o.name, label), o, o.bundle);
     if ("path" in sent) return sent;
     o.onInstall?.({ fallback: sent.fallback });
   } else if (o.bundleOnly) o.onInstall?.({ fallback: "this hub has no bundle source" });
@@ -151,14 +151,18 @@ export async function prepareDockerSide(o: {
   return { path: await sendTarball(exec, o.name, label, tgz, `claude-ui-side-${safeKey(o.key)}.tgz`) };
 }
 
-/** The bundle path of prepareDockerSide: `{fallback}` when the container is not covered or the parts cannot be had (the npm path follows). */
-async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDir: string; key: string; onPhase?: (p: SidePhase) => void; onInstall?: (i: { bundle: true }) => void }, src: BundleSource, label: string): Promise<{ path: string; bundle: SideBundle } | { fallback: string }> {
+/** How a kind runs the target probe and puts a file on the machine: Docker through `docker exec`, SSH through `ssh`. */
+export type BundleIo = { noun: "container" | "host"; probe: () => ReturnType<Exec>; send: (file: string, name: string) => Promise<string> };
+const dockerIo = (exec: Exec, name: string, label: string): BundleIo => ({ noun: "container", probe: () => exec("docker", ["exec", name, "sh", "-c", DOCKER_PROBE], 15_000), send: (file, n) => sendTarball(exec, name, label, file, n) });
+
+/** The bundle path of a prepare step: `{fallback}` when the machine is not covered or the parts cannot be had (the npm path follows). */
+export async function sendBundle(io: BundleIo, o: { pinned?: boolean; pkgDir: string; key: string; onPhase?: (p: SidePhase) => void; onInstall?: (i: { bundle: true }) => void }, src: BundleSource): Promise<{ path: string; bundle: SideBundle } | { fallback: string }> {
   const build = sideBuild(o.pkgDir);
-  const probe = build ? await exec("docker", ["exec", o.name, "sh", "-c", DOCKER_PROBE], 15_000) : undefined;
+  const probe = build ? await io.probe() : undefined;
   const target = probe ? parseTarget(probe.stdout) : undefined;
-  // docker exec did not run the probe (timeout, a failed exec): not a container the bundle does not cover.
-  if (probe && !target) return { fallback: probeFailReason(probe, "container") };
-  const m = installMethodOf(target, !!build);
+  // The probe did not run (timeout, a failed exec): not a machine the bundle does not cover.
+  if (probe && !target) return { fallback: probeFailReason(probe, io.noun) };
+  const m = installMethodOf(target, !!build, io.noun);
   if (m.method === "npm") return { fallback: m.reason };
   if (o.pinned) m.node = "pinned";
   const version = safeKey(src.version);
@@ -186,7 +190,7 @@ async function sendBundle(exec: Exec, o: { pinned?: boolean; name: string; pkgDi
   }
   try {
     o.onPhase?.("copying");
-    const path = await sendTarball(exec, o.name, label, tar, `claude-ui-side-${safeKey(o.key)}.tar`);
+    const path = await io.send(tar, `claude-ui-side-${safeKey(o.key)}.tar`);
     return { path, bundle: { target: m.target, ...(m.node === "pinned" && { nodeDir: nodeDirName(m.target) }), claudePackage: claudePackage(m.target) } };
   } finally {
     rmSync(tar, { force: true });
@@ -265,16 +269,21 @@ async function sendTarball(exec: Exec, name: string, label: string, tgz: string,
     if (cp.code === 0) return dest;
     cpError = lastLines(cp.stderr) || `exit code ${cp.code}`;
   }
+  return streamTo((script, args, ms, stdin) => exec("docker", ["exec", "-i", name, "sh", "-c", script, "sh", ...args], ms, stdin), label, tgz, file, "container", cpError);
+}
+
+/** The file as stdin of COPY_SCRIPT, in the first of /tmp, /dev/shm, $HOME that takes it; its size is checked. `run(script, args, ms, stdinFile)` runs a remote `sh -c`. Resolves with the path. */
+export async function streamTo(run: (script: string, args: string[], ms: number, stdinFile: string) => ReturnType<Exec>, label: string, tgz: string, file: string, noun: "container" | "host", cpError = ""): Promise<string> {
   const size = String(statSync(tgz).size);
   const errors: string[] = [];
   for (const d of DEST_DIRS) {
-    const r = await exec("docker", ["exec", "-i", name, "sh", "-c", COPY_SCRIPT, "sh", d, file, size], 120_000, tgz);
+    const r = await run(COPY_SCRIPT, [d, file, size], 120_000, tgz);
     const path = r.stdout.trim().split(/\r?\n/).pop() ?? "";
     if (r.code === 0 && path) return path;
     errors.push(lastLines(r.stderr) || `exit code ${r.code}`);
   }
   const tried = DEST_DIRS.map((d) => (d === "HOME" ? "$HOME" : d)).join(", ");
-  const why = errors.every((e) => /read-only file system/i.test(e)) ? "the container's file system is read-only (no writable /tmp, /dev/shm or home); mount a tmpfs on /tmp (docker run --tmpfs /tmp)" : errors[0]!;
+  const why = errors.every((e) => /read-only file system/i.test(e)) ? (noun === "host" ? "the host's file system is read-only (no writable /tmp, /dev/shm or home)" : "the container's file system is read-only (no writable /tmp, /dev/shm or home); mount a tmpfs on /tmp (docker run --tmpfs /tmp)") : errors[0]!;
   const first = cpError ? `docker cp was tried first and failed (${cpError.replace(/\.$/, "")}); then docker exec: ` : "";
   throw new Error(`Copying claude-ui into ${label} failed: ${first}no writable path (tried ${tried}): ${why.replace(/\.$/, "")}.`);
 }

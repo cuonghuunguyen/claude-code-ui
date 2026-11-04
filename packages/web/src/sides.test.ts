@@ -74,3 +74,17 @@ describe("sideStatus", () => {
     expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });
   });
 });
+
+it("SSH sides: kind, name, chip order, short badge (alias when several), opens on none until picked", () => {
+  expect(sideKind("ssh:box")).toBe("ssh");
+  expect(sideName(S("ssh:box", "SSH: box"))).toBe("box");
+  const local = S("local", "Linux");
+  expect(kindsOf([local, S("ssh:a", "SSH: a"), S("docker:d", "Docker: d"), S("wsl:U", "WSL: U")])).toEqual(["local", "wsl", "docker", "ssh"]);
+  expect(kindsOf([local], "ok")).toEqual(["local", "docker"]);
+  const sides = [local, S("ssh:a", "SSH: a", "off"), S("ssh:b", "SSH: b", "off")];
+  expect(defaultTarget("ssh", sides)).toBeUndefined();
+  expect(defaultTarget("ssh", sides, "ssh:b")?.id).toBe("ssh:b");
+  const cwds = { "/a": "ssh:a" };
+  expect(sideLookup([local, S("ssh:a", "SSH: a")], cwds).badge("/a")?.short).toBe("SSH");
+  expect(sideLookup(sides, cwds).badge("/a")?.short).toBe("a");
+});
