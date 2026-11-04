@@ -391,7 +391,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const root = rootOf(id);
     for (const [c, q] of queues) {
       const last = q.filter(fresh).at(-1);
-      if (last && rootOf(c) === root) notify(c, last);
+      // Not `id` itself: a coordinator that was just closed stays closed.
+      if (last && c !== id && rootOf(c) === root) notify(c, last);
     }
   }
 
@@ -415,7 +416,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
                 ? "error"
                 : undefined;
     if (!type) return;
-    if (type === "turn_end") {
+    // A stopped turn (the user's Stop, or the parent's worker_stop / worker_close) is not restarted by a notice.
+    if (type === "turn_end" && p.type === "turn_result" && !quiet.has(s.id)) {
       // This session's own turn ended with events unread (the notice was judged stale, or never sent): notify again, once.
       const last = (queues.get(s.id) ?? []).filter(fresh).at(-1);
       if (last) {
@@ -425,8 +427,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
           notify(s.id, last);
         }
       }
-      if (quiet.has(s.id)) return;
     }
+    if (type === "turn_end" && quiet.has(s.id)) return;
     const l = linkOf(s.id);
     if (!l?.coordinatorId || !l.name) return;
     // A request's part is emitted again when its tier is read (session.ts markLowTier): one request, one event.

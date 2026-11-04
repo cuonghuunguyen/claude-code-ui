@@ -1798,6 +1798,28 @@ describe("orchestration", () => {
     }
   });
 
+  it("closing or stopping a worker coordinator with unread events starts no new run of it", async () => {
+    enable();
+    const root = await coordinator();
+    const lead = await call(root, "worker_start", { name: "lead2", cwd: dirB, prompt: "x" });
+    await until(async () => (await state(lead.sessionId)) === "idle");
+    await call(lead.sessionId, "worker_start", { name: "sub2", cwd: dirC, prompt: "x" });
+    await until(() => notices(lead.sessionId).length >= 2);
+    await until(async () => (await state(lead.sessionId)) === "idle");
+    await settle();
+    // lead2 has an unread sub2 event and ignores it. Stop while running, then close: no notice turn follows either.
+    await call(root, "worker_send", { name: "lead2", text: "hold" });
+    await until(async () => (await state(lead.sessionId)) === "running");
+    const runs = runsOf(lead.sessionId).length;
+    const seen = notices(lead.sessionId).length;
+    await call(root, "worker_stop", { name: "lead2" });
+    await settle();
+    await call(root, "worker_close", { name: "lead2" });
+    await settle();
+    expect(runsOf(lead.sessionId)).toHaveLength(runs);
+    expect(notices(lead.sessionId)).toHaveLength(seen);
+  });
+
   it("worker_close and worker_stop of a running worker raise no turn_end for the coordinator; worker_list shows it idle", async () => {
     enable();
     const coord = await coordinator();
