@@ -18,8 +18,8 @@ One session (the **coordinator**) can start and steer other sessions (the **work
 | **Maximum workers per tree** | How many workers one coordinator you start may run at once, counting its workers' workers (1 to 20, default 4). Each coordinator has its own count. |
 | **Maximum workers in total** | How many workers may run at once on this daemon across every coordinator (0 to 100; 0, the default, = no limit). |
 | **Maximum tree depth** | How deep workers may start workers of their own (1 to 5). 1: only you start workers. 2 (default): a worker may start its own, for example a tester and a reviewer. |
-| **Close finished workers** | A worker that ends its turn with nothing pending closes its Claude process and stops counting toward the limits (default on). Not while you have it open in a tab. The coordinator can keep a worker open. |
 | **Maximum workers per coordinator** | How many workers one session (you or a worker) may run at once (1 to 20, default 4). |
+| **Close finished workers** | A worker that ends its turn with nothing pending closes its Claude process and stops counting toward the limits (default on). Not while you have it open in a tab. The coordinator can keep a worker open. |
 | **Worker mode** | The [permission mode](permissions) of a new worker when the coordinator does not pick one. Default: the coordinator's own mode (bypass becomes auto). |
 | **Notifications from workers** | Turn it off and a worker that finishes, needs input or fails sends no push, desktop or in-app notification. Its coordinator still hears. A request the coordinator passes on to you still notifies you. |
 | **Coordinator may answer permission requests** | Lets the coordinator allow or deny, once, a worker's low-risk requests: reads and edits inside the worker's folder, reads of the repo's agent docs, read-only git. Everything else waits for you. |

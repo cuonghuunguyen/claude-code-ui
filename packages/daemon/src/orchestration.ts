@@ -467,9 +467,11 @@ export function createOrchestration(deps: OrchestrationDeps) {
     }
     const captured = l.coordinatorId;
     if (e.type === "turn_end" && deps.settings().closeFinished && !l.keepOpen)
-      // The turn_result part comes before the session's idle state (session.ts receive): check after the current emit, then deliver with the outcome.
+      // The turn_result part comes before the session's idle state (session.ts receive): check after the current emit and the end-of-turn sync, then deliver with the outcome.
       return inOrder(s.id, async () => {
         await new Promise((r) => setImmediate(r));
+        // The turn's end starts a transcript sync (session.ts): releaseQuery refuses while it runs.
+        await s.sync().catch(() => {});
         if (finishable(s) && s.releaseQuery()) {
           e.closed = true;
           console.log(`session ${s.id}: worker turn ended, CLI closed (Close finished workers)`);
