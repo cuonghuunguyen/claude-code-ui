@@ -239,6 +239,7 @@ export default {
   "app.sidePanel.phase.downloading": "Downloading Node.js and Claude Code…",
   "app.sidePanel.phase.packing": "Packing claude-ui…",
   "app.sidePanel.phase.copying": "Copying into the container…",
+  "app.sidePanel.phase.copyingHost": "Copying into the host…",
   "app.sidePanel.phase.installing": "Installing (npm, can take minutes)…",
   "app.sidePanel.phase.starting": "Starting…",
   "app.sidePanel.verdict.running": "Running.",

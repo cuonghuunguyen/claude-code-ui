@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Exec } from "../src/docker-side.ts";
 import { kindOf, nameOf, sideTarget, startOptIn } from "../src/side-kinds.ts";
-import { checkSshSide, listSshHosts, parseSshConfig, prepareSshSide, sshArgs, sshError } from "../src/ssh-side.ts";
+import { checkSshSide, listSshHosts, parseSshConfig, prepareSshSide, sshArgs, sshConfigPath, sshError } from "../src/ssh-side.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const decode = (remote: string) => Buffer.from(/echo (\S+) \|/.exec(remote)![1]!, "base64").toString();
@@ -29,12 +29,26 @@ describe("parseSshConfig", () => {
     expect(parseSshConfig("Host * *.corp ?x !bad -oProxyCommand=x \"a b\" good\r\nHost\tok")).toEqual(["good", "ok"]);
   });
   it("listSshHosts: no file reads as none", () => {
-    expect(listSshHosts(() => { throw new Error("ENOENT"); })).toEqual([]);
-    expect(listSshHosts(() => "Host a\nHost b")).toEqual(["a", "b"]);
+    expect(listSshHosts(undefined, () => { throw new Error("ENOENT"); })).toEqual([]);
+    expect(listSshHosts(undefined, () => "Host a\nHost b")).toEqual(["a", "b"]);
+  });
+  it("CLAUDE_UI_SSH_CONFIG names the file the hosts are read from", () => {
+    expect(sshConfigPath({ CLAUDE_UI_SSH_CONFIG: "/x/cfg" })).toBe("/x/cfg");
+    expect(sshConfigPath({ CLAUDE_UI_SSH_CONFIG: "" })).toBeUndefined();
+    expect(sshConfigPath({})).toBeUndefined();
+    const f = join(dir("cfg-"), "config");
+    writeFileSync(f, "Host only-here\n");
+    expect(listSshHosts(f)).toEqual(["only-here"]);
+    expect(listSshHosts(join(dir("cfg-"), "missing"))).toEqual([]);
   });
 });
 
 describe("sshArgs", () => {
+  it("a config file goes in as -F before --; none: no -F", () => {
+    const a = sshArgs("box", "x", [], "/s/ssh_config");
+    expect(a.slice(6, 11)).toEqual(["ServerAliveCountMax=3", "-F", "/s/ssh_config", "--", "box"]);
+    expect(sshArgs("box", "x")).not.toContain("-F");
+  });
   it("has the fixed options, -- before the alias, and a script that round-trips through base64", () => {
     const script = "echo 'a b'\nexit 3";
     const a = sshArgs("box", script, ["x y", "it's"]);
@@ -80,7 +94,7 @@ describe("prepareSshSide", () => {
   const sha = (b: string) => createHash("sha256").update(b).digest("hex");
   const parts = () => [{ file: "node.tar.gz", label: "Node.js", url: "https://n/node", sha256: sha("node") }];
   const okFetch = (async () => new Response("node")) as unknown as typeof fetch;
-  function run(o: { probe?: { code: number | null; stdout?: string; stderr?: string }; copy?: (n: number, dest: string) => { code: number; stdout?: string; stderr?: string }; setup?: "never" | "needed"; arch?: string; libc?: string } = {}) {
+  function run(o: { probe?: { code: number | null; stdout?: string; stderr?: string }; copy?: (n: number, dest: string) => { code: number; stdout?: string; stderr?: string }; setup?: "never" | "needed"; arch?: string; libc?: string; config?: string } = {}) {
     const calls: { cmd: string; args: string[]; script: string; stdin?: string }[] = [];
     let copies = 0;
     const exec: Exec = async (cmd, args, _t, stdin) => {
@@ -93,7 +107,7 @@ describe("prepareSshSide", () => {
     };
     const phases: string[] = [];
     const cacheRoot = join(dir("home-"), "claude-ui", "side");
-    const result = prepareSshSide({ alias: "box", pkgDir: pkg(), key: "1.0.0-1", exec, setup: o.setup, onPhase: (p) => phases.push(p), onInstall: () => {}, bundle: { cacheRoot, version: "1.0.0", fetch: okFetch, parts } });
+    const result = prepareSshSide({ alias: "box", pkgDir: pkg(), key: "1.0.0-1", exec, config: o.config, setup: o.setup, onPhase: (p) => phases.push(p), onInstall: () => {}, bundle: { cacheRoot, version: "1.0.0", fetch: okFetch, parts } });
     return { calls, phases, result };
   }
 
@@ -108,6 +122,12 @@ describe("prepareSshSide", () => {
     expect(r.calls[0]!.stdin).toBeUndefined();
     expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
     expect(r.calls[1]!.script).toContain("cat >");
+  });
+  it("with a config file every ssh run passes -F before --", async () => {
+    const r = run({ config: "/s/cfg" });
+    await r.result;
+    expect(r.calls.length).toBeGreaterThan(1);
+    for (const c of r.calls) expect(c.args.slice(c.args.indexOf("-F"), c.args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
   });
   it("a /tmp that fails moves on to /dev/shm", async () => {
     const r = run({ copy: (n, d) => (n === 0 ? { code: 1, stderr: "Read-only file system" } : { code: 0, stdout: `${d}/x.tar\n` }) });
@@ -134,6 +154,11 @@ describe("checkSshSide", () => {
     const c = await check({ code: 255, stderr: "Host key verification failed." });
     expect(c).toMatchObject({ verdict: "blocked", reason: "unreachable" });
     expect(c.message).toContain("Run `ssh box` once in a terminal");
+  });
+  it("the check passes -F too", async () => {
+    let args: string[] = [];
+    await checkSshSide({ alias: "box", config: "/s/cfg", pkgDir: dir("pkg-"), key: "k", exec: async (_c, a) => ((args = a), { code: 255, stdout: "", stderr: "x" }) });
+    expect(args.slice(args.indexOf("-F"), args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
   });
   it("an answer that is no check output is check_failed", async () => {
     expect(await check({ code: 0, stdout: "hello" })).toMatchObject({ verdict: "blocked", reason: "check_failed" });

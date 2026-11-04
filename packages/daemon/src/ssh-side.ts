@@ -25,8 +25,11 @@ export function parseSshConfig(text: string): string[] {
   return [...out];
 }
 
-/** Host aliases of ~/.ssh/config; [] when there is no file. */
-export function listSshHosts(read: () => string = () => readFileSync(join(homedir(), ".ssh", "config"), "utf8")): string[] {
+/** The ssh config file the Hub uses instead of ~/.ssh/config: `CLAUDE_UI_SSH_CONFIG` (also passed to every ssh as `-F`); undefined: ssh's own default. */
+export const sshConfigPath = (env: NodeJS.ProcessEnv = process.env): string | undefined => env.CLAUDE_UI_SSH_CONFIG || undefined;
+
+/** Host aliases of the ssh config (`config` path, else ~/.ssh/config); [] when there is no file. */
+export function listSshHosts(config?: string, read: () => string = () => readFileSync(config ?? join(homedir(), ".ssh", "config"), "utf8")): string[] {
   try {
     return parseSshConfig(read());
   } catch {
@@ -38,8 +41,8 @@ export function listSshHosts(read: () => string = () => readFileSync(join(homedi
  * `ssh` arguments that run `script` with `sh -c` on the host. No askpass, no password, host key checking as the user configured.
  * Base64 keeps newlines and quotes away from the remote login shell (fish and tcsh break on them).
  */
-export const sshArgs = (alias: string, script: string, args: string[] = []) => [
-  "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", alias,
+export const sshArgs = (alias: string, script: string, args: string[] = [], config?: string) => [
+  "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", ...(config ? ["-F", config] : []), "--", alias,
   `sh -c ${shq(`eval "$(echo ${Buffer.from(script).toString("base64")} | base64 -d)"`)} sh ${args.map(shq).join(" ")}`.trimEnd(),
 ];
 
@@ -64,6 +67,8 @@ export async function prepareSshSide(o: {
   key: string;
   setup?: SideSetup;
   pinned?: boolean;
+  /** ssh config file (`-F`). */
+  config?: string;
   exec?: Exec;
   onPhase?: (p: SidePhase) => void;
   onInstall?: (i: { bundle: true } | { fallback: string }) => void;
@@ -73,13 +78,13 @@ export async function prepareSshSide(o: {
   const label = `SSH: ${o.alias}`;
   if (o.setup === "never") return { path: "" };
   const run = async (script: string, args: string[], ms: number, stdin?: string) => {
-    const r = await exec("ssh", sshArgs(o.alias, script, args), ms, stdin);
+    const r = await exec("ssh", sshArgs(o.alias, script, args, o.config), ms, stdin);
     const err = sshError(o.alias, r);
     if (err) throw new Error(err);
     return r;
   };
   const sent = await sendBundle(
-    { noun: "host", probe: () => run(DOCKER_PROBE, [], 30_000), send: (file, name) => streamTo((s, a, ms, f) => exec("ssh", sshArgs(o.alias, s, a), ms, f), label, file, name, "host") },
+    { noun: "host", probe: () => run(DOCKER_PROBE, [], 30_000), send: (file, name) => streamTo((s, a, ms, f) => exec("ssh", sshArgs(o.alias, s, a, o.config), ms, f), label, file, name, "host") },
     { pinned: o.pinned, pkgDir: o.pkgDir, key: o.key, onPhase: o.onPhase, onInstall: o.onInstall },
     o.bundle,
   );
@@ -88,10 +93,10 @@ export async function prepareSshSide(o: {
 }
 
 /** `side.check` of a host: read-only, one ssh run of the check script. */
-export async function checkSshSide(o: { alias: string; pkgDir: string; key: string; exec?: Exec; timeoutMs?: number; bundle?: BundleSource }): Promise<SideCheck> {
+export async function checkSshSide(o: { alias: string; config?: string; pkgDir: string; key: string; exec?: Exec; timeoutMs?: number; bundle?: BundleSource }): Promise<SideCheck> {
   const label = `SSH: ${o.alias}`;
   const noun = "host";
-  const r = await (o.exec ?? execRun)("ssh", sshArgs(o.alias, checkScript(o.key, "docker")), o.timeoutMs ?? 30_000);
+  const r = await (o.exec ?? execRun)("ssh", sshArgs(o.alias, checkScript(o.key, "docker"), [], o.config), o.timeoutMs ?? 30_000);
   const err = sshError(o.alias, r);
   if (err) return { ...blockedCheck(o.key, label, "unreachable", { noun }), message: err };
   const checked = parseCheck(r.stdout);

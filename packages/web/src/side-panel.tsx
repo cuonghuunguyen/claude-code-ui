@@ -26,7 +26,7 @@ export type PanelState = {
   failed?: RunMode;
 };
 
-const phaseText = (p: SidePhase) => t(`app.sidePanel.phase.${p}`);
+const phaseText = (p: SidePhase, host = false) => t(host && p === "copying" ? "app.sidePanel.phase.copyingHost" : `app.sidePanel.phase.${p}`);
 
 const verdictText = (v: SideCheck["verdict"], label: string): string => t(`app.sidePanel.verdict.${v}`, { side: label });
 
@@ -144,7 +144,7 @@ export function SidePanel({
   const noun = t(`app.sidePanel.noun.${kindNoun}`);
   // Installing from the bundle only unpacks; npm (WSL, or a Docker fallback) can take minutes.
   // An install first looks at the container or distro (which install, which parts): no phase yet.
-  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase);
+  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase, kindNoun === "host");
   // A failed run puts the focus on Retry.
   useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.

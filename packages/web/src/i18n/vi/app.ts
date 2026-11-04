@@ -241,6 +241,7 @@ export default {
   "app.sidePanel.phase.downloading": "Đang tải Node.js và Claude Code…",
   "app.sidePanel.phase.packing": "Đang đóng gói claude-ui…",
   "app.sidePanel.phase.copying": "Đang sao chép vào container…",
+  "app.sidePanel.phase.copyingHost": "Đang chép vào host…",
   "app.sidePanel.phase.installing": "Đang cài đặt (npm, có thể mất vài phút)…",
   "app.sidePanel.phase.starting": "Đang khởi động…",
   "app.sidePanel.verdict.running": "Đang chạy.",

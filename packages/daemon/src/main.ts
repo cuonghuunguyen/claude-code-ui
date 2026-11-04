@@ -18,7 +18,7 @@ import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide }
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
 import { prepareWslSide } from "./wsl-side.ts";
-import { checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshError } from "./ssh-side.ts";
+import { checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshConfigPath, sshError } from "./ssh-side.ts";
 import { kindOf, nameOf, sideTarget, type SideKindImpl } from "./side-kinds.ts";
 import { checkWslSide, createSides, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
@@ -108,6 +108,7 @@ if (side) {
   const sideKey = () => sideKeyOf(sidePackage);
   const docker = dockerCli();
   const ssh = sshCli();
+  const sshConfig = sshConfigPath();
   // A hub that never starts a side keeps its parts from another hub's prune (7 days unused).
   if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(), safeKey(version));
   /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
@@ -124,15 +125,15 @@ if (side) {
   /** SSH side: the bundle streams through ssh stdin to a covered Linux host, then `ssh <alias>` runs the setup script. */
   const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
     const key = sideKey();
-    const sent = await prepareSshSide({ alias, pkgDir: sidePackage, key, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
-    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle)), { stdio: "pipe", windowsHide: true }));
+    const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle), [], sshConfig), { stdio: "pipe", windowsHide: true }));
   };
   const bundle = () => ({ cacheRoot: sideCacheDir(), version, registry });
   // One entry per Side kind: start one (probe, install, launch) and check it read-only (side.check).
   const kinds: Record<"wsl" | "docker" | "ssh", SideKindImpl> = {
     wsl: { spawn: (n, o) => spawnWsl(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkWslSide({ distro: n, pkgDir: sidePackage, key: sideKey(), exec: execRun, bundle: bundle() }) },
     docker: { spawn: (n, o) => spawnDocker(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkDockerSide({ name: n, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
-    ssh: { spawn: (n, o) => spawnSsh(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkSshSide({ alias: n, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
+    ssh: { spawn: (n, o) => spawnSsh(n, o.setup, o.phase, o.install, o.pinned, o.bundleOnly), check: (n) => checkSshSide({ alias: n, config: sshConfig, pkgDir: sidePackage, key: sideKey(), bundle: bundle() }) },
   };
   let dockerState: DockerState | undefined;
   const sides =
@@ -150,7 +151,7 @@ if (side) {
                 dockerState = s.state;
                 found.push(...s.containers.map(dockerSide));
               }
-              if (ssh) found.push(...listSshHosts().map((h) => sideTarget("ssh", h)));
+              if (ssh) found.push(...listSshHosts(sshConfig).map((h) => sideTarget("ssh", h)));
               return found;
             },
             ...(docker && { dockerState: () => dockerState }),

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { test as base, createBdd } from "playwright-bdd";
 import type { FakeJira } from "../support/fake-jira.ts";
 import { startDaemon, type Daemon } from "../support/daemon.ts";
+import { startSshHost, type SshHost } from "../support/ssh-host.ts";
 import { projectsRoot, runDir, slug, testSlugs } from "../support/paths.ts";
 
 export type Project = { path: string; name: string };
@@ -16,7 +17,18 @@ export type Memo = { texts?: number; layout?: unknown; creates?: () => number; w
 /** The fake Jira of the scenario, once a step started it. */
 export type JiraBox = { fake?: FakeJira };
 
-export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo; jira: JiraBox }, { daemon: Daemon }>({
+/** The throwaway sshd of the SSH Side features: started by the first scenario that asks, removed with the worker. */
+export type SshHostBox = { get(): Promise<SshHost> };
+
+export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo; jira: JiraBox }, { daemon: Daemon; sshHost: SshHostBox }>({
+  sshHost: [
+    async ({}, use) => {
+      let host: SshHost | undefined;
+      await use({ get: async () => (host ??= await startSshHost(runDir())) });
+      host?.stop();
+    },
+    { scope: "worker", timeout: 300_000 },
+  ],
   // One daemon per worker: free port, own config dir, API key variables unset, Haiku. Stopped by PID tree.
   daemon: [
     async ({}, use, workerInfo) => {
