@@ -2,7 +2,10 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { TURN_MS, toolCard as anyToolCard } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
+/** GH-574 switch rows by label (en and vi). */
+const SWITCHES: Record<string, string> = { "Close finished workers": "closeFinished", "Đóng worker đã xong": "closeFinished" };
 const input = (page: Page, label: string): Locator => {
+  if (SWITCHES[label]) return page.getByTestId(`settings-orchestration-${SWITCHES[label]}`);
   const key = label === "Maximum tree depth" ? "maxDepth" : label === "Maximum workers per coordinator" ? "maxChildren" : label === "Maximum workers per tree" ? "workerCap" : label === "Maximum workers in total" ? "workerCapTotal" : "";
   if (!key) throw new Error(`unknown Orchestration setting "${label}"`);
   return page.getByTestId(`settings-orchestration-${key}`);
@@ -101,4 +104,42 @@ Then("the {string} tool card shows an error that names the depth limit", async (
 
 When("I show the sidebar", async ({ page }) => {
   await openSidebar(page);
+});
+
+Then("the Orchestration switch {string} is {word}", async ({ page }, label: string, state: string) => {
+  await expect(input(page, label)).toHaveAttribute("aria-checked", state === "on" ? "true" : "false");
+});
+
+When("I turn the Orchestration switch {string} {word}", async ({ page }, label: string, state: string) => {
+  const want = state === "on" ? "true" : "false";
+  if ((await input(page, label).getAttribute("aria-checked")) !== want) await input(page, label).click();
+  await expect(input(page, label)).toHaveAttribute("aria-checked", want);
+  await page.waitForTimeout(400);
+});
+
+Then("the Orchestration switch row {string} shows its label", async ({ page }, label: string) => {
+  await expect(page.getByTestId("settings-orchestration")).toContainText(label);
+});
+
+Then("the sidebar worker {string} is closed", async ({ page, project: { name: project } }, name: string) => {
+  await expect(async () => {
+    await revealWorkers(page, project, name);
+    await expect(row(page, project, name)).toHaveAttribute("data-state", "closed", { timeout: 5_000 });
+  }).toPass({ timeout: TURN_MS });
+});
+
+Then("the sidebar worker {string} stays idle", async ({ page, project: { name: project } }, name: string) => {
+  await expect(async () => {
+    await revealWorkers(page, project, name);
+    await expect(row(page, project, name)).toHaveAttribute("data-state", "idle", { timeout: 5_000 });
+  }).toPass({ timeout: TURN_MS });
+  // The auto-close runs within a tick of the turn end; give it room to (wrongly) happen.
+  await page.waitForTimeout(4_000);
+  await expect(row(page, project, name)).toHaveAttribute("data-state", "idle");
+});
+
+// openSidebar finds the list by its English label; after a language switch only the drawer button is stable.
+When("I open the sidebar drawer if the phone layout hides it", async ({ page }) => {
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
 });
