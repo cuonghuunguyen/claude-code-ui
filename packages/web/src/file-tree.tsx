@@ -243,6 +243,7 @@ export function FileTree({
   const [marks, setMarks] = useState<ReturnType<typeof gitMarks>>();
   const [, tick] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  const filterBox = useRef<HTMLDivElement>(null);
   const pending = useRef<{ path: string; focus: boolean }>(undefined);
   const buffer = useRef({ text: "", timer: 0 });
   const q = query.trim();
@@ -378,6 +379,9 @@ export function FileTree({
     const el = p && rowEl(root.current, p.path);
     if (!p || !el) return;
     pending.current = undefined;
+    // The sticky filter box covers the top of the scroller: keep the row below it.
+    const box = filterBox.current;
+    el.style.scrollMarginTop = box ? `${box.getBoundingClientRect().bottom - box.parentElement!.getBoundingClientRect().top}px` : "0px"; // includes the scroller's padding above the box
     el.scrollIntoView?.({ block: "nearest" });
     if (p.focus) el.focus();
   });
@@ -624,7 +628,7 @@ export function FileTree({
   const coarse = "max-md:h-11 pointer-coarse:h-11";
   return (
     <>
-      <div className="sticky top-0 z-10 border-b bg-card px-2 py-1">
+      <div ref={filterBox} className="sticky top-0 z-10 border-b bg-card px-2 py-1">
         <input
           type="search"
           value={query}
