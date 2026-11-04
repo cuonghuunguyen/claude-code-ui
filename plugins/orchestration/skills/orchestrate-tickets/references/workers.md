@@ -66,7 +66,7 @@ already sent a notice, the events are there: call it with no `timeoutMs` and do 
 
 | Type | Carries | Meaning |
 |---|---|---|
-| `turn_end` | `result` (the worker's last reply text, **first 4000 characters**), `isError`, `interrupted` | The worker stopped. Parse the RESULT block. |
+| `turn_end` | `result` (the worker's last reply text, **first 4000 characters**; a longer one ends with the `worker_read {name, part, offset}` call that reads the rest), `isError`, `interrupted` | The worker stopped. Parse the RESULT block. |
 | `question` | `requestId`, `questions[]` with options | The worker asked with its own question tool. Pending for you and the user. |
 | `permission` | `requestId`, `tool`, `input`, `tier`, `mayAnswer` | Low tier = reads and edits inside the worker folder. Every command is high. `mayAnswer` is false for high, and for everything while the user's "coordinator permissions" setting is off (its default). |
 | `denied` | `tool`, `toolUseId`, `input` | The auto-mode classifier, a rule or the user refused a call. Cannot be undone. |
@@ -80,7 +80,7 @@ Escalated requests never come back as events.
 ## The RESULT contract
 
 `turn_end.result` is the only structured channel back, and it is cut after 4000 characters
-from the **start**. So every worker prompt ends with this rule, and every final reply
+from the **start** (the cut text names the `worker_read` call for the rest). So every worker prompt ends with this rule, and every final reply
 **starts** with the block:
 
 ```

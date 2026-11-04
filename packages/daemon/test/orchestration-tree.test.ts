@@ -483,6 +483,22 @@ describe("worker tree: list and read", () => {
     ]);
   });
 
+  it("worker_read pages a reply of a descendant by path", async () => {
+    const t = setup();
+    const [, , rev] = tree(t);
+    const text = "q".repeat(20_000);
+    rev.subscribe = (_from: number, fn: (e: any) => void) => {
+      fn({ part: { type: "assistant_text", id: "m:0", text } });
+      return () => {};
+    };
+    const p1 = await call(t.o, "C", "worker_read", { name: "impl/rev", part: "m:0", offset: 0 });
+    expect(p1).toMatchObject({ name: "impl/rev", part: "m:0", offset: 0, total: 20_000, nextOffset: 16_000 });
+    const p2 = await call(t.o, "C", "worker_read", { name: "impl/rev", part: "m:0", offset: p1.nextOffset });
+    expect(p2.nextOffset).toBeUndefined();
+    expect(p1.text + p2.text).toBe(text);
+    expect((await call(t.o, "C", "worker_read", { name: "impl/rev", part: "x" })).error).toMatch(/no reply part/);
+  });
+
   it("worker_read takes a descendant path; an unknown segment names it", async () => {
     const t = setup();
     tree(t);
