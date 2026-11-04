@@ -412,6 +412,19 @@ describe("side chooser", () => {
     }
   });
 
+  it("the Docker container list shows the custom name and icon with the raw name beside it (GH-554)", async () => {
+    setLabels({ projects: {}, sides: { "docker:dev": { name: "Build box", icon: "🛠" } } });
+    try {
+      const { kind, click, rowEls, typeIn, filter } = await renderSides([S("local", "Linux"), ...docker("dev", "plain")], undefined, false, undefined, "ok");
+      await click(kind("Docker"));
+      expect(rowEls().map((r) => r.textContent)).toEqual([expect.stringContaining("🛠Build boxdev"), "plain"]);
+      await typeIn(() => filter(), "build");
+      expect(rowEls()).toHaveLength(1);
+    } finally {
+      setLabels(undefined);
+    }
+  });
+
   it("no SSH sides: no SSH chip", async () => {
     const { kinds } = await renderSides([S("local", "Linux"), ...docker("dev")]);
     expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
