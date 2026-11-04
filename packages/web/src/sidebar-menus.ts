@@ -79,6 +79,8 @@ export function groupEntries(o: {
   onArchive: (days: number) => void;
   /** Copy path (GH-456): the folder path as its side sees it, the row tooltip. */
   copyPath?: () => void;
+  /** "Change name and icon…" (GH-515): the Label dialog of this project. */
+  rename?: () => void;
   /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
   cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
@@ -92,6 +94,7 @@ export function groupEntries(o: {
     e.push({ kind: "item", id: `${p}create-worktree`, label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false) });
   }
   if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
+  if (o.rename) e.push(...(o.copyPath ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}rename`, label: t("sidebar.menu.rename"), onSelect: o.rename });
   if (!o.archivedView) {
     e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: t("sidebar.menu.hideInactive"), checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: t("sidebar.menu.archiveIdleOlder") });
     for (const d of ARCHIVE_DAYS) {

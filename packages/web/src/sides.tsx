@@ -2,19 +2,23 @@
 import { createContext, use } from "react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 import { t, useT } from "./i18n.ts";
+import { LabelIcon } from "./label-icon.tsx";
+import type { Label } from "@claude-ui/protocol";
 
 /**
  * Side label of a cwd (`Windows`, `WSL: Ubuntu`, `Docker: dev`) and its short form for narrow rows (`Win`, `WSL` or the distro
  * name when there are several, `Docker` or the container name when there are several); undefined on a daemon with one side,
  * where no badge shows.
  */
-export const SideLabel = createContext<(cwd: string) => { label: string; short: string } | undefined>(() => undefined);
+export const SideLabel = createContext<(cwd: string) => { label: string; short: string; icon?: string } | undefined>(() => undefined);
 
 /** The side lookups of a session list: `sides` absent or only local = one side. */
-export function sideLookup(sides: SideInfo[] | undefined, cwdSides: Record<string, string> = {}) {
+/** `names`: the custom name and icon per side id (GH-515); a custom name replaces both `label` and `short`. */
+export function sideLookup(sides: SideInfo[] | undefined, cwdSides: Record<string, string> = {}, names: Record<string, Label> = {}) {
   const many = !!sides && sides.length > 1;
   const sideOf = (cwd: string) => cwdSides[cwd] ?? LOCAL_SIDE;
-  const label = (cwd: string) => (many ? sides!.find((s) => s.id === sideOf(cwd))?.label : undefined);
+  const custom = (cwd: string) => (Object.hasOwn(names, sideOf(cwd)) ? names[sideOf(cwd)] : undefined);
+  const label = (cwd: string) => (many ? (custom(cwd)?.name ?? sides!.find((s) => s.id === sideOf(cwd))?.label) : undefined);
   const count = (prefix: string) => (sides ?? []).filter((s) => s.id.startsWith(prefix)).length;
   const badge = (cwd: string) => {
     const l = label(cwd);
@@ -22,7 +26,8 @@ export function sideLookup(sides: SideInfo[] | undefined, cwdSides: Record<strin
     const side = sideOf(cwd);
     const short =
       side === LOCAL_SIDE ? (l === "Windows" ? "Win" : l) : side.startsWith("docker:") ? (count("docker:") > 1 ? side.slice("docker:".length) : "Docker") : count("wsl:") > 1 ? side.slice("wsl:".length) : "WSL";
-    return { label: l, short };
+    const c = custom(cwd);
+    return { label: l, short: c?.name ?? short, ...(c?.icon && { icon: c.icon }) };
   };
   return { many, sideOf, label, badge };
 }
@@ -33,6 +38,7 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
   if (!b) return null;
   return (
     <span className="shrink-0 whitespace-nowrap rounded bg-muted px-1.5 py-px font-normal text-muted-foreground text-xs" title={b.label} aria-label={b.label} data-testid="side-badge">
+      {b.icon && <LabelIcon icon={b.icon} className="mr-1 inline-grid size-3 align-middle text-[10px]" />}
       {short ? b.short : b.label}
     </span>
   );
@@ -69,6 +75,9 @@ export function SideStatusLine({ cwd }: { cwd: string }) {
   );
 }
 
+/** The side's name in lists: the custom name (GH-515), else its own label (`Windows`, `WSL: Ubuntu`). */
+export const sideTitle = (s: SideInfo, names: Record<string, Label>) => (Object.hasOwn(names, s.id) ? names[s.id]?.name : undefined) ?? s.label;
+
 /** The daemon's own side is Windows: drive-letter paths are local, POSIX paths belong to another side. */
 export const localIsWindows = (sides: SideInfo[]) => sides.find((s) => s.id === LOCAL_SIDE)?.label === "Windows";
 
@@ -95,6 +104,8 @@ export type SideKind = "local" | "wsl" | "docker";
 export const sideKind = (id: string): SideKind => (id.startsWith("wsl:") ? "wsl" : id.startsWith("docker:") ? "docker" : "local");
 /** Distro or container name: the label without its `WSL: ` / `Docker: ` prefix. */
 export const sideName = (s: Pick<SideInfo, "label">) => s.label.replace(/^(?:WSL|Docker): /, "");
+/** `sideName` with the custom name (GH-515) in front. */
+export const sideNameOf = (s: Pick<SideInfo, "id" | "label">, names: Record<string, Label>) => (Object.hasOwn(names, s.id) ? names[s.id]?.name : undefined) ?? sideName(s);
 /** The kinds that have members, in chooser order: local first. */
 export const kindsOf = (sides: SideInfo[], docker?: DockerState): SideKind[] =>
   (["local", "wsl", "docker"] as const).filter((k) => k === "local" || sides.some((s) => sideKind(s.id) === k) || (k === "docker" && !!docker));

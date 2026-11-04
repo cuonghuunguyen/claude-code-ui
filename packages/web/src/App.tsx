@@ -161,6 +161,8 @@ import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
+import { LabelDialog } from "./label-dialog.tsx";
+import { projectLabel, saveLabel, setLabels, useLabels } from "./labels.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -268,7 +270,8 @@ export function App() {
   const [docker, setDocker] = useState<ListResult["docker"]>();
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
-  const sideOf = useMemo(() => sideLookup(sides, cwdSides), [sides, cwdSides]);
+  const labels = useLabels();
+  const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
   // GH-458: the status line of a project whose side is not ready; Retry / Update start it again (the state comes back as sessions.changed).
   const sideState = useMemo(
     () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed") => void client.current?.request({ type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
@@ -1368,7 +1371,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
+      onSettingsChanged: (m) => (setLabels(m.settings.labels), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1393,7 +1396,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => ((desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1682,6 +1685,8 @@ export function App() {
     }
   }
   const [cleanup, setCleanup] = useState<CleanupScope>();
+  // GH-515: the project whose name and icon the Label dialog edits.
+  const [labeling, setLabeling] = useState<string>();
   /** A run that outlives its closed dialog reports by toast. */
   const cleanupOpen = useRef(false);
   cleanupOpen.current = cleanup !== undefined;
@@ -3555,6 +3560,14 @@ export function App() {
           if (!cleanupOpen.current) setToast(r.skipped[0] ? tr("app.main.cleanupSkipped", { summary: summaryText(r), label: r.skipped[0].label, reason: r.skipped[0].reason }) : summaryText(r));
         }}
       />
+      <LabelDialog
+        open={labeling !== undefined}
+        title={tr("label.projectTitle", { name: labeling ? projectName(labeling) : "" })}
+        fallbackName={labeling ? baseName(labeling) : ""}
+        label={labeling ? projectLabel(labeling) : undefined}
+        onSave={(l) => saveLabel(cleanupRequest, "projects", labeling!, l)}
+        onClose={() => setLabeling(undefined)}
+      />
       <ConfirmDialog
         open={closingGroup !== undefined}
         title={tr("app.main.closeGroupTitle", { count: lastClosingGroup.current.ids.length, name: lastClosingGroup.current.name })}
@@ -3731,6 +3744,7 @@ export function App() {
               onWarmWorktree={warmWorktree}
               removing={(path) => removingPaths.has(path)}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
+              onEditProject={(cwd) => (setDrawer(false), setLabeling(cwd))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               renamingFromMenu={renaming?.menu}
