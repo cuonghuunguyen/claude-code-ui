@@ -400,6 +400,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     lastActivity.set(s.id, Date.now());
     if (p.type === "assistant_text" && !p.parentId) return void lastText.set(s.id, p.text);
     if (p.type === "user_text" && !p.parentId) return void lastText.delete(s.id);
+    // The CLI ended by itself (closed) or failed: the tree's running count dropped.
+    if (p.type === "session_state" && (p.state === "closed" || p.state === "error")) wake(s.id);
     const type: EventType | undefined =
       p.type === "turn_result" || p.type === "turn_interrupted"
         ? "turn_end"

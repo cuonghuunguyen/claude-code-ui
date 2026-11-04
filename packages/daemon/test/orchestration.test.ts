@@ -43,7 +43,13 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
   const result = () =>
     emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sid, is_error: false, duration_ms: 1, total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [], result: "" });
   let held: ((text: string) => void) | undefined;
+  let exited = false;
   const turn = async (text: string) => {
+    if (text === "exit") {
+      // The CLI process ends by itself, with no turn.
+      exited = true;
+      return wake();
+    }
     if (text === "stuck") {
       // A turn an interrupt does not end (a CLI that ignores it).
       reply("stuck");
@@ -109,6 +115,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
   const q = (async function* () {
     for (;;) {
       while (out.length) yield out.shift()!;
+      if (exited) return;
       await new Promise<void>((r) => (wake = r));
     }
   })();
@@ -1757,6 +1764,34 @@ describe("orchestration", () => {
       await settle();
       expect(notices(lead.sessionId)).toHaveLength(before);
       await call(lead.sessionId, "worker_close", { name: "sub" });
+      await until(() => notices(lead.sessionId).length > before);
+    } finally {
+      enable();
+    }
+  });
+
+  it("a worker coordinator without a CLI at the cap gets its notice when a worker below it exits by itself", async () => {
+    enable({ workerCap: 2 });
+    try {
+      const root = await coordinator();
+      const lead = await call(root, "worker_start", { name: "lead", cwd: dirB, prompt: "x" });
+      await until(async () => (await state(lead.sessionId)) === "idle");
+      const sub = await call(lead.sessionId, "worker_start", { name: "sub", cwd: dirC, prompt: "x" });
+      await until(async () => (await state(sub.sessionId)) === "idle");
+      await until(() => notices(lead.sessionId).length >= 2);
+      await until(async () => (await state(lead.sessionId)) === "idle");
+      await call(lead.sessionId, "worker_wait", { timeoutMs: 0 });
+      await call(root, "worker_close", { name: "lead" });
+      enable({ workerCap: 1 });
+      const before = notices(lead.sessionId).length;
+      await call(lead.sessionId, "worker_send", { name: "sub", text: "hold" });
+      await until(async () => (await state(sub.sessionId)) === "running");
+      await call(lead.sessionId, "worker_send", { name: "sub", text: "go" });
+      await until(async () => (await state(sub.sessionId)) === "idle");
+      await settle();
+      expect(notices(lead.sessionId)).toHaveLength(before);
+      await call(lead.sessionId, "worker_send", { name: "sub", text: "exit" });
+      await until(async () => (await state(sub.sessionId)) === "closed");
       await until(() => notices(lead.sessionId).length > before);
     } finally {
       enable();
