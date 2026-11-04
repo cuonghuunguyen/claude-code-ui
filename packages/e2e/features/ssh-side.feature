@@ -58,3 +58,16 @@ Feature: Open a project on an SSH host
     When I choose the SSH host "e2e-down" in Open project
     Then the side panel says "is not reachable"
     And I capture "ssh-unreachable"
+
+  Scenario: An SSH host with a custom name and icon shows them in Settings, Open project and the project badge
+    Given a throwaway SSH host
+    When I open the app and Settings › Sides
+    And I rename the SSH host "e2e-ok" to "Build box" with the emoji "🖥️"
+    Then the Settings row of the SSH host "e2e-ok" is named "Build box"
+    When I close Settings
+    And I list the SSH hosts in Open project
+    When I pick the SSH host named "e2e-ok"
+    Then the Open project target shows "Build box"
+    When I open the remote project folder
+    And the project badge shows "Build box"
+    And I capture "ssh-custom-name"

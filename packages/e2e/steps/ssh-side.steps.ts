@@ -98,3 +98,36 @@ When("I turn on Start with Claude UI for the SSH host {string}", async ({ page }
 Then("the side panel says {string}", async ({ page }, text: string) => {
   await expect(page.getByTestId("side-status")).toContainText(text, { timeout: 90_000 });
 });
+
+// GH-515 on an SSH host: the custom name and icon show in Settings, the Open project target and the project badge.
+When("I rename the SSH host {string} to {string} with the emoji {string}", async ({ page }, alias: string, name: string, emoji: string) => {
+  await page.getByTestId(`settings-side-edit-ssh:${alias}`).click();
+  await page.getByTestId("label-name").fill(name);
+  await page.getByTestId("label-icon-emoji").click();
+  await page.getByTestId("label-emoji").fill(emoji);
+  await page.getByTestId("label-save").click();
+  await expect(page.getByTestId("label-dialog")).toBeHidden();
+});
+
+Then("the Settings row of the SSH host {string} is named {string}", async ({ page }, alias: string, name: string) => {
+  await expect(page.getByTestId(`settings-side-ssh:${alias}`).getByTestId("settings-side-name")).toHaveText(name);
+});
+
+When("I list the SSH hosts in Open project", async ({ page }) => {
+  if (await page.getByTestId("open-drawer").isVisible()) await page.getByTestId("open-drawer").click();
+  await page.getByTestId("open-project").click();
+  await expect(page.getByTestId("open-project-dialog")).toBeVisible();
+  await page.getByTestId("side-kind").filter({ hasText: "SSH" }).click({ timeout: 30_000 });
+});
+
+When("I pick the SSH host named {string}", async ({ page }, name: string) => {
+  await page.getByTestId("container-row").filter({ hasText: name }).click();
+});
+
+Then("the Open project target shows {string}", async ({ page }, name: string) => {
+  await expect(page.getByTestId("side-target")).toContainText(name, { timeout: 120_000 });
+});
+
+Then("the project badge shows {string}", async ({ page }, name: string) => {
+  await expect(page.getByTestId("side-badge").filter({ hasText: name }).first()).toBeVisible({ timeout: 60_000 });
+});
