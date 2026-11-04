@@ -71,3 +71,19 @@ Feature: Open a project on an SSH host
     When I open the remote project folder
     And the project badge shows "Build box"
     And I capture "ssh-custom-name"
+
+  Scenario: The Open project host rows show the custom name and icon with the raw name beside, and the filter matches both
+    Given a throwaway SSH host
+    When I choose the SSH host "e2e-ok" in Open project
+    And I open the remote project folder
+    And I open the app and Settings › Sides
+    And I rename the SSH host "e2e-ok" to "Build box" with the emoji "🖥️"
+    And I close Settings
+    And Open project forgets the last chosen side
+    And I list the SSH hosts in Open project
+    Then the Open project row "Build box" shows the emoji "🖥️" and the raw name "e2e-ok"
+    When I filter the Open project list by "e2e-ok"
+    Then the Open project list shows only "Build box"
+    When I filter the Open project list by "build"
+    Then the Open project list shows only "Build box"
+    And I capture "ssh-open-project-names"

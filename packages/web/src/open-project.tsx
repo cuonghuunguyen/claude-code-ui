@@ -364,12 +364,13 @@ function ContainerStep({
 }) {
   const t = useT();
   const ssh = kind === "ssh";
+  const names = useLabels().sides;
   const [query, setQuery] = useState("");
   // The first match is highlighted: with a single container Enter confirms it, it never starts on its own.
   const [at, setAt] = useState(0);
   useEffect(() => input.current?.focus(), []);
   const q = query.trim().toLowerCase();
-  const rows = [...containers.filter((c) => isReady(c)), ...containers.filter((c) => !isReady(c))].filter((c) => sideName(c).toLowerCase().includes(q));
+  const rows = [...containers.filter((c) => isReady(c)), ...containers.filter((c) => !isReady(c))].filter((c) => `${sideNameOf(c, names)} ${sideName(c)}`.toLowerCase().includes(q));
   const selected = Math.min(at, rows.length - 1);
   const onKeyDown = (e: KeyboardEvent) => {
     if (isImeKey(e.nativeEvent)) return;
@@ -421,8 +422,9 @@ function ContainerStep({
               className={cn("flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm max-md:h-11", i === selected && "bg-secondary")}
               data-testid="container-row"
             >
-              <BoxIcon className="size-4 shrink-0 text-faint" aria-hidden />
-              <span className="min-w-0 flex-1 truncate font-medium">{sideName(c)}</span>
+              {names[c.id]?.icon ? <LabelIcon icon={names[c.id]!.icon!} className="size-4 text-[13px]" /> : <BoxIcon className="size-4 shrink-0 text-faint" aria-hidden />}
+              <span className="min-w-0 flex-1 truncate font-medium">{sideNameOf(c, names)}</span>
+              {sideNameOf(c, names) !== sideName(c) && <span className="min-w-0 max-w-1/2 shrink truncate text-muted-foreground text-xs" data-testid="container-raw-name">{sideName(c)}</span>}
               {stateWord(c) && <span className="shrink-0 text-muted-foreground text-xs">{stateWord(c)}</span>}
             </li>
           ))}

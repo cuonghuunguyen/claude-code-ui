@@ -131,3 +131,27 @@ Then("the Open project target shows {string}", async ({ page }, name: string) =>
 Then("the project badge shows {string}", async ({ page }, name: string) => {
   await expect(page.getByTestId("side-badge").filter({ hasText: name }).first()).toBeVisible({ timeout: 60_000 });
 });
+
+// GH-554: the Open project rows show the custom name and icon, the raw name beside, and the filter matches both.
+Then("the Open project row {string} shows the emoji {string} and the raw name {string}", async ({ page }, name: string, emoji: string, raw: string) => {
+  const row = page.getByTestId("container-row").filter({ hasText: name });
+  await expect(row.getByTestId("label-glyph-emoji")).toHaveText(emoji);
+  await expect(row.getByTestId("container-raw-name")).toHaveText(raw);
+});
+
+When("I filter the Open project list by {string}", async ({ page }, text: string) => {
+  await page.getByTestId("container-filter").fill(text);
+});
+
+Then("the Open project list shows only {string}", async ({ page }, name: string) => {
+  const rows = page.getByTestId("container-row");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText(name);
+});
+
+// The dialog opens on the last chosen side; clearing it shows the host list.
+When("Open project forgets the last chosen side", async ({ page }) => {
+  await page.evaluate(() => {
+    for (const k of ["claude-ui.side", "claude-ui.side.ssh"]) localStorage.removeItem(k);
+  });
+});
