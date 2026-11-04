@@ -35,7 +35,7 @@ describe("SSH Side in the registry", () => {
     sides.close();
   });
 
-  it("Start with Claude UI on: saved, and the next Hub start starts it by itself; off again forgets it", async () => {
+  it("Start with Claude UI on: saved, and the next Hub start connects and starts a Daemon by itself; off again forgets it", async () => {
     const { sides, saves } = registry(() => proc());
     expect(sides.prefs("ssh:box", { start: true })).toBe(true);
     expect(saves.at(-1)).toEqual([{ id: "ssh:box" }]);
@@ -91,7 +91,7 @@ describe("SSH Side: Add SSH host and updates", () => {
     await expect(sides.addSshHost("ssh box")).rejects.toThrow("ssh is not available");
     sides.close();
   });
-  it("Update automatically off keeps the installed build: the saved SSH Side starts with setup never; on, an update runs bundle-only", async () => {
+  it("Update automatically off keeps the installed build: the saved SSH Side starts with setup never; on, an update runs bundle-only (a launch: \"Start with Claude UI\" starts a Daemon when none runs)", async () => {
     const setups: unknown[] = [];
     const start = async (saved: SavedSide) => {
       const sides = createSides({ targets: [sideTarget("ssh", "box")], key: () => "new", saved: [saved], spawn: (_id, o) => (setups.push([o.setup, !!o.bundleOnly, !!o.attach]), proc()), save: () => {} });
@@ -101,7 +101,7 @@ describe("SSH Side: Add SSH host and updates", () => {
     await start({ id: "ssh:box", key: "old", update: false });
     await start({ id: "ssh:box", key: "old" });
     await start({ id: "ssh:box", key: "new" });
-    expect(setups).toEqual([["never", false, true], ["needed", true, false], ["never", false, true]]);
+    expect(setups).toEqual([["never", false, false], ["needed", true, false], ["never", false, false]]);
   });
 });
 

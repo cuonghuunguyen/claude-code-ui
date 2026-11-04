@@ -75,6 +75,12 @@ describe("sideStatus", () => {
     expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });
     expect(sideStatus(side({ state: "off", message: "The Side Daemon has ended." }))).toEqual({ text: "The Side Daemon has ended.", action: "retry" });
   });
+  it("an SSH Side whose remote Daemon runs another build says update pending, with no action; a taken-over Side shows its message with Retry", () => {
+    expect(sideStatus(side({ id: "ssh:box", state: "ready", updatePending: true }))).toEqual({ text: "Update pending: updates when nothing runs" });
+    expect(sideStatus(side({ id: "ssh:box", state: "ready" }))).toBeUndefined();
+    const taken = "SSH: box is taken over by another Claude UI. Retry to take it back.";
+    expect(sideStatus(side({ id: "ssh:box", state: "off", message: taken }))).toEqual({ text: taken, action: "retry" });
+  });
 });
 
 it("SSH sides: kind, name, chip order, short badge (alias when several), opens on none until picked", () => {

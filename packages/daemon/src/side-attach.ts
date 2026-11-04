@@ -1,7 +1,7 @@
 // `claude-ui side --attach` (ADR 0007): a thin bridge between ssh stdio and the Side Daemon's Unix socket. The launching ssh and every
 // later reattach run it; it never speaks the protocol.
 import { connect as netConnect, type Server, type Socket } from "node:net";
-import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
@@ -21,7 +21,10 @@ let outer: number | undefined;
 export function listenPrivate(server: Server, path: string) {
   const prev = process.umask(0o177);
   outer ??= prev;
-  server.once("listening", () => (process.umask(outer!), (outer = undefined)));
+  // Also on an error (EADDRINUSE of a lost race): the mask must not stay 0177.
+  const restore = () => outer !== undefined && (process.umask(outer), (outer = undefined));
+  server.once("listening", restore);
+  server.once("error", restore);
   server.listen(path);
 }
 
@@ -37,11 +40,33 @@ export function liveInstall(cli: string): { file: string; dir: string } | undefi
   return { file: join(dirname(dir), ".live"), dir };
 }
 
-/** Makes the socket's folder (mode 0700); a folder another user owns is refused (a shared /tmp). */
+/** Makes the socket's folder (mode 0700); a folder another user owns, or a symlink in its place, is refused (a shared /tmp). */
 export function prepareSockDir(dir: string, uid: number | undefined = process.getuid?.()) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (uid !== undefined && statSync(dir).uid !== uid) throw new Error(`${dir} is owned by another user`);
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`${dir} is not a folder`);
+  if (uid !== undefined && st.uid !== uid) throw new Error(`${dir} is owned by another user`);
   if (uid !== undefined) chmodSync(dir, 0o700);
+}
+
+/**
+ * Listens on `path`. EADDRINUSE: a live Daemon owns it (`onLive`, a second start that lost the race leaves); else the file is stale
+ * (a dead Daemon's) and is removed only if it is still the file seen at EADDRINUSE, so two starts never remove each other's new socket.
+ * shortcut: the stat -> rm gap stays (no atomic compare-and-remove on a path), upgrade when a lock file is needed.
+ */
+export function claimSocket(server: Server, path: string, o: { onLive: () => void; onError: (e: Error) => void; connect?: (p: string) => Socket }) {
+  server.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code !== "EADDRINUSE") return o.onError(e);
+    const seen = statSync(path, { throwIfNoEntry: false })?.ino;
+    const probe = (o.connect ?? ((p: string) => netConnect(p)))(path);
+    probe.once("connect", () => (probe.destroy(), o.onLive()));
+    probe.once("error", () => {
+      probe.destroy();
+      if (statSync(path, { throwIfNoEntry: false })?.ino === seen) rmSync(path, { force: true });
+      listenPrivate(server, path);
+    });
+  });
+  listenPrivate(server, path);
 }
 
 const tryConnect = (path: string, connect: (p: string) => Socket) =>

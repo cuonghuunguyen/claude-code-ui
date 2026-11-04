@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, createServer as netServer, type AddressInfo } from "node:net";
 import { homedir, networkInterfaces, release } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
@@ -13,7 +14,7 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { createSideDaemon } from "./side-daemon.ts";
-import { listenPrivate, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
+import { claimSocket, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "./side-attach.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
 import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide } from "./docker-side.ts";
@@ -30,6 +31,7 @@ import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { openInBrowser, runClient } from "./ctl/commands.ts";
 import { claimDaemonFile } from "./ctl/daemon-file.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
+import { migrateSideState } from "./side-state.ts";
 import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
@@ -101,11 +103,17 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
+// An SSH Side Daemon may share its machine with a normal claude-ui Hub: it keeps its own state beside its socket (a dot name in the install root, which the install sweep skips)
+// and never reads or writes the Hub's config folder (daemon.json, token, settings, sessions, versions/).
+const sideListen = side ? process.env.CLAUDE_UI_SIDE_LISTEN : undefined;
+// Every kind of Side (WSL, Docker too: the distro or container may run its own Hub) uses it; WSL/Docker have no socket, so it sits in the install root.
+const stateDir = side ? join(homedir(), ".local", "share", "claude-ui", "side", ".data") : configDir(); // not beside the socket: that may be a temporary folder
+if (side) migrateSideState(configDir(), stateDir);
+const state = { uploadDir: side ? join(stateDir, "uploads") : defaultUploadsDir(), settingsFile: join(stateDir, "sessions.json"), projects: createProjects({ file: join(stateDir, "projects.json") }), appSettings: createSettings({ file: join(stateDir, "settings.json") }), secrets: createSecrets({ file: join(stateDir, "secrets.json") }) };
 
 if (side) {
-  // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none.
-  mkdirSync(configDir(), { recursive: true, mode: 0o700 });
+  // A fresh container has no ~/.config: the hub's loadToken creates the config dir, a side has none (an SSH Side Daemon uses its own `stateDir`).
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   // stdout carries the frames: every log line goes to stderr.
   console.log = console.error;
   let push: (p: Parameters<Push["send"]>[0]) => void = () => {};
@@ -113,23 +121,15 @@ if (side) {
   // The hub holds the sleep inhibitor (a side runs on its machine): a side only reports whether a session runs.
   let running: (on: boolean) => void = () => {};
   const daemon = createDaemon({ webRoot, token: "", roots, push: sidePush, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, onRunning: (on) => running(on), ...state });
-  const listen = process.env.CLAUDE_UI_SIDE_LISTEN;
+  const listen = sideListen;
   if (listen) {
     // An SSH Side Daemon (ADR 0007): detached, outlives the pipe. Pipes arrive on the Unix socket (mode 0600), one at a time; it exits after its Grace period.
-    const sd = createSideDaemon({ accept: daemon.accept, git: runGit, busy: daemon.busy, stopIdle: daemon.stopAll, exit: () => process.exit(0) });
+    const live = liveInstall(process.argv[1] ?? "");
+    const sd = createSideDaemon({ accept: daemon.accept, git: runGit, busy: daemon.busy, terminals: daemon.terminals, stopIdle: daemon.stopAll, exit: () => process.exit(0), build: live && basename(live.dir) });
     push = sd.push;
     running = sd.running;
     const server = netServer((c) => sd.attach(c, c));
-    const listenOn = () => listenPrivate(server, listen);
-    server.on("error", (e: NodeJS.ErrnoException) => {
-      if (e.code !== "EADDRINUSE") return (console.error(`claude-ui side: ${e.message}`), process.exit(1));
-      // A live Daemon owns it (a second start lost the race): leave. A stale socket file of a dead one: remove it and listen.
-      const probe = netConnect(listen);
-      probe.once("connect", () => process.exit(0));
-      probe.once("error", () => (rmSync(listen, { force: true }), listenOn()));
-    });
-    listenOn();
-    const live = liveInstall(process.argv[1] ?? "");
+    claimSocket(server, listen, { onLive: () => process.exit(0), onError: (e) => (console.error(`claude-ui side: ${e.message}`), process.exit(1)) });
     // Only once this process owns the socket: a second start that loses the race must touch neither the socket nor the running Daemon's record.
     let owned = false;
     server.once("listening", () => ((owned = true), live && writeFileSync(live.file, live.dir)));
@@ -144,6 +144,20 @@ if (side) {
   const sidesFile = join(configDir(), "sides.json");
   const listsFile = join(configDir(), "side-lists.json");
   const graceFile = join(configDir(), "side-grace.json");
+  const attachedFile = join(configDir(), "side-attached.json");
+  /** This Hub's ID across runs (a restarted Hub is the same Hub for an SSH Side Daemon). */
+  const hubId = (() => {
+    const f = join(configDir(), "side-hub-id");
+    try {
+      const v = readFileSync(f, "utf8").trim();
+      if (v) return v;
+    } catch {
+      // first run
+    }
+    const v = randomUUID();
+    writeFileSync(f, v, { mode: 0o600 });
+    return v;
+  })();
   const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
@@ -202,7 +216,9 @@ if (side) {
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
           spawn: (id, { setup, phase, install, pinned, bundleOnly, attach }) => kinds[kindOf(id)!].spawn(nameOf(id), { setup, phase, install, pinned, bundleOnly, attach }),
           grace: { read: () => ((g) => (g && typeof g === "object" && !Array.isArray(g) ? Object.fromEntries(Object.entries(g).filter(([, v]) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10_080) as [string, number][]) : {}))(readJson(graceFile)), write: (g) => writeFileSync(graceFile, JSON.stringify(g)) },
+          attached: { read: () => ((a) => (Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : undefined))(readJson(attachedFile)), write: (ids) => writeFileSync(attachedFile, JSON.stringify(ids)) },
           key: sideKey,
+          hubId,
           ...(ssh && { addSshHost: (command: string, alias?: string) => addSshHost({ command, alias, config: sshConfig }) }),
           check: (id) => kinds[kindOf(id)!].check(nameOf(id)),
           // A start that ssh itself ended (login, host key, network): the message says what to do.

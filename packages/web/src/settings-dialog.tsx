@@ -265,7 +265,7 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
       {sides.map((r) => {
         const local = r.id === LOCAL_SIDE;
         const title = sideTitle(r, names);
-        const status = local ? "" : r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
+        const status = local ? "" : r.state === "ready" ? (r.updatePending ? t("side.updatePending") : t("settings.sides.running")) : (sideStatus(r)?.text ?? "");
         const dot = r.state === "ready" ? "bg-success" : r.state === "starting" || r.state === "reconnecting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
         const sub = title !== r.label ? [r.label, status].filter(Boolean).join(" · ") : status;
         return (
@@ -276,6 +276,11 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
               <div className="min-w-0 flex-1">
                 <span className="block truncate text-sm" title={title} data-testid="settings-side-name">{title}</span>
                 {sub && <span className={cn("block break-words text-xs", r.state === "error" ? "text-destructive" : "text-muted-foreground")}>{sub}</span>}
+                {!local && r.state !== "ready" && sideStatus(r)?.action === "retry" && (
+                  <button type="button" onClick={() => void request({ type: "side.start", side: r.id }).catch((e: Error) => onError(e.message))} className="mt-1 h-6 rounded-md border px-2 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid={`settings-side-retry-${r.id}`}>
+                    {t("side.retry")}
+                  </button>
+                )}
                 {r.id.startsWith("ssh:") && (
                   <label className="mt-1 flex items-center gap-2 text-muted-foreground text-xs" title={t("settings.sides.graceHint")}>
                     <span>{t("settings.sides.grace")}</span>

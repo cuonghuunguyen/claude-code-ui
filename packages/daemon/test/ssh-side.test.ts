@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import type { Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 import { kindOf, nameOf, sideTarget, startOptIn } from "../src/side-kinds.ts";
 import { addSshHost, checkSshSide, includeFiles, isWindowsHost, listSshHosts, parseSshCommand, parseSshConfig, prepareSshSide, sshArgs, sshConfigPath, sshError } from "../src/ssh-side.ts";
-import { checkScript, setupMessage, setupScript } from "../src/sides.ts";
+import { checkScript, setupMessage, setupScript, SWEEP_LINE, sshRunArgs } from "../src/sides.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const decode = (remote: string) => Buffer.from(/echo (\S+) \|/.exec(remote)![1]!, "base64").toString();
@@ -392,7 +393,7 @@ describe("setup script of a host", () => {
     expect(s).toContain("command -v npm >/dev/null 2>&1 || say npm_missing");
     expect(s).toContain('mkdir -p "$root" 2>/dev/null && [ -w "$root" ] || say home_not_writable');
     expect(s).toContain("claude-agent-sdk-*-*");
-    expect(s).toContain('[ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"'); // the build of a running Side Daemon (.live) stays
+    expect(s).toContain(SWEEP_LINE); // the build of a running Side Daemon (.live) stays
   });
   it("bundle install checks the home folder too; never reads only; Docker and WSL scripts are unchanged", () => {
     const b = { target: "linux-x64" as const, claudePackage: "claude-agent-sdk-linux-x64" };
@@ -410,5 +411,48 @@ describe("setup script of a host", () => {
     expect(setupMessage("npm_missing", "", "SSH: box", "host")).toContain("npm is not installed on SSH: box");
     expect(setupMessage("home_not_writable", "", "SSH: box", "host")).toContain("no writable home folder");
     expect(setupMessage("unpack_tools_missing", "", "SSH: box", "host")).toContain("on the host");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("remote install root: sweep and run tail", () => {
+  const sh = (script: string, env: Record<string, string> = {}) => {
+    try {
+      return { out: execFileSync("sh", ["-c", script], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" }), code: 0 };
+    } catch (e) {
+      return { out: String((e as { stdout?: string }).stdout ?? ""), code: (e as { status: number }).status };
+    }
+  };
+  it("the install sweep keeps the build a running Side Daemon uses, and never leaves the install root", () => {
+    const home = dir("sweep-");
+    const root = join(home, ".local/share/claude-ui/side");
+    // The remote's own Hub: its config folder (versions/) and a sibling of the install root.
+    const hub = [join(home, ".config/claude-ui/versions/1.0.0"), join(home, ".local/share/claude-ui/versions/1.0.0")];
+    for (const d of [...["a", "b", "cur", ".new-1", ".old-2", ".data"].map((n) => join(root, n)), ...hub]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(root, ".live"), join(root, "b"));
+    writeFileSync(join(root, ".side.sock"), "");
+    sh(`root=${JSON.stringify(root)}; dir="$root/cur"; ${SWEEP_LINE}`);
+    expect(["a", "b", "cur", ".new-1", ".old-2", ".data"].map((n) => existsSync(join(root, n)))).toEqual([false, true, true, false, false, true]);
+    expect(existsSync(join(root, ".side.sock"))).toBe(true);
+    expect(hub.map(existsSync)).toEqual([true, true]); // the remote Hub's install and versions/ stay
+  });
+  it("a reattach bridges from the build named by .live (a newer Hub, an older Daemon); without .live it says no_daemon at once", () => {
+    const home = dir("attach-");
+    const script = setupScript("", "hub-key", "ssh", "never", undefined, sshRunArgs(true));
+    expect(sh(script, { HOME: home })).toEqual({ out: "CLAUDE_UI_SETUP no_daemon\n", code: 3 });
+    const root = join(home, ".local/share/claude-ui/side");
+    const live = join(root, "old-key");
+    mkdirSync(join(live, "node/bin"), { recursive: true });
+    mkdirSync(join(live, "node_modules/claude-code-ui/dist"), { recursive: true });
+    mkdirSync(join(live, "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"), { recursive: true });
+    writeFileSync(join(live, "node_modules/claude-code-ui/dist/cli.js"), "");
+    writeFileSync(join(live, "node/bin/node"), '#!/bin/sh\necho "NODE $*"\n', { mode: 0o755 });
+    writeFileSync(join(root, ".live"), live);
+    const r = sh(script, { HOME: home });
+    expect(r.out).toContain(`NODE ${live}/node_modules/claude-code-ui/dist/cli.js side --attach\n`);
+    expect(existsSync(join(root, "hub-key"))).toBe(false); // this Hub's own build folder is not needed
+  });
+  it("a launch ends in `side --attach --start`, a reattach in `side --attach`", () => {
+    expect(setupScript("", "k", "ssh", "never", undefined, sshRunArgs(false))).toContain('"$cli" side --attach --start');
+    expect(setupScript("", "k", "ssh", "never", undefined, sshRunArgs(true))).toMatch(/"\$cli" side --attach$/);
   });
 });

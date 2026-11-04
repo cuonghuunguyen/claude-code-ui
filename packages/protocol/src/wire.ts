@@ -541,6 +541,8 @@ export type SideInfo = {
   autoUpdate?: false;
   /** SSH Side: minutes the remote Side Daemon keeps running with no hub attached (Grace period; default 30). */
   graceMinutes?: number;
+  /** SSH Side, ready: the remote Side Daemon runs another build; the hub updates it once nothing runs (no turn, no open terminal). */
+  updatePending?: true;
   /** `off` and the installed claude-ui is not this build: an update is needed (Update). */
   update?: true;
   /** A saved side the hub does not list now (a Docker container that is not running); named for Settings and the sidebar. */
