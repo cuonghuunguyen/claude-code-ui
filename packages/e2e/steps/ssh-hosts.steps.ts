@@ -51,6 +51,19 @@ Then("the form fits the viewport", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+Then("the form, its error and its buttons are inside the Open project dialog", async ({ page }) => {
+  const dialog = page.getByTestId("open-project-dialog");
+  const form = page.getByTestId("add-ssh-host-form");
+  // The form may scroll with the host list: bring each part into view first, then it must lie in the dialog box.
+  const parts = { form, error: page.getByTestId("add-ssh-host-error"), submit: page.getByTestId("add-ssh-host-submit"), cancel: form.getByRole("button").last() };
+  for (const [name, loc] of Object.entries(parts)) {
+    await loc.scrollIntoViewIfNeeded();
+    const d = (await dialog.boundingBox())!;
+    const b = (await loc.boundingBox())!;
+    expect(b && b.y >= d.y - 0.5 && b.y + b.height <= d.y + d.height + 0.5 && b.x >= d.x - 0.5 && b.x + b.width <= d.x + d.width + 0.5, `${name} ${JSON.stringify(b)} in dialog ${JSON.stringify(d)}`).toBe(true);
+  }
+});
+
 Then("the ssh config has a Host block {string} with {string}", async ({}, alias: string, line: string) => {
   const text = readFileSync(join(sshDir(runDir()), "config"), "utf8");
   const i = text.indexOf(`Host ${alias}\n`);

@@ -29,6 +29,7 @@ Feature: SSH hosts from the ssh config and the Add SSH host form
     And I add the SSH host with the command "ssh other@example.com" and the alias "main-a"
     Then the Add SSH host form says "already exists"
     And the form fits the viewport
+    And the form, its error and its buttons are inside the Open project dialog
     And I capture "ssh-host-refused"
     When I add the SSH host with the command "ssh other@example.com" and the alias "inc-b"
     Then the Add SSH host form says "already exists"
