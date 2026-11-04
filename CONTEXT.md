@@ -13,8 +13,8 @@ The Daemon the browser connects to. It routes each request to itself or to the S
 _Avoid_: main daemon, host daemon
 
 **Side**:
-A Daemon run with `--side` inside a WSL distro, a Docker container or a machine reached over SSH (an **SSH Side**), reached by the Hub over stdio. Never the side panel.
-_Avoid_: remote, node, side panel (different thing)
+A role: the Hub of a WSL distro, a Docker container or a machine reached over SSH (an **SSH Side**) while another Hub is attached to it and routes sessions, terminals and paths there. One Hub runs per machine; when none runs, the attaching Hub starts one. Never the side panel.
+_Avoid_: remote, node, peer Hub, upstream, side panel (different thing)
 
 **SSH host**:
 A `Host` entry of the user's ssh config, listed as an SSH Side under its alias. Adding one adds a `Host` entry to the ssh config.
