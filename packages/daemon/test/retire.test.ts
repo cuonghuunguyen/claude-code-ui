@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writeDaemonFile } from "../src/ctl/daemon-file.ts";
+import { CtlError } from "../src/ctl/connect.ts";
 import { retireAttachHub } from "../src/ctl/retire.ts";
 
 const withFile = (startedBy?: "attach") => {
@@ -30,6 +31,11 @@ describe("retireAttachHub", () => {
     const s = setup(withFile());
     await s.run();
     expect(s.ask).not.toHaveBeenCalled();
+  });
+  it("a pid that answers as no Hub (stale daemon.json, pid reused) is not waited for", async () => {
+    const s = setup(withFile("attach"), { ask: async () => Promise.reject(new CtlError(3, "not_running", "no daemon")) });
+    await s.run();
+    expect(s.log).not.toHaveBeenCalled();
   });
   it("asks once, says waiting only when turns run, resolves when the pid dies", async () => {
     for (const waitingFor of [0, 2]) {

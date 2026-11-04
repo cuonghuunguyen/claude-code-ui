@@ -1,5 +1,6 @@
 // A user start on a machine whose Hub was started by another computer's attach (ADR 0009): the attach-started Hub is asked to retire (the same
 // `update.install` + `update.restart` calls as `claude-ui update`), the start waits until it exits, then the user's Hub takes over and attached Hubs follow.
+import { CtlError } from "./connect.ts";
 import { readDaemonFile } from "./daemon-file.ts";
 
 /**
@@ -13,7 +14,8 @@ export async function retireAttachHub(o: { dir: string; alive: (pid: number) => 
   try {
     waitingFor = (await o.ask(d.port, o.token())).waitingFor;
   } catch (e) {
-    if (!o.alive(d.pid)) return;
+    // Gone, or not answering as a Hub (a stale daemon.json whose pid another process now uses): nothing to wait for.
+    if (!o.alive(d.pid) || (e instanceof CtlError && e.exit === 3)) return;
     throw e;
   }
   if (waitingFor > 0) o.log(`claude-ui: a Claude UI started by another computer's attach runs here (pid ${d.pid}); waiting for its ${waitingFor} running turn(s) to finish.`);

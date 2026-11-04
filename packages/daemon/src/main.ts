@@ -180,6 +180,7 @@ const sides =
         grace: { read: () => ((g) => (g && typeof g === "object" && !Array.isArray(g) ? Object.fromEntries(Object.entries(g).filter(([, v]) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10_080) as [string, number][]) : {}))(readJson(graceFile)), write: (g) => writeFileSync(graceFile, JSON.stringify(g)) },
         attached: { read: () => ((a) => (Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : undefined))(readJson(attachedFile)), write: (ids) => writeFileSync(attachedFile, JSON.stringify(ids)) },
         key: sideKey,
+        version,
         ...(ssh && { addSshHost: (command: string, alias?: string) => addSshHost({ command, alias, config: sshConfig }) }),
         check: (id) => kinds[kindOf(id)!].check(nameOf(id)),
         // A start that ssh itself ended (login, host key, network): the message says what to do.
@@ -265,8 +266,11 @@ server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   // `--port 0` (a Hub started by an attach) listens on any free port.
   const actual = (server.address() as AddressInfo).port;
   const owned = await attachOwned;
+  // Without the socket, the live Hub that owns it stays the one bridges find (this write must not hide its `attach`).
+  const prev = owned ? undefined : readDaemonFile(dir);
+  const keptAttach = prev && prev.attach && pidAlive(prev.pid) ? { attach: prev.attach, ...(prev.schema && { schema: prev.schema }) } : {};
   try {
-    process.on("exit", claimDaemonFile(dir, { port: actual, pid: process.pid, version, startedAt: new Date().toISOString(), ...(owned && attachSock && { attach: attachSock, schema: [...SIDE_SCHEMA] as [number, number] }), ...(startedBy && { startedBy }) }));
+    process.on("exit", claimDaemonFile(dir, { port: actual, pid: process.pid, version, startedAt: new Date().toISOString(), ...(owned && attachSock ? { attach: attachSock, schema: [...SIDE_SCHEMA] as [number, number] } : keptAttach), ...(startedBy && { startedBy }) }));
   } catch (e) {
     console.error(`claude-ui: cannot write daemon.json: ${(e as Error).message}`);
   }

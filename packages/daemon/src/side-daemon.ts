@@ -91,6 +91,8 @@ export function createAttachServer(o: {
       };
       const onData = (b: Buffer | string) => {
         buf += b;
+        // The hello is one short line; anything longer is not an attaching Hub.
+        if (buf.length > 65_536) return settle(undefined, false);
         const nl = buf.indexOf("\n");
         if (nl < 0) return;
         let range: unknown;

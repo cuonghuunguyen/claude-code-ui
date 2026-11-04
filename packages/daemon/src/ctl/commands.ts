@@ -156,11 +156,12 @@ export async function updateLiveHub(io: { dir: string; env: NodeJS.ProcessEnv; s
   try {
     const tp = tokenPath({ env: io.env, dir: io.dir });
     const r = await askUpdate(d.port, readToken(tp.file, tp.explicit));
-    io.stdout(`Installed ${r.installed}; the running Claude UI (pid ${d.pid}) ${r.waitingFor ? `restarts when ${r.waitingFor} session(s) are idle` : "restarts now"}.\n`);
+    io.stdout(d.startedBy === "attach" ? `The Claude UI started by another computer's attach (pid ${d.pid}) ends ${r.waitingFor ? `when ${r.waitingFor} running turn(s) end` : "now"}; the next attach starts the current build.\n` : `Installed ${r.installed}; the running Claude UI (pid ${d.pid}) ${r.waitingFor ? `restarts when ${r.waitingFor} session(s) are idle` : "restarts now"}.\n`);
     return 0;
   } catch (e) {
     if (!(e instanceof CtlError)) throw e;
-    if (e.exit === 3) return undefined;
+    // No Hub answers, or it has no updater (--no-update-check, not started by the launcher): install as without a Hub.
+    if (e.exit === 3 || e.code === "update_unavailable") return undefined;
     io.stderr(`claude-ui: ${e.message}\n`);
     return 1;
   }

@@ -232,6 +232,15 @@ describe("createUpdater", () => {
     await expect(u.install()).rejects.toThrow("no update available");
   });
 
+  it("a failed install (nothing newer) does not stay: a later call looks again", async () => {
+    let version = "0.2.0";
+    const fetchLatest = (async () => ({ ok: true, json: async () => ({ version }) })) as unknown as typeof fetch;
+    const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: fetchLatest, run: fakeNpm(), busy: () => ({ sessions: 0, terminals: 0 }), exit: vi.fn(), broadcast: () => {} });
+    await expect(u.install()).rejects.toThrow("no update available");
+    version = "0.2.1";
+    expect(await u.install()).toBe("0.2.1");
+  });
+
   describe("retire (an attach-started Hub)", () => {
     const retiring = (busy = { sessions: 0, terminals: 0 }) => {
       const order: string[] = [];

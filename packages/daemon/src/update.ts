@@ -205,7 +205,8 @@ export function createUpdater(opts: {
     /** Installs the available version (once; a second call waits for the first). The daemon keeps running on failure. */
     install(): Promise<string> {
       if (opts.retire) return Promise.resolve(opts.current);
-      installing ??= (async () => {
+      if (installing) return installing;
+      const p = (async () => {
         // A Hub that checked before the release has none available yet.
         const v = available ?? (await check());
         if (!v) throw new Error("no update available");
@@ -221,11 +222,13 @@ export function createUpdater(opts: {
           // Every connection is back at "available".
           setState(undefined);
           throw err;
-        } finally {
-          installing = undefined;
         }
       })();
-      return installing;
+      // Cleared whatever way it ends (a failed look at the registry included), so a later call tries again.
+      installing = p;
+      const clear = () => void (installing === p && (installing = undefined));
+      p.then(clear, clear);
+      return p;
     },
     /**
      * Exits RESTART_CODE once no session is busy for `graceMs` (`now`: at once). Nothing busy but open terminals: once they
