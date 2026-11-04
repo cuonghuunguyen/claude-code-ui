@@ -230,7 +230,7 @@ describe.skipIf(process.platform === "win32")("fake docker", () => {
     const setup = run(["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
     expect([setup.status, setup.stdout]).toEqual([1, cfg.setup.stdout]);
   });
-  it("GH-458: log lines per call and per setup exec; side makes the setup exec run a real side under its home (not run here)", () => {
+  it("GH-458: log lines per call and per setup exec; side makes the setup exec run a real bridge to the Hub under its home (not run here)", () => {
     const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
     try {
       const log = join(d, "docker.log");
@@ -242,7 +242,8 @@ describe.skipIf(process.platform === "win32")("fake docker", () => {
       // The side script is built, never started here: only its text is checked.
       const text = fakeDockerScript({ ...withLog, side: { home: join(d, "h"), repo: "/repo", projects: join(d, "p") } });
       expect(text).toContain("side.pid");
-      expect(text).toContain("--side --roots");
+      expect(text).toContain("side --attach --start");
+      expect(text).not.toContain("--side");
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

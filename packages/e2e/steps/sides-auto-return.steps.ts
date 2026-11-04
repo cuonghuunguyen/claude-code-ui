@@ -1,5 +1,6 @@
-// GH-458 acceptance: saved Docker sides come back with the hub. A fake `docker` CLI (support/fake-docker.ts) whose setup exec runs a real
-// side process (`main.ts --side`) under <run>/side-home; the side's project lives in tmp, outside the daemon's roots and home. POSIX only.
+// GH-458, GH-578 acceptance: saved Docker sides come back with the hub. A fake `docker` CLI (support/fake-docker.ts) whose setup exec runs the real
+// bridge (`main.ts side --attach [--start]`) under <run>/side-home; the bridge starts the Hub of the container (detached). The Hub's project lives in tmp,
+// outside the daemon's roots and home. POSIX only.
 // Written, not run in GH-458. Everything stays in the run folder or in a tmp folder of its own (never the owner's config or cache).
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import { After, Given, Then, When } from "./fixtures.ts";
 
 type Fake = { name: string; listed: boolean; mode: "side" | "fails" | "not_installed"; project: string; home: string; log: string };
 let fake: Fake | undefined;
+let hubBefore: number | undefined;
 
 const probeFails = { code: 1, stdout: "", stderr: "probe not answered" };
 function configOf(f: Fake): FakeDockerConfig {
@@ -31,14 +33,37 @@ function configOf(f: Fake): FakeDockerConfig {
 const write = () => writeFakeDocker(runDir(), configOf(fake!));
 const sideFile = (daemon: { configDir: string }) => join(daemon.configDir, "sides.json");
 const logLines = () => (existsSync(fake!.log) ? readFileSync(fake!.log, "utf8").split("\n").filter(Boolean) : []);
-const setups = () => logLines().filter((l) => l === "setup").length;
+/** Launches that may start a Hub in the container (`side --attach --start`); a reattach (attach only) is not one. */
+const starts = () => logLines().filter((l) => l === "start").length;
 const sidePid = () => Number(readFileSync(join(fake!.home, "side.pid"), "utf8"));
-const killSide = () => {
+const kill = (pid: number) => {
   try {
-    process.kill(sidePid(), "SIGKILL");
+    process.kill(pid, "SIGKILL");
   } catch {
     // Already gone.
   }
+};
+/** The bridge process of the container (what a dropped pipe ends). */
+const killSide = () => {
+  try {
+    kill(sidePid());
+  } catch {
+    // Never started.
+  }
+};
+/** The Hub the bridge started in the container: its PID is in the container's daemon.json. */
+const hubPid = (): number | undefined => {
+  try {
+    return Number(JSON.parse(readFileSync(join(fake!.home, ".config", "claude-ui", "daemon.json"), "utf8")).pid) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+/** The container stops: its processes end, the bridge and the Hub. */
+const killContainer = () => {
+  killSide();
+  const p = hubPid();
+  if (p) kill(p);
 };
 const group = (page: Page, project: string) => page.getByTestId("session-group").filter({ has: page.locator(`[data-testid="group-toggle"][title$="${project}"]`) });
 const status = (page: Page, project: string) => group(page, project).getByTestId("sidebar-side-status");
@@ -106,14 +131,25 @@ When("I restart the daemon with the fake Docker", async ({ daemon, page }) => {
   await waitConnected(page);
 });
 
-When("I kill the side process of {string}", async ({}, _name: string) => {
+When("I kill the bridge process of {string}", async ({}, _name: string) => {
+  hubBefore = hubPid();
+  expect(hubBefore, "the Hub the bridge started in the container").toBeTruthy();
   killSide();
+});
+
+Then("the Hub of {string} is the one that ran before", async ({}, _name: string) => {
+  expect(hubPid()).toBe(hubBefore);
+  expect(() => process.kill(hubBefore!, 0)).not.toThrow();
 });
 
 When("the container {string} stops", async ({}, _name: string) => {
   fake!.listed = false;
   write();
-  killSide();
+  killContainer();
+});
+
+When("the container {string} restarts", async ({}, _name: string) => {
+  killContainer();
 });
 
 When("the container {string} runs again", async ({}, _name: string) => {
@@ -132,6 +168,15 @@ When("I turn {string} for {string} in Settings", async ({ page }, state: string,
   const want = state === "on";
   if ((await sw.getAttribute("aria-checked")) !== String(want)) await sw.click();
   await expect(page.getByTestId(`settings-side-start-docker:${name}`)).toHaveAttribute("aria-checked", String(want));
+});
+
+// A Hub started from the source checkout names no build: the attaching Hub would update it (an installed build always names one). Off keeps the scenario on the start rule.
+When("I turn {string} Update automatically for {string} in Settings", async ({ page }, state: string, name: string) => {
+  await openSides(page);
+  const sw = page.getByTestId(`settings-side-update-docker:${name}`);
+  const want = state === "on";
+  if ((await sw.getAttribute("aria-checked")) !== String(want)) await sw.click();
+  await expect(page.getByTestId(`settings-side-update-docker:${name}`)).toHaveAttribute("aria-checked", String(want));
 });
 
 When("I open Settings › Sides", async ({ page }) => {
@@ -175,9 +220,9 @@ Then("the project {string} is not in the sidebar", async ({ page }, project: str
 });
 
 Then("the side {string} was not started again for {int} seconds", async ({}, _name: string, seconds: number) => {
-  const before = setups();
+  const before = starts();
   await new Promise((r) => setTimeout(r, seconds * 1000));
-  expect(setups()).toBe(before);
+  expect(starts()).toBe(before);
 });
 
 Then("the fake Docker log has no docker cp", async () => {
@@ -188,10 +233,10 @@ Then("the Settings row of {string} says Start with Claude UI is {string}", async
   await expect(page.getByTestId(`settings-side-start-docker:${name}`)).toHaveAttribute("aria-checked", state === "on" ? "true" : "false");
 });
 
-// The worker's daemon outlives the scenario: its fake side process and the side's project go.
+// The worker's daemon outlives the scenario: the fake bridge, the Hub it started and the side's project go.
 After(async () => {
   if (!fake) return;
-  killSide();
+  killContainer();
   rmSync(join(fake.project, ".."), { recursive: true, force: true });
   fake = undefined;
 });

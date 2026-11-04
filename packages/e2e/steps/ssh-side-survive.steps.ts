@@ -1,30 +1,19 @@
-// SSH Side survives the pipe (GH-548): see features/ssh-side-survive.feature. POSIX with docker and the ssh tools only.
+// An SSH Side survives the pipe (GH-548, ADR 0009: the Hub of the host stays): see features/ssh-side-survive.feature. POSIX with docker and the ssh tools only.
 // Shared steps (throwaway host, choose host, open project folder, Settings › Sides, close Settings) live in ssh-side.steps.ts / create-worktree.steps.ts.
-import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { openApp } from "../support/flow.ts";
 import { openSettings } from "../support/ui.ts";
 import { runDir, sshDir } from "../support/paths.ts";
+import { hubPids, run, sleep } from "../support/ssh-hub.ts";
 import { Then, When } from "./fixtures.ts";
 
 const config = () => join(sshDir(runDir()), "config");
 const original = () => join(sshDir(runDir()), "config.reachable");
 const row = (page: Page, alias: string) => page.getByTestId(`settings-side-ssh:${alias}`);
 const grace = (page: Page, alias: string) => page.getByTestId(`settings-side-grace-ssh:${alias}`);
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const run = (cmd: string, args: string[]) => {
-  try {
-    return execFileSync(cmd, args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    return "";
-  }
-};
-/** The Side Daemon process of the host (a node running `--side`), by its command line inside the container. */
-const daemonPids = (container: string) => run("docker", ["exec", container, "pgrep", "-f", "side-daemon|--side"]).split(/\s+/).filter(Boolean);
-
-// The host's port moved to a closed one: a new ssh (a retry of the attach) is refused, the Side Daemon on the host is untouched.
+// The host's port moved to a closed one: a new ssh (a retry of the attach) is refused, the Hub on the host is untouched.
 When("the SSH host {string} becomes unreachable", async ({}, _alias: string) => {
   if (!existsSync(original())) copyFileSync(config(), original());
   writeFileSync(config(), readFileSync(original(), "utf8").replace(/^(\s*Port )(\d+)$/gm, (_m, p: string, n: string) => `${p}${Number(n) + 1}`));
@@ -46,17 +35,17 @@ Then("the Settings row of the SSH host {string} says {string}", async ({ page },
   await expect(row(page, alias)).toContainText(text, { timeout: 90_000 });
 });
 
-Then("the Side Daemon of the SSH host is still running", async ({ sshHost }) => {
+Then("the Hub of the SSH host is still running", async ({ sshHost }) => {
   const host = await sshHost.get();
-  expect(daemonPids(host.name).length, "Side Daemon processes in the host").toBeGreaterThan(0);
+  expect(hubPids(host.name).length, "Hubs in the host").toBe(1);
 });
 
 // The idle Grace period (1 minute) runs out on the host; waits up to 3 minutes for the process to be gone.
-When("the Side Daemon of the SSH host ended", async ({ sshHost }) => {
+When("the Hub of the SSH host ended", async ({ sshHost }) => {
   const host = await sshHost.get();
   const end = Date.now() + 180_000;
-  while (daemonPids(host.name).length && Date.now() < end) await sleep(2_000);
-  expect(daemonPids(host.name), "Side Daemon processes in the host after the Grace period").toEqual([]);
+  while (hubPids(host.name).length && Date.now() < end) await sleep(2_000);
+  expect(hubPids(host.name), "Hubs in the host after the Grace period").toEqual([]);
 });
 
 Then("the Grace period of the SSH host {string} shows {string}", async ({ page }, alias: string, value: string) => {
@@ -79,14 +68,14 @@ When("I reload the app and the daemon restarts and I open Settings › Sides", a
 });
 
 let noted: string[] = [];
-When("I note the Side Daemon of the SSH host", async ({ sshHost }) => {
-  noted = daemonPids((await sshHost.get()).name);
+When("I note the Hub of the SSH host", async ({ sshHost }) => {
+  noted = hubPids((await sshHost.get()).name);
   expect(noted.length).toBeGreaterThan(0);
 });
 
-Then("the Side Daemon of the SSH host is a new one", async ({ sshHost }) => {
+Then("the Hub of the SSH host is a new one", async ({ sshHost }) => {
   const name = (await sshHost.get()).name;
-  await expect.poll(() => daemonPids(name).filter((p) => !noted.includes(p)).length, { timeout: 60_000 }).toBeGreaterThan(0);
+  await expect.poll(() => hubPids(name).filter((p) => !noted.includes(p)).length, { timeout: 60_000 }).toBeGreaterThan(0);
 });
 
 // The dialog opens on the last chosen host: an off Side starts by itself, as for any open of an installed host.

@@ -1,4 +1,4 @@
-# GH-548. An SSH Side survives a dropped pipe (ADR 0007). Same throwaway sshd and run-local ssh config as ssh-side.feature (CLAUDE_UI_SSH_CONFIG under the run
+# GH-548, ADR 0009. An SSH Side survives a dropped pipe: the Hub of the host (started by the first attach) keeps running. Same throwaway sshd and run-local ssh config as ssh-side.feature (CLAUDE_UI_SSH_CONFIG under the run
 # folder: the owner's ~/.ssh is never read or written). The Hub's ssh process is killed by PID (found by the run's config path); "unreachable" is the
 # run's ssh config with the host's port moved to a closed one, restored after. The scenarios run in this order on one daemon: the first installs claude-ui on the host.
 # Skips itself on Windows.
@@ -13,7 +13,7 @@ Feature: An SSH Side survives a dropped pipe
     When the SSH host "e2e-ok" becomes unreachable
     And I kill the Hub's ssh process of the SSH host "e2e-ok"
     Then the Settings row of the SSH host "e2e-ok" says "Reconnecting"
-    And the Side Daemon of the SSH host is still running
+    And the Hub of the SSH host is still running
     And I capture "side-reconnecting"
     When the SSH host "e2e-ok" becomes reachable again
     Then the Settings row of the SSH host "e2e-ok" says "Running"
@@ -29,24 +29,24 @@ Feature: An SSH Side survives a dropped pipe
     Then the Grace period of the SSH host "e2e-ok" shows "5"
     And I capture "grace-5-persisted"
 
-  Scenario: After the Grace period ran out the attach finds no Side Daemon, and opening the host starts a fresh one
+  Scenario: After the Grace period ran out the attach finds no Hub, and opening the host starts a fresh one
     Given a throwaway SSH host
     When I choose the SSH host "e2e-ok" in Open project
     And I open the remote project folder
     And I open the app and Settings › Sides
     And I set the Grace period of the SSH host "e2e-ok" to "1"
     Then the Settings row of the SSH host "e2e-ok" says "Running"
-    And I note the Side Daemon of the SSH host
+    And I note the Hub of the SSH host
     When the SSH host "e2e-ok" becomes unreachable
     And I kill the Hub's ssh process of the SSH host "e2e-ok"
     Then the Settings row of the SSH host "e2e-ok" says "Reconnecting"
-    When the Side Daemon of the SSH host ended
+    When the Hub of the SSH host ended
     And the SSH host "e2e-ok" becomes reachable again
     Then the Settings row of the SSH host "e2e-ok" says "Grace period ran out"
     And I capture "side-off-no-daemon"
     When I close Settings
     And I open Open project on the last chosen host
     Then the Open project folder input is shown
-    And the Side Daemon of the SSH host is a new one
+    And the Hub of the SSH host is a new one
     When I open the remote project folder
     And I capture "side-fresh-daemon"
