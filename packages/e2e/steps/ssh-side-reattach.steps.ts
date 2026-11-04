@@ -77,6 +77,10 @@ Then("the second Claude UI shows the SSH host {string} as {string}", async ({}, 
   await expect(row(page2!, alias)).toContainText(text, { timeout: 60_000 });
 });
 
+When("I click Retry on the Settings row of the SSH host {string}", async ({ page }, alias: string) => {
+  await page.getByTestId(`settings-side-retry-ssh:${alias}`).click();
+});
+
 After(async () => {
   await page2?.close().catch(() => {});
   await hub2?.stop();

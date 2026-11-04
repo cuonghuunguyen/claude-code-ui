@@ -40,6 +40,10 @@ Feature: An SSH Side after a Hub restart
     And the Side Daemon processes of the SSH host are the remembered ones
     And I capture "first-claude-ui-taken-over"
     And the second Claude UI shows the SSH host "e2e-ok" as "Running"
+    When I click Retry on the Settings row of the SSH host "e2e-ok"
+    Then the Settings row of the SSH host "e2e-ok" says "Running"
+    And the second Claude UI shows the SSH host "e2e-ok" as "taken over by another Claude UI"
+    And I capture "retry-takes-ssh-host-back"
 
   Scenario: A claude-ui Hub in the SSH host is left alone by attach, restart and the Grace exit
     Given a throwaway SSH host
