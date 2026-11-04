@@ -239,7 +239,7 @@ request.
 
 | Event | Do | Never |
 |---|---|---|
-| `turn_end`, `RESULT: succeeded` | Update the ledger. Make the forward moves the stage earned. `worker_close` the worker (the implementer too: `worker_send` resumes it later). Start the next stage **in the same turn**. | Transition the ticket on the implementer's word. Acceptance moves it. |
+| `turn_end`, `RESULT: succeeded` | Update the ledger. Make the forward moves the stage earned. claude-ui closes a finished worker itself (`turn_end` with `closed: true`); call `worker_close` only when the event lacks `closed` (kept open, setting off). Start the next stage **in the same turn**. | Transition the ticket on the implementer's word. Acceptance moves it. |
 | `turn_end`, `RESULT: failed` | The stage is red. `worker_send` the implementer the report path and the failing case; after its fix, re-run the stage on a fresh worker. Count the attempt. | Fix it yourself, or transition forward. |
 | `turn_end`, `RESULT: blocked` | Read why. "needs plan" → start stage 0. Anything else → tell the user. | Improvise around it. |
 | `turn_end`, no RESULT block | Not settled. `worker_read` it, then `worker_send` "finish, then end with the RESULT block". Not an attempt. | Treat it as success. |

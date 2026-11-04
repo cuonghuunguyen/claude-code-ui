@@ -136,6 +136,8 @@ export default {
   "settings.workerMode.acceptEdits": "Chấp nhận chỉnh sửa",
   "settings.workerMode.plan": "Kế hoạch",
   "settings.workerMode.auto": "Tự động",
+  "settings.row.orchestration.closeFinished.label": "Đóng worker đã xong",
+  "settings.row.orchestration.closeFinished.hint": "Worker kết thúc lượt mà không còn việc chờ sẽ đóng tiến trình Claude của nó, nên không còn tính vào giới hạn worker. Không đóng khi bạn đang mở nó trong một tab hoặc coordinator giữ nó mở. Tin nhắn mới sẽ tiếp tục nó.",
   "settings.row.orchestration.workerNotifications.label": "Thông báo từ worker",
   "settings.row.orchestration.workerNotifications.hint": "Thông báo đẩy, máy tính và trong ứng dụng khi worker kết thúc, cần phản hồi hoặc dừng do lỗi. Tắt: chỉ coordinator của nó biết; yêu cầu coordinator chuyển lên bạn vẫn có thông báo.",
   "settings.row.orchestration.coordinatorPermissions.label": "Coordinator được trả lời yêu cầu quyền",

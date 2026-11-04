@@ -18,6 +18,7 @@ One session (the **coordinator**) can start and steer other sessions (the **work
 | **Maximum workers per tree** | How many workers one coordinator you start may run at once, counting its workers' workers (1 to 20, default 4). Each coordinator has its own count. |
 | **Maximum workers in total** | How many workers may run at once on this daemon across every coordinator (0 to 100; 0, the default, = no limit). |
 | **Maximum tree depth** | How deep workers may start workers of their own (1 to 5). 1: only you start workers. 2 (default): a worker may start its own, for example a tester and a reviewer. |
+| **Close finished workers** | A worker that ends its turn with nothing pending closes its Claude process and stops counting toward the limits (default on). Not while you have it open in a tab. The coordinator can keep a worker open. |
 | **Maximum workers per coordinator** | How many workers one session (you or a worker) may run at once (1 to 20, default 4). |
 | **Worker mode** | The [permission mode](permissions) of a new worker when the coordinator does not pick one. Default: the coordinator's own mode (bypass becomes auto). |
 | **Notifications from workers** | Turn it off and a worker that finishes, needs input or fails sends no push, desktop or in-app notification. Its coordinator still hears. A request the coordinator passes on to you still notifies you. |
@@ -39,7 +40,7 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 ## The worker tools
 
 <details>
-<summary>The 11 tools the coordinator gets (an MCP server inside the daemon)</summary>
+<summary>The 12 tools the coordinator gets (an MCP server inside the daemon)</summary>
 
 | Tool | Does |
 | --- | --- |
@@ -53,6 +54,7 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 | `worker_escalate` | Hand a worker's question or request to you |
 | `worker_stop` | Interrupt a worker's running turn |
 | `worker_close` | Close a worker's Claude process (the session stays) |
+| `worker_keep_open` | Keep a worker's Claude process after its turns |
 | `worker_remove` | Delete a finished worker's session for good |
 
 </details>
@@ -61,6 +63,7 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 
 - A worker is a normal session. You can open it, type in it and answer its requests yourself. The first answer wins.
 - A worker in a more permissive mode than its coordinator needs your OK on the `worker_start` card.
+- A finished worker resumes on its next message (about 4 s plus MCP start).
 - `worker_close` refuses a worker that has running workers of its own; `worker_remove` refuses a worker that has any worker below it (remove those first).
 - A `worker_start` over a limit asks you nothing: the worker gets the error at once.
 - High-tier requests are always yours. The coordinator can still stop or close the worker.

@@ -73,6 +73,10 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
       const suggestions = [{ type: "addRules" as const, rules: [{ toolName: "Bash" }], behavior: "allow" as const, destination: "localSettings" as const }];
       const r = await options.canUseTool!(tool, input, { signal: new AbortController().signal, suggestions, toolUseID, requestId: randomUUID(), ...extra });
       reply(`perm: ${JSON.stringify(r)}`);
+    } else if (text === "bg") {
+      // A background task no turn end stops (a subagent / shell still running).
+      emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", description: "bg" });
+      reply("bg");
     } else if (text === "classified") {
       const toolUseID = randomUUID();
       emit({ type: "assistant", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { id: `msg_${toolUseID}`, role: "assistant", content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "git push --force origin main" } }] } });
@@ -195,7 +199,7 @@ async function until<T>(get: () => T | undefined | false, ms = 5000): Promise<T>
   }
 }
 
-const enable = (patch: object = {}) => appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true, ...patch } });
+const enable = (patch: object = {}) => appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true, closeFinished: false, ...patch } });
 
 async function coordinator(cwd = dirA, model?: string) {
   const r = await c.request({ type: "session.create", cwd, model });
@@ -1002,6 +1006,7 @@ describe("orchestration", () => {
     const sdk = { name: "orchestration", source: "sdk" };
     expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
     expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
+    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
   });
 
   it("worker_remove closes an idle worker with a live CLI without a prior worker_close, frees the name and broadcasts the removal", async () => {
@@ -1165,7 +1170,7 @@ describe("orchestration", () => {
     const sp = (slow.address() as AddressInfo).port;
     const sc = await client(sp);
     try {
-      appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true } });
+      appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true, closeFinished: false } });
       const created = (await sc.request({ type: "session.create", cwd: dirA })).result.session.id;
       await sc.request({ type: "session.prompt", sessionId: created, text: "hi" });
       await until(() => runsOf(created).at(-1)?.texts.length);
@@ -2001,6 +2006,94 @@ describe("orchestration", () => {
     }
     expect(existsSync(wt)).toBe(false);
     expect(runs.filter((r) => r.options.cwd === wt)).toEqual([]);
+  });
+});
+
+describe("Close finished workers (GH-574)", () => {
+  const live = async (coord: string, n: string) => (await call(coord, "worker_list")).workers.find((w: { name: string }) => w.name === n)?.live;
+  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+
+  it("cap 1: a worker that ends its turn closes its CLI; the next worker_start passes without worker_close; turn_end says closed", async () => {
+    enable({ workerCap: 1, closeFinished: true });
+    const coord = await coordinator();
+    const a = await call(coord, "worker_start", { name: "a", cwd: dirB, prompt: "x" });
+    expect(await turnEnd(coord, "a")).toMatchObject({ name: "a", type: "turn_end", closed: true });
+    expect(await live(coord, "a")).toBe(false);
+    expect(runsOf(a.sessionId)[0]!.closed).toBe(true);
+    expect((await call(coord, "worker_start", { name: "b", cwd: dirC, prompt: "x" })).name).toBe("b");
+  });
+
+  it("worker_send to an auto-closed worker resumes it in a new CLI and starts a new turn", async () => {
+    enable({ closeFinished: true });
+    const coord = await coordinator();
+    const a = await call(coord, "worker_start", { name: "a", cwd: dirB, prompt: "x" });
+    expect(await turnEnd(coord, "a")).toMatchObject({ closed: true });
+    expect(await call(coord, "worker_send", { name: "a", text: "more" })).toMatchObject({ delivered: "new turn" });
+    await until(() => runsOf(a.sessionId).length === 2);
+    expect(runsOf(a.sessionId)[1]!.options.resume).toBe(a.sessionId);
+    expect(runsOf(a.sessionId)[1]!.texts).toEqual(["more"]);
+    expect(await turnEnd(coord, "a")).toMatchObject({ closed: true });
+  });
+
+  it("not closed: keepOpen at worker_start; worker_keep_open after start; keepOpen false closes at the next turn end", async () => {
+    enable({ closeFinished: true });
+    const coord = await coordinator();
+    expect(await call(coord, "worker_start", { name: "k1", cwd: dirB, prompt: "x", keepOpen: true })).toMatchObject({ keepOpen: true });
+    const e1 = await turnEnd(coord, "k1");
+    expect(e1.closed).toBeUndefined();
+    expect(await live(coord, "k1")).toBe(true);
+    await call(coord, "worker_start", { name: "k2", cwd: dirC, prompt: "hold" });
+    expect(await call(coord, "worker_keep_open", { name: "k2", keepOpen: true })).toEqual({ name: "k2", keepOpen: true });
+    await call(coord, "worker_send", { name: "k2", text: "end" });
+    expect((await turnEnd(coord, "k2")).closed).toBeUndefined();
+    expect(await live(coord, "k2")).toBe(true);
+    await call(coord, "worker_keep_open", { name: "k2", keepOpen: false });
+    await call(coord, "worker_send", { name: "k2", text: "again" });
+    expect(await turnEnd(coord, "k2")).toMatchObject({ closed: true });
+    expect(await live(coord, "k2")).toBe(false);
+    expect((await call(coord, "worker_keep_open", { name: "nope", keepOpen: true })).error).toContain("No worker named");
+    await call(coord, "worker_close", { name: "k1" });
+  });
+
+  it("not closed while a tab shows the worker", async () => {
+    enable({ closeFinished: true });
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "tab", cwd: dirB, prompt: "hold" });
+    const c2 = await client();
+    try {
+      await c2.request({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 });
+      await call(coord, "worker_send", { name: "tab", text: "end" });
+      expect((await turnEnd(coord, "tab")).closed).toBeUndefined();
+      expect(await live(coord, "tab")).toBe(true);
+    } finally {
+      c2.ws.close();
+    }
+  });
+
+  it("not closed with a background task", async () => {
+    enable({ closeFinished: true });
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "bgw", cwd: dirB, prompt: "bg" });
+    expect((await turnEnd(coord, "bgw")).closed).toBeUndefined();
+    expect(await live(coord, "bgw")).toBe(true);
+  });
+
+  it("not closed while a worker below it runs", async () => {
+    enable({ closeFinished: true });
+    const coord = await coordinator();
+    const p = await call(coord, "worker_start", { name: "p", cwd: dirB, prompt: "hold" });
+    await call(p.sessionId, "worker_start", { name: "k", cwd: dirC, prompt: "hold" });
+    await call(coord, "worker_send", { name: "p", text: "end" });
+    expect((await turnEnd(coord, "p")).closed).toBeUndefined();
+    expect(await live(coord, "p")).toBe(true);
+  });
+
+  it("setting off: today's behavior", async () => {
+    enable({ closeFinished: false });
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "off", cwd: dirB, prompt: "x" });
+    expect((await turnEnd(coord, "off")).closed).toBeUndefined();
+    expect(await live(coord, "off")).toBe(true);
   });
 });
 

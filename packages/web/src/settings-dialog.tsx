@@ -688,6 +688,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "workerCapTotal", kind: "number", min: 0, max: 100 },
       { key: "maxDepth", kind: "number", min: 1, max: 5 },
       { key: "maxChildren", kind: "number", min: 1, max: 20 },
+      { key: "closeFinished", kind: "switch" },
       {
         key: "workerMode",
         kind: "select",

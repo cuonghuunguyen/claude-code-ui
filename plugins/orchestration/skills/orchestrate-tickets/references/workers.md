@@ -31,7 +31,7 @@ Behaviour below is the daemon's (`packages/daemon/src/orchestration.ts`, `docs/s
 | Hand a question or command permission to the user | `worker_escalate{name, id, reason}` | User gets a push with `reason`. You get no more events for it. |
 | Settle a low-tier permission | `worker_permission{name, id, allow, reason}` | Only when the event says `mayAnswer: true`. |
 | Interrupt a turn | `worker_stop{name}` | Cancels its pending questions and permissions. Refused while an escalated question waits. |
-| Free a slot | `worker_close{name}` | Ends the CLI process; session, transcript and worktree stay. Refused while a turn runs. |
+| Free a slot | `worker_close{name}` | Ends the CLI process; session, transcript and worktree stay. Refused while a turn runs (a finished worker closes by itself unless kept open). |
 
 ### Names
 

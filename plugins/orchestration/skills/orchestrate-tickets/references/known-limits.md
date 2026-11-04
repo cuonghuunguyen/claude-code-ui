@@ -67,7 +67,7 @@ State these when they bite.
 | Call | Does | Use when |
 |---|---|---|
 | `worker_stop` | Interrupts a running turn, cancels its pending requests | Stop work in flight |
-| `worker_close` | Ends the process; session, transcript, worktree stay | After `worker_stop`, or any settled worker |
+| `worker_close` | Ends the process; session, transcript, worktree stay | After `worker_stop`, or any settled worker (a finished worker closes by itself unless kept open) |
 | `worker_list` | States of every worker of this coordinator | Before ending: nothing of this batch may still run |
 
 Nothing here deletes a worktree or a branch, and nothing under the scratch folder was ever

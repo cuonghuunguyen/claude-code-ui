@@ -30,7 +30,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
   if (legacy) delete (settings as Partial<Settings>).power;
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -128,6 +128,17 @@ it("Notifications from workers is on by default and its switch sends a patch of 
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { workerNotifications: false } } });
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("false");
 });
+
+it("Close finished workers is on by default and its switch sends a patch of that field (GH-574)", async () => {
+  const { q, calls, pick } = await render();
+  await pick("orchestration");
+  const desc = document.getElementById(q("settings-orchestration-closeFinished")!.getAttribute("aria-describedby")!)?.textContent;
+  expect(q("settings-orchestration-closeFinished")?.getAttribute("aria-label")).toBe("Close finished workers");
+  expect(q("settings-orchestration-closeFinished")?.getAttribute("aria-checked")).toBe("true");
+  expect(desc).toContain("stops counting toward the worker limits");
+  await act(async () => q("settings-orchestration-closeFinished")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { closeFinished: false } } });
+}, 15000);
 
 it("a switch sends a patch of its field only", async () => {
   const { q, calls, pick } = await render();

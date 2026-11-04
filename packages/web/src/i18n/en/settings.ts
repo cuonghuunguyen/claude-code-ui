@@ -134,6 +134,8 @@ export default {
   "settings.workerMode.acceptEdits": "Accept edits",
   "settings.workerMode.plan": "Plan",
   "settings.workerMode.auto": "Auto",
+  "settings.row.orchestration.closeFinished.label": "Close finished workers",
+  "settings.row.orchestration.closeFinished.hint": "A worker that ends its turn with nothing pending closes its Claude process, so it stops counting toward the worker limits. Not while you have it open in a tab or its coordinator keeps it open. A new message resumes it.",
   "settings.row.orchestration.workerNotifications.label": "Notifications from workers",
   "settings.row.orchestration.workerNotifications.hint": "Push, desktop and in-app notifications when a worker finishes, needs input or stops with an error. Off: only its coordinator hears about it; a request the coordinator escalates to you still notifies.",
   "settings.row.orchestration.coordinatorPermissions.label": "Coordinator may answer permission requests",

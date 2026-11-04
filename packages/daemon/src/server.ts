@@ -877,6 +877,7 @@ export function createDaemon(opts: {
 
   const orchestration = createOrchestration({
     links: settings,
+    held: (id) => !!holds.get(id),
     settings: () => appSettings.get().orchestration,
     sessions,
     find: findSession,
