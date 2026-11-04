@@ -130,8 +130,10 @@ if (side) {
     });
     listenOn();
     const live = liveInstall(process.argv[1] ?? "");
-    if (live) writeFileSync(live.file, live.dir);
-    process.on("exit", () => (rmSync(listen, { force: true }), live && rmSync(live.file, { force: true })));
+    // Only once this process owns the socket: a second start that loses the race must touch neither the socket nor the running Daemon's record.
+    let owned = false;
+    server.once("listening", () => ((owned = true), live && writeFileSync(live.file, live.dir)));
+    process.on("exit", () => owned && (rmSync(listen, { force: true }), live && rmSync(live.file, { force: true })));
   } else {
     const io = runSide({ input: process.stdin, output: process.stdout, accept: daemon.accept, git: runGit, onEnd: () => process.exit(0) });
     push = io.push;
