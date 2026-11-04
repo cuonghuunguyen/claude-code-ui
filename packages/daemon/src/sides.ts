@@ -620,6 +620,8 @@ export function createSides(opts: {
   reconnectMs?: number[];
   /** The SSH Sides that were attached when this Hub last ran (`side-attached.json`): the only ones a Hub start attaches to unless "Start with Claude UI" is on. */
   attached?: { read(): string[] | undefined; write(ids: string[]): void };
+  /** This Hub's own ID, kept across its runs: sent to an SSH Side Daemon so that an automatic attach never takes the Side from another Hub. */
+  hubId?: string;
   /** Wait between the end of the pipe and the launch of the update of an SSH Side Daemon (default 5 s: the Daemon exits on its next 1 s tick). */
   updateWaitMs?: number;
   /** Grace period of an SSH Side in minutes, kept across hub runs (`side-grace.json`). */
@@ -688,12 +690,12 @@ export function createSides(opts: {
     if (closing) return;
     if (!e) {
       // SSH, "Start with Claude UI" off: only a host attached at the last shutdown is attached again; no Daemon is started.
-      if (survivesPipe(id) && attached.has(id)) start(id, "never", undefined, undefined, true).catch(() => {});
+      if (survivesPipe(id) && attached.has(id)) start(id, "never", undefined, undefined, true, true).catch(() => {});
       return;
     }
     const same = (e.key !== undefined && e.key === opts.key?.()) || e.update === false;
     // "Start with Claude UI" on is the owner's opt-in: an SSH host is connected and a Side Daemon is started when none runs (launch, not attach-only).
-    start(id, same ? "never" : "needed", undefined, !same).catch((err) => {
+    start(id, same ? "never" : "needed", undefined, !same, undefined, true).catch((err) => {
       console.error(`starting ${id} failed:`, (err as Error).message);
       if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
     });
@@ -834,7 +836,8 @@ export function createSides(opts: {
     );
   }
 
-  function start(id: string, setup: SideSetup = "needed", nodeNote?: string, bundleOnly?: boolean, attach?: boolean): Promise<void> {
+  /** `auto`: the Hub starts it by itself (Hub start, reconnect, update); a Daemon another Hub attached to refuses it (`taken`). A user action (Retry, opening the host) is not auto and takes the Side back. */
+  function start(id: string, setup: SideSetup = "needed", nodeNote?: string, bundleOnly?: boolean, attach?: boolean, auto?: boolean): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
     if (s.state === "ready") return Promise.resolve();
@@ -883,6 +886,7 @@ export function createSides(opts: {
       }
       await new Promise<void>((resolve, reject) => {
       s.proc = proc;
+      if (opts.hubId && survivesPipe(s.id)) write(s, { hello: { hub: opts.hubId, auto: !!auto } });
       let setupError: string | undefined;
       let setupCode: string | undefined;
       let setupDetail = "";
@@ -1012,7 +1016,7 @@ export function createSides(opts: {
         if (lost && Date.now() - lost.at < graceMin(s.id) * 60_000 + 60_000) {
           s.lost = { ...lost, tries: lost.tries + 1 };
           Object.assign(s, { state: "reconnecting", message: undefined, proc: undefined, starting: undefined });
-          later(s.id, reconnectMs[Math.min(s.lost.tries, reconnectMs.length) - 1]!, () => start(s.id, "never", undefined, undefined, true).catch(() => {}));
+          later(s.id, reconnectMs[Math.min(s.lost.tries, reconnectMs.length) - 1]!, () => start(s.id, "never", undefined, undefined, true, true).catch(() => {}));
         } else {
           // The reconnect window ran out: the Daemon is gone for good.
           if (s.lost) setAttached(s.id, false);
@@ -1021,7 +1025,7 @@ export function createSides(opts: {
         if (noDaemon || notInstalled || taken) setAttached(s.id, false);
         // An exit of a ready side: it comes back by itself (Starting…) unless it exits again and again.
         const restarting = !s.lost && !taken && !updating && wasReady && scheduleRestart(s);
-        if (updating) later(s.id, opts.updateWaitMs ?? 5_000, () => start(s.id, "needed", undefined, true).catch(() => {}));
+        if (updating) later(s.id, opts.updateWaitMs ?? 5_000, () => start(s.id, "needed", undefined, true, undefined, true).catch(() => {}));
         Object.assign(s, restarting || s.lost ? {} : updating ? { state: "starting", message: undefined } : taken ? { state: "off", message: `${s.label} is taken over by another Claude UI. Retry to take it back.` } : notInstalled ? { state: "off", message: undefined } : noDaemon ? { state: "off", message } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         s.running = false;
@@ -1708,7 +1712,7 @@ export class SideSocket extends EventEmitter {
  * (the daemon's connection handler) and writes their messages to `output`. Ends the process when the hub goes away.
  * `heartbeatMs` (an SSH Side Daemon): a `{"hb":1}` frame both ways every period; no frame from the hub for 3 periods ends the pipe.
  */
-export function runSide(opts: { build?: string; input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner; heartbeatMs?: number; /** The hub's Grace period (`{"grace":ms}`, sent on attach). */ onGrace?: (ms: number) => void }) {
+export function runSide(opts: { build?: string; /** The Hub named itself (`{"hello":{"hub","auto"}}`, its first line). */ onHello?: (hub: string | undefined) => void; input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner; heartbeatMs?: number; /** The hub's Grace period (`{"grace":ms}`, sent on attach). */ onGrace?: (ms: number) => void }) {
   const sockets = new Map<number, SideSocket>();
   let ended = false;
   let beat: ReturnType<typeof setInterval> | undefined;
@@ -1725,7 +1729,7 @@ export function runSide(opts: { build?: string; input: Readable; output: Writabl
     opts.onEnd?.();
   };
   lines(opts.input, (line) => {
-    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown; g?: number; git?: GitRunOptions; hb?: unknown; grace?: unknown };
+    let f: { c?: number; o?: unknown; m?: unknown; x?: unknown; g?: number; git?: GitRunOptions; hb?: unknown; grace?: unknown; hello?: { hub?: unknown } };
     try {
       f = JSON.parse(line);
     } catch {
@@ -1734,6 +1738,7 @@ export function runSide(opts: { build?: string; input: Readable; output: Writabl
     if (!f) return;
     seen = Date.now();
     if (f.hb) return;
+    if (f.hello) return opts.onHello?.(typeof f.hello.hub === "string" ? f.hello.hub : undefined);
     if (typeof f.grace === "number" && f.grace > 0) return opts.onGrace?.(f.grace);
     if (typeof f.g === "number" && f.git) {
       const g = f.g;

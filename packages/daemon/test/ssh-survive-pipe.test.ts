@@ -76,6 +76,7 @@ describe("Side Daemon: the Grace period", () => {
     const seen: string[] = [];
     a.stdout.on("data", (b) => seen.push(String(b)));
     pipe(d);
+    await vi.advanceTimersByTimeAsync(2_100); // a Hub of the previous build sends no hello: the Daemon waits for it, then takes over
     expect(seen.join("")).toContain('{"taken":1}'); // the first Hub is told, so it does not attach again
     expect(st.closed).toBe(1);
     expect(st.exited).toBe(0);

@@ -61,7 +61,8 @@ describe("a Daemon of this build serves the lines a Hub of the previous build wr
 
   it("every line a Hub of this build writes (attach, open, send, close, git, grace, heartbeat, update) has the shape of a pinned old line", async () => {
     // Pinned key sets of the previous build's Hub -> Daemon lines.
-    const OLD_SHAPES = ['["c","o"]', '["c","m"]', '["c","x"]', '["g","git"]', '["hb"]', '["grace"]'];
+    // `["hello"]` is new: a Daemon of the previous build reads it as a line with no known key and ignores it (runSide: no `c`, `g`, `hb` or `grace`).
+    const OLD_SHAPES = ['["c","o"]', '["c","m"]', '["c","x"]', '["g","git"]', '["hb"]', '["grace"]', '["hello"]'];
     const stdin = new PassThrough();
     const sent: string[] = [];
     stdin.on("data", (b) => sent.push(...String(b).split("\n").filter(Boolean)));
@@ -70,7 +71,7 @@ describe("a Daemon of this build serves the lines a Hub of the previous build wr
     const proc: SideProcess = { stdin, stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} };
     vi.useFakeTimers();
     try {
-      const sides = createSides({ targets: [sideTarget("ssh", "box")], spawn: () => proc, key: () => "new", heartbeatMs: 1_000, updateWaitMs: 1e9, grace: { read: () => ({}), write: () => {} } });
+      const sides = createSides({ targets: [sideTarget("ssh", "box")], spawn: () => proc, key: () => "new", hubId: "h", heartbeatMs: 1_000, updateWaitMs: 1e9, grace: { read: () => ({}), write: () => {} } });
       await sides.start("ssh:box"); // ready (grace) ... then the update ({"grace":1}) as nothing runs
       const c = sides.open("ssh:box", () => {})!;
       c.send({ type: "session.list" } as never);
@@ -79,6 +80,7 @@ describe("a Daemon of this build serves the lines a Hub of the previous build wr
       await vi.advanceTimersByTimeAsync(2_000); // heartbeats
       const shapes = new Set(sent.map((l) => JSON.stringify(Object.keys(JSON.parse(l)).sort())));
       expect([...shapes].every((s) => OLD_SHAPES.includes(s)), [...shapes].join(" ")).toBe(true);
+      expect(sent[0]).toBe('{"hello":{"hub":"h","auto":false}}');
       expect(sent.join("")).toContain('{"grace":1}'); // the update line is a `grace` line the old Daemon understands
       sides.close();
     } finally {

@@ -49,6 +49,7 @@ export function noDaemon(): SideProcess {
   return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
 }
 
+let hubs = 0;
 export function hub(d: ReturnType<typeof daemon>["d"], extra: Partial<Parameters<typeof createSides>[0]> = {}) {
   const pipes: ReturnType<typeof pipe>[] = [];
   const spawned: { setup?: string; attach?: boolean; bundleOnly?: boolean }[] = [];
@@ -58,6 +59,7 @@ export function hub(d: ReturnType<typeof daemon>["d"], extra: Partial<Parameters
     discoverMs: 0,
     // The in-process Daemon does not heartbeat (see `daemon`): the hub's own check would end the pipe after 45 s.
     heartbeatMs: 1e9,
+    hubId: `hub-${++hubs}`,
     ...extra,
   });
   return { sides, pipes, spawned, state: () => sides.list().find((s) => s.id === "ssh:box")!.state };

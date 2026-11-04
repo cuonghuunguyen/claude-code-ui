@@ -135,6 +135,67 @@ describe("two Hubs", () => {
   });
 });
 
+describe("an automatic attach never takes the Side from another Hub", () => {
+  it("a reconnect of the first Hub after the second took over is answered with taken: off, no retry; Retry (a user action) takes it back", async () => {
+    const { d, st } = daemon();
+    const sa = store();
+    const a = hub(d, { attached: sa.attached, reconnectMs: [1_000] });
+    const b = hub(d);
+    await a.sides.start("ssh:box");
+    await vi.advanceTimersByTimeAsync(5);
+    a.pipes[0]!.drop(); // a network drop: A will attach again by itself
+    expect(row(a).state).toBe("reconnecting");
+    await b.sides.start("ssh:box"); // B attaches meanwhile
+    await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersByTimeAsync(1_100); // A's automatic attach
+    expect(a.spawned.length).toBe(2);
+    expect(row(a)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
+    expect(row(b).state).toBe("ready");
+    expect(sa.st.ids).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(a.spawned.length).toBe(2); // no retry
+    await a.sides.start("ssh:box"); // Retry
+    await vi.advanceTimersByTimeAsync(5);
+    expect(row(a).state).toBe("ready");
+    expect(row(b)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
+    expect(st.exited).toBe(0);
+    a.sides.close();
+    b.sides.close();
+    d.close();
+  });
+
+  it("a Hub restart reattaches (same Hub ID, auto) even while its dead pipe is still attached", async () => {
+    const { d } = daemon();
+    const s = store();
+    const a = hub(d, { attached: s.attached, hubId: "me" });
+    await a.sides.start("ssh:box");
+    await vi.advanceTimersByTimeAsync(5);
+    // the old process is gone but its pipe is not detected yet
+    const b = hub(d, { attached: s.attached, hubId: "me" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(row(b).state).toBe("ready");
+    expect(b.spawned[0]).toMatchObject({ attach: true });
+    b.sides.close();
+    d.close();
+  });
+
+  it("the Hub restart reattach is refused when another Hub attached in the meantime", async () => {
+    const { d } = daemon();
+    const s = store(["ssh:box"]);
+    const other = hub(d, { hubId: "other" });
+    await other.sides.start("ssh:box");
+    await vi.advanceTimersByTimeAsync(5);
+    const b = hub(d, { attached: s.attached, hubId: "me" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(row(b)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
+    expect(row(other).state).toBe("ready");
+    expect(s.st.ids).toEqual([]);
+    b.sides.close();
+    other.sides.close();
+    d.close();
+  });
+});
+
 describe("update pending", () => {
   /** A Hub of build "new"; its spawns attach to the Daemons in order (the last repeats). */
   function updHub(daemons: ReturnType<typeof daemon>["d"][], extra: Partial<Parameters<typeof createSides>[0]> = {}) {

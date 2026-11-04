@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, createServer as netServer, type AddressInfo } from "node:net";
@@ -30,6 +31,7 @@ import { startServe, tailscalePreflight } from "./tailscale.ts";
 import { openInBrowser, runClient } from "./ctl/commands.ts";
 import { claimDaemonFile } from "./ctl/daemon-file.ts";
 import { configDir, loadToken, pairingUrl } from "./token.ts";
+import { migrateSideState } from "./side-state.ts";
 import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
@@ -106,6 +108,7 @@ const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../
 const sideListen = side ? process.env.CLAUDE_UI_SIDE_LISTEN : undefined;
 // Every kind of Side (WSL, Docker too: the distro or container may run its own Hub) uses it; WSL/Docker have no socket, so it sits in the install root.
 const stateDir = side ? join(homedir(), ".local", "share", "claude-ui", "side", ".data") : configDir(); // not beside the socket: that may be a temporary folder
+if (side) migrateSideState(configDir(), stateDir);
 const state = { uploadDir: side ? join(stateDir, "uploads") : defaultUploadsDir(), settingsFile: join(stateDir, "sessions.json"), projects: createProjects({ file: join(stateDir, "projects.json") }), appSettings: createSettings({ file: join(stateDir, "settings.json") }), secrets: createSecrets({ file: join(stateDir, "secrets.json") }) };
 
 if (side) {
@@ -142,6 +145,19 @@ if (side) {
   const listsFile = join(configDir(), "side-lists.json");
   const graceFile = join(configDir(), "side-grace.json");
   const attachedFile = join(configDir(), "side-attached.json");
+  /** This Hub's ID across runs (a restarted Hub is the same Hub for an SSH Side Daemon). */
+  const hubId = (() => {
+    const f = join(configDir(), "side-hub-id");
+    try {
+      const v = readFileSync(f, "utf8").trim();
+      if (v) return v;
+    } catch {
+      // first run
+    }
+    const v = randomUUID();
+    writeFileSync(f, v, { mode: 0o600 });
+    return v;
+  })();
   const push = createPush({ desktop: () => state.appSettings.get().notifications.desktop, ...(osNotify === false && { notify: false as const }) });
   const distros = process.platform === "win32" ? wslDistros() : [];
   const sidePackage = sidePackageDir();
@@ -202,6 +218,7 @@ if (side) {
           grace: { read: () => ((g) => (g && typeof g === "object" && !Array.isArray(g) ? Object.fromEntries(Object.entries(g).filter(([, v]) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10_080) as [string, number][]) : {}))(readJson(graceFile)), write: (g) => writeFileSync(graceFile, JSON.stringify(g)) },
           attached: { read: () => ((a) => (Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : undefined))(readJson(attachedFile)), write: (ids) => writeFileSync(attachedFile, JSON.stringify(ids)) },
           key: sideKey,
+          hubId,
           ...(ssh && { addSshHost: (command: string, alias?: string) => addSshHost({ command, alias, config: sshConfig }) }),
           check: (id) => kinds[kindOf(id)!].check(nameOf(id)),
           // A start that ssh itself ended (login, host key, network): the message says what to do.

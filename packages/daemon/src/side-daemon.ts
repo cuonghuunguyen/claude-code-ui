@@ -1,6 +1,6 @@
 // The Side Daemon of an SSH Side (ADR 0007): outlives the pipe of the Hub. It serves one attached pipe at a time (the newest attach takes
 // over) and counts the Grace period while no pipe is attached and no turn runs.
-import type { Readable, Writable } from "node:stream";
+import { PassThrough, type Readable, type Writable } from "node:stream";
 import type { PushPayload } from "@claude-ui/protocol";
 import type { GitRunner } from "./git-runner.ts";
 import { runSide, type SideSocket } from "./sides.ts";
@@ -22,11 +22,15 @@ export function createSideDaemon(o: {
   exit: () => void;
   graceMs?: number;
   heartbeatMs?: number;
+  /** How long a second pipe waits for the Hub's `hello` line while another pipe is attached (default 2 s; a Hub of the previous build sends none). */
+  helloMs?: number;
   /** How often the Grace period is counted (default 1 s). */
   tickMs?: number;
 }) {
   let graceMs = o.graceMs ?? DEFAULT_GRACE_MS;
   let pipe: ReturnType<typeof runSide> | undefined;
+  /** The Hub (`hello.hub`) of the attached pipe; undefined for a Hub of the previous build. */
+  let pipeHub: string | undefined;
   let running = false;
   let idleMs = 0;
   let last = Date.now();
@@ -47,29 +51,70 @@ export function createSideDaemon(o: {
     }
   }, o.tickMs ?? 1000);
   tick.unref();
+  const begin = (input: Readable, output: Writable, hub?: string) => {
+    pipe?.takeOver();
+    pipeHub = hub;
+    idleMs = 0;
+    const mine: ReturnType<typeof runSide> = (pipe = runSide({
+      input,
+      output,
+      accept: o.accept,
+      git: o.git,
+      heartbeatMs: o.heartbeatMs ?? HEARTBEAT_MS,
+      build: o.build,
+      onGrace: (ms) => (graceMs = ms),
+      onHello: (h) => void (pipe === mine && (pipeHub = h)),
+      onEnd: () => {
+        if (pipe !== mine) return;
+        pipe = undefined;
+        pipeHub = undefined;
+        idleMs = 0;
+        last = Date.now();
+      },
+    }));
+    // Terminals first: the Hub decides on the `running` frame, so it must know the terminals by then.
+    if (o.terminals) mine.terminals((terms = o.terminals()));
+    mine.running(running);
+  };
   return {
-    /** The attach seam: the pipe of a Hub (ssh stdio through the bridge, or a stream pair in tests). */
+    /**
+     * The attach seam: the pipe of a Hub (ssh stdio through the bridge, or a stream pair in tests). With no pipe attached it starts at once. With one
+     * attached it first reads the new Hub's `{"hello":{"hub","auto"}}` line: an automatic attach (a reconnect, a Hub start) of another Hub is refused
+     * with `{"taken":1}` (it must not take the Side back from the Hub that took it over); any other attach takes over.
+     */
     attach(input: Readable, output: Writable) {
-      pipe?.takeOver();
-      idleMs = 0;
-      const mine: ReturnType<typeof runSide> = (pipe = runSide({
-        input,
-        output,
-        accept: o.accept,
-        git: o.git,
-        heartbeatMs: o.heartbeatMs ?? HEARTBEAT_MS,
-        build: o.build,
-        onGrace: (ms) => (graceMs = ms),
-        onEnd: () => {
-          if (pipe !== mine) return;
-          pipe = undefined;
-          idleMs = 0;
-          last = Date.now();
-        },
-      }));
-      // Terminals first: the Hub decides on the `running` frame, so it must know the terminals by then.
-      if (o.terminals) mine.terminals((terms = o.terminals()));
-      mine.running(running);
+      if (!pipe) return begin(input, output);
+      let buf = "";
+      const settle = (hello: { hub?: unknown; auto?: unknown } | undefined, rest: string) => {
+        clearTimeout(timer);
+        input.off("data", onData);
+        const hub = typeof hello?.hub === "string" ? hello.hub : undefined;
+        if (hello?.auto === true && pipe && pipeHub !== undefined && hub !== pipeHub) {
+          output.write('{"taken":1}\n');
+          output.end();
+          return void input.destroy();
+        }
+        const relay = new PassThrough();
+        relay.on("close", () => input.destroy());
+        if (rest) relay.write(rest);
+        input.pipe(relay);
+        begin(relay, output, hub);
+      };
+      const onData = (b: Buffer | string) => {
+        buf += b;
+        const nl = buf.indexOf("\n");
+        if (nl < 0) return;
+        let hello: { hub?: unknown; auto?: unknown } | undefined;
+        try {
+          hello = (JSON.parse(buf.slice(0, nl)) as { hello?: object }).hello;
+        } catch {
+          // not a hello: the line is the pipe's first frame
+        }
+        settle(hello, hello ? buf.slice(nl + 1) : buf);
+      };
+      const timer = setTimeout(() => settle(undefined, buf), o.helloMs ?? 2000);
+      input.on("data", onData);
+      input.once("close", () => clearTimeout(timer));
     },
     push: (p: PushPayload) => pipe?.push(p),
     running(on: boolean) {
