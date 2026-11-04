@@ -52,7 +52,7 @@ export function OpenProjectDialog({
   docker?: DockerState;
   /** The hub has ssh: the SSH kind shows with no host, and its list offers Add SSH host (`onAddSshHost`, rejecting with the reason). */
   ssh?: boolean;
-  onAddSshHost?: (command: string, alias?: string) => Promise<unknown>;
+  onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   /** Side of a recent project. */
@@ -137,7 +137,7 @@ function SidePicker({
   sides: SideInfo[];
   docker?: DockerState;
   ssh?: boolean;
-  onAddSshHost?: (command: string, alias?: string) => Promise<unknown>;
+  onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
   sideOf: (cwd: string) => string;
@@ -372,17 +372,26 @@ function ContainerStep({
   stateWord: (s: SideInfo) => string | undefined;
   isReady: (s: SideInfo) => boolean;
   onPick: (id: string) => void;
-  onAddHost?: (command: string, alias?: string) => Promise<unknown>;
+  onAddHost?: (command: string) => Promise<string>;
 }) {
   const t = useT();
   const ssh = kind === "ssh";
   const [query, setQuery] = useState("");
   // The first match is highlighted: with a single container Enter confirms it, it never starts on its own.
   const [at, setAt] = useState(0);
+  // A host just added: once the list has it, it is the highlighted row (the filter is cleared).
+  const [added, setAdded] = useState<string>();
   useEffect(() => input.current?.focus(), []);
   const q = query.trim().toLowerCase();
   const rows = [...containers.filter((c) => isReady(c)), ...containers.filter((c) => !isReady(c))].filter((c) => sideName(c).toLowerCase().includes(q));
   const selected = Math.min(at, rows.length - 1);
+  const addedAt = added === undefined ? -1 : rows.findIndex((c) => c.id === added);
+  useEffect(() => {
+    if (addedAt < 0) return;
+    setAt(addedAt);
+    setAdded(undefined);
+    input.current?.focus();
+  }, [addedAt]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (isImeKey(e.nativeEvent)) return;
     const keys: Record<string, (() => unknown) | undefined> = {
@@ -440,8 +449,7 @@ function ContainerStep({
           ))}
         </ul>
         {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t(ssh ? "sidebar.op.noHost" : "sidebar.op.noContainer")}</p>}
-        {/* Inside the scroll area: the form with its error and buttons must stay reachable in a short dialog (390x844). */}
-        {onAddHost && <AddSshHost onAdd={onAddHost} />}
+        {onAddHost && <AddSshHost onAdd={onAddHost} onAdded={(id) => (setQuery(""), setAdded(id))} />}
       </div>
     </>
   );

@@ -29,39 +29,67 @@ Then("the SSH host list does not show {string}", async ({ page }, alias: string)
   await expect(rows(page, alias)).toHaveCount(0);
 });
 
-When("I open the Add SSH host form", async ({ page }) => {
+const dialog = (page: import("@playwright/test").Page) => page.getByTestId("add-ssh-host-dialog");
+
+When("I open the Add SSH host dialog", async ({ page }) => {
   await page.getByTestId("add-ssh-host").click();
-  await expect(page.getByTestId("add-ssh-host-form")).toBeVisible();
+  await expect(dialog(page)).toBeVisible();
 });
 
-When("I add the SSH host with the command {string} and the alias {string}", async ({ page }, command: string, alias: string) => {
+When("I type the Add SSH host command {string}", async ({ page }, command: string) => {
   await page.getByTestId("add-ssh-host-command").fill(command);
-  await page.getByTestId("add-ssh-host-alias").fill(alias);
+});
+
+When("I add the typed SSH host", async ({ page }) => {
   await page.getByTestId("add-ssh-host-submit").click();
 });
 
-Then("the Add SSH host form says {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("add-ssh-host-error")).toContainText(text);
+Then("the Add SSH host preview shows {string} as {string}", async ({ page }, key: string, value: string) => {
+  await expect(page.getByTestId(`add-ssh-host-preview-${key}`)).toHaveText(value);
 });
 
-Then("the form fits the viewport", async ({ page }) => {
-  const box = await page.getByTestId("add-ssh-host-form").boundingBox();
-  const vw = page.viewportSize()!.width;
-  expect(box && box.x >= 0 && box.x + box.width <= vw, `form box ${JSON.stringify(box)} in ${vw}`).toBe(true);
+Then("the Add SSH host dialog says {string}", async ({ page }, text: string) => {
+  await expect(dialog(page).getByRole("alert")).toContainText(text);
+});
+
+Then("the Add SSH host dialog is closed", async ({ page }) => {
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+Then("the SSH host {string} is the selected row", async ({ page }, alias: string) => {
+  await expect(rows(page, alias)).toHaveAttribute("aria-selected", "true");
+});
+
+When("I press Escape in the Add SSH host dialog", async ({ page }) => {
+  await page.getByTestId("add-ssh-host-command").press("Escape");
+});
+
+Then("the Add SSH host button has the focus", async ({ page }) => {
+  await expect(page.getByTestId("add-ssh-host")).toBeFocused();
+});
+
+const inside = async (outer: import("@playwright/test").Locator, inner: import("@playwright/test").Locator, name: string) => {
+  await inner.scrollIntoViewIfNeeded();
+  const d = (await outer.boundingBox())!;
+  const b = (await inner.boundingBox())!;
+  expect(b && b.y >= d.y - 0.5 && b.y + b.height <= d.y + d.height + 0.5 && b.x >= d.x - 0.5 && b.x + b.width <= d.x + d.width + 0.5, `${name} ${JSON.stringify(b)} in dialog ${JSON.stringify(d)}`).toBe(true);
+};
+
+Then("the Add SSH host dialog fits the viewport", async ({ page }) => {
+  const box = (await dialog(page).boundingBox())!;
+  const { width: vw, height: vh } = page.viewportSize()!;
+  expect(box.x >= 0 && box.x + box.width <= vw && box.y >= 0 && box.y + box.height <= vh, `dialog ${JSON.stringify(box)} in ${vw}x${vh}`).toBe(true);
+  // Below sm (640 px) it is a full-height sheet.
+  if (vw < 640) expect(Math.round(box.height), `sheet height in ${vh}`).toBe(vh);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-});
-
-Then("the form, its error and its buttons are inside the Open project dialog", async ({ page }) => {
-  const dialog = page.getByTestId("open-project-dialog");
-  const form = page.getByTestId("add-ssh-host-form");
-  // The form may scroll with the host list: bring each part into view first, then it must lie in the dialog box.
-  const parts = { form, error: page.getByTestId("add-ssh-host-error"), submit: page.getByTestId("add-ssh-host-submit"), cancel: form.getByRole("button").last() };
+  // The input, its buttons and an error are inside the dialog; targets are 44 px tall below md (768 px).
+  const parts = { input: page.getByTestId("add-ssh-host-command"), add: page.getByTestId("add-ssh-host-submit"), cancel: page.getByTestId("add-ssh-host-cancel") };
   for (const [name, loc] of Object.entries(parts)) {
-    await loc.scrollIntoViewIfNeeded();
-    const d = (await dialog.boundingBox())!;
-    const b = (await loc.boundingBox())!;
-    expect(b && b.y >= d.y - 0.5 && b.y + b.height <= d.y + d.height + 0.5 && b.x >= d.x - 0.5 && b.x + b.width <= d.x + d.width + 0.5, `${name} ${JSON.stringify(b)} in dialog ${JSON.stringify(d)}`).toBe(true);
+    await inside(dialog(page), loc, name);
+    if (vw < 768) expect((await loc.boundingBox())!.height, `${name} height`).toBeGreaterThanOrEqual(44);
   }
+  const alert = dialog(page).getByRole("alert");
+  if (await alert.count()) await inside(dialog(page), alert, "error");
 });
 
 Then("the ssh config has a Host block {string} with {string}", async ({}, alias: string, line: string) => {

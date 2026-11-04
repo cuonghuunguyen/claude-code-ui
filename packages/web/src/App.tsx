@@ -4205,8 +4205,8 @@ export function App() {
         sides={sides}
         docker={docker}
         ssh={!!ssh}
-        onAddSshHost={async (command, alias) => {
-          const r = await client.current!.request<SshAddResult>({ type: "ssh.add", command, ...(alias && { alias }) });
+        onAddSshHost={async (command) => {
+          const r = await client.current!.request<SshAddResult>({ type: "ssh.add", command });
           await refreshList();
           return r.side;
         }}
