@@ -300,6 +300,9 @@ describe("parseSshCommand", () => {
     expect(() => parseSshCommand("ssh bad/host")).toThrow("not a valid host name");
     expect(() => parseSshCommand("ssh -J -oX host")).toThrow("characters that are not allowed");
     expect(() => parseSshCommand('ssh -i "k\nProxyCommand x" host')).toThrow("not allowed");
+    expect(() => parseSshCommand("ssh o'b@example.com")).toThrow("not allowed");
+    expect(() => parseSshCommand('ssh -i "/home/o\'b/key" example.com')).toThrow("not allowed");
+    expect(() => parseSshCommand("ssh -J a\\b host")).toThrow("not allowed");
   });
 });
 
@@ -367,6 +370,7 @@ describe("checkSshSide: hosts the bundle does not cover", () => {
     expect(await check({}, { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command" })).toMatchObject({ reason: "windows_host" });
     expect(await check({ node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
     expect(await check({ npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
+    expect(await check({ writable: "/tmp" })).toMatchObject({ reason: "no_writable_path" });
     expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("home folder are not writable") });
   });
   it("a macOS Node.js is usable (the posix rule): the check script asks for it", () => {

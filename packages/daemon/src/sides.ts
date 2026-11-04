@@ -476,7 +476,7 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
   if (!ownNode && !c.node) return blocked("node_missing");
   if (!ownNode && !nodeOk) return blocked("node_old", c.node);
   if (needsInstall) {
-    if (((docker && o.cpUsable === false) || o.kind === "ssh") && c.writable && c.writable.length === 0) return blocked("no_writable_path");
+    if (((docker && o.cpUsable === false) && c.writable && c.writable.length === 0) || (o.kind === "ssh" && c.writable && !c.writable.includes("$HOME"))) return blocked("no_writable_path");
     if (bundleInstall) {
       const gone = [c.tools && !c.tools.tar && "tar", c.tools && !c.tools.gzip && "gzip"].filter(Boolean) as string[];
       if (gone.length) return blocked("unpack_tools_missing", gone.join(" and "));

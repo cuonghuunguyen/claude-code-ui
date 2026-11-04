@@ -119,7 +119,7 @@ export function parseSshCommand(text: string): SshTarget {
   const host = at >= 0 ? dest.slice(at + 1) : dest;
   if (!/^[A-Za-z0-9_][\w.:%-]*$/.test(host)) throw new Error(`"${host}" is not a valid host name.`);
   const clean = (v: string | undefined, what: string, spaces = false) => {
-    if (v !== undefined && (/[\x00-\x1f\x7f"#]/.test(v) || (!spaces && /\s/.test(v)) || v.startsWith("-"))) throw new Error(`The ${what} "${v}" has characters that are not allowed.`);
+    if (v !== undefined && (/[\x00-\x1f\x7f"'\\#]/.test(v) || (!spaces && /\s/.test(v)) || v.startsWith("-"))) throw new Error(`The ${what} "${v}" has characters that are not allowed.`);
     return v;
   };
   const port = o["-p"] === undefined ? undefined : Number(o["-p"]);
