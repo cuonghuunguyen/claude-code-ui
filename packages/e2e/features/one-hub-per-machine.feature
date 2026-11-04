@@ -55,7 +55,7 @@ Feature: One Hub per machine
     When the claude-ui installed in the SSH host says it is version "1.1.0"
     And I stop the app, replace the Hub of the SSH host by one started by an attach with the schema "0,0" and start the app
     And I open the app and Settings › Sides
-    Then the Settings row of the SSH host "e2e-ok" says "there"
+    Then the Settings row of the SSH host "e2e-ok" says "Claude UI 1.1.0 there, dev here"
     And the Settings row of the SSH host "e2e-ok" shows the Update button
     And the page has no horizontal scroll
     And the Settings row of the SSH host "e2e-ok" fits the viewport
