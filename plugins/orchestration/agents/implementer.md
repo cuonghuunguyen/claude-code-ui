@@ -35,7 +35,7 @@ After the commit, start both verifiers on that SHA, in parallel, each with one `
 | ui-tester | orchestration:ui-tester | sonnet | ui-tester |
 | reviewer | orchestration:reviewer | opus | reviewer |
 
-HANDOFF for them: same ticket, worktree, branch and report-dir; `commit` = your SHA; `coordinator` = your own worker name; `attempts` = used/budget of that stage. After the starts, end your turn and wait for the notices; call `worker_wait` once per notice, never in a loop. Read results with `worker_read` (path form `<name>` for your own) and the report files.
+HANDOFF for them: same ticket, worktree, branch and report-dir; `commit` = your SHA; `coordinator` = your own worker name; `attempts` = used/budget of that stage. After the starts, end your turn and wait for the notices; call `worker_wait` once per notice, never in a loop. Answer every notice with one `worker_wait`, even one that looks stale (for a worker you closed or stopped yourself): it can be the only wake-up for events still queued. Read results with `worker_read` (path form `<name>` for your own) and the report files.
 
 - Red from either: fix, commit, start a **fresh** verifier of that kind (`reviewer-2`, `ui-tester-2`) on the new SHA. Never reuse a verifier for a new SHA.
 - Join: continue only when both are green on the same SHA.

@@ -62,7 +62,7 @@ after the worktree is removed.
 ## Events
 
 `worker_wait` returns the events not read yet, else waits up to `timeoutMs`. Because claude-ui
-already sent a notice, the events are there: call it with no `timeoutMs` and do not loop.
+already sent a notice, the events are there: call it with no `timeoutMs` and do not loop. Answer every notice with one `worker_wait`, even one that looks stale: it can be the only wake-up for events still queued.
 
 | Type | Carries | Meaning |
 |---|---|---|
