@@ -567,6 +567,7 @@ export function App() {
   const [dockInsert, setDockInsert] = useState<Record<string, string>>({});
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
+  const [quickOpenQuery, setQuickOpenQuery] = useState("");
   const [openFile, setOpenFile] = useState<{ path: string; line?: number; /** The editor takes the focus (an explicit "open in Files tab", #301). */ focus?: boolean }>();
   // GH-399 file tabs: the tab whose editor takes the focus (`seq` tells a repeat apart), and the Files tree's reveal request (a file, or a breadcrumb folder).
   const [fileFocus, setFileFocus] = useState<{ ref: string; seq: number }>();
@@ -2481,7 +2482,7 @@ export function App() {
         plan: () => showPlanRef.current(id),
         link: (path, line) => {
           const o = here();
-          if (o.cwd) popFile(path, line, undefined, { id, cwd: o.cwd });
+          if (o.cwd) openFileLinkRef.current(path, line, { id, cwd: o.cwd });
         },
         quote: (q) => setDockInsert((i) => ({ ...i, [id]: q })),
       };
@@ -2601,6 +2602,7 @@ export function App() {
   };
   const hideQuickOpen = (restoreFocus: boolean) => {
     setQuickOpen(false);
+    setQuickOpenQuery("");
     if (restoreFocus && quickOpener.current instanceof HTMLElement) quickOpener.current.focus();
   };
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
@@ -2620,7 +2622,27 @@ export function App() {
   }, []);
   const openViewer = useOpenViewer(shown, (v) => (isFileTarget(v.target) ? popFile(v.target.path, v.target.line, v.opener) : setViewer(v)));
   /** A path in assistant text (absolute, inside the session cwd): the Files tab opens it at the line. */
-  const openFileLink = useCallback((path: string, line?: number) => popFile(path, line), []);
+  const openFileLink = useCallback(
+    (path: string, line?: number, owner?: { id: string; cwd: string }) => {
+      const cwd = owner?.cwd ?? panelTargetRef.current?.cwd;
+      const name = cwd ? relPath(path, cwd) : path;
+      if (!cwd || name === path || /[\\/]/.test(name)) return popFile(path, line, undefined, owner);
+      // A bare name is looked up in the project: one match opens it, several go to quick open, none keeps the plain open.
+      const open = (p: string) => popFile(p, line, undefined, owner);
+      client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query: name }, { timeoutMs: 10_000 }).then(
+        (r) => {
+          const hits = r.paths.filter((h) => !h.endsWith("/") && baseName(h) === name);
+          if (hits.length === 1) open(joinPath(cwd, hits[0]!));
+          else if (hits.length > 1) (setQuickOpenQuery(name), showQuickOpen());
+          else open(path);
+        },
+        () => open(path),
+      );
+    },
+    [],
+  );
+  const openFileLinkRef = useRef(openFileLink);
+  openFileLinkRef.current = openFileLink;
   /** Plan pane / "Open in tab": reveals the Plan pane of the current session. */
   const showPlan = (sid = currentId) => {
     if (!sid || !isSession(sid)) return;
@@ -4164,6 +4186,7 @@ export function App() {
         <QuickOpen
           connected={status === "connected"}
           onSearch={search(shown.cwd)}
+          initialQuery={quickOpenQuery}
           onOpen={(p) => (hideQuickOpen(false), openInPanel(p))}
           onOpenTab={(p) => (hideQuickOpen(false), openFileTab(joinPath(shown.cwd, p)))}
           onMention={(p) => {

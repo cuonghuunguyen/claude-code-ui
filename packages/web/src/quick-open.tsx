@@ -14,6 +14,7 @@ export const quickOpenLabel = () => t("app.quickOpen.searchKey", { key: `${mod}P
 export function QuickOpen({
   connected,
   onSearch,
+  initialQuery = "",
   onOpen,
   onMention,
   onOpenTab,
@@ -21,6 +22,8 @@ export function QuickOpen({
 }: {
   connected: boolean;
   onSearch: (query: string) => Promise<string[]>;
+  /** A file link with a bare name that matches several files: the list opens already filtered. */
+  initialQuery?: string;
   onOpen: (path: string) => void;
   onMention: (path: string) => void;
   /** Alt+Enter or a middle click on a row (GH-399): the file as a main-area tab. */
@@ -28,7 +31,7 @@ export function QuickOpen({
   onClose: () => void;
 }) {
   const t = useT();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [found, setFound] = useState<{ query: string; paths: string[]; error?: string }>();
   const [active, setActive] = useState(0);
   const [attempt, setAttempt] = useState(0);
