@@ -184,3 +184,14 @@ it("GH-399 Alt+Enter and a middle click on a row open the file as a tab; Enter s
   expect(onOpen).toHaveBeenCalledWith("README.md");
   expect(onOpenTab).toHaveBeenCalledTimes(2);
 });
+
+it("starts filtered by initialQuery (a bare file name with several matches)", async () => {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  const onSearch = vi.fn(async (q: string) => FILES[q] ?? []);
+  await act(async () => root!.render(<QuickOpen onSearch={onSearch} connected initialQuery="au" onOpen={vi.fn()} onMention={vi.fn()} onClose={vi.fn()} />));
+  expect(onSearch).toHaveBeenCalledWith("au");
+  expect(el.querySelector<HTMLInputElement>('[data-testid="quick-open-input"]')!.value).toBe("au");
+  expect([...el.querySelectorAll<HTMLElement>('[role="option"]')].map((r) => r.dataset.path)).toEqual(["src/auth/login.ts"]);
+});
