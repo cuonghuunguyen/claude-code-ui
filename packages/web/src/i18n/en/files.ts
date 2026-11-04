@@ -31,6 +31,7 @@ export default {
   "files.loadingFile": "Loading file…",
   "files.reloadFromDisk": "Reload from disk",
   "files.openInDialog": "Open in file dialog",
+  "files.notFound": "File not found: {name}",
   "files.diffView": "Diff view",
   "files.diffUnified": "Unified diff",
   "files.diffSplit": "Split diff",

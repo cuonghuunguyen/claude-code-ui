@@ -4,7 +4,7 @@ import { ArtifactLinkMenu, ArtifactUrlContext } from "./artifact-preview.tsx";
 import { isClaudeUrl } from "./tools.ts";
 import { defaultComponents, defaultRemarkPlugins, type Components } from "streamdown";
 import { useT } from "./i18n.ts";
-import { inDir, isWinPath, joinPath, sepOf, withSep } from "./paths.ts";
+import { baseName, inDir, isWinPath, joinPath, relPath, sepOf, withSep } from "./paths.ts";
 import { CwdContext } from "./tool-card.tsx";
 
 /** Opens `path` in the Files tab, at `line` when given. Without a provider, file references stay plain text. */
@@ -79,6 +79,17 @@ export function fileRef(text: string, base: string, root = base): { path: string
   const path = s.startsWith("/") || isWinPath(s) ? s : joinPath(base, s.replace(/^\.\//, ""));
   if (!inDir(path, root) || path.length <= root.replace(/[\\/]$/, "").length) return;
   return { path, ...(line && { line }) };
+}
+
+/**
+ * A bare file name (`path` directly under `cwd`) looked up in the project with `search` (`fs.search`: paths relative to `cwd`):
+ * `open` the one file of that name, `pick` among several, or it is `missing`. Undefined when `path` has a folder.
+ */
+export async function resolveBareName(path: string, cwd: string, search: (query: string) => Promise<string[]>): Promise<{ open: string } | { pick: string } | { missing: string } | undefined> {
+  const name = relPath(path, cwd);
+  if (name === path || /[\\/]/.test(name)) return;
+  const hits = (await search(name)).filter((h) => !h.endsWith("/") && baseName(h) === name);
+  return hits.length === 1 ? { open: joinPath(cwd, hits[0]!) } : hits.length ? { pick: name } : { missing: name };
 }
 
 const FILE_LINK = "streamdown:file/";

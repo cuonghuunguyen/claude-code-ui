@@ -117,7 +117,7 @@ import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, sa
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
-import { FILE_LINK_PROPS, FileLinkContext } from "./file-links.tsx";
+import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
@@ -568,6 +568,8 @@ export function App() {
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
+  /** A bare-name file link of a docked session: quick open searches that session's folder. */
+  const [quickOpenOwner, setQuickOpenOwner] = useState<{ id: string; cwd: string }>();
   const [openFile, setOpenFile] = useState<{ path: string; line?: number; /** The editor takes the focus (an explicit "open in Files tab", #301). */ focus?: boolean }>();
   // GH-399 file tabs: the tab whose editor takes the focus (`seq` tells a repeat apart), and the Files tree's reveal request (a file, or a breadcrumb folder).
   const [fileFocus, setFileFocus] = useState<{ ref: string; seq: number }>();
@@ -2603,6 +2605,7 @@ export function App() {
   const hideQuickOpen = (restoreFocus: boolean) => {
     setQuickOpen(false);
     setQuickOpenQuery("");
+    setQuickOpenOwner(undefined);
     if (restoreFocus && quickOpener.current instanceof HTMLElement) quickOpener.current.focus();
   };
   const wide = (px: number) => window.matchMedia(`(min-width: ${px}px)`).matches;
@@ -2625,16 +2628,15 @@ export function App() {
   const openFileLink = useCallback(
     (path: string, line?: number, owner?: { id: string; cwd: string }) => {
       const cwd = owner?.cwd ?? panelTargetRef.current?.cwd;
-      const name = cwd ? relPath(path, cwd) : path;
-      if (!cwd || name === path || /[\\/]/.test(name)) return popFile(path, line, undefined, owner);
-      // A bare name is looked up in the project: one match opens it, several go to quick open, none keeps the plain open.
+      if (!cwd) return popFile(path, line, undefined, owner);
       const open = (p: string) => popFile(p, line, undefined, owner);
-      client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query: name }, { timeoutMs: 10_000 }).then(
+      // A bare name is looked up in the project: one match opens it, several go to quick open, none says so.
+      resolveBareName(path, cwd, (query) => client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query }, { timeoutMs: 10_000 }).then((r) => r.paths)).then(
         (r) => {
-          const hits = r.paths.filter((h) => !h.endsWith("/") && baseName(h) === name);
-          if (hits.length === 1) open(joinPath(cwd, hits[0]!));
-          else if (hits.length > 1) (setQuickOpenQuery(name), showQuickOpen());
-          else open(path);
+          if (!r) open(path);
+          else if ("open" in r) open(r.open);
+          else if ("pick" in r) (setQuickOpenQuery(r.pick), setQuickOpenOwner(owner), showQuickOpen());
+          else setToast(tt("files.notFound", { name: r.missing }));
         },
         () => open(path),
       );
@@ -4185,10 +4187,10 @@ export function App() {
       {quickOpen && shown && (
         <QuickOpen
           connected={status === "connected"}
-          onSearch={search(shown.cwd)}
+          onSearch={search(quickOpenOwner?.cwd ?? shown.cwd)}
           initialQuery={quickOpenQuery}
-          onOpen={(p) => (hideQuickOpen(false), openInPanel(p))}
-          onOpenTab={(p) => (hideQuickOpen(false), openFileTab(joinPath(shown.cwd, p)))}
+          onOpen={(p) => (hideQuickOpen(false), quickOpenOwner ? popFile(joinPath(quickOpenOwner.cwd, p), undefined, undefined, quickOpenOwner) : openInPanel(p))}
+          onOpenTab={(p) => (hideQuickOpen(false), openFileTab(joinPath(quickOpenOwner?.cwd ?? shown.cwd, p)))}
           onMention={(p) => {
             hideQuickOpen(false);
             setInsert(mentionPath(p));

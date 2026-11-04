@@ -90,3 +90,14 @@ it("explicit link targets in a markdown file all open: ../, a bare name, an imag
   expect(el.textContent).toContain("out");
   act(() => root.render(null));
 });
+
+it("resolveBareName: one match opens it, several pick, none is missing, a path with a folder is not looked up", async () => {
+  const { resolveBareName } = await import("./file-links.tsx");
+  const find = (paths: string[]) => vi.fn(async () => paths);
+  expect(await resolveBareName("/w/A.java", "/w", find(["src/main/A.java", "src/main/A.javaX", "src/"]))).toEqual({ open: "/w/src/main/A.java" });
+  expect(await resolveBareName("/w/A.java", "/w", find(["x/A.java", "y/A.java"]))).toEqual({ pick: "A.java" });
+  expect(await resolveBareName("/w/A.java", "/w", find(["x/B.java"]))).toEqual({ missing: "A.java" });
+  const never = find([]);
+  expect(await resolveBareName("/w/src/A.java", "/w", never)).toBeUndefined();
+  expect(never).not.toHaveBeenCalled();
+});
