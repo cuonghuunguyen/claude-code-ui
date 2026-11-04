@@ -51,7 +51,7 @@ export default {
   "settings.sides.grace": "Giữ chạy khi không có Claude UI (phút)",
   "settings.sides.graceLabel": "Số phút {name} giữ chạy khi không có Claude UI",
   "settings.sides.graceHint": "Máy chủ giữ phiên và terminal khi Claude UI vắng mặt. Thời gian chỉ tính khi không có lượt nào đang chạy.",
-  "settings.sides.hint": "Tự khởi động (khởi động cùng Claude UI) có hiệu lực ở lần khởi động Claude UI tiếp theo. Tắt cũng gỡ các dự án của môi trường khỏi thanh bên. Tự cập nhật chỉ cài bản Claude UI mới từ gói; npm không bao giờ chạy trong side.",
+  "settings.sides.hint": "Tự khởi động (khởi động cùng Claude UI) có hiệu lực ở lần khởi động Claude UI tiếp theo. Tắt cũng gỡ các dự án của môi trường khỏi thanh bên. Tự cập nhật chỉ cài bản Claude UI mới từ gói; npm không bao giờ chạy trong side. Với máy chủ SSH, bật là kết nối mỗi lần Claude UI khởi động và chạy Side Daemon nếu chưa có; tắt chỉ nối lại máy chủ đã nối lúc tắt gần nhất và không bao giờ khởi động Daemon.",
   "settings.screen.title": "Màn hình",
   "settings.screen.awake": "Giữ màn hình sáng",
   "settings.screen.awakeHint": "Giữ màn hình thiết bị này sáng khi trang đang hiển thị. Trình duyệt cho màn hình ngủ khi bạn chuyển đi và bật lại khi bạn quay về. Lưu trong trình duyệt này. Bật hoặc tắt cũng đặt Giữ máy tính thức.",
@@ -285,6 +285,7 @@ export default {
   // sides.tsx
   "side.starting": "Đang khởi động…",
   "side.reconnecting": "Đang kết nối lại…",
+  "side.updatePending": "Chờ cập nhật: cập nhật khi không có gì chạy",
   "side.couldNotStart": "Không khởi động được",
   "side.needsUpdate": "Cần cập nhật",
   "side.notRunning": "Không chạy",

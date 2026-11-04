@@ -2655,6 +2655,8 @@ export function createDaemon(opts: {
     orchestration,
     /** SSH Side Daemon (ADR 0007): a turn runs. A turn that waits on a permission prompt or a question is idle (`needs_input`). */
     busy: () => [...sessions.values()].some((s) => s.info().state === "running"),
+    /** SSH Side Daemon: open terminals (an update of the Side Daemon would end them). */
+    terminals: () => terminals.count(),
     /** SSH Side Daemon at the end of its Grace period: closes every session (the CLI ends, pending requests are abandoned) and terminal. */
     stopAll: async () => {
       await Promise.all([...sessions.values()].map((s) => s.close().catch(() => {})));

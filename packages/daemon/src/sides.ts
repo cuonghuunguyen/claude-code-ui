@@ -16,6 +16,7 @@ import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
 import { kindOf, nameOf, NOUN, sideTarget, startOptIn, survivesPipe } from "./side-kinds.ts";
+import { safeKey } from "./side-bundle.ts";
 import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, TARGET_PROBE_LINES_POSIX, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
@@ -98,6 +99,8 @@ export function setupMessage(code: string, detail: string, side: string, kind: b
  * `key` (version and build), so no registry or unpublished version matters. wsl: `source` is the Windows package folder (read
  * through /mnt; npm packs it); docker: `source` is the tarball's path in the container. Then runs it.
  */
+/** The install sweep of a setup script: removes the other builds under `$root` (our own install root, never the Hub's `versions/`) except `$dir` and the build a running Side Daemon records in `$root/.live`. */
+export const SWEEP_LINE = '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"; done';
 /** `runArgs`: what the installed cli runs at the end (default `--side`; an SSH Side runs the bridge to its Side Daemon, `sshRunArgs`). */
 export function setupScript(source: string, key: string, kind: "wsl" | "docker" | "ssh" = "wsl", mode: SideSetup = "needed", bundle?: SideBundle, runArgs = "--side") {
   const docker = kind !== "wsl";
@@ -114,6 +117,8 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     'root="$HOME/.local/share/claude-ui/side"',
     ...(host && !never ? [HOME_CHECK] : []),
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
+    // A reattach bridges from the build the running Side Daemon uses (it may be older than this one), not from this build's folder.
+    ...(runArgs === sshRunArgs(true) ? ['live=$(cat "$root/.live" 2>/dev/null); [ -n "$live" ] && [ -f "$live/node_modules/claude-code-ui/dist/cli.js" ] || say no_daemon', 'dir="$live"'] : []),
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     // npm skips an optional dependency it could not fetch: without the SDK's Linux binary (any arch or libc) the side lists no
     // models (no auto mode) and runs no query. Such an install is installed again: into an empty temp folder next to the old
@@ -161,7 +166,7 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
     '  rm -rf "$old"',
     // Earlier versions and builds, leftovers of killed runs.
     // A running Side Daemon (ADR 0007) records its install folder in "$root/.live": that folder stays while it runs.
-    '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"; done',
+    SWEEP_LINE,
     "fi",
     ]),
     ...(docker && !never ? ['rm -f "$src" 2>/dev/null'] : []),
@@ -223,7 +228,7 @@ function finishLines(found: boolean, before: string[] = []) {
     '  mv "$new" "$dir" || { rm -rf "$dir" "$new"; [ -e "$old" ] && mv "$old" "$dir"; say install_failed "the new install could not be moved in"; }',
     '  rm -rf "$old"',
     // A running Side Daemon (ADR 0007) records its install folder in "$root/.live": that folder stays while it runs.
-    '  live=$(cat "$root/.live" 2>/dev/null); for d in "$root"/* "$root"/.new-* "$root"/.old-*; do [ "$d" = "$dir" ] || [ "${d##*/}" = "${live##*/}" ] || rm -rf "$d"; done',
+    SWEEP_LINE,
   ];
 }
 
@@ -556,7 +561,7 @@ function lines(stream: Readable, onLine: (line: string) => void, max = Infinity,
 }
 
 type GitCall = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout };
-type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall>; killTree?: boolean; /** `reconnecting`: when the pipe dropped, and the attach tries since. */ lost?: { at: number; tries: number }; beat?: ReturnType<typeof setInterval> };
+type Side = SideInfo & { /** GH-523: the side has a session running or waiting for the user (its `running` frame). */ running?: boolean; proc?: SideProcess; starting?: Promise<void>; conns: Map<number, (m: ServerMessage) => void>; gits: Map<number, GitCall>; killTree?: boolean; /** `reconnecting`: when the pipe dropped, and the attach tries since. */ lost?: { at: number; tries: number }; /** Update tries of this Hub run. */ updates?: number; /** The update is under way: the pipe ends on purpose. */ updating?: boolean; /** Open terminals of the remote Side Daemon (`terminals` frame; a Daemon of the previous build sends none). */ terminals?: number; beat?: ReturnType<typeof setInterval> };
 
 let nextGit = 0;
 
@@ -604,6 +609,10 @@ export function createSides(opts: {
   restartMs?: number[];
   /** Wait before attach try 1, 2, 3 ... of a dropped SSH pipe; the last repeats (default 2 s, 5 s, 15 s, 30 s). */
   reconnectMs?: number[];
+  /** The SSH Sides that were attached when this Hub last ran (`side-attached.json`): the only ones a Hub start attaches to unless "Start with Claude UI" is on. */
+  attached?: { read(): string[] | undefined; write(ids: string[]): void };
+  /** Wait between the end of the pipe and the launch of the update of an SSH Side Daemon (default 5 s: the Daemon exits on its next 1 s tick). */
+  updateWaitMs?: number;
   /** Grace period of an SSH Side in minutes, kept across hub runs (`side-grace.json`). */
   grace?: { read(): Record<string, number>; write(g: Record<string, number>): void };
   /** Wait before the one retry of a failed auto start (default 30 s). */
@@ -631,9 +640,20 @@ export function createSides(opts: {
   /** Sides with "Start with Claude UI" on: they start again with the next daemon start (a saved ID not seen yet stays saved). */
   const saved = new Map((opts.saved ?? []).map((e) => [e.id, e]));
   const persist = () => opts.save?.([...saved.values()]);
+  let closing = false;
+  /**
+   * SSH Sides attached at the last shutdown. Added on ready; removed when the Side ends on purpose (no Daemon, taken over, lost for good);
+   * kept on Hub close, a dropped pipe and an unreachable host.
+   * shortcut: a missing file (first run after the upgrade) is seeded with the saved SSH Sides, once.
+   */
+  const attached = new Set(opts.attached?.read() ?? [...saved.keys()].filter(survivesPipe));
+  const setAttached = (id: string, on: boolean) => {
+    if (closing || attached.has(id) === on) return;
+    on ? attached.add(id) : attached.delete(id);
+    opts.attached?.write([...attached]);
+  };
   /** Started again once per daemon run. */
   const autoTried = new Set<string>();
-  let closing = false;
   /** One pending timer per side: a restart after an exit, or the retry of a failed auto start. */
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const later = (id: string, ms: number, f: () => void) => {
@@ -656,16 +676,21 @@ export function createSides(opts: {
    */
   const startSaved = (id: string, retried = false) => {
     const e = saved.get(id);
-    if (!e || closing) return;
+    if (closing) return;
+    if (!e) {
+      // SSH, "Start with Claude UI" off: only a host attached at the last shutdown is attached again; no Daemon is started.
+      if (survivesPipe(id) && attached.has(id)) start(id, "never", undefined, undefined, true).catch(() => {});
+      return;
+    }
     const same = (e.key !== undefined && e.key === opts.key?.()) || e.update === false;
-    // An SSH Side Daemon is not started at hub start: the hub attaches to the one that still runs. Only an automatic update (another build) launches.
-    start(id, same ? "never" : "needed", undefined, !same, survivesPipe(id) && same).catch((err) => {
+    // "Start with Claude UI" on is the owner's opt-in: an SSH host is connected and a Side Daemon is started when none runs (launch, not attach-only).
+    start(id, same ? "never" : "needed", undefined, !same).catch((err) => {
       console.error(`starting ${id} failed:`, (err as Error).message);
       if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
     });
   };
   const autoStart = (id: string) => {
-    if (!saved.has(id) || autoTried.has(id)) return;
+    if (!(saved.has(id) || (survivesPipe(id) && attached.has(id))) || autoTried.has(id)) return;
     autoTried.add(id);
     startSaved(id);
   };
@@ -777,6 +802,19 @@ export function createSides(opts: {
     changed();
   };
 
+  /**
+   * An SSH Side Daemon of another build: once nothing runs (no turn, nothing waiting for the user, no open terminal) the Hub sets its Grace period
+   * to 1 ms and ends the pipe. The idle Daemon exits on its next tick; the Hub then launches this build. At most 2 tries per Hub run.
+   * shortcut: a Daemon of the previous build reports no terminals, so its open terminals end with the update; upgrade when that build is out of use.
+   */
+  function maybeUpdate(s: Side) {
+    if (!s.updatePending || s.state !== "ready" || s.running !== false || s.terminals || s.updating || (s.updates ?? 0) >= 2) return;
+    s.updates = (s.updates ?? 0) + 1;
+    s.updating = true;
+    write(s, { grace: 1 });
+    s.proc?.kill();
+  }
+
   function start(id: string, setup: SideSetup = "needed", nodeNote?: string, bundleOnly?: boolean, attach?: boolean): Promise<void> {
     const s = sides.get(id);
     if (!s) return Promise.reject(new Error(`unknown side ${id}`));
@@ -785,6 +823,7 @@ export function createSides(opts: {
     clearTimeout(timers.get(id));
     timers.delete(id);
     delete s.update;
+    delete s.updatePending;
     delete s.phase;
     delete s.bundle;
     delete s.fallback;
@@ -828,6 +867,8 @@ export function createSides(opts: {
       let setupError: string | undefined;
       let setupCode: string | undefined;
       let setupDetail = "";
+      /** Another Hub attached to the Side Daemon (the `taken` frame): this Hub does not attach again. */
+      let taken = false;
       let stderr = "";
       // The tail below keeps 2000 chars; a long stack would push the crash line out, so it is remembered as it arrives
       // (`partial` carries an unfinished line over to the next chunk).
@@ -857,6 +898,7 @@ export function createSides(opts: {
         const f = parsed.frame;
         seen = Date.now();
         if (f.kind === "hb") return;
+        if (f.kind === "taken") return void (taken = true);
         if (f.kind === "git") {
           const call = s.gits.get(f.g);
           if (!call) return;
@@ -873,8 +915,14 @@ export function createSides(opts: {
           delete s.bundle;
           delete s.fallback;
           clashed.delete(s.id);
-          Object.assign(s, { state: "ready", message: undefined, killTree: f.killTree });
+          Object.assign(s, { state: "ready", message: undefined, killTree: f.killTree, running: undefined });
           delete s.lost;
+          delete s.terminals;
+          if (survivesPipe(s.id)) {
+            setAttached(s.id, true);
+            // Another build (a Daemon of the previous build names none): updated once nothing runs. Not with "Update automatically" off.
+            if (opts.key && saved.get(s.id)?.update !== false && f.build !== safeKey(opts.key())) s.updatePending = true;
+          }
           clearInterval(s.beat);
           if (f.hb) {
             // A Side Daemon heartbeat (ADR 0007): a frame both ways every period; 3 missed ends the pipe (the exit handler reconnects).
@@ -890,6 +938,10 @@ export function createSides(opts: {
           changed();
         } else if (f.kind === "running") {
           if (s.running !== f.running) (s.running = f.running), runningListeners.forEach((l) => l());
+          maybeUpdate(s);
+        } else if (f.kind === "terminals") {
+          s.terminals = f.terminals;
+          maybeUpdate(s);
         } else if (f.kind === "push") {
           // A side notifies for its own sessions only (GH-279): not for one another side owns.
           const owner = sessionSide.get(f.push.sessionId);
@@ -935,15 +987,23 @@ export function createSides(opts: {
           return;
         }
         // SSH: the Side Daemon outlives its pipe. Attach again with backoff (`reconnecting`) until the Grace period must have run out.
-        const lost = survivesPipe(s.id) && !closing && !noDaemon && !notInstalled ? (s.lost ?? (wasReady ? { at: Date.now(), tries: 0 } : undefined)) : undefined;
+        const updating = !!s.updating;
+        delete s.updating;
+        const lost = survivesPipe(s.id) && !closing && !noDaemon && !notInstalled && !taken && !updating ? (s.lost ?? (wasReady ? { at: Date.now(), tries: 0 } : undefined)) : undefined;
         if (lost && Date.now() - lost.at < graceMin(s.id) * 60_000 + 60_000) {
           s.lost = { ...lost, tries: lost.tries + 1 };
           Object.assign(s, { state: "reconnecting", message: undefined, proc: undefined, starting: undefined });
           later(s.id, reconnectMs[Math.min(s.lost.tries, reconnectMs.length) - 1]!, () => start(s.id, "never", undefined, undefined, true).catch(() => {}));
-        } else delete s.lost;
+        } else {
+          // The reconnect window ran out: the Daemon is gone for good.
+          if (s.lost) setAttached(s.id, false);
+          delete s.lost;
+        }
+        if (noDaemon || notInstalled || taken) setAttached(s.id, false);
         // An exit of a ready side: it comes back by itself (Starting…) unless it exits again and again.
-        const restarting = !s.lost && wasReady && scheduleRestart(s);
-        Object.assign(s, restarting || s.lost ? {} : notInstalled ? { state: "off", message: undefined } : noDaemon ? { state: "off", message } : { state: "error", message }, { proc: undefined, starting: undefined });
+        const restarting = !s.lost && !taken && !updating && wasReady && scheduleRestart(s);
+        if (updating) later(s.id, opts.updateWaitMs ?? 5_000, () => start(s.id, "needed", undefined, true).catch(() => {}));
+        Object.assign(s, restarting || s.lost ? {} : updating ? { state: "starting", message: undefined } : taken ? { state: "off", message: `${s.label} is taken over by another Claude UI. Retry to take it back.` } : notInstalled ? { state: "off", message: undefined } : noDaemon ? { state: "off", message } : { state: "error", message }, { proc: undefined, starting: undefined });
         s.conns.clear();
         s.running = false;
         for (const [gid, c] of s.gits) {
@@ -1047,7 +1107,7 @@ export function createSides(opts: {
     return p;
   }
 
-  for (const id of saved.keys()) if (sides.has(id)) autoStart(id);
+  for (const id of new Set([...saved.keys(), ...attached])) if (sides.has(id)) autoStart(id);
 
   let lastDiscover = 0;
   /** IDs the last discover() listed. */
@@ -1106,7 +1166,7 @@ export function createSides(opts: {
     /** Every side, local first. */
     list: (): SideInfo[] => [
       { id: LOCAL_SIDE, label: opts.localLabel ?? "Windows", state: "ready" },
-      ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote, update }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error" || (state === "off" && update)) && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }), ...(graces.has(id) && { graceMinutes: graces.get(id)! }), ...(saved.has(id) && { autoStart: true as const }), ...(saved.get(id)?.update === false && { autoUpdate: false as const }), ...(update && state === "off" && { update: true as const }) })),
+      ...[...sides.values()].map(({ id, label, state, message, phase, bundle, fallback, nodeNote, update, updatePending }) => ({ id, label, state, ...(message && { message }), ...(phase && state === "starting" && { phase }), ...(bundle && state === "starting" && { bundle }), ...(fallback && (state === "starting" || state === "error" || (state === "off" && update)) && { fallback }), ...(nodeNote && state === "starting" && { nodeNote }), ...(graces.has(id) && { graceMinutes: graces.get(id)! }), ...(saved.has(id) && { autoStart: true as const }), ...(updatePending && state === "ready" && { updatePending: true as const }), ...(saved.get(id)?.update === false && { autoUpdate: false as const }), ...(update && state === "off" && { update: true as const }) })),
       ...[...saved.keys()].filter((id) => !sides.has(id)).map(missingRow),
     ],
     /** "Start with Claude UI" / "Update automatically" (side.prefs). False: no such side. Turning start on starts nothing now. */
@@ -1629,7 +1689,7 @@ export class SideSocket extends EventEmitter {
  * (the daemon's connection handler) and writes their messages to `output`. Ends the process when the hub goes away.
  * `heartbeatMs` (an SSH Side Daemon): a `{"hb":1}` frame both ways every period; no frame from the hub for 3 periods ends the pipe.
  */
-export function runSide(opts: { input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner; heartbeatMs?: number; /** The hub's Grace period (`{"grace":ms}`, sent on attach). */ onGrace?: (ms: number) => void }) {
+export function runSide(opts: { build?: string; input: Readable; output: Writable; accept: (ws: SideSocket) => void; onEnd?: () => void; git?: GitRunner; heartbeatMs?: number; /** The hub's Grace period (`{"grace":ms}`, sent on attach). */ onGrace?: (ms: number) => void }) {
   const sockets = new Map<number, SideSocket>();
   let ended = false;
   let beat: ReturnType<typeof setInterval> | undefined;
@@ -1689,8 +1749,11 @@ export function runSide(opts: { input: Readable; output: Writable; accept: (ws: 
     beat.unref();
   }
   // killTree: this side ends a timed-out git's process group; an older side that did not restart sends none (the hub refuses remote git to it).
-  write(JSON.stringify({ ready: true, killTree: true, ...(opts.heartbeatMs && { hb: true }) }));
+  write(JSON.stringify({ ready: true, killTree: true, ...(opts.heartbeatMs && { hb: true }), ...(opts.build && { build: opts.build }) }));
   return {
+    /** A newer attach replaces this pipe: tells the Hub (it must not attach again), then ends. */
+    takeOver: () => (write('{"taken":1}'), end()),
+    terminals: (n: number) => write(JSON.stringify({ terminals: n })),
     push: (p: PushPayload) => write(JSON.stringify({ push: p })),
     running: (on: boolean) => write(JSON.stringify({ running: on })),
     end,

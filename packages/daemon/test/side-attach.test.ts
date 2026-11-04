@@ -1,12 +1,12 @@
 // `claude-ui side --attach`: the bridge between ssh stdio and the Side Daemon's Unix socket (ADR 0007).
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { chmodSync, statSync } from "node:fs";
-import { liveInstall, prepareSockDir, runAttach, sideSocketPath } from "../src/side-attach.ts";
+import { claimSocket, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "../src/side-attach.ts";
 
 let dir: string;
 let server: Server | undefined;
@@ -92,4 +92,44 @@ it("listenPrivate: the socket is 0600 and the process umask is restored (childre
   await new Promise<void>((ok) => (listenPrivate(server!, sock), server!.once("listening", ok)));
   expect(statSync(sock).mode & 0o777).toBe(0o600);
   expect(process.umask()).toBe(before);
+});
+
+it("prepareSockDir refuses a symlink in place of the folder", () => {
+  const real = join(dir, "real");
+  mkdirSync(real);
+  const link = join(dir, "link");
+  symlinkSync(real, link);
+  expect(() => prepareSockDir(link, process.getuid!())).toThrow("not a folder");
+  writeFileSync(join(dir, "file"), "");
+  expect(() => prepareSockDir(join(dir, "file"), process.getuid!())).toThrow();
+});
+
+it("claimSocket: two Daemons that meet a stale socket file: exactly one owns the socket, the other leaves", async () => {
+  const sock = join(dir, "c.sock");
+  writeFileSync(sock, ""); // stale: a regular file of a dead Daemon
+  const a = createServer();
+  const b = createServer();
+  const live: string[] = [];
+  const errors: Error[] = [];
+  const listening = (s: Server) => new Promise<void>((ok) => s.once("listening", ok));
+  const first = listening(a);
+  claimSocket(a, sock, { onLive: () => live.push("a"), onError: (e) => errors.push(e) });
+  claimSocket(b, sock, { onLive: () => live.push("b"), onError: (e) => errors.push(e) });
+  await Promise.race([first, new Promise((r) => setTimeout(r, 2000))]);
+  await new Promise((r) => setTimeout(r, 200));
+  expect([a.listening, b.listening].filter(Boolean).length).toBe(1);
+  expect(live.length + [a.listening, b.listening].filter(Boolean).length).toBe(2);
+  expect(errors).toEqual([]);
+  a.close();
+  b.close();
+});
+
+it("claimSocket: a live Daemon owns the socket: the second start leaves it alone", async () => {
+  const sock = join(dir, "l.sock");
+  await listen(sock);
+  const second = createServer();
+  const live = await new Promise<boolean>((ok) => claimSocket(second, sock, { onLive: () => ok(true), onError: () => ok(false) }));
+  expect(live).toBe(true);
+  expect(second.listening).toBe(false);
+  expect(statSync(sock).isSocket()).toBe(true); // not removed
 });

@@ -265,7 +265,7 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
       {sides.map((r) => {
         const local = r.id === LOCAL_SIDE;
         const title = sideTitle(r, names);
-        const status = local ? "" : r.state === "ready" ? t("settings.sides.running") : (sideStatus(r)?.text ?? "");
+        const status = local ? "" : r.state === "ready" ? (r.updatePending ? t("side.updatePending") : t("settings.sides.running")) : (sideStatus(r)?.text ?? "");
         const dot = r.state === "ready" ? "bg-success" : r.state === "starting" || r.state === "reconnecting" ? "animate-pulse bg-warning motion-reduce:animate-none" : r.state === "error" ? "bg-destructive" : "bg-muted-foreground/40";
         const sub = title !== r.label ? [r.label, status].filter(Boolean).join(" · ") : status;
         return (

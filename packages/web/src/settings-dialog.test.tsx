@@ -1052,6 +1052,13 @@ it("Sides group: a row per side with state; the switches send side.prefs; Update
   expect(calls).toHaveLength(n);
 });
 
+it("Sides group: an SSH row whose remote Daemon runs another build says update pending instead of Running", async () => {
+  const { q, pick } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "ready", updatePending: true }, { id: "ssh:two", label: "SSH: two", state: "ready" }] });
+  await pick("sides");
+  expect(q("settings-side-ssh:box")?.textContent).toContain("Update pending: updates when nothing runs");
+  expect(q("settings-side-ssh:two")?.textContent).toContain("Running");
+});
+
 it("Sides group: an SSH Side has a Grace period field (default 30 min) that sends side.prefs graceMinutes; other kinds have none", async () => {
   const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "reconnecting" }, { id: "ssh:two", label: "SSH: two", state: "ready", graceMinutes: 45 }, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" }] });
   await pick("sides");
