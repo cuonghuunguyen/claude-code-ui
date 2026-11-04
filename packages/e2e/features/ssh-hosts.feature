@@ -31,6 +31,7 @@ Feature: SSH hosts from the ssh config and the Add SSH host dialog
     Then the Add SSH host dialog is closed
     And the SSH host list shows "build.example.com" once
     And the SSH host "build.example.com" is the selected row
+    And the SSH host filter has the focus
     And the ssh config has a Host block "build.example.com" with "HostName build.example.com"
     And the ssh config has a Host block "build.example.com" with "Port 2222"
     And I capture "ssh-host-added"

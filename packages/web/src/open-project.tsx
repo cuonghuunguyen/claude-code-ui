@@ -391,7 +391,6 @@ function ContainerStep({
     if (addedAt < 0) return;
     setAt(addedAt);
     setAdded(undefined);
-    input.current?.focus();
   }, [addedAt]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (isImeKey(e.nativeEvent)) return;
@@ -451,7 +450,7 @@ function ContainerStep({
           ))}
         </ul>
         {!rows.length && <p className="m-auto py-6 text-muted-foreground text-sm">{t(ssh ? "sidebar.op.noHost" : "sidebar.op.noContainer")}</p>}
-        {onAddHost && <AddSshHost onAdd={onAddHost} onAdded={(id) => (setQuery(""), setAdded(id))} />}
+        {onAddHost && <AddSshHost onAdd={onAddHost} onAdded={(id) => (setQuery(""), setAdded(id))} focusAfterAdd={() => input.current} />}
       </div>
     </>
   );

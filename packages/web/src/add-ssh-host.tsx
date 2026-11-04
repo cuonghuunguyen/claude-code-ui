@@ -20,14 +20,17 @@ function preview(command: string): { target: SshTarget } | { reason: string } | 
 }
 
 /** `onAdd` resolves with the new host's Side id, or rejects with the daemon's reason (shown in the dialog). `onAdded`: called after the dialog closed. */
-export function AddSshHost({ onAdd, onAdded }: { onAdd: (command: string) => Promise<string>; onAdded?: (side: string) => void }) {
+/** `focusAfterAdd`: where the focus goes when the dialog closed after a successful Add (default: the button, as after Cancel). */
+export function AddSshHost({ onAdd, onAdded, focusAfterAdd }: { onAdd: (command: string) => Promise<string>; onAdded?: (side: string) => void; focusAfterAdd?: () => HTMLElement | null }) {
   const t = useT();
   const button = useRef<HTMLButtonElement>(null);
+  const added = useRef(false);
   const [open, setOpen] = useState(false);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const close = () => (setOpen(false), setCommand(""), setError(undefined));
+  const onOpen = () => ((added.current = false), setOpen(true));
   const p = preview(command);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -36,6 +39,7 @@ export function AddSshHost({ onAdd, onAdded }: { onAdd: (command: string) => Pro
     setError(undefined);
     try {
       const side = await onAdd(command.trim());
+      added.current = true;
       close();
       onAdded?.(side);
     } catch (err) {
@@ -47,7 +51,7 @@ export function AddSshHost({ onAdd, onAdded }: { onAdd: (command: string) => Pro
   const rows = p && "target" in p ? ([["alias", p.target.host], ["host", p.target.host], ["user", p.target.user], ["port", p.target.port && String(p.target.port)], ["key", p.target.identity], ["jump", p.target.jump]] as const).filter((r) => r[1]) : [];
   return (
     <div className="px-1.5 pb-2">
-      <Button ref={button} type="button" variant="ghost" size="sm" onClick={() => setOpen(true)} className="max-md:h-11" data-testid="add-ssh-host">
+      <Button ref={button} type="button" variant="ghost" size="sm" onClick={onOpen} className="max-md:h-11" data-testid="add-ssh-host">
         <PlusIcon className="size-4" aria-hidden />
         {t("sidebar.op.addHost")}
       </Button>
@@ -57,7 +61,7 @@ export function AddSshHost({ onAdd, onAdded }: { onAdd: (command: string) => Pro
         onClose={close}
         busy={busy}
         testId="add-ssh-host-dialog"
-        finalFocus={() => button.current}
+        finalFocus={() => (added.current && focusAfterAdd?.()) || button.current}
         footer={
           <>
             <Button type="submit" form="add-ssh-host-form" size="sm" disabled={busy || !p || !("target" in p)} className="max-md:h-11" data-testid="add-ssh-host-submit">

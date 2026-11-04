@@ -80,6 +80,8 @@ describe("Add SSH host dialog in Open project", () => {
     expect(r.q("add-ssh-host-dialog")).toBeNull();
     const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="container-row"]')];
     expect(rows.map((x) => [x.textContent, x.getAttribute("aria-selected")])).toEqual([["aNot set up", "false"], ["build.example.comNot set up", "true"]]);
+    // The keys of the list (arrows, Enter) work at once: the focus is on the filter, not on the Add button.
+    expect(document.activeElement).toBe(r.q("container-filter"));
   });
   it("a refusal shows its reason inside the dialog and keeps the command for a retry; Cancel closes it", async () => {
     const onAdd = vi.fn(async (_c: string): Promise<string> => {

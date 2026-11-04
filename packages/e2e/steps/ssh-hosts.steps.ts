@@ -60,6 +60,10 @@ Then("the SSH host {string} is the selected row", async ({ page }, alias: string
   await expect(rows(page, alias)).toHaveAttribute("aria-selected", "true");
 });
 
+Then("the SSH host filter has the focus", async ({ page }) => {
+  await expect(page.getByTestId("container-filter")).toBeFocused();
+});
+
 When("I press Escape in the Add SSH host dialog", async ({ page }) => {
   await page.getByTestId("add-ssh-host-command").press("Escape");
 });
