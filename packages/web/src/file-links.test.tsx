@@ -97,6 +97,8 @@ it("resolveBareName: one match opens it, several pick, none is missing, a path w
   expect(await resolveBareName("/w/A.java", "/w", find(["src/main/A.java", "src/main/A.javaX", "src/"]))).toEqual({ open: "/w/src/main/A.java" });
   expect(await resolveBareName("/w/A.java", "/w", find(["x/A.java", "y/A.java"]))).toEqual({ pick: "A.java" });
   expect(await resolveBareName("/w/A.java", "/w", find(["x/B.java"]))).toEqual({ missing: "A.java" });
+  expect(await resolveBareName("/w/package.json", "/w", find(["package.json", "web/package.json"]))).toEqual({ open: "/w/package.json" });
+  expect(await resolveBareName("/w/readme.md", "/w", find(["docs/README.md"]))).toEqual({ open: "/w/docs/README.md" });
   const never = find([]);
   expect(await resolveBareName("/w/src/A.java", "/w", never)).toBeUndefined();
   expect(never).not.toHaveBeenCalled();
