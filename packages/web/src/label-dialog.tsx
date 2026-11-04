@@ -1,5 +1,5 @@
 // Name and icon of a project or a machine (GH-515, docs/spec.md "Settings" › labels): name, none / emoji / image icon, the image cropped to a square.
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { LABEL_EMOJI_MAX, LABEL_ICON_MAX, LABEL_ICON_PX, LABEL_NAME_MAX, type Label } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ function Body({ title, fallbackName, label, onSave, onClose }: Props) {
   const [pic, setPic] = useState<Pic>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => () => (pic ? URL.revokeObjectURL(pic.url) : undefined), [pic?.url]);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | undefined>(undefined);
 
   function choose(file: File | undefined) {

@@ -900,7 +900,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
-    ...(sides?.length || docker ? [{ id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides ?? []} request={request} onError={setError} /> }] : []),
+    { id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides?.length ? sides : [{ id: LOCAL_SIDE, label: t("settings.sides.local"), state: "ready" }]} request={request} onError={setError} /> },
     ...(performance
       ? [
           {

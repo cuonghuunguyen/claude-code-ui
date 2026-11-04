@@ -382,7 +382,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1000,8 +1000,10 @@ it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does
 
 const LOCAL = { id: "local", label: "Windows", state: "ready" } as const;
 
-it("Sides group: always shown with the row of this machine; none from a daemon that lists no side", async () => {
-  expect((await render({})).q("settings-group-sides")).toBeNull();
+it("Sides group: always shown with the row of this machine; a daemon that lists no side gets a fallback row", async () => {
+  const none = await render({});
+  await none.pick("sides");
+  expect(none.q("settings-side-local")?.textContent).toContain("This machine");
   document.body.innerHTML = "";
   const a = await render({ sides: [LOCAL] });
   await a.pick("sides");
