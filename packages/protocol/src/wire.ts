@@ -160,6 +160,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "side.start"; side: string; setup?: SideSetup }
   /** Read-only look at a side (nothing is installed or started; the hub answers it, a side never sees it): reply `SideCheck`, error `unknown_side`. */
   | { type: "side.check"; side: string }
+  /** Add SSH host: writes a `Host` block for `ssh user@host -p N [-i key] [-J jump]` to the ssh config (alias defaults to the host name). Reply `SshAddResult`; error `bad_request` with the reason (bad command, alias exists, no ssh). Broadcasts nothing: the list is read again. */
+  | { type: "ssh.add"; command: string; alias?: string }
   /** "Start with Claude UI" (`start`: the hub starts the side with itself) and "Update automatically" (`update`) of a side; reply `{}`; error `unknown_side`, `bad_request`. */
   | { type: "side.prefs"; side: string; start?: boolean; update?: boolean }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
@@ -471,6 +473,8 @@ export type ListResult = {
    * Absent: no docker command, or a daemon without this field (the Docker kind then shows only when a Docker side is listed).
    */
   docker?: DockerState;
+  /** A hub with the ssh command: the SSH kind shows (and Add SSH host works) even with no host in the ssh config. */
+  ssh?: true;
   /** Side of each listed project, recent project and session cwd that is not local. */
   cwdSides?: Record<string, string>;
   /** Git worktrees of each listed project that is in a git repository (docs/spec.md "Projects"), the main worktree first. */
@@ -548,7 +552,7 @@ export type SideSetup = "never" | "needed" | "force";
 /** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
 export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
 /** Why a check is blocked. */
-export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "no_writable_path" | "check_failed";
+export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "no_writable_path" | "npm_missing" | "windows_host" | "check_failed";
 export type SideCheckFacts = {
   reachable: boolean;
   running?: boolean;
@@ -572,6 +576,8 @@ export type SideCheckFacts = {
   /** Docker or WSL: the installed build carries its own Node.js (a bundle install). */
   bundled?: boolean;
 };
+/** Reply of `ssh.add`: the new SSH Side (`ssh:<alias>`), already in the list. */
+export type SshAddResult = { side: string };
 /** Reply of `side.check`. `message`: the user's next step in plain words (blocked, install, update). `key`: this claude-ui build. */
 export type SideCheck = { verdict: SideCheckVerdict; reason?: SideCheckReason; message?: string; key: string; facts: SideCheckFacts; phase?: SidePhase };
 export const LOCAL_SIDE = "local";

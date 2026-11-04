@@ -25,6 +25,7 @@ import type {
   RespondResult,
   SessionInfo,
   SideCheck,
+  SshAddResult,
   PlanUsage,
   SessionListItem,
   SetModelResult,
@@ -268,6 +269,7 @@ export function App() {
   // Sides (WSL distros, Docker containers): every side, and the side of each listed cwd that is not local.
   const [sides, setSides] = useState<ListResult["sides"]>();
   const [docker, setDocker] = useState<ListResult["docker"]>();
+  const [ssh, setSsh] = useState<ListResult["ssh"]>();
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const labels = useLabels();
@@ -695,7 +697,7 @@ export function App() {
   async function refreshList() {
     const gen = connGen.current;
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, sides, docker, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
@@ -714,6 +716,7 @@ export function App() {
       setRecentProjects(recentProjects);
       setSides(sides);
       setDocker(docker);
+      setSsh(ssh);
       setCwdSides(cwdSides);
       setWorktrees(worktrees);
       setListLoaded(true);
@@ -4201,6 +4204,12 @@ export function App() {
         recent={recentProjects}
         sides={sides}
         docker={docker}
+        ssh={!!ssh}
+        onAddSshHost={async (command, alias) => {
+          const r = await client.current!.request<SshAddResult>({ type: "ssh.add", command, ...(alias && { alias }) });
+          await refreshList();
+          return r.side;
+        }}
         onStartSide={(side, setup) => client.current!.request({ type: "side.start", side, ...(setup && { setup }) })}
         onCheckSide={(side) => client.current!.request<SideCheck>({ type: "side.check", side })}
         sideOf={sideOf.sideOf}

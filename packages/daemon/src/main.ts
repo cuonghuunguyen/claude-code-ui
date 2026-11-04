@@ -18,7 +18,7 @@ import { checkDockerSide, dockerStatus, execRun, folderPath, prepareDockerSide }
 import { runGit, setGitRunner, threadRunner } from "./git-runner.ts";
 import { wslGitRunner } from "./wsl-git.ts";
 import { prepareWslSide } from "./wsl-side.ts";
-import { checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshConfigPath, sshError } from "./ssh-side.ts";
+import { addSshHost, checkSshSide, listSshHosts, prepareSshSide, sshArgs, sshConfigPath, sshError } from "./ssh-side.ts";
 import { kindOf, nameOf, sideTarget, type SideKindImpl } from "./side-kinds.ts";
 import { checkWslSide, createSides, effectiveSetup, parseSaved, type SavedSide, dockerExecArgs, forwardSidePush, dockerSide, parseDistros, runSide, setupScript, wslArgs, wslSide, type SideProcess } from "./sides.ts";
 import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
@@ -122,11 +122,11 @@ if (side) {
     const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
     return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle)), { stdio: "pipe", windowsHide: true }));
   };
-  /** SSH side: the bundle streams through ssh stdin to a covered Linux host, then `ssh <alias>` runs the setup script. */
+  /** SSH side: the bundle (a covered Linux host) or the npm tarball (any other POSIX host) goes through ssh stdin, then `ssh <alias>` runs the setup script. */
   const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean): Promise<SideProcess> => {
     const key = sideKey();
-    const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
-    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle), [], sshConfig), { stdio: "pipe", windowsHide: true }));
+    const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
+    return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "ssh", sent.never ? "never" : effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle), [], sshConfig), { stdio: "pipe", windowsHide: true }));
   };
   const bundle = () => ({ cacheRoot: sideCacheDir(), version, registry });
   // One entry per Side kind: start one (probe, install, launch) and check it read-only (side.check).
@@ -159,6 +159,7 @@ if (side) {
           // This claude-ui's own package runs in the side: the installed package, or packages/claude-ui of a source checkout (npm start builds it).
           spawn: (id, { setup, phase, install, pinned, bundleOnly }) => kinds[kindOf(id)!].spawn(nameOf(id), { setup, phase, install, pinned, bundleOnly }),
           key: sideKey,
+          ...(ssh && { addSshHost: (command: string, alias?: string) => addSshHost({ command, alias, config: sshConfig }) }),
           check: (id) => kinds[kindOf(id)!].check(nameOf(id)),
           // A start that ssh itself ended (login, host key, network): the message says what to do.
           exitMessage: (id, code, stderr) => (kindOf(id) === "ssh" ? sshError(nameOf(id), { code, stderr }) : undefined),
