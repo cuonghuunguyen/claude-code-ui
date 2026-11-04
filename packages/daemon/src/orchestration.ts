@@ -198,8 +198,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const lastActivity = new Map<string, number>();
   /** Workers with a turn open (running, or waiting for input): since when. */
   const open = new Map<string, number>();
-  /** Workers whose new turn has had no CLI message yet: when it was sent and the message count then. */
-  const noStart = new Map<string, { at: number; received: number }>();
+  /** Workers whose new turn has shown no progress yet (no assistant or result message; the echo of the prompt is none): when it was sent and the progress count then. */
+  const noStart = new Map<string, { at: number; progress: number }>();
   /** Workers reported as stalled, with the CLI message count then: the next CLI message ends the stall and re-arms the watchdog. */
   const stalled = new Map<string, { reason: NonNullable<WorkerEvent["reason"]>; received: number }>();
   const stallOf = (id: string) => {
@@ -421,7 +421,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "user_text" && !p.parentId) return void lastText.delete(s.id);
     // The CLI ended by itself (closed) or failed: the tree's running count dropped.
     if (p.type === "session_state" && (p.state === "closed" || p.state === "error")) wake(s.id);
-    if (p.type === "session_state" && p.state === "running" && !open.has(s.id)) open.set(s.id, Date.now());
+    // Each move into running (also after needs_input) restarts the silence clock: a long wait for the user is not silence.
+    if (p.type === "session_state" && p.state === "running") open.set(s.id, Date.now());
     if (p.type === "turn_result" || p.type === "turn_interrupted" || (p.type === "session_state" && p.state !== "running" && p.state !== "needs_input")) {
       // A CLI that ended in the middle of a turn: no result will come.
       if (p.type === "session_state" && p.state === "closed" && open.has(s.id) && !quiet.has(s.id) && !stallOf(s.id)) stall(s, "ended_without_result");
@@ -500,8 +501,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     route(s.id, l.coordinatorId, { name: l.name, sessionId: s.id, type: "stalled", at: Date.now(), reason, lastActivity: new Date(at).toISOString() });
   }
 
-  /** Arms no_start for a new turn sent to `s` (`received` taken before the prompt). */
-  const armNoStart = (s: Session, received: number) => noStart.set(s.id, { at: Date.now(), received });
+  /** Arms no_start for a new turn sent to `s` (`progress` taken before the prompt). */
+  const armNoStart = (s: Session, progress: number) => noStart.set(s.id, { at: Date.now(), progress });
 
   /** Looks for stalls: a new turn the CLI never started, a running worker that sends nothing for `stallMinutes`. */
   function sweep(now = Date.now()) {
@@ -509,9 +510,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
     for (const [id, since] of open) {
       const s = deps.sessions.get(id);
       if (!s || stallOf(id)) continue;
-      const { received, at } = s.activity();
+      const { progress, at } = s.activity();
       let n = noStart.get(id);
-      if (n && n.received !== received) (noStart.delete(id), (n = undefined));
+      if (n && n.progress !== progress) (noStart.delete(id), (n = undefined));
       if (n) {
         if (now - n.at >= NO_START_MS) stall(s, "no_start");
       } else if (minutes > 0 && s.info().state === "running" && now - Math.max(at, since) >= minutes * 60_000) stall(s, "silent");
@@ -677,7 +678,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
             reserved.delete(`${cur()}\0${a.name}`);
           }
           try {
-            const before = s!.activity().received;
+            const before = s!.activity().progress;
             const err = await deps.prompt(s!, a.prompt);
             if (err) throw new ToolError(`Worker ${a.name} was created but its first prompt failed: ${err}`);
             armNoStart(s!, before);
@@ -706,7 +707,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           }
           const steering = ["running", "needs_input"].includes(s.info().state);
           let err: string | undefined;
-          const before = s.activity().received;
+          const before = s.activity().progress;
           try {
             err = await deps.prompt(s, a.text);
           } finally {
@@ -853,9 +854,10 @@ export function createOrchestration(deps: OrchestrationDeps) {
           const daemonNote = deps.buildNote?.();
           const row = (w: { id: string; name: string; cwd?: string }) => {
             const s = deps.sessions.get(w.id);
+            const stalledNow = stallOf(w.id);
             const at = lastActivity.get(w.id);
             const agent = linkOf(w.id)?.agent;
-            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}), ...(stallOf(w.id) && { stalled: stallOf(w.id) }) };
+            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}), ...(stalledNow && { stalled: stalledNow }) };
           };
           return {
             workers: a.tree ? descendants(coordinator).map((d) => ({ ...row({ ...d, cwd: linkOf(d.id)?.cwd }), path: d.path, ...(d.coordinator && { coordinator: d.coordinator }), depth: d.depth })) : workers(coordinator).map(row),
@@ -1067,8 +1069,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
       for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity, open, noStart, stalled] as Map<string, unknown>[]) m.delete(id);
       for (const set of [served, notified, renoticed]) set.delete(id);
     },
-    /** Daemon stop: every blocked worker_wait ends with a tool error. */
     sweep,
+    /** Daemon stop: every blocked worker_wait ends with a tool error. */
     shutdown() {
       clearInterval(timer);
       for (const w of [...waiters]) w.done(new ToolError("The claude-ui daemon stopped while waiting. After it is back, call worker_list, then worker_send to resume workers."));

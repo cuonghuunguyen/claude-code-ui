@@ -225,6 +225,8 @@ export class Session {
   private received = 0;
   /** Date.now() of the last stream message (or of this object): the stall watchdog reads it with `received` (activity()). */
   private receivedAt = Date.now();
+  /** Assistant, result, stream and tool progress messages received so far (activity()). */
+  private progress = 0;
   /** The first stale check that found the turn ended: the transcript size and message count it saw; a second one must see the same. */
   private staleSeen?: { size: number; received: number };
   /** The CLI compacts the conversation (status compacting until compact_boundary or another status): a silent turn. */
@@ -450,12 +452,15 @@ export class Session {
     await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
   }
 
-  /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
-  /** How many messages the CLI sent and when the last came: a tool call that runs long still sends a heartbeat every 30 s. */
+  /**
+   * What the CLI sent: all messages and when the last came (a long tool call still sends a heartbeat every 30 s), and `progress`,
+   * the messages that show the turn runs (not the echo of the prompt, which the CLI sends once it took it).
+   */
   activity() {
-    return { received: this.received, at: this.receivedAt };
+    return { received: this.received, at: this.receivedAt, progress: this.progress };
   }
 
+  /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
   liveQuery(): Query | undefined {
     return this.isLive() ? this.query : undefined;
   }
@@ -1215,6 +1220,7 @@ export class Session {
   private receive(m: SDKMessage, q: Query) {
     this.received++;
     this.receivedAt = Date.now();
+    if (["assistant", "result", "stream_event", "tool_progress"].includes(m.type)) this.progress++;
     this.armStale();
     if ((m.type === "user" || m.type === "assistant") && m.uuid) {
       this.known.add(m.uuid);

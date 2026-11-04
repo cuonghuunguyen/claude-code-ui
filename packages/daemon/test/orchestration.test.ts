@@ -55,7 +55,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
       reply("stuck");
       await new Promise(() => {});
     } else if (text === "mute") {
-      // A turn the CLI never starts: no message at all until the next prompt (or an interrupt) arrives.
+      // A turn the CLI never runs: only the echo of the prompt, no reply until the next prompt (or an interrupt) arrives.
       await new Promise<string>((r) => (held = r));
     } else if (text === "hold") {
       reply("holding");
@@ -104,7 +104,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
         emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sid, is_error: false, duration_ms: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [], result: "" });
         continue;
       }
-      if (text !== "mute") emit({ ...m, session_id: sid, isReplay: true });
+      emit({ ...m, session_id: sid, isReplay: true });
       if (held) {
         const h = held;
         held = undefined;
@@ -2246,6 +2246,7 @@ describe("stall watchdog", () => {
     const coord = await coordinator();
     await call(coord, "worker_start", { name: "off1", cwd: dirB, prompt: "hold" });
     await until(() => runsIn(dirB).length);
+    await new Promise((r) => setTimeout(r, 50));
     later(240 * 60_000);
     expect(await stalls(coord)).toEqual([]);
     await call(coord, "worker_close", { name: "off1" });

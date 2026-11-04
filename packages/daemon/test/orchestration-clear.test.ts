@@ -11,7 +11,7 @@ function fakeSession(id: string, live = true): any {
   return Object.assign(f, {
     isLive: () => true,
     liveQuery: () => (f.live ? {} : undefined),
-    activity: () => ({ received: 0, at: 0 }),
+    activity: () => ({ received: 0, at: 0, progress: 0 }),
     info: () => ({ state: "idle", permissionMode: "default" }),
     working: () => false,
     permissionTier: () => f.tier(),
