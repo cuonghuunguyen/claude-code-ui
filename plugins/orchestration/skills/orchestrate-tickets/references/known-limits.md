@@ -14,8 +14,9 @@ State these when they bite.
 3. **Workers belong to one coordinator session.** Resume that session to keep driving them; a
    new session cannot adopt them (`workers.md` "Restarts"). The ledger is what makes a
    hand-finish possible.
-4. **The result is cut after 4000 characters from the start.** A worker that writes its RESULT
-   block at the end of a long reply loses it. The prompts say so; enforce it.
+4. **The result is cut after 4000 characters from the start.** The cut text names a
+   `worker_read {name, part, offset}` call for the rest, so nothing is lost, but a RESULT block
+   at the start saves that call. The prompts say so; enforce it.
 5. **A worker that ends its turn without a result is not finished.** It may have run out of
    turns, misunderstood, or be waiting on something. `worker_read` before deciding anything.
 6. **Every command is a high-tier permission.** Only the user approves those. A worker in
