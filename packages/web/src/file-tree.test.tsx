@@ -194,6 +194,22 @@ it("collapse all clears the expanded dirs; reveal expands the ancestors of a pat
   t.unmount();
 });
 
+it("reveal keeps the row below the sticky filter box (scroll-margin-top = its height)", async () => {
+  const t = setup();
+  await t.render();
+  const box = t.el.querySelector<HTMLElement>("input[type=search]")!.parentElement!;
+  Object.defineProperty(box, "offsetHeight", { value: 37 });
+  const seen: string[] = [];
+  const orig = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (this: HTMLElement) {
+    seen.push(this.style.scrollMarginTop);
+  };
+  await act(async () => t.handle.current!.reveal("/p/README.md", false));
+  Element.prototype.scrollIntoView = orig;
+  expect(seen.at(-1)).toBe("37px");
+  t.unmount();
+});
+
 it("auto-reveal: changing activePath expands its ancestors without moving focus", async () => {
   const t = setup();
   await t.render();
