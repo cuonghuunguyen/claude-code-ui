@@ -1,7 +1,7 @@
 // The Files tab's file tree (docs/spec.md "Layout", Side panel): a flat ARIA tree with file-type icons, git marks (each file marked by its own repository), a filter field and keyboard navigation.
-import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type RefObject } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { fileNameProblem, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
+import { fileNameProblem, LOCAL_SIDE, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import { tipMiddleClick } from "./recommendations.ts";
 import type { connect, RequestError } from "./client.ts";
@@ -9,6 +9,9 @@ import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
 import { createLimiter, gitRows } from "./git-changes.ts";
+import { PasteClashDialog, type ClashAsk } from "./paste-clash-dialog.tsx";
+import { treeClipboard } from "./tree-clipboard.ts";
+import { browserItems, planPaste, rawItems, runTransfer, type Item, type Progress, type TransferResult } from "./transfer.ts";
 import { t, useT, type Key } from "./i18n.ts";
 
 /** Why `name` cannot be a file name, in the UI language. */
@@ -46,6 +49,9 @@ const MARK_STYLE: Record<Mark, { text: string; label: () => string }> = {
 };
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };
 
+/** The drag of a tree row: JSON `{ path, name, isDir, side }`. */
+const DRAG_TYPE = "application/x-claude-ui-entry";
+const mb = (n: number) => `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`;
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
 const MOVES_FOCUS = new Set<TreeCommand>(["open", "openTab", "viewer", "changes", "repoChanges", "repoGraph", "mention", "rename", "duplicate", "delete", "newFile", "newFolder"]);
@@ -172,6 +178,8 @@ const rowEl = (root: HTMLElement | null, path: string) => [...(root?.querySelect
 export function FileTree({
   client,
   cwd,
+  side = LOCAL_SIDE,
+  sideLabel,
   activePath,
   reloadKey = 0,
   gitStamp,
@@ -195,6 +203,10 @@ export function FileTree({
 }: {
   client: Client;
   cwd: string;
+  /** The Daemon (Side id) that owns `cwd` (default: local): every copy, paste and drop request carries it (GH-555). */
+  side?: string;
+  /** Its name for the confirm text of a drop from another Daemon. */
+  sideLabel?: string;
   activePath?: string;
   /** Bumped by the reload button: the root and every expanded folder are listed again and the git marks read again. */
   reloadKey?: number;
@@ -266,6 +278,22 @@ export function FileTree({
   const delPath = useRef<string>(undefined);
   const delConfirmed = useRef(false);
   const windows = isWinPath(cwd);
+  // Copy, cut, paste, drag and drop (GH-555).
+  const [clip, setClip] = useState(treeClipboard.get());
+  const [clash, setClash] = useState<ClashAsk>();
+  const [progress, setProgress] = useState<{ p: Progress; cancel: boolean }>();
+  const [note, setNote] = useState<string>();
+  const [dropDir, setDropDir] = useState<string>();
+  const [dropAsk, setDropAsk] = useState<{ item: Item; op: "copy" | "cut"; dir: string }>();
+  const abort = useRef<AbortController>(undefined);
+  useEffect(() => treeClipboard.subscribe(() => setClip(treeClipboard.get())), []);
+  useEffect(
+    () =>
+      treeClipboard.onChanged((s, dir) => {
+        if (s === side && Array.isArray(modelRef.current.dirs[dir])) void list(dir);
+      }),
+    [side],
+  );
 
   async function list(dir: string) {
     setModel((m) => ({ ...m, dirs: { ...m.dirs, [dir]: Array.isArray(m.dirs[dir]) ? m.dirs[dir]! : "loading" } }));
@@ -526,6 +554,136 @@ export function FileTree({
     if (next) goTo(next, true);
   }
 
+  /** Runs a paste or drop into `dir`: the plan, the clash questions, the progress line, then the tree and the open tabs follow. `warn`: shown after a clean run. */
+  async function transfer(items: Item[], op: "copy" | "cut", dir: string, warn?: string) {
+    if (opBusy.current) return;
+    setOpError(undefined);
+    setNote(undefined);
+    const plan = planPaste(items, { side, dir }, op);
+    const refusal = plan.refused[0];
+    if (refusal) setOpError(refusal.code === "into_itself" ? tr("files.paste.intoItself", { name: refusal.name }) : refusal.code === "too_large" ? tr("files.paste.tooLarge") : opErrorText(refusal.code, "", refusal.name));
+    if (!plan.items.length) return void (warn && !refusal && setOpError(warn));
+    opBusy.current = true;
+    const ac = (abort.current = new AbortController());
+    setBusyPath(dir);
+    setProgress({ p: { files: 0, totalFiles: 0, bytes: 0, totalBytes: 0 }, cancel: false });
+    const timer = setTimeout(() => setProgress((s) => s && { ...s, cancel: true }), 300);
+    let r: TransferResult;
+    try {
+      const names = (await client.request<FsListResult>({ type: "fs.list", path: dir, side } as never)).entries.map((e) => e.name);
+      r = await runTransfer({
+        send: (m) => client.request(m as never),
+        items: plan.items,
+        target: { side, dir, names },
+        op,
+        signal: ac.signal,
+        onProgress: (p) => setProgress((s) => s && { ...s, p }),
+        resolve: (name, remaining) =>
+          new Promise((res) =>
+            setClash({ name, folder: dir === cwd ? tr("files.tree.theProject") : relPath(dir, cwd), remaining, answer: (choice, all) => (setClash(undefined), res({ choice, all })) }),
+          ),
+      });
+    } catch (e) {
+      r = { done: [], moved: [], skipped: [], linksSkipped: 0, error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
+    }
+    clearTimeout(timer);
+    abort.current = undefined;
+    opBusy.current = false;
+    setProgress(undefined);
+    setBusyPath(undefined);
+    if (r.error) setOpError(opErrorText(r.error.code, r.error.message, r.error.name));
+    else if (r.cancelled) setNote(tr("files.paste.cancelled"));
+    else if (r.linksSkipped) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }));
+    else if (warn) setOpError(warn);
+    if (!r.done.length) return;
+    if (op === "cut") {
+      for (const m of r.moved) {
+        const from = items.find((i) => i.kind === "daemon" && i.path === m.from);
+        const src = from?.kind === "daemon" ? from.side : side;
+        if (src === side) {
+          setModel((s) => ({ ...s, ...movePaths(s, m.from, m.to) }));
+          onMoved?.(m.from, m.to);
+        } else {
+          setModel((s) => ({ ...s, ...dropPaths(s, m.from) }));
+          onDeleted?.(m.from);
+        }
+        await list(parentOf(m.from));
+        treeClipboard.notifyChanged(src, parentOf(m.from));
+      }
+      treeClipboard.clear();
+    }
+    await list(dir);
+    treeClipboard.notifyChanged(side, dir);
+    onChanged?.();
+    await reveal(r.done[0]!, true);
+  }
+  /** OS files of a paste (no folders: the clipboard does not carry their content) or a drop. */
+  async function transferOs(raw: ReturnType<typeof rawItems>, folders: boolean, dir: string) {
+    const { items, osFolders } = await browserItems(raw, folders);
+    const warn = osFolders ? tr("files.paste.osFolder") : undefined;
+    if (items.length) await transfer(items, "copy", dir, warn);
+    else if (warn) setOpError(warn);
+  }
+  const clipItem = (c: NonNullable<typeof clip>): Item => ({ kind: "daemon", name: c.name, isDir: c.isDir, side: c.side, path: c.path });
+  function setClipboard(op: "copy" | "cut", entry: FsEntry) {
+    treeClipboard.set({ op, path: entry.path, name: entry.name, isDir: entry.isDir, side });
+    // Also as text: a later paste that carries files then means the user copied files in the OS after this.
+    try {
+      void navigator.clipboard?.writeText(entry.path)?.catch(() => {});
+    } catch {
+      // no clipboard access
+    }
+  }
+  /** The folder a paste or drop at `target` goes into: a folder row itself, a file row's folder, else the project. */
+  const dirAt = (target: EventTarget) => {
+    const path = (target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset.path;
+    const r = path === undefined ? undefined : rows.find((x) => x.kind === "entry" && x.entry.path === path);
+    return r?.kind === "entry" ? (r.entry.isDir ? r.entry.path : parentOf(r.entry.path)) : cwd;
+  };
+  function onPasteEvent(e: ClipboardEvent) {
+    if ((e.target as HTMLElement).closest("input, textarea")) return;
+    const dir = dirAt(e.target);
+    const dt = e.clipboardData;
+    if (dt.files.length > 0 || Array.from(dt.items ?? []).some((i) => i.kind === "file")) {
+      e.preventDefault();
+      return void transferOs(rawItems(dt), false, dir);
+    }
+    const c = treeClipboard.get();
+    if (!c) return;
+    e.preventDefault();
+    void transfer([clipItem(c)], c.op, dir);
+  }
+  const accepts = (e: DragEvent) => e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes(DRAG_TYPE);
+  function onDragOverEvent(e: DragEvent) {
+    if (!accepts(e)) return;
+    e.preventDefault();
+    const files = e.dataTransfer.types.includes("Files");
+    e.dataTransfer.dropEffect = files || e.altKey ? "copy" : "move";
+    const dir = dirAt(e.target);
+    setDropDir(dir === cwd ? undefined : dir);
+  }
+  function onDropEvent(e: DragEvent) {
+    if (!accepts(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropDir(undefined);
+    const dir = dirAt(e.target);
+    const dt = e.dataTransfer;
+    if (dt.types.includes("Files")) return void transferOs(rawItems(dt), true, dir);
+    let d: { path: string; name: string; isDir: boolean; side: string };
+    try {
+      d = JSON.parse(dt.getData(DRAG_TYPE));
+    } catch {
+      return;
+    }
+    const item: Item = { kind: "daemon", name: d.name, isDir: d.isDir, side: d.side, path: d.path };
+    const op = d.side === side && !e.altKey ? "cut" : "copy";
+    // Nothing to ask when it is refused or does nothing; the transfer says why.
+    const plan = planPaste([item], { side, dir }, op);
+    if (!plan.items.length || plan.refused.length) return void transfer([item], op, dir);
+    setDropAsk({ item, op, dir });
+  }
+
   const targetOf = (path: string | undefined): TreeTarget => {
     const r = path === undefined ? undefined : rows.find((x) => x.kind === "entry" && x.entry.path === path);
     if (!r || r.kind !== "entry") return { kind: "root" };
@@ -544,6 +702,13 @@ export function FileTree({
     if (MOVES_FOCUS.has(id)) movedFocus.current = true;
     const entry = t.kind === "root" ? undefined : t.entry;
     switch (id) {
+      case "cut":
+      case "copy":
+        return entry && setClipboard(id, entry);
+      case "paste": {
+        const c = treeClipboard.get();
+        return c && void transfer([clipItem(c)], c.op, t.kind === "root" ? cwd : t.kind === "dir" ? t.entry.path : parentOf(t.entry.path));
+      }
       case "rename":
         return void startRename(path);
       case "duplicate":
@@ -601,6 +766,8 @@ export function FileTree({
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
     if (plain && e.key === "F2") return (e.preventDefault(), void startRename(row.entry.path));
     if ((plain && e.key === "Delete") || (MAC && e.key === "Backspace" && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey)) return (e.preventDefault(), askDelete(row.entry));
+    const mod = MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey && (e.key === "c" || e.key === "x")) return (e.preventDefault(), setClipboard(e.key === "x" ? "cut" : "copy", row.entry));
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -657,9 +824,24 @@ export function FileTree({
           </button>
         </div>
       )}
+      {progress && (
+        <div role="status" className="flex items-center gap-2 px-2 py-1 text-muted-foreground" data-testid="tree-paste-progress">
+          <span className="min-w-0 flex-1 truncate">{tr("files.paste.progress", { files: progress.p.files, totalFiles: progress.p.totalFiles, bytes: mb(progress.p.bytes), totalBytes: mb(progress.p.totalBytes) })}</span>
+          {progress.cancel && (
+            <button type="button" className="shrink-0 cursor-pointer rounded-sm px-2 py-0.5 text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" onClick={() => abort.current?.abort()} data-testid="tree-paste-cancel">
+              {tr("files.paste.cancel")}
+            </button>
+          )}
+        </div>
+      )}
+      {note && (
+        <div role="status" className="px-2 py-1 text-muted-foreground" data-testid="tree-paste-note">
+          {note}
+        </div>
+      )}
       <ContextMenu.Root onOpenChange={(open) => open && ((movedFocus.current = false), setMenuTarget(targetOf(pendingTarget.current)))}>
       <ContextMenu.Trigger
-        render={<div className="flex flex-1 flex-col" />}
+        render={<div className="flex flex-1 flex-col" onPaste={onPasteEvent} onDragOver={onDragOverEvent} onDrop={onDropEvent} onDragLeave={(e) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setDropDir(undefined)} />}
         onContextMenuCapture={(e) => captureTarget(e.target)}
         onTouchStartCapture={(e) => captureTarget(e.target)}
         onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
@@ -722,7 +904,14 @@ export function FileTree({
               data-path={entry.path}
               data-dir={entry.isDir ? "" : undefined}
               aria-busy={busyPath === entry.path || undefined}
-              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : "hover:bg-muted"} ${busyPath === entry.path ? "opacity-60" : ""}`}
+              draggable={!r.renaming}
+              onDragStart={(e) => {
+                e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ path: entry.path, name: entry.name, isDir: entry.isDir, side }));
+                e.dataTransfer.setData("text/plain", entry.path);
+                e.dataTransfer.effectAllowed = "copyMove";
+              }}
+              onDragEnd={() => setDropDir(undefined)}
+              className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : "hover:bg-muted"} ${busyPath === entry.path || (clip?.op === "cut" && clip.side === side && clip.path === entry.path) ? "opacity-60" : ""} ${dropDir === entry.path ? "ring-2 ring-inset ring-ring" : ""}`}
               style={pad}
               onFocus={() => setFocused(entry.path)}
               onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
@@ -798,7 +987,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab, !!clip).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (
@@ -824,6 +1013,24 @@ export function FileTree({
         </ContextMenu.Positioner>
       </ContextMenu.Portal>
       </ContextMenu.Root>
+      <PasteClashDialog ask={clash} />
+      <ConfirmDialog
+        open={!!dropAsk}
+        title={dropAsk ? tr(dropAsk.op === "cut" ? "files.paste.confirmMoveTitle" : "files.paste.confirmCopyTitle", { name: dropAsk.item.name }) : ""}
+        description={
+          dropAsk
+            ? tr(dropAsk.op === "cut" ? "files.paste.confirmMove" : "files.paste.confirmCopy", {
+                name: dropAsk.item.name,
+                folder: dropAsk.dir === cwd ? tr("files.tree.theProject") : relPath(dropAsk.dir, cwd),
+                side: dropAsk.item.kind === "daemon" && dropAsk.item.side !== side && sideLabel ? tr("files.paste.onSide", { side: sideLabel }) : "",
+              })
+            : ""
+        }
+        confirm={tr(dropAsk?.op === "cut" ? "files.paste.confirmMoveButton" : "files.paste.confirmCopyButton")}
+        onConfirm={() => (dropAsk && void transfer([dropAsk.item], dropAsk.op, dropAsk.dir), setDropAsk(undefined))}
+        onCancel={() => setDropAsk(undefined)}
+        testId="tree-drop"
+      />
       <ConfirmDialog
         open={!!del}
         title={tr("files.tree.deleteTitle", { name: del?.entry.name ?? "" })}

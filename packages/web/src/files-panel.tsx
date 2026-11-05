@@ -56,6 +56,8 @@ export function FilesPanel({
   client,
   status,
   cwd,
+  side,
+  sideLabel,
   onSend,
   onCopy,
   onViewer,
@@ -86,6 +88,9 @@ export function FilesPanel({
   client: Client;
   status: ConnectionStatus;
   cwd: string;
+  /** The Daemon (Side id) that owns `cwd`, and its name when there are several. */
+  side?: string;
+  sideLabel?: string;
   onSend: (mention: string) => void;
   /** File tree menu: Copy path / Copy relative path. */
   onCopy?: (text: string, what: string) => void;
@@ -266,6 +271,8 @@ export function FilesPanel({
             key={cwd}
             client={client}
             cwd={cwd}
+            side={side}
+            sideLabel={sideLabel}
             activePath={active?.path}
             reloadKey={treeKey}
             gitStamp={gitStamp}
