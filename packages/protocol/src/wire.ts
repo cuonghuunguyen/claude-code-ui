@@ -238,6 +238,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /** Changes tab Commit: commits exactly `paths` (relative to the repository top, as `git.diff` names them; a rename: both sides) with their working-tree content; other index and work-tree entries stay; hooks run. `amend`: rewrites HEAD (no path: its message only). `push`: the reply also carries the push dialog data of HEAD's branch. Reply GitCommitFilesResult. */
   | { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true }
+  /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
+  | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
+  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
+  | { type: "git.commitMessageCancel" }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
@@ -680,6 +684,8 @@ export type GitRemote = { output: string; refs: string | null };
 /** `remote` null outside a git work tree. */
 export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
 /** `committed` is null outside a git work tree. */
+/** `truncated`: the diff in the prompt was cut (the file list was complete). */
+export type GitCommitMessageResult = { message: string; truncated?: true };
 export type GitCommitFilesResult = { committed: GitCommitted | null };
 export type GitRemoteResult = { remote: GitRemote | null };
 /** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
@@ -726,6 +732,10 @@ export const LABEL_EMOJI_MAX = 16;
 export const LABEL_ICON_MAX = 32_000;
 /** Entries per map. */
 export const LABEL_ENTRIES_MAX = 200;
+/** Longest commit message instruction, global or per project (GH-559). */
+export const COMMIT_INSTRUCTION_MAX = 4000;
+/** What Claude is asked when no instruction is set (the Settings › Git placeholder shows it). */
+export const DEFAULT_COMMIT_INSTRUCTION = "Write a conventional commit message: a subject line of at most 72 characters in the imperative mood (type(scope): summary), a blank line, then a short body that explains what changed and why. Plain text.";
 /** Side of the saved square image icon, in pixels. */
 export const LABEL_ICON_PX = 64;
 /** Side of the saved square app icon, in pixels (the PWA icon size). */
@@ -758,6 +768,10 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     detectSubmodulesLimit: number;
     ignoreSubmodules: boolean;
     openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+    /** GH-559: what Claude is asked for when it writes a commit message; "" = the built-in instruction. At most COMMIT_INSTRUCTION_MAX chars. */
+    commitMessageInstruction: string;
+    /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
+    commitMessageInstructions: Record<string, string>;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

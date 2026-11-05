@@ -142,6 +142,8 @@ export default {
   "files.changes.commitAndPush": "Commit and Push",
   "files.changes.amend": "Amend",
   "files.changes.commitMessage": "Commit message",
+  "files.changes.generate": "Generate commit message",
+  "files.changes.generateStop": "Stop generating",
   "files.changes.checkAll": "Select all files",
   "files.changes.checkFile": "Include {path} in the commit",
   "files.changes.checkedCount": "{n} of {m}",

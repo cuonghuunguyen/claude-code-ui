@@ -171,6 +171,10 @@ export default {
   "settings.row.git.ignoreSubmodules.hint": "Bỏ qua các thay đổi của submodule trong cây tệp.",
   "settings.row.git.openRepositoryInParentFolders.label": "Mở kho mã trong thư mục cha",
   "settings.row.git.openRepositoryInParentFolders.hint": "Điều khiển việc có mở kho mã nằm trong thư mục cha của không gian làm việc hoặc tệp đang mở hay không. Mặc định always (VS Code: prompt); prompt hoạt động như always ở đây cho đến khi có hộp thoại hỏi.",
+  "settings.row.git.commitMessageInstruction.label": "Chỉ dẫn viết nội dung commit",
+  "settings.row.git.commitMessageInstruction.hint": "Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn. Để trống: dùng chỉ dẫn có sẵn (chữ xám).",
+  "settings.git.projectInstruction.label": "Chỉ dẫn viết nội dung commit cho {project}",
+  "settings.git.projectInstruction.hint": "Chỉ áp dụng cho dự án này; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên.",
 
   // perf-settings.tsx
   "perf.nothingYet": "Chưa có gì.",

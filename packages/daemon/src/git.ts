@@ -427,7 +427,7 @@ async function worktreeList(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported" | "cancelled";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported" | "cancelled" | "timeout" | "generate_failed";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);

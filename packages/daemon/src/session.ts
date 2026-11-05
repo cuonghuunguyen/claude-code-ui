@@ -63,7 +63,7 @@ type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
 
 // Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
-const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
+export const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
 /** `uploadDir`: the folder of this session's fs.uploads by its id (created on call), readable by Claude without a permission request. */

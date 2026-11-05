@@ -24,7 +24,8 @@ import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
-import { gitCommitFiles } from "./git-write.ts";
+import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
+import { gitCommitDiff, gitCommitFiles } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -1532,6 +1533,8 @@ export function createDaemon(opts: {
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
+    /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
+    let generating: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
     const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
@@ -1549,6 +1552,7 @@ export function createDaemon(opts: {
       unwatchAll();
       attached.forEach((d) => d());
       searching?.abort();
+      generating?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
       focused.delete(ws);
@@ -2249,6 +2253,31 @@ export function createDaemon(opts: {
           } catch (e) {
             if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.commitMessageCancel":
+          generating?.abort();
+          return reply({});
+        case "git.commitMessage": {
+          generating?.abort();
+          generating = undefined;
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // `project` is only a key of the settings map: never a path.
+          if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) return fail("bad_request", "project must be a project folder");
+          const ctl = (generating = new AbortController());
+          // Paths, diff, instruction and reply are never logged.
+          try {
+            const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
+            if (!d) return fail("not_git", NOT_TOP);
+            const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
+            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query });
+            return reply({ message, ...(d.cut && { truncated: true }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          } finally {
+            if (generating === ctl) generating = undefined;
           }
         }
         case "git.branch":

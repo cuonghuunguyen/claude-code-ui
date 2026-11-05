@@ -242,6 +242,7 @@ export function ChangesPanel({
   ignoreSubmodules,
   onReload,
   onGitWrite,
+  project,
 }: {
   client: Client;
   view: SessionView;
@@ -270,6 +271,8 @@ export function ChangesPanel({
   onReload?: () => void;
   /** After a commit: files changed on disk's git state (the file tree marks). */
   onGitWrite?: () => void;
+  /** The project folder (key of the per-project commit message instruction). */
+  project?: string;
 }) {
   useT();
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
@@ -819,7 +822,7 @@ export function ChangesPanel({
       {notGit}
       {commitMode && (
         <>
-          <CommitBox client={client} cwd={gitCwd} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />
+          <CommitBox client={client} cwd={gitCwd} project={project} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />
           <GitOpResult cwd={gitCwd} {...OP_RESULT_IDS} />
         </>
       )}
