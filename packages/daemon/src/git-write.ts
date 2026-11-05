@@ -1,9 +1,9 @@
 // Git writes of the Changes tab (docs/spec.md "Layout", Changes tab; wire `git.commitFiles`): started by a click, so the
 // repository's hooks run like in a terminal; they never prompt. Later Git ops (rollback, checkout) extend this module.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { GitCommitted, GitOperation, GitOperationKind } from "@claude-ui/protocol";
+import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { branchInfo, branchRef, exclusive, gitBranch, HARDEN, MAX_ERROR, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { runGit } from "./git-runner.ts";
@@ -225,6 +225,104 @@ export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions
         await Promise.all(added.map((f) => rm(join(top, f), { force: true })));
       }
       return { output: "", refs: await gitRefs(top, o.allowed) };
+    });
+  });
+}
+
+// ---- Graph commit menu: Undo Commit, Revert Commit, Cherry-Pick, Reset Current Branch to Here (docs/spec.md "Layout", Graph tab) ----
+
+const MAX_LOSE = 50;
+const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
+
+/** Everything the commit menu shows for `hash` and the exact argv of each action, re-read from git. `hard`: also the files a hard reset would lose. */
+async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, hard: boolean): Promise<GitCommitMenu> {
+  const known = await ask(top, ["rev-parse", "--verify", "-q", `${hash}^{commit}`], env);
+  if (known.code === 1) throw bad("Unknown commit");
+  const parents = (await run(top, ["rev-list", "--parents", "-n", "1", hash], env)).out.split(" ").length - 1;
+  const head = (await ask(top, ["rev-parse", "--verify", "-q", "HEAD"], env)).out;
+  const headRef = (await ask(top, ["symbolic-ref", "-q", "HEAD"], env)).out;
+  const info: GitCommitMenu = { hash, parents };
+  if (headRef) info.headRef = headRef;
+  if (head) info.headHash = head;
+  const op = await gitOperation(top);
+  const blocked = !headRef ? "HEAD is detached" : !head ? "No commits yet" : op ? (op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`) : undefined;
+  if (blocked) return { ...info, why: { undo: blocked, revert: blocked, cherryPick: blocked, reset: blocked } };
+  const current = shortRef(headRef);
+  const why: NonNullable<GitCommitMenu["why"]> = {};
+  const ancestor = async (a: string, b: string) => {
+    try {
+      return (await ask(top, ["merge-base", "--is-ancestor", a, b], env)).code === 0;
+    } catch {
+      return false; // an upstream that is gone: nothing is known to be pushed
+    }
+  };
+  const upstream = (await run(top, ["for-each-ref", "--format=%(upstream)", headRef], env)).out;
+  if (hash !== head) why.undo = "Only the current commit";
+  else if (parents === 0) why.undo = "This is the first commit";
+  else if (upstream && (await ancestor("HEAD", upstream))) why.undo = `Already pushed to ${shortRef(upstream)}`;
+  else info.undo = [...HARDEN, "reset", "--soft", "HEAD~1"];
+  if (parents > 1) why.revert = "Merge commit: revert it in a terminal";
+  else if (!(await ancestor(hash, "HEAD"))) why.revert = `Not on ${current}`;
+  else info.revert = [...HARDEN, "revert", "--no-edit", hash];
+  if (parents > 1) why.cherryPick = "Merge commit: cherry-pick it in a terminal";
+  else if (await ancestor(hash, "HEAD")) why.cherryPick = `Already on ${current}`;
+  else info.cherryPick = [...HARDEN, "cherry-pick", hash];
+  // --no-recurse-submodules: a user's `submodule.recurse=true` would reset submodule work the preview does not list.
+  info.reset = { soft: [...HARDEN, "reset", "--soft", hash], mixed: [...HARDEN, "reset", "--mixed", hash], hard: [...HARDEN, "reset", "--hard", "--no-recurse-submodules", hash] };
+  if (hard) {
+    // Tracked changes of the index and work tree, plus untracked files the target tree would overwrite.
+    const names = async (...a: string[]) => (await run(top, ["diff", "--no-renames", "--name-only", "-z", ...a], env)).out.split("\0").filter(Boolean);
+    const lose = new Set(await names("HEAD"));
+    for (const f of await names("--diff-filter=A", "HEAD", hash)) if (await lstat(join(top, f)).then(() => true, () => false)) lose.add(f);
+    const paths = [...lose].sort();
+    const h = createHash("sha256").update(head);
+    for (const f of paths) {
+      const st = await lstat(join(top, f)).catch(() => undefined);
+      h.update(`\0${f}\0${st ? `${st.size}:${st.mtimeMs}` : "-"}`);
+    }
+    info.lose = paths.slice(0, MAX_LOSE);
+    info.loseCount = paths.length;
+    info.dirty = h.digest("hex");
+  }
+  if (Object.keys(why).length) info.why = why;
+  return info;
+}
+
+/** Commit menu data of `hash`; null outside a work tree. Read-only: no lock. */
+export async function gitCommitMenu(cwd: string, o: { hash: unknown; hard?: unknown } & RemoteOptions): Promise<GitCommitMenu | null> {
+  if (!isHash(o.hash)) throw bad("Invalid commit hash");
+  const hash = o.hash;
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    return commitInfo(top, hash, await writeEnv(top), o.hard === true);
+  });
+}
+
+type CommitAction = { hash: unknown; headRef: unknown; headHash: unknown; argv: unknown; mode?: unknown; dirty?: unknown } & RemoteOptions;
+/**
+ * Undo Commit, Revert Commit, Cherry-Pick or Reset Current Branch to Here, as the menu showed it (`gitCommitMenu`): the daemon runs only the argv it computes
+ * again to the same words, against the same HEAD; a hard reset also needs the same lost files (`dirty`). A stop on conflicts is a success whose reply has `operation`.
+ */
+export async function gitCommitAction(cwd: string, action: "undo" | "revert" | "cherryPick" | "reset", o: CommitAction): Promise<Written | null> {
+  if (!isHash(o.hash) || !isHash(o.headHash) || typeof o.headRef !== "string") throw bad("hash, headRef and headHash must be a commit, the shown branch and its commit");
+  if (!Array.isArray(o.argv) || o.argv.length > 64 || !o.argv.every((a) => typeof a === "string")) throw bad("Missing command");
+  if (action === "reset" && o.mode !== "soft" && o.mode !== "mixed" && o.mode !== "hard") throw bad("mode must be soft, mixed or hard");
+  if (action === "reset" && o.mode === "hard" && typeof o.dirty !== "string") throw bad("A hard reset needs the files the dialog showed");
+  const { hash, shown } = { hash: o.hash, shown: o.argv as string[] };
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    return exclusive(top, async () => {
+      const env = await writeEnvNoEditor(top);
+      const info = await commitInfo(top, hash, env, o.mode === "hard");
+      if (o.headRef !== info.headRef || o.headHash !== info.headHash) throw new WorktreeError("stale", "HEAD moved since the menu opened: reopen it");
+      const argv = action === "reset" ? info.reset?.[o.mode as "soft" | "mixed" | "hard"] : info[action];
+      if (!argv) throw bad(info.why?.[action] ?? `${action} is not available`);
+      if (shown.length !== argv.length || shown.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the menu opened");
+      if (o.mode === "hard" && o.dirty !== info.dirty) throw new WorktreeError("stale", "Files changed since the dialog opened: reopen it");
+      // shortcut: no "snapshot before" yet; Local history and Timeline (#565) hook in here, before reset --hard.
+      return runStop(top, argv.slice(HARDEN.length), env, o.allowed);
     });
   });
 }

@@ -246,6 +246,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
+  | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
+  /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.undoCommit" | "git.revert" | "git.cherryPick"; cwd: string; hash: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Commit menu Reset Current Branch to Here: `mode` and `argv` as shown; `dirty` (required for `hard`): the `git.commitMenu` fingerprint of the files the reset would lose. Reply GitWriteResult. */
+  | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
   | { type: "git.operation"; cwd: string; exact?: true }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
@@ -728,6 +734,24 @@ export type GitBranchInfo = {
 };
 /** `branch` null outside a git work tree. */
 export type GitBranchResult = { branch: GitBranchInfo | null };
+/** What the commit menu shows for one commit and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
+export type GitCommitMenu = {
+  hash: string;
+  parents: number;
+  headRef?: string;
+  headHash?: string;
+  undo?: string[];
+  revert?: string[];
+  cherryPick?: string[];
+  reset?: { soft: string[]; mixed: string[]; hard: string[] };
+  /** Only with `hard`: the files a hard reset overwrites or deletes (at most 50), their count, and the fingerprint `git.reset` must send back. */
+  lose?: string[];
+  loseCount?: number;
+  dirty?: string;
+  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string };
+};
+/** `commitMenu` null outside a git work tree. */
+export type GitCommitMenuResult = { commitMenu: GitCommitMenu | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
