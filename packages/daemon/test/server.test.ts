@@ -1123,6 +1123,20 @@ describe("daemon", () => {
     expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
   });
 
+  it("answers git.merge, git.rebase, git.continue, git.abort and git.operation for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    const hash = "a".repeat(40);
+    const write = { ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] };
+    const msgs = [{ type: "git.merge", ...write }, { type: "git.rebase", ...write }, { type: "git.continue", kind: "merge" }, { type: "git.abort", kind: "merge" }, { type: "git.operation" }];
+    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write })).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.continue", cwd: webRoot, kind: "merge" })).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.operation", cwd: webRoot })).toMatchObject({ result: { operation: null } });
+    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write, local: "nope" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";
@@ -1195,6 +1209,11 @@ describe("daemon", () => {
         { type: "git.fileAt", hash, path: "t.txt" },
         { type: "git.fetch" },
         { type: "git.commitFiles", paths: ["t.txt"], message: "m" },
+        { type: "git.merge", ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] },
+        { type: "git.rebase", ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] },
+        { type: "git.continue", kind: "merge" },
+        { type: "git.abort", kind: "merge" },
+        { type: "git.operation" },
         { type: "git.branch", ref: "refs/heads/main" },
         { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
         { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },

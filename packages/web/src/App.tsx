@@ -4057,6 +4057,7 @@ export function App() {
                           ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
                           onGitWrite={editors.nudge}
+                          onResolve={(prompt) => (addonImpl.current.insert(panelTarget.sessionId!, prompt), setPane("session"))}
                         />
                       )
                     ) : (
@@ -4075,6 +4076,7 @@ export function App() {
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
                         onGitWrite={editors.nudge}
+                        onResolve={(prompt) => (newSession(panelTarget.cwd), setInsert(prompt))}
                         emptyText={tr("app.changes.empty")}
                       />
                     ),

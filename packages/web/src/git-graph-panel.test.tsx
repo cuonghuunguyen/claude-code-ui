@@ -74,7 +74,8 @@ let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", re
 const MAIN_ARGV = "refs/heads/main:refs/heads/main";
 const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
   ref: "refs/heads/main", local: hash(3), checkedOut: "here", remote: "origin", remoteRef: "refs/heads/main", tracking: "refs/remotes/origin/main", trackingHash: hash(2), upstreamHash: hash(2), upstream: "origin/main", ahead: 1, behind: 1,
-  push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"], ...o,
+  push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"],
+  headRef: "refs/heads/dev", headHash: hash(1), merge: ["merge", "--no-edit", "main"], rebase: ["rebase", "refs/heads/main"], ...o,
 });
 let branchInfo: (ref: string) => GitBranchInfo = () => infoMain();
 let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
@@ -89,7 +90,7 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     }
     if (m.type === "git.fetch") return fetchReply();
     if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
-    if (m.type === "git.push" || m.type === "git.pull") return writeReply();
+    if (m.type === "git.push" || m.type === "git.pull" || m.type === "git.merge" || m.type === "git.rebase") return writeReply();
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
@@ -916,6 +917,39 @@ it("Push and Pull confirm with the exact command too; Pull sends git.pull", asyn
   await flush();
   expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull, tracking: hash(2) }]);
   expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
+});
+
+it("Merge and Rebase name HEAD's branch, show the exact command and send the hashes the menu showed; a stop on conflicts says so", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  expect(byId("branch-merge").textContent).toBe("Merge into dev…");
+  expect(byId("branch-rebase").textContent).toBe("Rebase dev onto main…");
+  await act(async () => byId("branch-merge").click());
+  expect(byId("git-merge-dialog").textContent).toContain("Merge main into dev?");
+  expect(byId("git-command").textContent).toBe("git merge --no-edit main");
+  writeReply = async () => ({ written: { output: "CONFLICT", refs: "s2", operation: { kind: "merge", conflicted: ["a.txt"] } } });
+  await act(async () => byId("git-merge-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.merge")).toEqual([{ type: "git.merge", cwd: "/p", ref: "refs/heads/main", local: hash(3), headRef: "refs/heads/dev", headHash: hash(1), argv: infoMain().merge }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Merge of main stopped on conflicts");
+  writeReply = async () => ({ written: { output: "", refs: "s3" } });
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-rebase").click());
+  expect(byId("git-command").textContent).toBe("git rebase refs/heads/main");
+  await act(async () => byId("git-rebase-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.rebase")).toHaveLength(1);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Rebased onto main");
+});
+
+it("Merge and Rebase are disabled with the reason git gave", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ merge: undefined, rebase: undefined, why: { merge: "This is the current branch", rebase: "This is the current branch" } });
+  await menuAt(chip("refs/heads/main"));
+  expect(byId("branch-merge").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("branch-merge").textContent).toContain("This is the current branch");
 });
 
 it("a branch not checked out here says so in the menu and the dialog; one in another worktree disables Pull with the reason", async () => {

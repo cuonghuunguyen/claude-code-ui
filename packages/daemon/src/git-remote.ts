@@ -4,7 +4,7 @@ import { isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
-import { ceilingEnv, gitDirsOf, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
+import { ceilingEnv, gitDirsOf, gitOperation, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
 import { BATCH_SSH, runGit } from "./git-runner.ts";
 import { redact } from "./plugins.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -191,7 +191,7 @@ export function checkedOutOf(worktree: string, top: string): string | undefined 
 }
 
 /** Everything the menu shows and the exact argv of each action, re-read from git. */
-async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
+export async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
   const f = (...fields: string[]) => `--format=${fields.join(`%1f`)}%1e`;
   const rows = (out: string) => out.split(RS).map((r) => r.replace(/^\n/, "")).filter(Boolean).map((r) => r.split(US));
   const own = rows((await local(top, ["for-each-ref", f("%(refname)", "%(objectname)", "%(upstream)", "%(upstream:remotename)", "%(upstream:remoteref)", "%(push:remotename)", "%(worktreepath)"), "--", ref], env)).out).find((r) => r[0] === ref);
@@ -242,7 +242,24 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
   else if (info.checkedOut === "here") info.pull = [...HARDEN, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", upRemote, upRef];
   else if (info.checkedOut) why.pull = `Checked out in ${info.checkedOut}: pull there`;
   else info.pull = [...HARDEN, "fetch", "--no-recurse-submodules", upRemote, `${upRef}:${ref}`];
-  if (why.push || why.forcePush || why.pull) info.why = why;
+  // Merge and rebase act on HEAD: what the menu showed of it (`headRef`, `headHash`) is checked again before the run.
+  const head = (await local(top, ["rev-parse", "--verify", "-q", "HEAD"], env)).out;
+  const headRef = (await local(top, ["symbolic-ref", "-q", "HEAD"], env)).out;
+  if (headRef) info.headRef = headRef;
+  if (head) info.headHash = head;
+  const op = await gitOperation(top);
+  const blocked = !headRef ? "HEAD is detached" : !head ? "No commits yet" : headRef === ref ? "This is the current branch" : op ? (op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`) : undefined;
+  if (blocked) {
+    why.merge = blocked;
+    why.rebase = blocked;
+  } else {
+    // The short name gives the message "Merge branch 'x'" (the full ref would print `refs/heads/x`); when git reads it as something else (a tag), the full ref.
+    const short = ref.slice(11);
+    const same = (await local(top, ["rev-parse", "--verify", "-q", `${short}^{commit}`], env)).out === info.local;
+    info.merge = [...HARDEN, "merge", "--no-edit", same ? short : ref];
+    info.rebase = [...HARDEN, "rebase", ref];
+  }
+  if (Object.keys(why).length) info.why = why;
   return info;
 }
 
