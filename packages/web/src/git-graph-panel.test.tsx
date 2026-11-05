@@ -8,6 +8,7 @@ import { GraphPane, GraphPanel } from "./git-graph-panel.tsx";
 import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { GitRepo } from "@claude-ui/protocol";
 import { forgetRemoteOps } from "./git-remote-ops.ts";
+import { focusCommit } from "./graph-focus.ts";
 import { noteRefs, refsOf } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
 
@@ -1024,4 +1025,24 @@ it("without exact no request carries it", async () => {
   const c = fake(history(3));
   await mount(c);
   expect(c.sent.some((m) => "exact" in m)).toBe(false);
+});
+
+// ---- Annotate (GH-564): focusCommit ----
+it("focusCommit before the pane shows: the filter gets the hash, git.log asks for it, the commit is selected; a nested repository's pane reads at GitRepo.path", async () => {
+  const c = fake(history(10));
+  // The Files tab sets the selector, then asks; the pane mounts hidden and has not read yet.
+  setRepoChoice("/p", lib.rel);
+  focusCommit(lib.path, hash(5));
+  await mountPane(c, [own, lib], true);
+  expect(c.sent.filter((m) => m.type === "git.log")).toEqual([]);
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" hidden={false} repos={{ list: [own, lib], projectKey: "/p" }} />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 450))));
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.log").at(-1)).toMatchObject({ cwd: lib.path, text: hash(5), exact: true });
+  expect((el.querySelector("[data-testid=graph-filter-text]") as HTMLInputElement).value).toBe(hash(5));
+  expect(el.querySelector("[data-testid=commit-list]")!.getAttribute("aria-activedescendant")).toBe(`commit-${hash(5)}`);
+  // Taken once: a remount does not apply it again.
+  await act(async () => root.render(null));
+  await mountPane(c, [own, lib]);
+  expect((el.querySelector("[data-testid=graph-filter-text]") as HTMLInputElement).value).toBe("");
 });
