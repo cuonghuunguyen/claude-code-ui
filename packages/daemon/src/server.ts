@@ -2259,16 +2259,16 @@ export function createDaemon(opts: {
           generating?.abort();
           return reply({});
         case "git.commitMessage": {
+          // Before any await or early return: a cancel or a close at any moment aborts this request.
           generating?.abort();
-          generating = undefined;
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // `project` is only a key of the settings map: never a path.
-          if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) return fail("bad_request", "project must be a project folder");
           const ctl = (generating = new AbortController());
-          // Paths, diff, instruction and reply are never logged.
           try {
+            const cwd = allowed(msg.cwd);
+            if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+            if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+            // `project` is only a key of the settings map: never a path.
+            if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) return fail("bad_request", "project must be a project folder");
+            // Paths, diff, instruction and reply are never logged.
             const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
             if (!d) return fail("not_git", NOT_TOP);
             const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);

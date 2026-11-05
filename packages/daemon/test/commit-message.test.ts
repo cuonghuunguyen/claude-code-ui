@@ -78,7 +78,7 @@ describe("generateCommitMessage", () => {
     const s = stub(ok("feat: x"));
     expect(await gen(s.query)).toBe("feat: x");
     expect(s.seen.prompt).toBe("p");
-    expect(s.seen.options).toMatchObject({ tools: [], persistSession: false, maxTurns: 1, model: "haiku", cwd: "/x", settings: { disableAllHooks: true } });
+    expect(s.seen.options).toMatchObject({ tools: [], persistSession: false, maxTurns: 1, model: "haiku", cwd: "/x", settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });

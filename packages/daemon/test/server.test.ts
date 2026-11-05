@@ -1162,6 +1162,10 @@ describe("daemon", () => {
       expect(await Promise.race([waiting, new Promise((r) => setTimeout(() => r("pending"), 200))])).toBe("pending");
       await c.request({ type: "git.commitMessageCancel" });
       expect(await waiting).toMatchObject({ type: "error", code: "cancelled" });
+      // A cancel right behind the request, before the repository check finished, still stops it.
+      const early = c.request(m);
+      await c.request({ type: "git.commitMessageCancel" });
+      expect(await early).toMatchObject({ type: "error", code: "cancelled" });
     } finally {
       d.close();
     }
