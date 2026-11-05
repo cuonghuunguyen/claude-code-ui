@@ -171,6 +171,11 @@ describe("prepareSshSide", () => {
     expect(r.installs).toEqual([{ bundle: true }]);
     expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
   });
+  it("a macOS host with a usable Node.js gets the darwin bundle without Node.js; the pinned retry carries it", async () => {
+    const os = "Darwin\nCLAUDE_UI_CHECK foundnode=1";
+    expect((await run({ arch: "arm64", libc: "unknown", os }).result).bundle).toEqual({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
+    expect((await run({ arch: "arm64", libc: "unknown", os, pinned: true }).result).bundle).toEqual({ target: "darwin-arm64", nodeDir: expect.stringMatching(/^node-v[\d.]+-darwin-arm64$/), claudePackage: "claude-agent-sdk-darwin-arm64" });
+  });
   it("an automatic update (bundleOnly) never uses npm: the installed build runs", async () => {
     const r = run({ libc: "musl", bundleOnly: true });
     expect(await r.result).toEqual({ path: "", never: true });

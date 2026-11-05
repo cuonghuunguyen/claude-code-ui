@@ -68,9 +68,9 @@ describe("target", () => {
   });
 
   describe("NODE_OK_JS (the rule the candidate node runs)", () => {
-    const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string }) => {
+    const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string; posix?: boolean }) => {
       let out: string | undefined;
-      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? ""], platform: o.platform ?? "linux", arch: o.arch ?? "x64", stdout: { write: (t: string) => (out = t) } };
+      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? "", ...(o.posix ? ["posix"] : [])], platform: o.platform ?? "linux", arch: o.arch ?? "x64", stdout: { write: (t: string) => (out = t) } };
       runInNewContext(NODE_OK_JS, { process });
       return out === NODE_OK_TOKEN;
     };
@@ -88,6 +88,13 @@ describe("target", () => {
       expect(ok({ want: "", arch: "ia32" })).toBe(true);
       expect(ok({ bun: "1.1.0" })).toBe(false);
       expect(ok({ deno: "2.0.0" })).toBe(false);
+    });
+    it("posix (SSH hosts, darwin bundles): a macOS Node.js of the asked arch counts; Windows never does", () => {
+      expect(ok({ platform: "darwin", want: "arm64", arch: "arm64", posix: true })).toBe(true);
+      expect(ok({ platform: "darwin", want: "arm64", arch: "x64", posix: true })).toBe(false);
+      expect(ok({ platform: "freebsd", posix: true })).toBe(true);
+      expect(ok({ platform: "win32", posix: true })).toBe(false);
+      expect(ok({ platform: "darwin", want: "arm64", arch: "arm64" })).toBe(false);
     });
   });
 

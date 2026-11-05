@@ -1,8 +1,8 @@
-// The Docker side bundle (docs/spec.md "Sides"): the hub assembles, per target (linux-x64, linux-arm64, glibc), one tar with
+// The side bundle (docs/spec.md "Sides"): the hub assembles, per target (linux-x64, linux-arm64 with glibc; darwin-x64, darwin-arm64 for SSH hosts), one tar with
 // everything the side runs on, so the container needs no Node.js, npm, network or build tools. Parts, each fetched from its
 // official source and checked before any use (also when cached): the Node.js runtime (nodejs.org, pinned version and SHA-256 from
-// its SHASUMS256.txt), node-pty with its Linux N-API prebuilds (npm registry, pinned sha512 integrity) and the Claude Code binary
-// and the Agent SDK's JS (`@anthropic-ai/claude-agent-sdk-linux-<arch>` and `@anthropic-ai/claude-agent-sdk` of the SDK version
+// its SHASUMS256.txt), node-pty with its N-API prebuilds (npm registry, pinned sha512 integrity) and the Claude Code binary
+// and the Agent SDK's JS (`@anthropic-ai/claude-agent-sdk-<target>` and `@anthropic-ai/claude-agent-sdk` of the SDK version
 // this build was made with, npm registry, the registry's integrity). The side JS is this build's dist/side (build.mjs), with its
 // inlined packages' license texts. Nothing is re-hosted: the hub downloads, the container gets a copy.
 import { createHash } from "node:crypto";
@@ -69,7 +69,7 @@ export const USABLE_NODE_FN = `usable_node() { n=; command -v node >/dev/null 2>
 const NODE_ARCH_LINES = 'case "$(uname -m)" in x86_64|amd64) na=x64;; aarch64|arm64) na=arm64;; *) na=;; esac';
 const NODE_PROBE_LINES = [USABLE_NODE_FN, NODE_ARCH_LINES, 'usable_node "$na" && emit foundnode 1 || emit foundnode 0'];
 export const TARGET_PROBE_LINES = [...TARGET_PROBE_BASE, ...NODE_PROBE_LINES];
-/** The probe lines of an SSH host: its Node.js may be a macOS or BSD one (`posix`), which only the npm install runs on. */
+/** The probe lines of an SSH host: its Node.js may be a macOS or BSD one (`posix`): the npm install and a darwin bundle run on it. */
 export const TARGET_PROBE_LINES_POSIX = TARGET_PROBE_LINES.map((l) => l.replace('usable_node "$na" &&', 'usable_node "$na" posix &&'));
 export const TARGET_PROBE = TARGET_PROBE_LINES.join("\n");
 /** The probe of a container: nvm first, like its setup script. */

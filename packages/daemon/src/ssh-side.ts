@@ -133,8 +133,8 @@ const WINDOWS = "Windows SSH hosts are not supported yet";
 
 /**
  * Before the launch: one ssh run probes the host (OS, target, what is installed). A Windows host is refused. A host that already has this
- * build skips the install (nothing is sent). A covered Linux host gets the bundle (assembled from the Hub's verified parts) through ssh
- * stdin; any other POSIX host (musl, other arch, macOS, BSD) gets the npm tarball and installs with its own Node.js. An automatic update
+ * build skips the install (nothing is sent). A covered Linux or macOS host gets the bundle (assembled from the Hub's verified parts) through ssh
+ * stdin; any other POSIX host (musl, other arch, BSD) gets the npm tarball and installs with its own Node.js. An automatic update
  * (`bundleOnly`) never uses npm. Resolves with the path on the host (`never`: run what is installed) and the bundle; rejects with the
  * user's next step. Setup `never`: nothing is probed or sent.
  */
