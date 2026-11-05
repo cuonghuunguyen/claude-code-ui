@@ -37,7 +37,7 @@ Không. Nó dùng gói đăng ký Claude mà bạn đã đăng nhập bằng `cl
 
 ### Hỗ trợ hệ điều hành nào? {#which-operating-systems-does-it-support}
 
-Windows, macOS và Linux. Trên Windows, một bản cài còn chạy được phiên bên trong các bản phân phối WSL, và trên mọi hệ điều hành thì chạy được bên trong container Docker đang chạy. Xem [WSL và Docker](../features/wsl-docker).
+Windows, macOS và Linux. Trên Windows, một bản cài còn chạy được phiên bên trong các bản phân phối WSL, và trên mọi hệ điều hành thì chạy được bên trong container Docker đang chạy và trên các máy bạn truy cập qua SSH. Xem [WSL, Docker & SSH](../features/wsl-docker).
 
 ### Có dùng chung được với phiên mở từ CLI `claude` hay VS Code không? {#does-it-work-with-sessions-i-started-in-the-claude-cli-or-vs-code}
 

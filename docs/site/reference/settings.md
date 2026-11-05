@@ -21,6 +21,8 @@ Most settings are **kept in this browser** only. Orchestration, Focus, Usage lim
 | --- | --- |
 | Theme | Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One. Recolors the app, the editor, diffs, the terminal and the git graph at once. Dracula has no light colors: in light mode it shows Default. Kept in this browser. |
 
+| App name and icon | Your own name and icon (an emoji or an image) for the browser tab and the installed app. **Change…** opens the editor; an empty name means "Claude UI". Saved in the daemon: it applies to every browser of this Claude UI. The tab changes at once. An installed app takes it when the browser next checks for updates (up to a day) or after you reinstall it. |
+
 The theme button at the top right still cycles System, Light and Dark inside the theme.
 
 ## General
@@ -134,14 +136,16 @@ One Jira connection for the **Ticket** tab of [Create worktree](../features/proj
 
 ## Sides
 
-Shown when a WSL distro or container is listed. Per side:
+Shown when a WSL distro, container or SSH host is listed. This computer is always listed, with a pencil button for its [name and icon](../features/projects#custom-names-and-icons). Per side:
 
 | Setting | Does |
 | --- | --- |
 | Start with Claude UI | Starts the side with Claude UI, from the next start. Off also removes the side's projects from the sidebar. |
 | Update automatically | Installs a new Claude UI build from the bundle. Needs Start with Claude UI. |
+| Keep running without Claude UI (minutes) | The Grace period: how long a Hub that Claude UI started on that machine keeps running with no Claude UI attached, no browser connected and no turn running (default 30). A Hub you started there never ends by it. |
+| Update | Shown when the Claude UI on an SSH host is older than yours: runs `claude-ui update` there. |
 
-See [WSL & Docker](../features/wsl-docker).
+See [WSL, Docker & SSH](../features/wsl-docker).
 
 ## Performance
 

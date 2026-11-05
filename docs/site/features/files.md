@@ -26,7 +26,7 @@ The **Files** pane: a file tree and a simple editor for the session's folder. It
 
 Click **Pop out** in the Files tab to open the tree, tabs and editor in a large dialog. It is the same state: open tabs, unsaved edits, cursor and undo history carry over, and back (**Open in editor**).
 
-A **Read** card in the timeline, a file path in Claude's answer (`src/cart.js:12`) and **Open in file dialog** in the tree menu open the file there, at its line.
+A **Read** card in the timeline, a file path in Claude's answer (`src/cart.js:12`) and **Open in file dialog** in the tree menu open the file there, at its line. A bare file name in Claude's answer (`cart.js`) opens the matching file of the project. The match ignores case. When several files match, a file picker opens filtered by the name. With no match, a **File not found** message shows.
 
 ## File tree menu
 

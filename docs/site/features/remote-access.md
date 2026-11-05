@@ -60,7 +60,7 @@ For example with [Caddy](https://caddyserver.com): `caddy reverse-proxy --from m
 ## Good to know
 
 - Tailscale's public **Funnel** is never used. claude-ui refuses to start if Funnel is on for that port.
-- `tailscale serve` runs only while claude-ui runs. Nothing stays configured after it exits. If you already set up `tailscale serve --bg 4280`, claude-ui reuses it.
+- `tailscale serve` runs only while claude-ui runs. It also ends when claude-ui is killed. Nothing stays configured after it exits. If you already set up `tailscale serve --bg 4280`, claude-ui reuses it.
 - WSL2 is not reachable from the LAN by default. Run claude-ui on Windows, or turn on WSL mirrored networking.
 - The page reconnects by itself when the phone wakes up or the network comes back.
 - Treat the pairing link like a password: it gives full access. See [Privacy](../reference/privacy).

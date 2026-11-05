@@ -32,5 +32,6 @@ Một thư mục dự án có thể chứa nhiều kho mã: kho lồng nhau, ho�
 - Chuyển giữa **Diff chia đôi** và **Diff gộp**. Màn hình hẹp luôn dùng diff gộp.
 - Kéo cạnh của danh sách tệp để đổi kích thước, hoặc chọn nó rồi nhấn <kbd>←</kbd> / <kbd>→</kbd>. Nhấp đúp vào cạnh để khôi phục độ rộng. Độ rộng được lưu theo trình duyệt.
 - **Lọc tệp** thu hẹp danh sách theo tên.
+- Thư mục chỉ có một thư mục con hiện thành một dòng (`src/components`). **Xem dạng danh sách** hiện các tệp phẳng, mỗi tệp theo đường dẫn của nó; **Xem dạng cây** quay lại. Lựa chọn được lưu theo trình duyệt.
 - Chọn chế độ mà khung mở ra tại [Cài đặt › Bố cục › Thay đổi](../reference/settings#changes).
 - Thanh trạng thái dưới ô nhập prompt hiển thị nhánh và số đếm `+thêm −xóa`.

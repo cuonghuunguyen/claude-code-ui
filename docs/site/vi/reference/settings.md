@@ -21,6 +21,8 @@ Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Đi�
 | --- | --- |
 | Chủ đề | Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One. Đổi màu cùng lúc cho ứng dụng, trình soạn thảo, diff, terminal và đồ thị git. Dracula không có màu sáng: ở chế độ sáng nó hiện Default. Được lưu trong trình duyệt này. |
 
+| Tên và biểu tượng ứng dụng | Tên và biểu tượng riêng của bạn (emoji hoặc ảnh) cho thẻ trình duyệt và ứng dụng đã cài. **Thay đổi…** mở trình chỉnh sửa; tên trống nghĩa là "Claude UI". Lưu trong daemon: áp dụng cho mọi trình duyệt dùng Claude UI này. Thẻ trình duyệt đổi ngay. Ứng dụng đã cài nhận khi trình duyệt kiểm tra cập nhật lần tới (tối đa một ngày) hoặc sau khi cài lại. |
+
 Nút chủ đề ở góc trên bên phải vẫn chuyển lần lượt Hệ thống, Sáng và Tối bên trong chủ đề.
 
 ## Chung {#general}
@@ -134,14 +136,16 @@ Một kết nối Jira cho tab **Ticket** của [Tạo worktree](../features/pro
 
 ## Môi trường {#sides}
 
-Hiện khi có một bản phân phối WSL hoặc container trong danh sách. Với mỗi môi trường:
+Hiện khi có một bản phân phối WSL, container hoặc máy chủ SSH trong danh sách. Máy này luôn có trong danh sách, kèm nút bút chì để đặt [tên và biểu tượng](../features/projects#custom-names-and-icons). Với mỗi môi trường:
 
 | Cài đặt | Chức năng |
 | --- | --- |
 | Khởi động cùng Claude UI | Khởi động môi trường cùng Claude UI, từ lần khởi động sau. Tắt cũng gỡ các dự án của môi trường khỏi thanh bên. |
 | Tự động cập nhật | Cài bản dựng Claude UI mới từ bundle. Cần bật Khởi động cùng Claude UI. |
+| Giữ chạy khi không có Claude UI (phút) | Grace period: Hub do Claude UI khởi động trên máy đó giữ chạy bao lâu khi không có Claude UI nào gắn vào, không có trình duyệt nào kết nối và không có lượt chạy nào (mặc định 30). Hub do bạn khởi động ở đó không bao giờ kết thúc vì mốc này. |
+| Cập nhật | Hiện khi Claude UI trên máy chủ SSH cũ hơn bản của bạn: chạy `claude-ui update` ở đó. |
 
-Xem [WSL và Docker](../features/wsl-docker).
+Xem [WSL, Docker & SSH](../features/wsl-docker).
 
 ## Hiệu năng {#performance}
 

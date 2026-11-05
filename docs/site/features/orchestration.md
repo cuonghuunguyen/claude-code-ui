@@ -20,6 +20,7 @@ One session (the **coordinator**) can start and steer other sessions (the **work
 | **Maximum tree depth** | How deep workers may start workers of their own (1 to 5). 1: only you start workers. 2 (default): a worker may start its own, for example a tester and a reviewer. |
 | **Maximum workers per coordinator** | How many workers one session (you or a worker) may run at once (1 to 20, default 4). |
 | **Close finished workers** | A worker that ends its turn with nothing pending closes its Claude process and stops counting toward the limits (default on). Not while you have it open in a tab. The coordinator can keep a worker open. |
+| **Stall alert after (minutes)** | Tells the coordinator when a running worker sends nothing for this long (0 to 240, default 20; 0 = off). |
 | **Worker mode** | The [permission mode](permissions) of a new worker when the coordinator does not pick one. Default: the coordinator's own mode (bypass becomes auto). |
 | **Notifications from workers** | Turn it off and a worker that finishes, needs input or fails sends no push, desktop or in-app notification. Its coordinator still hears. A request the coordinator passes on to you still notifies you. |
 | **Coordinator may answer permission requests** | Lets the coordinator allow or deny, once, a worker's low-risk requests: reads and edits inside the worker's folder, reads of the repo's agent docs, read-only git. Everything else waits for you. |
@@ -46,8 +47,8 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 | --- | --- |
 | `worker_start` | Start a worker in a folder or in a new git worktree, with a first prompt, optionally as an agent type |
 | `worker_send` | Send a message to a worker (steers a running turn) |
-| `worker_wait` | Wait for a worker event: question, permission, denied, turn end, error |
-| `worker_read` | Read a worker's recent timeline (a path such as `implementer/reviewer` reads a worker below you) |
+| `worker_wait` | Wait for a worker event: question, permission, denied, turn end, error, stalled |
+| `worker_read` | Read a worker's recent timeline (a path such as `implementer/reviewer` reads a worker below you). `part` and `offset` read one long reply whole, page by page |
 | `worker_list` | List workers and their state (`tree` lists every worker below you) |
 | `worker_answer` | Answer a worker's simple factual question |
 | `worker_permission` | Allow once or deny a worker's low-tier permission request |
@@ -63,6 +64,8 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 
 - A worker is a normal session. You can open it, type in it and answer its requests yourself. The first answer wins.
 - A worker in a more permissive mode than its coordinator needs your OK on the `worker_start` card.
+- A turn end event holds the first 4000 characters of the worker's reply. For a longer reply the coordinator reads the rest with `worker_read` (`part`, `offset`).
+- A **stalled** event tells the coordinator that a worker needs a look. Reasons: the Claude process ended in the middle of a turn, a new turn never started, or the worker sent nothing for **Stall alert after** minutes. The worker is not stopped, and the coordinator decides. The worker's `stalled` field in `worker_list` clears with its next message.
 - A finished worker resumes on its next message (about 4 s plus MCP start).
 - `worker_close` refuses a worker that has running workers of its own; `worker_remove` refuses a worker that has any worker below it (remove those first).
 - A `worker_start` over a limit asks you nothing: the worker gets the error at once.

@@ -60,7 +60,7 @@ Ví dụ với [Caddy](https://caddyserver.com): `caddy reverse-proxy --from my-
 ## Cần biết {#good-to-know}
 
 - **Funnel** công khai của Tailscale không bao giờ được dùng. claude-ui từ chối khởi động nếu Funnel đang bật cho cổng đó.
-- `tailscale serve` chỉ chạy khi claude-ui chạy. Không có cấu hình nào còn lại sau khi thoát. Nếu bạn đã thiết lập `tailscale serve --bg 4280`, claude-ui dùng lại cấu hình đó.
+- `tailscale serve` chỉ chạy khi claude-ui chạy. Nó cũng kết thúc khi claude-ui bị kill. Không có cấu hình nào còn lại sau khi thoát. Nếu bạn đã thiết lập `tailscale serve --bg 4280`, claude-ui dùng lại cấu hình đó.
 - WSL2 mặc định không truy cập được từ LAN. Chạy claude-ui trên Windows, hoặc bật mạng mirrored của WSL.
 - Trang tự kết nối lại khi điện thoại thức dậy hoặc mạng trở lại.
 - Hãy coi liên kết ghép nối như mật khẩu: nó cấp toàn quyền truy cập. Xem [Quyền riêng tư](../reference/privacy).

@@ -60,7 +60,7 @@ const SIDEBAR: [string, [string, string][]][] = [
   ["Many sessions", [["Projects & worktrees", "/features/projects"], ["Focus page", "/features/focus"], ["Notifications", "/features/notifications"], ["Orchestration (workers)", "/features/orchestration"]]],
   ["Workspace & layout", [["Sessions & tabs", "/features/sessions"], ["Panes & layout", "/features/panes"], ["Split view", "/features/split-view"], ["Context menus", "/features/context-menus"], ["Clean up", "/features/clean-up"], ["Command palette", "/features/palette"], ["Keep screen awake", "/features/keep-awake"]]],
   ["Code & git", [["Files", "/features/files"], ["Changes & diffs", "/features/changes"], ["Git graph", "/features/git-graph"], ["Terminal", "/features/terminal"]]],
-  ["Setup & access", [["Phone & remote access", "/features/remote-access"], ["WSL & Docker", "/features/wsl-docker"], ["MCP, skills & plugins", "/features/config-dialogs"], ["Addons", "/features/addons"], ["Updates", "/features/updates"]]],
+  ["Setup & access", [["Phone & remote access", "/features/remote-access"], ["WSL, Docker & SSH", "/features/wsl-docker"], ["MCP, skills & plugins", "/features/config-dialogs"], ["Addons", "/features/addons"], ["Updates", "/features/updates"]]],
   ["Reference", [["Keyboard shortcuts", "/reference/shortcuts"], ["Settings", "/reference/settings"], ["CLI flags", "/reference/cli"], ["Troubleshooting & FAQ", "/reference/troubleshooting"], ["Privacy", "/reference/privacy"]]],
 ];
 const sidebar = (prefix: string, l: Labels): DefaultTheme.SidebarItem[] =>
@@ -102,7 +102,7 @@ const VI: Labels = {
   Terminal: "Terminal",
   "Setup & access": "Thiết lập và truy cập",
   "Phone & remote access": "Điện thoại và truy cập từ xa",
-  "WSL & Docker": "WSL và Docker",
+  "WSL, Docker & SSH": "WSL, Docker và SSH",
   "MCP, skills & plugins": "MCP, skill và plugin",
   Addons: "Addon",
   Updates: "Cập nhật",

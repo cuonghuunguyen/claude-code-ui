@@ -26,7 +26,7 @@ Khung **Tệp**: cây tệp và một trình soạn thảo đơn giản cho thư
 
 Bấm **Tách ra** trong tab Tệp để mở cây, các tab và trình soạn thảo trong một hộp thoại lớn. Đó là cùng một trạng thái: tab đang mở, chỉnh sửa chưa lưu, con trỏ và lịch sử hoàn tác được giữ nguyên, và cả khi quay lại (**Mở trong trình soạn thảo**).
 
-Thẻ **Read** trong dòng thời gian, đường dẫn tệp trong câu trả lời của Claude (`src/cart.js:12`) và **Mở trong hộp thoại tệp** trong menu cây sẽ mở tệp tại đó, ở đúng dòng.
+Thẻ **Read** trong dòng thời gian, đường dẫn tệp trong câu trả lời của Claude (`src/cart.js:12`) và **Mở trong hộp thoại tệp** trong menu cây sẽ mở tệp tại đó, ở đúng dòng. Tên tệp đứng một mình trong câu trả lời của Claude (`cart.js`) mở tệp khớp của dự án; việc khớp không phân biệt hoa thường. Khi nhiều tệp khớp, bộ chọn tệp mở ra đã lọc theo tên đó. Không khớp thì hiện thông báo **Không tìm thấy tệp**.
 
 ## Menu cây tệp {#file-tree-menu}
 
