@@ -21,8 +21,6 @@ export type JiraBox = { fake?: FakeJira };
 export type SshHostBox = { get(): Promise<SshHost> };
 
 export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo; jira: JiraBox }, { daemon: Daemon; sshHost: SshHostBox }>({
-  // E2E_CHANNEL=chrome runs the scenarios in the installed Google Chrome (default: Playwright's Chromium).
-  ...(process.env.E2E_CHANNEL ? { channel: [process.env.E2E_CHANNEL, { option: true }] as never } : {}),
   sshHost: [
     async ({}, use) => {
       let host: SshHost | undefined;
