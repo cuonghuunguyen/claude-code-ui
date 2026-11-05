@@ -262,8 +262,8 @@ async function switchTo(top: string, args: string[], smart: boolean, env: NodeJS
   try {
     switched = (await run(top, ["switch", ...args], lc)).out;
   } catch (e) {
-    await run(top, ["stash", "pop"], env).catch(() => {});
-    throw e;
+    const back = await run(top, ["stash", "pop"], env).then(() => "", () => "\nYour changes are kept in the stash: run git stash pop in a terminal.");
+    throw back && e instanceof WorktreeError ? new WorktreeError(e.code, e.message + back) : e;
   }
   // Another process may have pushed a stash since: popping would apply its entry.
   if ((await run(top, ["rev-parse", "-q", "--verify", "refs/stash"], env, { soft: true })).out !== stash) {

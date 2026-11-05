@@ -143,6 +143,16 @@ describe("gitCheckout", () => {
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true }))).toBe("git_failed");
     expect(run(r.dir, "stash", "list")).toBe("");
   });
+  it("smart whose switch then fails (untracked file in the way too): the stash is popped back, nothing is lost", async () => {
+    const r = repo();
+    put(r.dir, "a.txt", "mine\n");
+    put(r.dir, "b.txt", "untracked\n");
+    const before = head(r.dir);
+    expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true }))).toBe("git_failed");
+    expect(head(r.dir)).toBe(before);
+    expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toBe("mine\n");
+    expect(run(r.dir, "stash", "list")).toBe("");
+  });
   it("a branch checked out in another work tree: git_failed naming it", async () => {
     const r = repo();
     const wt = join(r.root, "wt");

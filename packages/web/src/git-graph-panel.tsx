@@ -1,5 +1,5 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the selected repository: lanes, filters, Fetch, details, per-file diff.
-import { memo, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, memo, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
@@ -363,7 +363,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))} fallbackHash={() => detail.hash}>{el}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))} fallbackHash={() => detail.hash}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>

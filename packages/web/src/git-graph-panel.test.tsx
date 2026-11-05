@@ -1128,3 +1128,12 @@ it("New branch from a row sends git.branchCreate with the row's hash and checkou
   expect(c.sent.filter((m) => m.type === "git.branchCreate")).toEqual([{ type: "git.branchCreate", cwd: "/p", name: "topic", at: hash(2), checkout: true }]);
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created and checked out topic");
 });
+
+it("New branch from a chip in the commit details uses the shown commit", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(1);
+  const inDetails = [...el.querySelectorAll("[data-testid=commit-details] [data-ref]")][0]!;
+  await menuAt(inDetails);
+  expect(byId("branch-new").textContent).toBe(`New branch from ${hash(2).slice(0, 7)}…`);
+});
