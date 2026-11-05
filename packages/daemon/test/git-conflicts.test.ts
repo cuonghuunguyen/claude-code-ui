@@ -277,6 +277,19 @@ describe("conflicts", () => {
     expect(readFileSync(join(b.dir, "a.txt"), "utf8")).toBe("mine\n");
     expect(head(b.dir)).toBe(h);
   });
+  it("kind conflict: Abort removes a conflicted path that HEAD lacks (deleted by us)", async () => {
+    const r = repo();
+    put(r.dir, "a.txt", "stashed\n");
+    run(r.dir, "stash", "push", "-q");
+    run(r.dir, "rm", "-q", "a.txt");
+    run(r.dir, "commit", "-q", "-m", "drop a");
+    tryRun(r.dir, "stash", "pop");
+    expect((await gitOperation(r.dir))?.kind).toBe("conflict");
+    await gitAbort(r.dir, { kind: "conflict", ...r.o });
+    expect(existsSync(join(r.dir, "a.txt"))).toBe(false);
+    expect(run(r.dir, "status", "--porcelain")).toBe("");
+    expect(run(r.dir, "stash", "list")).not.toBe("");
+  });
   it("Continue and Abort without an operation, or for another kind, are stale", async () => {
     const r = repo();
     await expect(gitContinue(r.dir, { kind: "merge", ...r.o })).rejects.toMatchObject({ code: "stale", message: "No git operation is in progress: reload" });
