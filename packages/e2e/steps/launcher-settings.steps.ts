@@ -63,3 +63,13 @@ Then("the permission mode picker offers {string}", async ({ page }, label: strin
   await page.keyboard.press("Escape");
   if (phone) await page.keyboard.press("Escape");
 });
+
+Then("the launcher shortcut row is below the back button", async ({ page }) => {
+  const back = await page.getByTestId("settings-back").boundingBox();
+  const row = await page.getByTestId("settings-launcher-shortcut").boundingBox();
+  const heading = await page.getByRole("heading", { name: "Launcher", exact: true }).boundingBox();
+  const shortcutRow = await page.locator("#settings-launcher-shortcut-hint").boundingBox();
+  expect(row!.y).toBeGreaterThanOrEqual(back!.y + back!.height - 1);
+  // The section heading starts below the last line of the shortcut hint.
+  expect(heading!.y).toBeGreaterThanOrEqual(shortcutRow!.y + shortcutRow!.height - 1);
+});

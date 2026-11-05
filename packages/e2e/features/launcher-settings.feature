@@ -17,6 +17,7 @@ Feature: Launcher settings (GH-553)
     And the app is open
     When I open Settings › Launcher
     Then the page has no horizontal scroll
+    And the launcher shortcut row is below the back button
     And I capture "launcher phone"
 
   Scenario: Saved start options apply on the next start; a flag still wins

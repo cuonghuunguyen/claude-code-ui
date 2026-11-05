@@ -726,7 +726,7 @@ function LauncherShortcutRow({ installed, request, onInstalled, onError }: { ins
       .finally(() => setBusy(false));
   };
   return (
-    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+    <div className="flex shrink-0 items-center gap-3 border-t py-2 max-md:min-h-11">
       <div className="min-w-0 flex-1">
         <span className="block text-sm">{t("settings.launcher.shortcut.label")}</span>
         <span id="settings-launcher-shortcut-hint" className="block text-muted-foreground text-xs">{t("settings.launcher.shortcut.hint")}</span>
