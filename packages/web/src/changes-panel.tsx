@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -66,6 +66,24 @@ export function loadStyle(): DiffStyle {
 export function saveStyle(s: DiffStyle) {
   try {
     localStorage.setItem(STYLE_KEY, s);
+  } catch {
+    // Storage blocked: the choice lasts while the panel is open.
+  }
+}
+
+// Wide file sidebar as a folder tree (default) or a flat list by path, per browser.
+const LIST_VIEW_KEY = "claude-ui.changesListView";
+type ListView = "tree" | "list";
+function loadListView(): ListView {
+  try {
+    return localStorage.getItem(LIST_VIEW_KEY) === "list" ? "list" : "tree";
+  } catch {
+    return "tree";
+  }
+}
+function saveListView(v: ListView) {
+  try {
+    localStorage.setItem(LIST_VIEW_KEY, v);
   } catch {
     // Storage blocked: the choice lasts while the panel is open.
   }
@@ -153,7 +171,13 @@ function fileTree(rows: Row[], cwd: string): Folder {
     f.files.sort((a, b) => a.path.localeCompare(b.path));
   };
   sort(root);
-  return root;
+  // Compact folders (VS Code): a folder holding only one folder shows as one row "a/b", keyed by the inner path.
+  const compact = (f: Folder): Folder => {
+    let d = f;
+    while (d.folders.length === 1 && !d.files.length) d = { ...d.folders[0]!, name: `${d.name}/${d.folders[0]!.name}` };
+    return { ...d, folders: d.folders.map(compact) };
+  };
+  return { ...root, folders: root.folders.map(compact) };
 }
 /**
  * Rows per file by its last call: the disk reads come back one by one, and a session tab switch remounts the panel, so without it every
@@ -432,8 +456,10 @@ export function ChangesPanel({
   const q = narrow ? "" : filter.trim().toLowerCase();
   const matched = q ? rows.filter((r) => relPath(r.path, cwd).toLowerCase().includes(q)) : rows;
   const tree = useMemo(() => fileTree(matched, cwd), [rows, q, cwd]);
-  // The order on screen: the tree's on wide screens, by path in the narrow accordion (OpenCode's mobile review).
-  const shown = narrow ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
+  const [listView, setListView] = useState(loadListView);
+  const flat = narrow || listView === "list";
+  // The order on screen: the tree's, or by path in the list view and the narrow accordion (OpenCode's mobile review).
+  const shown = flat ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Show changes (file tree menu): Uncommitted mode, no filter hiding the file, its folders open, the file selected and scrolled to.
@@ -564,7 +590,10 @@ export function ChangesPanel({
             data-path={r.path}
           >
             {rowIcon(r)}
-            <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {flat && filePath(r.path, cwd).dir && <span className="text-faint">{filePath(r.path, cwd).dir.replace(/\/$/, "")}/</span>}
+              {filePath(r.path, cwd).name}
+            </span>
             {r.submodule && <SubmoduleBadge />}
             {r.nested && <RepoBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
@@ -816,6 +845,22 @@ export function ChangesPanel({
                 className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
                 data-testid="changes-filter"
               />
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="ml-1 shrink-0"
+                aria-pressed={listView === "list"}
+                title={listView === "list" ? t("files.changes.viewTree") : t("files.changes.viewList")}
+                aria-label={listView === "list" ? t("files.changes.viewTree") : t("files.changes.viewList")}
+                onClick={() => {
+                  const v = listView === "list" ? "tree" : "list";
+                  setListView(v);
+                  saveListView(v);
+                }}
+                data-testid="changes-list-view"
+              >
+                {listView === "list" ? <ListTreeIcon /> : <ListIcon />}
+              </Button>
             </label>
             {scopeGroup && (
               <div className="flex items-center gap-2 px-2 pb-1">
@@ -825,7 +870,7 @@ export function ChangesPanel({
             )}
             {!shown.length && <p className="px-3 py-2 text-muted-foreground">{t("files.changes.noMatch")}</p>}
             <ul className="flex min-h-0 flex-col gap-0.5 overflow-auto p-1" aria-label={t("files.changes.changedFiles")}>
-              {branch(tree, 0)}
+              {branch(flat ? { name: "", path: "", folders: [], files: shown } : tree, 0)}
             </ul>
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">{t("files.changes.listCut")}</p>}
           </div>

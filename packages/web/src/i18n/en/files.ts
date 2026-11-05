@@ -174,6 +174,8 @@ export default {
   "files.changes.nextTitle": "Next file (→)",
   "files.changes.next": "Next file",
   "files.changes.changedFiles": "Changed files",
+  "files.changes.viewList": "View as list",
+  "files.changes.viewTree": "View as tree",
   "files.changes.listCut": "List cut at 3000 files",
   "files.changes.noMatch": "No files match.",
   "files.changes.sub": "Submodule {path}",

@@ -213,6 +213,26 @@ it("wide: a folder tree like OpenCode's review sidebar (folders first, file-type
   expect(el.querySelector("[data-testid=changed-folder]")!.getAttribute("aria-expanded")).toBe("false");
 });
 
+it("wide: single-child folders compact into one row; the list view shows files by path, kept per browser", async () => {
+  const client = fakeClient({ "/p/a/b/c/x.ts": "x = 2\n", "/p/a/b/c/y.ts": "y = 2\n", "/p/z.md": "z = 2\n" });
+  const parts = [edit("e1", "/p/z.md", "z = 1", "z = 2"), edit("e2", "/p/a/b/c/y.ts", "y = 1", "y = 2"), edit("e3", "/p/a/b/c/x.ts", "x = 1", "x = 2")];
+  const panel = () => <ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />;
+  await act(async () => root.render(panel()));
+  await flush();
+  const rows = () => [...el.querySelectorAll("ul[aria-label='Changed files'] button")].map((b) => `${b.getAttribute("style")}|${b.textContent}`);
+  expect(rows()).toEqual(["padding-left: 8px;|a/b/c", "padding-left: 24px;|x.ts", "padding-left: 24px;|y.ts", "padding-left: 8px;|z.md"]);
+  const toggle = () => el.querySelector<HTMLButtonElement>("[data-testid=changes-list-view]")!;
+  expect(toggle().getAttribute("aria-label")).toBe("View as list");
+  await act(async () => toggle().click());
+  expect(rows()).toEqual(["padding-left: 8px;|a/b/c/x.ts", "padding-left: 8px;|a/b/c/y.ts", "padding-left: 8px;|z.md"]);
+  expect(localStorage.getItem("claude-ui.changesListView")).toBe("list");
+  await act(async () => root.render(null));
+  await act(async () => root.render(panel()));
+  await flush();
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(rows()).toHaveLength(3);
+});
+
 it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const panel = () => <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")])} cwd="/p" onOpen={() => {}} />;

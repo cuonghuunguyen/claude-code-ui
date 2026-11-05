@@ -176,6 +176,8 @@ export default {
   "files.changes.nextTitle": "Tệp sau (→)",
   "files.changes.next": "Tệp sau",
   "files.changes.changedFiles": "Tệp thay đổi",
+  "files.changes.viewList": "Xem dạng danh sách",
+  "files.changes.viewTree": "Xem dạng cây",
   "files.changes.listCut": "Danh sách bị cắt ở 3000 tệp",
   "files.changes.noMatch": "Không có tệp khớp.",
   "files.changes.sub": "Submodule {path}",

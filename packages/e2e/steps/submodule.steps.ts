@@ -23,8 +23,11 @@ const side = (page: import("@playwright/test").Page) => page.getByTestId("side-p
 async function openPane(page: import("@playwright/test").Page, name: string): Promise<void> {
   const pattern = new RegExp(`^${name}`, "i");
   const desktopTab = side(page).getByRole("tab", { name: pattern });
+  const phoneTab = page.getByRole("tablist", { name: "Panes" }).getByRole("tab", { name: pattern });
+  // After a reload the panel renders late: wait for either before choosing.
+  await desktopTab.or(phoneTab).first().waitFor({ timeout: 15_000 });
   if (await desktopTab.isVisible()) return void (await desktopTab.click());
-  await page.getByRole("tablist", { name: "Panes" }).getByRole("tab", { name: pattern }).click();
+  await phoneTab.click();
 }
 const sha = (project: object) => shas.get(project)!;
 
