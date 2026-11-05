@@ -2,6 +2,12 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- App icon: Settings › Appearance › **App icon** lets you set your own icon (an emoji or an image) for every browser of this Claude UI. It shows in the browser tab and in the installed app.
+
 ## 1.1.0 - 2026-11-03
 
 ### Added

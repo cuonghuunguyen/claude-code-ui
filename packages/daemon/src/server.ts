@@ -45,6 +45,7 @@ import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
+import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
@@ -1436,6 +1437,7 @@ export function createDaemon(opts: {
     }
     // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
     if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
+    if (serveAppIcon(req, res, root, path, () => appSettings.get().app.icon)) return;
     serveStatic(req, res, root, path);
   });
 

@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, labels: { projects: {}, sides: {} } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, labels: { projects: {}, sides: {} }, app: { icon: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -331,4 +331,20 @@ it("stallMinutes defaults to 20 and accepts 0 to 240 only", () => {
   expect(s.get().orchestration.stallMinutes).toBe(20);
   for (const stallMinutes of [-1, 241, 1.5]) expect(() => s.set({ orchestration: { stallMinutes } as never })).toThrow("Stall alert after (minutes) must be a whole number from 0 to 240");
   for (const stallMinutes of [0, 240]) expect(s.set({ orchestration: { stallMinutes } }).orchestration.stallMinutes).toBe(stallMinutes);
+});
+
+it("app icon: accepts the built-in icon, an emoji and a small raster data URL; stored and reset", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().app).toEqual({ icon: "" });
+  for (const icon of ["🚀", "data:image/webp;base64,UklGRg==", PNG]) expect(s.set({ app: { icon } }).app.icon).toBe(icon);
+  expect(createSettings({ file: f }).get().app.icon).toBe(PNG);
+  s.set({ app: { icon: "" } });
+  expect(JSON.parse(readFileSync(f, "utf8")).app?.icon).toBeUndefined();
+});
+
+it("app icon: refuses a too big image, another mime, a whitespace or long emoji and a non-string", () => {
+  const s = createSettings({ file: file() });
+  const bad = ["data:image/png;base64," + "A".repeat(300_000), "data:image/svg+xml;base64,PHN2Zz4=", "data:image/gif;base64,R0lGOD==", " ", "a b", "x".repeat(17), 5];
+  for (const icon of bad) expect(() => s.set({ app: { icon: icon as never } })).toThrow(/App icon must be/);
 });

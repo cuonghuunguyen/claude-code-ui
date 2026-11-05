@@ -30,8 +30,8 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} } };
-  if (legacy) delete (settings as Partial<Settings>).power;
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "" } };
+  if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app);
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -43,7 +43,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) } };
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
     }
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
@@ -139,6 +139,36 @@ it("Close finished workers is on by default and its switch sends a patch of that
   await act(async () => q("settings-orchestration-closeFinished")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { closeFinished: false } } });
 }, 15000);
+
+it("Appearance: App icon row shows the built-in icon, Change opens a nameless dialog and an emoji saves as app.icon", async () => {
+  const { q, calls, pick } = await render();
+  await pick("appearance");
+  expect(q("settings-app-icon")!.querySelector("img")!.getAttribute("src")).toBe("/icon.svg");
+  expect(q("settings-app-icon")!.textContent).toContain("every browser");
+  await act(async () => q("settings-app-icon-change")!.click());
+  expect(q("label-dialog")).not.toBeNull();
+  expect(q("label-name")).toBeNull();
+  await act(async () => q("label-icon-emoji")!.click());
+  await act(async () => {
+    const i = q("label-emoji") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, "🚀");
+    i.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => q("label-save")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "🚀" } } });
+  expect(q("settings-app-icon")!.textContent).toContain("🚀");
+  expect(q("label-dialog")).toBeNull();
+  await act(async () => q("settings-app-icon-change")!.click());
+  await act(async () => q("label-reset")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "" } } });
+});
+
+it("Appearance: an older daemon without the app setting shows no App icon row", async () => {
+  const { q, pick } = await render({ legacy: true });
+  await pick("appearance");
+  expect(q("settings-appearance")).not.toBeNull();
+  expect(q("settings-app-icon")).toBeNull();
+});
 
 it("a switch sends a patch of its field only", async () => {
   const { q, calls, pick } = await render();

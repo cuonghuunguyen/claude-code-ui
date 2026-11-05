@@ -4,11 +4,12 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
 import { saveLabel, useLabels } from "./labels.ts";
+import { saveAppIcon, useAppIcon } from "./app-icon.ts";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -193,8 +194,38 @@ function LanguageRow() {
   );
 }
 
+/** The app icon (daemon setting, every browser; docs/spec.md "Settings" › App icon): the browser tab at once, an installed app via its manifest. */
+function AppIconRow({ request }: { request: <T>(msg: Request) => Promise<T> }) {
+  const t = useT();
+  const icon = useAppIcon();
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11" data-testid="settings-app-icon">
+      {icon ? <LabelIcon icon={icon} className="size-8 text-2xl" /> : <img alt="" src="/icon.svg" className="size-8 shrink-0 rounded-sm" />}
+      <div className="min-w-0 flex-1">
+        <span id="settings-app-icon-label" className="block text-sm">{t("settings.appIcon.label")}</span>
+        <span id="settings-app-icon-hint" className="block text-muted-foreground text-xs">{t("settings.appIcon.hint")}</span>
+      </div>
+      <button type="button" onClick={() => setEditing(true)} aria-describedby="settings-app-icon-hint" className="h-8 shrink-0 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-app-icon-change">
+        {t("settings.appIcon.change")}
+      </button>
+      <LabelDialog
+        open={editing}
+        nameless
+        iconPx={APP_ICON_PX}
+        iconMax={APP_ICON_MAX}
+        title={t("settings.appIcon.label")}
+        fallbackName=""
+        label={icon ? { icon } : undefined}
+        onSave={(l) => saveAppIcon(request, l?.icon ?? "")}
+        onClose={() => setEditing(false)}
+      />
+    </div>
+  );
+}
+
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
-function AppearanceSection() {
+function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <T>(msg: Request) => Promise<T> }) {
   const t = useT();
   const stored = useColorTheme();
   const dark = useDark();
@@ -235,6 +266,7 @@ function AppearanceSection() {
         </Select>
       </div>
       <LanguageRow />
+      {app && <AppIconRow request={request} />}
       {id === "dracula" && !dark && (
         <div data-testid="settings-theme-dracula-warning" className="flex flex-col pb-2">
           <Banner kind="warning">{t("settings.theme.draculaWarning")}</Banner>
@@ -884,7 +916,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const git = daemonGroup("git");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
   const groups: Group[] = [
-    { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection /> },
+    { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection app={settings?.app} request={request} /> },
     {
       id: "general",
       title: t("settings.group.general"),

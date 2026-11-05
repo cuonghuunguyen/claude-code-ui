@@ -19,13 +19,13 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render(o: { label?: Label; onSave?: (l: Label | undefined) => Promise<void> } = {}) {
+async function render(o: { label?: Label; onSave?: (l: Label | undefined) => Promise<void>; nameless?: boolean } = {}) {
   const onSave = vi.fn(o.onSave ?? (async () => {}));
   const onClose = vi.fn();
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => root!.render(<LabelDialog open title="Name and icon of app" fallbackName="app" label={o.label} onSave={onSave} onClose={onClose} />));
+  await act(async () => root!.render(<LabelDialog open title="Name and icon of app" fallbackName="app" label={o.label} nameless={o.nameless} onSave={onSave} onClose={onClose} />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const type = async (id: string, v: string) =>
     act(async () => {
@@ -106,4 +106,13 @@ it("an image that cannot be decoded shows the decode error", async () => {
   } finally {
     globalThis.Image = orig;
   }
+});
+
+it("nameless hides the name field and Save sends only the icon", async () => {
+  const { q, type, click, onSave } = await render({ nameless: true });
+  expect(q("label-name")).toBeNull();
+  await click("label-icon-emoji");
+  await type("label-emoji", "🛒");
+  await click("label-save");
+  expect(onSave).toHaveBeenCalledWith({ icon: "🛒" });
 });
