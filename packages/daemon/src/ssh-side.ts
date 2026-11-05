@@ -112,14 +112,14 @@ export function addSshHost(o: { command: string; alias?: string; config?: string
  * Shell snippet that imports the environment of the user's login shell (`$SHELL -ilc`, so ~/.zprofile, ~/.zshrc, ~/.bash_profile are read; sshd
  * itself starts a non-login, non-interactive shell). Only sh-family shells: fish, tcsh, nu or an unset SHELL keep the plain environment. The
  * profile's stdout, stderr and stdin are discarded (it cannot pollute the protocol); the env goes through a 0600 temp file, read only when
- * complete. A profile that runs longer than `seconds` is killed and the plain environment stays.
+ * complete and only when a trial eval in a subshell succeeds (a readonly variable such as SHELLOPTS would stop the script). PWD, OLDPWD and SHLVL are not imported. A profile that runs longer than `seconds` is killed and the plain environment stays.
  */
 export const loginEnvScript = (seconds = 10) => `case "\${SHELL##*/}" in sh|bash|zsh|ksh|mksh|dash|ash|yash)
   cui_f=$(mktemp 2>/dev/null) && {
-    "$SHELL" -ilc 'exec sh -c "{ export -p; echo \\#cui-end; } >\\"\\$0\\"" "$0"' "$cui_f" </dev/null >/dev/null 2>&1 & cui_p=$!
+    "$SHELL" -ilc 'exec sh -c "unset PWD OLDPWD SHLVL; { export -p; echo \\#cui-end; } >\\"\\$0\\"" "$0"' "$cui_f" </dev/null >/dev/null 2>&1 & cui_p=$!
     (sleep ${seconds}; kill -9 $cui_p) </dev/null >/dev/null 2>&1 & cui_w=$!
     { wait $cui_p; kill $cui_w; wait $cui_w; } 2>/dev/null
-    [ "$(tail -n 1 "$cui_f")" = "#cui-end" ] && eval "$(cat "$cui_f")"
+    [ "$(tail -n 1 "$cui_f")" = "#cui-end" ] && (eval "$(cat "$cui_f")") >/dev/null 2>&1 && eval "$(cat "$cui_f")"
     rm -f "$cui_f"; } ;;
 esac; unset cui_f cui_p cui_w`;
 

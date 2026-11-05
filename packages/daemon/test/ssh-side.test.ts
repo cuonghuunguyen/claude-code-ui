@@ -84,6 +84,12 @@ describe.skipIf(process.platform === "win32")("loginEnvScript", () => {
     expect(out.endsWith("|a b'c")).toBe(true);
     expect(out).not.toContain("noise");
   });
+  it("a readonly variable in the dump skips the import without stopping the script; PWD is not imported", () => {
+    const HOME = home(`export SHELLOPTS=posix; cd /; export CUI_Q=x`);
+    const out = execFileSync("sh", ["-c", `${loginEnvScript()}; printf 'after|%s' "$CUI_Q"; pwd`], { env: { PATH: process.env.PATH, HOME, SHELL: bash } as NodeJS.ProcessEnv, cwd: HOME, encoding: "utf8" });
+    expect(out.startsWith("after|")).toBe(true);
+    expect(out.trim().endsWith(realpathSync(HOME))).toBe(true);
+  });
   it("a profile that hangs is killed after the limit; the plain environment stays", () => {
     const { out, ms } = run({ HOME: home("sleep 30"), SHELL: bash }, 1);
     expect(ms).toBeLessThan(5_000);
