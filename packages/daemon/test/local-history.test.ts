@@ -32,17 +32,34 @@ describe("local history", () => {
     expect(await h.read(file, l[0]!.id)).toBe("v1");
   });
 
-  it("merges save and agent entries within 10 s and keeps the content before the burst", async () => {
+  it("merges entries of one source within 10 s and keeps the content before the burst", async () => {
     const { h, file, tick } = setup();
     h.before(file, "save");
     tick(3000);
-    h.before(file, "agent", "v1");
+    h.before(file, "save", "v1");
     expect(await h.list(file)).toHaveLength(1);
     tick(11_000);
     h.before(file, "save", "v2");
     const l = await h.list(file);
     expect(l).toHaveLength(2);
     expect(await h.read(file, l[1]!.id)).toBe("v0");
+  });
+
+  it("a save and an agent edit within 10 s keep both contents", async () => {
+    const { h, file, tick } = setup();
+    h.before(file, "save", "v0");
+    tick(3000);
+    h.before(file, "agent", "v1");
+    expect((await h.list(file)).map((e) => e.reason)).toEqual(["agent", "save"]);
+  });
+
+  it("the default excludes also match under a dot folder", async () => {
+    const { h, root } = setup();
+    mkdirSync(join(root, ".claude", "node_modules"), { recursive: true });
+    const f = join(root, ".claude", "node_modules", "x.js");
+    writeFileSync(f, "x");
+    h.before(f, "save");
+    expect(await h.list(f)).toEqual([]);
   });
 
   it("a git-write reason never merges, nor is merged into", async () => {
@@ -79,6 +96,7 @@ describe("local history", () => {
   it("skips files over 256 KB, excluded globs, outside roots and disabled", async () => {
     const { h, file, root } = setup({ exclude: ["**/skip/**"] });
     h.before(file, "save", "x".repeat(256 * 1024 + 1));
+    h.before(file, "agent", "é".repeat(150 * 1024)); // 300 KB in bytes
     mkdirSync(join(root, "skip"));
     const ex = join(root, "skip", "b.txt");
     writeFileSync(ex, "b");

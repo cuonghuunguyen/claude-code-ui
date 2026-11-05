@@ -1230,11 +1230,12 @@ export class Session {
       }
     } else if (m.type === "user" && !("isReplay" in m && m.isReplay) && Array.isArray(m.message.content)) {
       const original = (m.tool_use_result as { originalFile?: unknown } | undefined)?.originalFile;
-      for (const b of m.message.content) {
-        if (b.type !== "tool_result") continue;
+      const results = m.message.content.filter((b) => b.type === "tool_result");
+      for (const b of results) {
         const path = this.editCalls.get(b.tool_use_id);
         this.editCalls.delete(b.tool_use_id);
-        if (path && !b.is_error && typeof original === "string") this.opts.onFileEdit?.(path, original);
+        // One tool_use_result per message: with several results it cannot be told which one it belongs to.
+        if (path && results.length === 1 && !b.is_error && typeof original === "string") this.opts.onFileEdit?.(path, original);
       }
     }
   }

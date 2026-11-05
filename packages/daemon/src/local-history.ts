@@ -13,6 +13,7 @@ export const MAX_BYTES = 256 * 1024;
 export const MERGE_MS = 10_000;
 const MAX_PENDING = 100;
 const MAX_PENDING_BYTES = 8 * 1024 * 1024;
+// A burst merges within one source only: a user save followed by an agent edit keeps both contents.
 const MERGING: readonly HistoryReason[] = ["save", "agent"];
 
 export class HistoryError extends Error {
@@ -45,12 +46,13 @@ export function createLocalHistory(opts: { dir: string; settings: () => { enable
 
   const storeOf = (path: string) => {
     const dir = join(opts.dir, createHash("sha256").update(path).digest("hex").slice(0, 16));
-    mkdirSync(dir, { recursive: true });
     return { dir, json: createJsonFile<Store>(join(dir, "entries.json"), parse, "local history") };
   };
   const excluded = (path: string) => {
-    const p = path.replaceAll("\\", "/");
-    return opts.settings().exclude.some((g) => matchesGlob(p, g));
+    // matchesGlob lets `**` skip dot folders only if the glob names them: hide the dots on both sides (.claude/worktrees/..).
+    const hide = (x: string) => x.replaceAll("\\", "/").replaceAll("/.", "/\u0001");
+    const p = hide(path);
+    return opts.settings().exclude.some((g) => matchesGlob(p, hide(g)));
   };
   const known = (path: string) => {
     const p = opts.allowed(path);
@@ -74,11 +76,12 @@ export function createLocalHistory(opts: { dir: string; settings: () => { enable
   /** Writes one entry; the caller has checked size and settings. `force`: named entries skip dedupe and merge. */
   async function store(it: Item, force: boolean): Promise<Stored | undefined> {
     const { dir, json } = storeOf(it.path);
+    mkdirSync(dir, { recursive: true });
     const hash = hashOf(it.content);
     const last = json.get().entries.at(-1);
     if (!force && last) {
       if (last.hash === hash) return;
-      if (it.time - last.time < MERGE_MS && MERGING.includes(it.reason) && MERGING.includes(last.reason)) return;
+      if (it.time - last.time < MERGE_MS && it.reason === last.reason && MERGING.includes(it.reason)) return;
     }
     const entry: Stored = { id: randomUUID(), time: it.time, reason: it.reason, size: Buffer.byteLength(it.content), hash, ...(it.label ? { label: it.label } : {}) };
     await writeFile(join(dir, entry.id), it.content, { mode: 0o600 });
@@ -123,7 +126,7 @@ export function createLocalHistory(opts: { dir: string; settings: () => { enable
         const p = s.enabled ? opts.allowed(path) : undefined;
         if (!p || excluded(p)) return;
         const text = content ?? readDisk(p);
-        if (text === undefined || text.length > MAX_BYTES) return;
+        if (text === undefined || Buffer.byteLength(text) > MAX_BYTES) return;
         if (queue.length >= MAX_PENDING || pendingBytes + text.length > MAX_PENDING_BYTES) {
           dropped++;
           if (now() - loggedAt > 60_000) {
