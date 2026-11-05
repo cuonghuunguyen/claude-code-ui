@@ -127,6 +127,8 @@ export default {
   "settings.row.orchestration.maxDepth.hint": "How deep workers may start workers of their own: 1 = only you start workers; 2 = a worker may start its own (e.g. a tester and a reviewer).",
   "settings.row.orchestration.maxChildren.label": "Maximum workers per coordinator",
   "settings.row.orchestration.maxChildren.hint": "Workers one session (you or a worker) may run at the same time. Maximum workers per tree still counts its whole tree.",
+  "settings.row.orchestration.stallMinutes.label": "Stall alert after (minutes)",
+  "settings.row.orchestration.stallMinutes.hint": "Tell the coordinator when a running worker sends nothing for this long. 0 = off.",
   "settings.row.orchestration.workerMode.label": "Worker mode",
   "settings.row.orchestration.workerMode.hint": "Permission mode of a new worker when the coordinator does not name one. Coordinator's mode: the coordinator's own (bypass gives auto). A mode above the coordinator's still asks you on the worker_start card.",
   "settings.workerMode.coordinator": "Coordinator's mode",

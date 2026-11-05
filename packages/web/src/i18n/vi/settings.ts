@@ -129,6 +129,8 @@ export default {
   "settings.row.orchestration.maxDepth.hint": "Worker được khởi động worker riêng sâu đến đâu: 1 = chỉ bạn khởi động worker; 2 = worker được khởi động worker riêng (ví dụ một tester và một reviewer).",
   "settings.row.orchestration.maxChildren.label": "Số worker tối đa mỗi coordinator",
   "settings.row.orchestration.maxChildren.hint": "Số worker mà một phiên (bạn hoặc một worker) được chạy cùng lúc. Số worker tối đa mỗi cây vẫn tính cả cây.",
+  "settings.row.orchestration.stallMinutes.label": "Cảnh báo treo sau (phút)",
+  "settings.row.orchestration.stallMinutes.hint": "Báo cho coordinator khi một worker đang chạy không gửi gì trong khoảng thời gian này. 0 = tắt.",
   "settings.row.orchestration.workerMode.label": "Chế độ worker",
   "settings.row.orchestration.workerMode.hint": "Chế độ quyền của worker mới khi coordinator không chỉ định. Chế độ của coordinator: chế độ của chính coordinator (bypass cho ra auto). Chế độ cao hơn của coordinator vẫn hỏi bạn trên thẻ worker_start.",
   "settings.workerMode.coordinator": "Chế độ của coordinator",
