@@ -444,7 +444,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Local history", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
