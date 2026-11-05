@@ -214,8 +214,22 @@ The pane with the file tree and the editor tabs (side panel by default, or a mai
 _Avoid_: explorer
 
 **Changes tab**:
-The side-panel pane that reviews the session's file changes as diffs.
+The side-panel pane that reviews file changes as diffs, in one of three modes: Session (files the session's Edit/Write calls changed), Uncommitted (working tree against HEAD) or Branch (working tree against a branch).
 _Avoid_: review panel
+
+**Rollback**:
+Discarding the uncommitted changes of a file or a hunk, back to HEAD; an added file is deleted. IntelliJ's term.
+_Avoid_: revert (a commit that undoes another commit), discard, reset
+
+**Smart checkout**:
+Checkout of a branch when local changes conflict with it: stash the changes, check out, re-apply them. IntelliJ's term.
+
+**Local history**:
+Snapshots of a file's content kept by claude-ui outside git (ADR 0010): on a Files-tab save, on an agent Edit/Write, and before a claude-ui git write that loses content. Restorable from the Timeline. VS Code's term.
+
+**Timeline**:
+The section under the file tree listing the selected file's Local history entries and git commits, newest first.
+_Avoid_: file history (only its git half)
 
 **File dialog**:
 The large modal that shows the Files tab (tree, tabs, editor) over the same editor state. Pop out opens it; Read cards and file references in the timeline open it at a line. Not the popup viewer (the dialog for a diff, a plan or the Changes view).
