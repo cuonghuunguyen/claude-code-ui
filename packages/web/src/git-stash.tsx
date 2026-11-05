@@ -13,6 +13,11 @@ type Client = ReturnType<typeof connect>;
 const when = (time: number) => (Date.now() / 1000 - time < 7 * 86400 ? timeAgo(time * 1000) : dateFormat().format(new Date(time * 1000)));
 const INPUT = "h-8 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 type Verb = "Apply" | "Pop" | "Drop";
+const ACTION = {
+  Apply: { done: "files.graph.stashApplied", running: "files.graph.stashApplying" },
+  Pop: { done: "files.graph.stashPopped", running: "files.graph.stashPopping" },
+  Drop: { done: "files.graph.stashDropped", running: "files.graph.stashDropping" },
+} as const;
 const TYPE = { Apply: "git.stashApply", Pop: "git.stashPop", Drop: "git.stashDrop" } as const;
 
 export function StashSection({ client, cwd, exact, repoName, version, busy, onRun, open }: { client: Client; cwd: string; exact?: boolean; repoName?: string; version: number; busy: boolean; onRun: (msg: StashRequest, done: string | ((r: OpReply) => string), running: string) => void; open: boolean }) {
@@ -24,6 +29,8 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
   const [push, setPush] = useState<{ message: string; untracked: boolean }>();
   const [drop, setDrop] = useState<GitStash>();
   const gen = useRef(0);
+  // The list of another repository must not stay actionable.
+  useEffect(() => setStashes(undefined), [cwd]);
   useEffect(() => {
     if (!open) return;
     const id = ++gen.current;
@@ -36,11 +43,7 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
   const ref = (s: GitStash) => `stash@{${s.index}}`;
   const act = (verb: Verb, s: GitStash) => {
     const at = of(ref(s));
-    const { done, running } = {
-      Apply: { done: "files.graph.stashApplied", running: "files.graph.stashApplying" },
-      Pop: { done: "files.graph.stashPopped", running: "files.graph.stashPopping" },
-      Drop: { done: "files.graph.stashDropped", running: "files.graph.stashDropping" },
-    }[verb] as { done: "files.graph.stashApplied"; running: "files.graph.stashApplying" };
+    const { done, running } = ACTION[verb];
     const stop = verb === "Drop" ? undefined : t("files.graph.stashStopped", { verb: t(running), target: at });
     onRun({ type: TYPE[verb], cwd, ...ex, index: s.index, hash: s.hash }, (r) => (stop && r.written?.operation ? stop : t(done, { target: at })), `${t(running)} ${at}…`);
   };
@@ -81,7 +84,7 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
           {t("files.graph.stashUntracked")}
         </label>
       </ConfirmDialog>
-      <ConfirmDialog open={!!drop} destructive title={t("files.graph.stashDropTitle", { target: drop ? ref(drop) : "" })} description={`${drop?.message ?? ""} ${t("files.graph.stashDropText")}`} confirm={t("files.graph.stashDrop")} onConfirm={confirmDrop} onCancel={() => setDrop(undefined)} testId="git-stash-drop" />
+      <ConfirmDialog open={!!drop} destructive title={t("files.graph.stashDropTitle", { target: drop ? ref(drop) : "" })} description={`${drop?.message ?? ""}. ${t("files.graph.stashDropText")}`} confirm={t("files.graph.stashDrop")} onConfirm={confirmDrop} onCancel={() => setDrop(undefined)} testId="git-stash-drop" />
     </div>
   );
 }

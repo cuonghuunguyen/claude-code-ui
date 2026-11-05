@@ -237,7 +237,8 @@ export async function gitStashList(cwd: string, o: RemoteOptions): Promise<GitSt
     const top = await topIn(cwd, o.allowed);
     if (!top) return null;
     // shortcut: first 500 entries only, upgrade when someone keeps more
-    const { out } = await ask(top, ["stash", "list", "-z", "--max-count=500", "--format=%H%x1f%gs%x1f%ct"], await writeEnv(top));
+    // Raw stdout: `run` keeps only the last 8000 chars, which cuts a long list.
+    const out = (await runGit({ cwd: top, args: [...HARDEN, "stash", "list", "-z", "--max-count=500", "--format=%H%x1f%gs%x1f%ct"], env: await writeEnv(top), timeout: writeConfig.timeout, killTree: true })).stdout.toString("utf8");
     return out.split("\0").filter(Boolean).map((row, index) => {
       const [hash, message, time] = row.trim().split("\x1f");
       return { index, hash, message, time: Number(time) };

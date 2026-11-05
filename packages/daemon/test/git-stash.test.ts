@@ -84,6 +84,17 @@ describe("gitStashList", () => {
     expect(list.map((s) => s.message)).toEqual(["On main: second", "On main: first"]);
     expect(list[0].time).toBeGreaterThan(1_600_000_000);
   });
+  it("lists more than 100 entries whole (output over 8000 chars)", async () => {
+    const r = repo();
+    for (let i = 0; i < 150; i++) {
+      put(r.dir, "a.txt", `edit ${i}\n`);
+      run(r.dir, "stash", "store", "-m", `entry number ${i} with a long enough message to fill the output`, run(r.dir, "stash", "create"));
+    }
+    const list = (await gitStashList(r.dir, r.o))!;
+    expect(list).toHaveLength(150);
+    expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
+    expect(list.every((s) => Number.isFinite(s.time))).toBe(true);
+  });
   it("is empty without entries and null outside a work tree", async () => {
     const r = repo();
     expect(await gitStashList(r.dir, r.o)).toEqual([]);
