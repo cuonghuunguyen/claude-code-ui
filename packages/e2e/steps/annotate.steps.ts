@@ -39,3 +39,15 @@ Then("the Annotate button is at least 44px high", async ({ page }) => {
   const box = await page.getByTestId("editor-annotate").boundingBox();
   expect(box!.height).toBeGreaterThanOrEqual(44);
 });
+
+// Real Tab presses from the toggle: the marker must be a tab stop with its aria-label.
+When("I Tab from Annotate to the first commit marker", async ({ page }) => {
+  const marker = marks(page).filter({ hasText: /^[0-9a-f]{7} / }).first();
+  await expect(marker).toHaveAttribute("aria-label", /^Commit [0-9a-f]{7} by .+, /);
+  await page.getByTestId("editor-annotate").focus();
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press("Tab");
+    if (await marker.evaluate((e) => e === document.activeElement)) return;
+  }
+  throw new Error("Tab never reached the first commit marker");
+});
