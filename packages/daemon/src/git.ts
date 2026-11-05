@@ -183,7 +183,7 @@ const pinFor = (r: Repo): NodeJS.ProcessEnv => {
 };
 /** Pins validated by this request (`topIn`): inside a scope a git call on a top it did not validate is refused, never resolved again (GH-319). */
 const requestPins = new AsyncLocalStorage<Map<string, NodeJS.ProcessEnv>>();
-const pinScope = <T>(fn: () => Promise<T>): Promise<T> => requestPins.run(new Map(), fn);
+export const pinScope = <T>(fn: () => Promise<T>): Promise<T> => requestPins.run(new Map(), fn);
 export const ceilingEnv = async (cwd: string): Promise<NodeJS.ProcessEnv> => {
   const top = await gitTopOf(cwd);
   if (!top) return {};
@@ -1288,7 +1288,7 @@ const filterText = (v: unknown, what: string): string | undefined => {
   if (typeof v !== "string" || v.length > MAX_FILTER || /[\0\n\r]/.test(v)) throw bad(`Invalid ${what} filter`);
   return v.trim() || undefined;
 };
-const repoPath = (p: unknown): string => {
+export const repoPath = (p: unknown): string => {
   if (typeof p !== "string" || !p || p.length > 4096 || p.includes("\0") || p.includes("\\") || p.startsWith("/") || p.startsWith("-") || p.split("/").includes("..")) throw bad("Invalid path");
   return p;
 };

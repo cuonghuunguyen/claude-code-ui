@@ -3,7 +3,7 @@ import { memo, useCallback, type ReactElement, type ReactNode, useEffect, useMem
 import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon, XIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -15,7 +15,8 @@ import { readFailure } from "./files.ts";
 import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
-import { runRemoteOp, dismissRemoteResult, useRemoteOp } from "./git-remote-ops.ts";
+import { GitOpResult } from "./git-op-result.tsx";
+import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -179,7 +180,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const freshNext = useRef(false);
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
-  const { running: op, result, settled } = useRemoteOp(cwd);
+  const { running: op, settled } = useRemoteOp(cwd);
   const runRemote = (msg: RemoteRequest, done: string, running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
@@ -324,30 +325,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
       <span role="status" className="sr-only">
         {op ?? ""}
       </span>
-      {result && (
-        <div className="flex shrink-0 items-start gap-2 border-b px-3 py-1.5 text-sm" data-testid="graph-remote-result">
-          {result.ok ? (
-            <div role="status" className="min-w-0 flex-1 text-muted-foreground">
-              {result.text}
-              {result.output && (
-                <details>
-                  <summary className="cursor-pointer">{tr("files.graph.output")}</summary>
-                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{result.output}</pre>
-                </details>
-              )}
-            </div>
-          ) : (
-            <div role="alert" className="min-w-0 flex-1 text-destructive">
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs" data-testid="graph-remote-error">
-                {result.text}
-              </pre>
-            </div>
-          )}
-          <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-label={tr("files.dismiss")} onClick={() => dismissRemoteResult(cwd)}>
-            <XIcon />
-          </Button>
-        </div>
-      )}
+      <GitOpResult cwd={cwd} />
       {notGit ? (
         <p className="m-auto p-4 text-muted-foreground">{tr("files.graph.notGit")}</p>
       ) : (

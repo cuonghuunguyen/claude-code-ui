@@ -1114,6 +1114,15 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
   });
 
+  it("answers git.commitFiles for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const m = { type: "git.commitFiles", paths: ["a.txt"], message: "m" };
+    expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: { committed: null } });
+    expect(await c.request({ ...m, cwd: webRoot, message: " " })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";
@@ -1185,6 +1194,7 @@ describe("daemon", () => {
         { type: "git.commit", hash },
         { type: "git.fileAt", hash, path: "t.txt" },
         { type: "git.fetch" },
+        { type: "git.commitFiles", paths: ["t.txt"], message: "m" },
         { type: "git.branch", ref: "refs/heads/main" },
         { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
         { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },

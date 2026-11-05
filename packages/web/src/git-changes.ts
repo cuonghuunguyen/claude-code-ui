@@ -80,3 +80,17 @@ export function createLimiter(limit: number): (live: () => boolean, fn: () => Pr
  * A before side without any CR (or none at all) means the repository's text is LF: the disk's CRLF becomes LF.
  */
 export const gitEol = (before: string, after: string): string => (before.includes("\r") ? after : after.replace(/\r\n/g, "\n"));
+
+type CommitRow = { path: string; rel?: string; oldPath?: string; nested?: unknown; dirtyOnly?: boolean };
+/** A row git can commit in this repository: a file or a moved gitlink. A nested repository, or a submodule whose own files changed, has its own commit. */
+export const commitable = (r: CommitRow): boolean => r.rel !== undefined && !r.nested && !r.dirtyOnly;
+/** The `git.commitFiles` paths of the checked rows (keyed by `path`): `rel`, and a rename's `oldPath` too; no duplicates. */
+export function commitPaths(rows: CommitRow[], checked: ReadonlySet<string>): string[] {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (!checked.has(r.path) || !commitable(r)) continue;
+    out.add(r.rel!);
+    if (r.oldPath !== undefined) out.add(r.oldPath);
+  }
+  return [...out];
+}
