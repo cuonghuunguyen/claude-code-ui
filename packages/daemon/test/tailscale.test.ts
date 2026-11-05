@@ -130,4 +130,14 @@ describe("SERVE_WATCHER", () => {
     await ended;
     expect(() => process.kill(pid, 0)).toThrow();
   });
+  it.skipIf(process.platform === "win32")("also kills the real serve behind a sh wrapper without exec (macOS /usr/local/bin/tailscale)", async () => {
+    const inner = `"${process.execPath}" -e "console.log(process.pid);setInterval(() => {}, 1000)"; :`; // `; :` stops sh from exec-ing the last command
+    const w = nodeSpawn(process.execPath, ["-e", SERVE_WATCHER, "/bin/sh", "-c", inner], { stdio: ["pipe", "pipe", "inherit"] });
+    const pid = Number(await new Promise<string>((r) => w.stdout.once("data", (d) => r(String(d)))));
+    const ended = new Promise((r) => w.on("exit", r));
+    w.stdin.end();
+    await ended;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
 });
