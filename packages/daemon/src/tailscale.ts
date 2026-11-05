@@ -84,10 +84,16 @@ export async function tailscalePreflight(o: { port: number; platform: NodeJS.Pla
   return { cli, hostname: status.hostname, serve: served === "free" };
 }
 
-/** Spawns the foreground serve (its config lives only while the process runs); returns stop(). */
+/** Runs `tailscale serve` as its child and kills it when its stdin closes: the daemon holds the pipe, so even a SIGKILLed daemon leaves no serve behind. */
+export const SERVE_WATCHER = `const [cli, ...a] = process.argv.slice(1);
+const c = require("node:child_process").spawn(cli, a, { stdio: ["ignore", "inherit", "inherit"], windowsHide: true });
+process.stdin.on("close", () => c.kill()).resume();
+c.on("exit", (code) => process.exit(code ?? 1));
+c.on("error", (e) => (console.error(e.message), process.exit(1)));`;
+
+/** Spawns the foreground serve (its config lives only while the process runs, which ends with this daemon); returns stop(). */
 export function startServe(o: { cli: string; port: number; spawn: typeof nodeSpawn; log: (line: string) => void; platform: NodeJS.Platform }): { stop: () => void } {
-  // ponytail: a SIGKILLed daemon leaves this child (and its serve config) running until it is killed; add a parent-alive check if it matters.
-  const child = o.spawn(o.cli, ["serve", "--https=443", `http://127.0.0.1:${o.port}`], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: { ...process.env, TAILSCALE_BE_CLI: "1" } });
+  const child = o.spawn(process.execPath, ["-e", SERVE_WATCHER, o.cli, "serve", "--https=443", `http://127.0.0.1:${o.port}`], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, TAILSCALE_BE_CLI: "1" } });
   let stopped = false;
   const lastErr: string[] = [];
   createInterface({ input: child.stdout! }).on("line", (l) => o.log(`tailscale serve: ${l}`));
@@ -102,5 +108,5 @@ export function startServe(o: { cli: string; port: number; spawn: typeof nodeSpa
     const err = lastErr.join("\n");
     o.log(`tailscale serve exited (code ${code}); claude-ui keeps running on localhost.${err ? `\n${err}` : ""}${o.platform === "linux" && /denied/i.test(err) ? "\nRun once: sudo tailscale set --operator=$USER" : ""}`);
   });
-  return { stop: () => ((stopped = true), void child.kill()) };
+  return { stop: () => ((stopped = true), void child.stdin!.end()) };
 }
