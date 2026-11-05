@@ -1,9 +1,10 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
+import { isAbsolute } from "node:path";
 import { createJsonFile } from "./json-file.ts";
 import { APP_ICON_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -80,6 +81,16 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     detectSubmodulesLimit: intIn("Detect submodules limit", 0, 100),
     ignoreSubmodules: bool("Ignore submodules"),
     openRepositoryInParentFolders: { valid: (v) => (PARENT_FOLDER_MODES as readonly unknown[]).includes(v), label: "Open repository in parent folders", rule: `one of ${PARENT_FOLDER_MODES.join(", ")}` },
+  },
+  launcher: {
+    port: intIn("Port", 1, 65535),
+    roots: strings("Roots", (s) => isAbsolute(s), "at most 50 absolute paths of at most 260 characters"),
+    tailscale: bool("Tailscale"),
+    lan: bool("LAN"),
+    allowBypass: bool("Allow bypass permissions"),
+    updateCheck: bool("Check for updates"),
+    osNotify: bool("Desktop notification on this computer"),
+    open: bool("Open browser at start"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },

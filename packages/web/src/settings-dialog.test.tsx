@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -30,8 +30,8 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
-  if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app);
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+  if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
@@ -43,8 +43,9 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
+      settings = { orchestration: { ...settings.orchestration, ...v }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, ...(settings.launcher && { launcher: { ...settings.launcher, ...((msg.patch.launcher ?? {}) as object) } }), labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
     }
+    if (msg.type === "launcher.shortcut") return { installed: msg.on };
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
     if (msg.type === "jira.test") return { user: "Ann Example" };
@@ -444,7 +445,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1228,4 +1229,45 @@ it("Sides group: an SSH host row has the pencil and shows its custom name (GH-51
   expect(q("settings-side-ssh:box")?.textContent).toContain("SSH: box");
   expect(q("settings-side-ssh:box")?.querySelector("button[aria-label*='box']")).not.toBeNull();
   expect(q("settings-side-start-ssh:box")?.getAttribute("aria-checked")).toBe("false");
+});
+
+it("Launcher group lists the start options, the intro and the URL of the saved port (GH-553)", async () => {
+  const { q, pick } = await render({ daemon: { host: "box", shortcut: { installed: false } } });
+  await pick("launcher");
+  for (const k of ["port", "roots", "lan", "allowBypass", "tailscale", "open", "updateCheck", "osNotify"]) expect(q(`settings-launcher-${k}`), k).not.toBeNull();
+  expect(q("settings-launcher-intro")?.textContent).toContain("next start");
+  expect(q("settings-launcher-url")?.textContent).toBe("From the next start: http://127.0.0.1:4280/");
+  expect(q("settings-launcher-shortcut")?.getAttribute("aria-checked")).toBe("false");
+});
+
+it("the Launcher shortcut switch sends launcher.shortcut and shows the reply (GH-553)", async () => {
+  const { q, pick, calls } = await render({ daemon: { host: "box", shortcut: { installed: false } } });
+  await pick("launcher");
+  await act(async () => q("settings-launcher-shortcut")!.click());
+  expect(calls).toContainEqual({ type: "launcher.shortcut", on: true });
+  expect(q("settings-launcher-shortcut")?.getAttribute("aria-checked")).toBe("true");
+});
+
+it("no shortcut row without daemon.shortcut; the options still show (GH-553)", async () => {
+  const { q, pick } = await render();
+  await pick("launcher");
+  expect(q("settings-launcher-shortcut")).toBeNull();
+  expect(q("settings-launcher-port")).not.toBeNull();
+});
+
+it("a port change shows the new URL (GH-553)", async () => {
+  const { q, pick } = await render();
+  await pick("launcher");
+  const input = q("settings-launcher-port") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "4999");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(q("settings-launcher-url")?.textContent).toBe("From the next start: http://127.0.0.1:4999/");
+});
+
+it("no Launcher group from an older daemon (GH-553)", async () => {
+  const { q } = await render({ legacy: true });
+  expect(q("settings-group-launcher")).toBeNull();
 });

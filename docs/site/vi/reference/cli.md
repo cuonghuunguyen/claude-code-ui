@@ -48,7 +48,7 @@ Chưa có: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (tên đ
 | `-v`, `--version` | | | In phiên bản |
 | `-h`, `--help` | | | In trợ giúp |
 
-Cờ được ưu tiên hơn biến môi trường tương ứng.
+Cờ được ưu tiên hơn biến môi trường tương ứng. Cả hai đều được ưu tiên hơn các tùy chọn lưu trong Cài đặt › Trình khởi chạy (cổng, thư mục gốc, Tailscale, LAN, bypass, kiểm tra cập nhật, thông báo desktop, mở trình duyệt), áp dụng từ lần khởi động sau. Cài đặt › Trình khởi chạy cũng thêm lối tắt vào Applications (macOS), menu ứng dụng (Linux) hoặc menu Start (Windows): nhấp để mở claude-ui trong trình duyệt khi nó đang chạy, nếu không thì chạy nó trong terminal.
 
 ## Biến môi trường {#environment-variables}
 

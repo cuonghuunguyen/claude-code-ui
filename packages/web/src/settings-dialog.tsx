@@ -715,12 +715,46 @@ function AddonsSection({ onAddons }: { onAddons: () => void }) {
   );
 }
 
+/** The Launcher shortcut switch (GH-553): creates or removes the OS entry on the Hub's machine; the state comes from settings.get. */
+function LauncherShortcutRow({ installed, request, onInstalled, onError }: { installed: boolean; request: <T>(msg: Request) => Promise<T>; onInstalled: (on: boolean) => void; onError: (m: string) => void }) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const toggle = (on: boolean) => {
+    setBusy(true);
+    request<{ installed: boolean }>({ type: "launcher.shortcut", on })
+      .then((r) => (onInstalled(r.installed), onError("")), (e: Error) => onError(e.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+      <div className="min-w-0 flex-1">
+        <span className="block text-sm">{t("settings.launcher.shortcut.label")}</span>
+        <span id="settings-launcher-shortcut-hint" className="block text-muted-foreground text-xs">{t("settings.launcher.shortcut.hint")}</span>
+      </div>
+      <Switch on={installed} label={t("settings.launcher.shortcut.label")} held={busy} onToggle={toggle} title={t("settings.launcher.shortcut.label")} describedBy="settings-launcher-shortcut-hint" testId="settings-launcher-shortcut" />
+    </div>
+  );
+}
+
 type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
 /** The group and section title of a daemon section. */
 const sectionTitle = (id: string) => t(`settings.section.${id}` as Key);
 const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
+  {
+    id: "launcher",
+    rows: [
+      { key: "port", kind: "number", min: 1, max: 65535 },
+      { key: "roots", kind: "list" },
+      { key: "open", kind: "switch" },
+      { key: "tailscale", kind: "switch" },
+      { key: "lan", kind: "switch" },
+      { key: "allowBypass", kind: "switch" },
+      { key: "updateCheck", kind: "switch" },
+      { key: "osNotify", kind: "switch" },
+    ],
+  },
   {
     id: "orchestration",
     rows: [
@@ -854,6 +888,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           {t("settings.git.intro")}
         </p>
       )}
+      {sec.id === "launcher" && (
+        <p className="pb-1 text-muted-foreground text-xs" data-testid="settings-launcher-intro">
+          {t("settings.launcher.intro")}
+        </p>
+      )}
       {sec.rows.map((row) => {
         const id = `settings-${sec.id}-${row.key}`;
         const label = rk(sec.id, row.key, "label");
@@ -902,6 +941,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           </div>
         );
       })}
+      {sec.id === "launcher" && (
+        <p className="border-t pt-2 text-muted-foreground text-xs" data-testid="settings-launcher-url">
+          {t("settings.launcher.url", { port: String(settings.launcher.port) })}
+        </p>
+      )}
     </section>
       )}
     </>
@@ -917,6 +961,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
   const git = daemonGroup("git");
+  const launcher = daemonGroup("launcher");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
   const groups: Group[] = [
     { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection app={settings?.app} request={request} /> },
@@ -972,6 +1017,21 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
+    ...(launcher
+      ? [
+          {
+            id: "launcher",
+            title: sectionTitle(launcher.id),
+            category: "System" as const,
+            body: (
+              <>
+                {daemon?.shortcut && <LauncherShortcutRow installed={daemon.shortcut.installed} request={request} onInstalled={(installed) => setDaemon((d) => d && { ...d, shortcut: { installed } })} onError={(m) => setError(m || undefined)} />}
+                {daemonSection(launcher)}
+              </>
+            ),
+          },
+        ]
+      : []),
     { id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides?.length ? sides : [{ id: LOCAL_SIDE, label: t("settings.sides.local"), state: "ready" }]} request={request} onError={setError} /> },
     ...(performance
       ? [
