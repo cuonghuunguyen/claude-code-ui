@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TabsBar, useGroupedTabs, type TabInfo } from "./tabs-bar.tsx";
+import { setLabels } from "./labels.ts";
 import { NEW_TAB } from "./tabs.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -21,6 +22,7 @@ const WINFO: Record<string, TabInfo> = { w1: W1, w2: W2, a: { ...INFO.a!, group:
 
 let root: ReturnType<typeof createRoot> | undefined;
 beforeEach(() => localStorage.clear());
+afterEach(() => setLabels(undefined));
 afterEach(() => {
   act(() => root?.unmount());
   document.body.innerHTML = "";
@@ -328,4 +330,32 @@ it("GH-378 compact: the chip menu has Clean up group; disabled when the group ha
   expect(item.getAttribute("aria-disabled")).toBe("true");
   await act(async () => item.click());
   expect(c.onCleanup).not.toHaveBeenCalled();
+});
+
+const chevron = (c: HTMLElement) => c.querySelector("svg.lucide-chevron-down");
+
+it("a chip shows the project icon instead of the chevron when the project has one", async () => {
+  setLabels({ projects: { "/home/u/docs": { icon: "📚" } }, sides: {} });
+  const el = await mount(<TabsBar {...noop} tabs={["a", "b"]} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} />);
+  const withIcon = chip(el, "/home/u/docs");
+  expect(withIcon.querySelector('[data-icon="project"]')?.textContent).toBe("📚");
+  expect(chevron(withIcon)).toBeNull();
+});
+
+it("a chip keeps the chevron when the project has no icon", async () => {
+  setLabels({ projects: { "/home/u/docs": { icon: "📚" } }, sides: {} });
+  const el = await mount(<TabsBar {...noop} tabs={["a", "b"]} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} />);
+  const plain = chip(el, "/home/u/web");
+  expect(plain.querySelector('[data-icon="project"]')).toBeNull();
+  expect(chevron(plain)).not.toBeNull();
+});
+
+it("by worktree: the chip shows the icon of the project in groupColor", async () => {
+  setLabels({ projects: { "/r/acme": { icon: "🚀" } }, sides: {} });
+  const el = await mount(<TabsBar {...noop} tabs={["w1", "w2", "a"]} activeId="a" info={(id) => WINFO[id]!} grouping="worktree" />);
+  for (const c of chips(el).slice(0, 2)) {
+    expect(c.querySelector('[data-icon="project"]')?.textContent).toBe("🚀");
+    expect(chevron(c)).toBeNull();
+  }
+  expect(chevron(chips(el)[2]!)).not.toBeNull();
 });
