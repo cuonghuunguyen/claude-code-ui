@@ -130,3 +130,23 @@ Feature: Merge and Rebase from the branch menu, and the conflict banner of the C
     Then the conflict banner is not shown
     And the history of the project is linear
     And I capture "clean-rebase"
+
+  Scenario: Abort of a stash pop conflict restores the file to HEAD and keeps the stash entry
+    Given the viewport is 1440x900
+    And the scratch project is a git repository with an origin inside the allowed roots
+    And the scratch project has the branch "feature" that conflicts with main on "a.txt"
+    And the scratch project has a stash pop conflict on "a.txt"
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open the Changes tab of the side panel
+    And I reload the Changes tab from disk
+    Then the conflict banner says "Unmerged files" and lists "a.txt"
+    And I capture "stash-pop-before-abort"
+    When I click "Abort" in the conflict banner
+    And I confirm the abort in the conflict banner
+    Then the conflict banner is not shown
+    And the file "a.txt" has the text "newer"
+    And the project has no operation in progress
+    And the project has 1 stash entry
+    And I capture "stash-pop-aborted"

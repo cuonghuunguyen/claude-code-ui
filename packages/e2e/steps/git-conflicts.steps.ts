@@ -158,3 +158,11 @@ Then("the session has {int} user message(s)", async ({ page }, n: number) => {
 Given("the scratch project has checked out {string}", async ({ project }, branch: string) => {
   git(project.path, "checkout", "-q", branch);
 });
+
+Then("the file {string} has the text {string}", async ({ project }, file: string, text: string) => {
+  await expect.poll(() => readFileSync(join(project.path, file), "utf8"), { timeout: 30_000 }).toBe(`${text}\n`);
+});
+
+Then("the project has {int} stash entry/entries", async ({ project }, n: number) => {
+  expect(git(project.path, "stash", "list").split("\n").filter(Boolean)).toHaveLength(n);
+});
