@@ -6,6 +6,8 @@ import { dirname, join, posix, win32 } from "node:path";
 import { promisify } from "node:util";
 
 const NAME = "Claude UI";
+/** Written into every entry we make; an existing entry without it is the user's and is never replaced or removed. */
+const MARK = "claude-ui-launcher-shortcut";
 const ID = "io.github.cuonghuunguyen.claude-code-ui";
 
 /** An icns container with one ic09 (512 px PNG) entry. */
@@ -41,7 +43,7 @@ export function macApp(shell: string): File[] {
   return [
     {
       path: "Contents/Info.plist",
-      content: `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n${plist("CFBundleExecutable", "claude-ui")}${plist("CFBundleIconFile", "icon")}${plist("CFBundleIdentifier", ID)}${plist("CFBundleName", NAME)}${plist("CFBundleDisplayName", NAME)}${plist("CFBundlePackageType", "APPL")}${plist("CFBundleShortVersionString", "1.0")}</dict>\n</plist>\n`,
+      content: `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n${plist("CFBundleExecutable", "claude-ui")}${plist("CFBundleIconFile", "icon")}${plist("CFBundleIdentifier", ID)}${plist("CFBundleName", NAME)}${plist("CFBundleDisplayName", NAME)}${plist("CFBundlePackageType", "APPL")}${plist("CFBundleShortVersionString", "1.0")}${plist("ClaudeUIShortcut", MARK)}</dict>\n</plist>\n`,
     },
     {
       path: "Contents/MacOS/claude-ui",
@@ -56,7 +58,7 @@ export function macApp(shell: string): File[] {
 const desktopArg = (s: string) => `"${s.replace(/["`$\\]/g, "\\$&").replaceAll("\\", "\\\\").replaceAll("%", "%%")}"`;
 
 export function desktopEntry(shell: string, icon: string): string {
-  return `[Desktop Entry]\nType=Application\nName=${NAME}\nComment=Start Claude UI, or open it when it runs\nExec=${desktopArg(shell)} -ilc "claude-ui open >/dev/null 2>&1 || exec claude-ui"\nIcon=${icon}\nTerminal=true\nCategories=Development;\n`;
+  return `[Desktop Entry]\nType=Application\nName=${NAME}\nComment=Start Claude UI, or open it when it runs\nExec=${desktopArg(shell)} -ilc "claude-ui open >/dev/null 2>&1 || exec claude-ui"\nIcon=${icon}\nTerminal=true\nCategories=Development;\nX-ClaudeUI-Shortcut=${MARK}\n`;
 }
 
 /** PowerShell that writes the .lnk (a binary .lnk is not hand-built). */
@@ -69,7 +71,7 @@ export function windowsScript(o: { lnk: string; comspec: string; icon: string; c
     `$s.Arguments = '/c call claude-ui open >nul 2>&1 || claude-ui'`,
     `$s.WorkingDirectory = ${q(o.cwd)}`,
     `$s.IconLocation = ${q(`${o.icon},0`)}`,
-    `$s.Description = 'Start Claude UI, or open it when it runs'`,
+    `$s.Description = 'Start Claude UI, or open it when it runs (${MARK})'`,
     `$s.Save()`,
   ].join("\n");
 }
@@ -99,9 +101,20 @@ export function createShortcut(o: { platform: NodeJS.Platform; env: NodeJS.Proce
     if (mode) chmodSync(file, mode);
   };
   const installed = () => existsSync(path);
+  // Data-loss guard: only an entry carrying MARK may be replaced or removed (a .lnk keeps its Description as UTF-16 or ANSI text).
+  const guard = () => {
+    if (!installed()) return;
+    let ours = false;
+    try {
+      const b = readFileSync(o.platform === "darwin" ? join(path, "Contents/Info.plist") : path);
+      ours = b.includes(MARK) || b.includes(Buffer.from(MARK, "utf16le"));
+    } catch {}
+    if (!ours) throw new Error(`${path} exists and was not made by claude-ui; remove or rename it yourself first`);
+  };
   return {
     installed,
     async set(on) {
+      guard();
       if (!on) {
         rmSync(path, { recursive: true, force: true });
         if (o.platform !== "darwin") rmSync(icon, { force: true });

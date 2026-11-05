@@ -47,7 +47,7 @@ describe("generators", () => {
   });
   it("Linux desktop entry", () => {
     expect(desktopEntry("/bin/bash", "/c/claude-ui.png")).toBe(
-      `[Desktop Entry]\nType=Application\nName=Claude UI\nComment=Start Claude UI, or open it when it runs\nExec="/bin/bash" -ilc "claude-ui open >/dev/null 2>&1 || exec claude-ui"\nIcon=/c/claude-ui.png\nTerminal=true\nCategories=Development;\n`,
+      `[Desktop Entry]\nType=Application\nName=Claude UI\nComment=Start Claude UI, or open it when it runs\nExec="/bin/bash" -ilc "claude-ui open >/dev/null 2>&1 || exec claude-ui"\nIcon=/c/claude-ui.png\nTerminal=true\nCategories=Development;\nX-ClaudeUI-Shortcut=claude-ui-launcher-shortcut\n`,
     );
   });
   it("Linux Exec escapes reserved characters", () => {
@@ -108,6 +108,27 @@ describe("createShortcut", () => {
     expect(existsSync(join(configDir, "claude-ui.ico"))).toBe(true);
     await shortcut.set(false);
     expect(existsSync(join(configDir, "claude-ui.ico"))).toBe(false);
+  });
+  it("a foreign entry at the path survives remove and create, with a clear error", async () => {
+    // win32 paths use backslashes: on another host the entry cannot be created there (the guard code is the same for all three).
+    const platforms: NodeJS.Platform[] = process.platform === "win32" ? ["linux", "darwin", "win32"] : ["linux", "darwin"];
+    for (const platform of platforms) {
+      const { dir, shortcut } = setup(platform);
+      const path = join(dir, ({ linux: "claude-ui.desktop", win32: "Claude UI.lnk", darwin: "Claude UI.app" } as Record<string, string>)[platform]!);
+      mkdirSync(path.endsWith(".app") ? join(path, "Contents") : dir, { recursive: true });
+      const file = path.endsWith(".app") ? join(path, "Contents/Info.plist") : path;
+      writeFileSync(file, "the user's own");
+      await expect(shortcut.set(false)).rejects.toThrow(/not made by claude-ui/);
+      await expect(shortcut.set(true)).rejects.toThrow(/not made by claude-ui/);
+      expect(readFileSync(file, "utf8")).toBe("the user's own");
+    }
+  });
+  it("our own entry is replaced and removed", async () => {
+    const { dir, shortcut } = setup("linux");
+    await shortcut.set(true);
+    await shortcut.set(true);
+    expect(readFileSync(join(dir, "claude-ui.desktop"), "utf8")).toContain("X-ClaudeUI-Shortcut=");
+    expect(await shortcut.set(false)).toBe(false);
   });
   it("an unsupported platform gives no shortcut", () => {
     expect(createShortcut({ platform: "aix", env: {}, home: "/h", configDir: "/c", webRoot: "/w" })).toBeUndefined();
