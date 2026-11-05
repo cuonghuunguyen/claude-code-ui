@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 import { kindOf, nameOf, sideTarget, startOptIn } from "../src/side-kinds.ts";
-import { addSshHost, checkSshSide, includeFiles, isWindowsHost, listSshHosts, parseSshCommand, parseSshConfig, prepareSshSide, sshArgs, sshConfigPath, sshError } from "../src/ssh-side.ts";
+import { addSshHost, checkSshSide, includeFiles, isWindowsHost, listSshHosts, parseSshCommand, parseSshConfig, loginEnvScript, prepareSshSide, sshArgs, sshConfigPath, sshError } from "../src/ssh-side.ts";
 import { checkScript, setupMessage, setupScript, SWEEP_LINE, attachArgs } from "../src/sides.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -59,9 +59,44 @@ describe("sshArgs", () => {
     expect(a.slice(0, 8)).toEqual(["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--"]);
     expect(a[8]).toBe("box");
     expect(a).toHaveLength(10);
-    expect(decode(a[9]!)).toBe(script);
+    expect(decode(a[9]!)).toBe(`${loginEnvScript()}\n${script}`);
     expect(a[9]).not.toContain("\n");
     expect(a[9]!.endsWith(`sh 'x y' 'it'\\''s'`)).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("loginEnvScript", () => {
+  const home = (profile: string) => {
+    const h = dir("login-");
+    writeFileSync(join(h, ".bash_profile"), profile);
+    return h;
+  };
+  const run = (env: Record<string, string | undefined>, seconds?: number) => {
+    const t0 = Date.now();
+    const out = execFileSync("sh", ["-c", `${loginEnvScript(seconds)}; printf '%s|%s' "$PATH" "$CUI_Q"`], { env: { PATH: process.env.PATH, ...env } as NodeJS.ProcessEnv, encoding: "utf8", timeout: 20_000 });
+    return { out, ms: Date.now() - t0 };
+  };
+  const bash = existsSync("/bin/bash") ? "/bin/bash" : "/usr/bin/bash";
+  it("imports PATH and quoted values of the login profile; its output is discarded", () => {
+    const HOME = home(`echo noise; echo err >&2; export PATH=/gh592/bin:$PATH; export CUI_Q="a b'c"`);
+    const { out } = run({ HOME, SHELL: bash });
+    expect(out.startsWith("/gh592/bin:")).toBe(true);
+    expect(out.endsWith("|a b'c")).toBe(true);
+    expect(out).not.toContain("noise");
+  });
+  it("a profile that hangs is killed after the limit; the plain environment stays", () => {
+    const { out, ms } = run({ HOME: home("sleep 30"), SHELL: bash }, 1);
+    expect(ms).toBeLessThan(5_000);
+    expect(out).toBe(`${process.env.PATH}|`);
+  });
+  it("fish is skipped", () => {
+    const HOME = home("export CUI_Q=x");
+    expect(run({ HOME, SHELL: "/usr/bin/fish" }).out).toBe(`${process.env.PATH}|`);
+  });
+  it.skipIf(!existsSync("/bin/zsh"))("zsh: ~/.zprofile is read", () => {
+    const HOME = dir("login-");
+    writeFileSync(join(HOME, ".zprofile"), "export PATH=/gh592/zsh:$PATH");
+    expect(run({ HOME, SHELL: "/bin/zsh" }).out.startsWith("/gh592/zsh:")).toBe(true);
   });
 });
 
