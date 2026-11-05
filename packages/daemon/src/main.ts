@@ -197,7 +197,8 @@ if (process.platform === "win32") setGitRunner(wslGitRunner({ local: threadRunne
 const tsEnv = { ...process.env, TAILSCALE_BE_CLI: "1" };
 const exec = promisify(execFile);
 const ts = tailscale ? await tailscalePreflight({ port, platform: process.platform, env: process.env, exec: (f, a) => exec(f, a, { timeout: 10_000, windowsHide: true, env: tsEnv }) }) : undefined;
-if (ts && "error" in ts) (console.error(`claude-ui: ${ts.error}`), process.exit(1));
+// Exit 2 (setup error): the launcher must not read it as a broken release and fall back to an older version.
+if (ts && "error" in ts) (console.error(`claude-ui: ${ts.error}`), process.exit(2));
 if (ts) hostname = ts.hostname;
 cleanup = () => sides?.close();
 // Windows does not end children with their parent: a killed npm/tsx/launcher would leave this daemon, its wsl.exe and the WSL side running.

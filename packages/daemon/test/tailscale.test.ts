@@ -1,7 +1,8 @@
+import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { cliCandidates, installHint, readServe, readStatus, startServe, tailscalePreflight, type Exec } from "../src/tailscale.ts";
+import { cliCandidates, installHint, readServe, readStatus, SERVE_WATCHER, startServe, tailscalePreflight, type Exec } from "../src/tailscale.ts";
 
 const running = { BackendState: "Running", Self: { DNSName: "m.tn.ts.net." }, CertDomains: ["m.tn.ts.net"] };
 const winServe = { TCP: { "443": { HTTPS: true } }, Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4280" } } } } };
@@ -84,7 +85,7 @@ describe("tailscalePreflight", () => {
 
 describe("startServe", () => {
   function fake() {
-    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), killed: false, kill() { this.killed = true; } });
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() });
     const calls: unknown[][] = [];
     const spawn = ((...a: unknown[]) => (calls.push(a), child)) as never;
     return { child, calls, spawn };
@@ -94,7 +95,7 @@ describe("startServe", () => {
     const { child, calls, spawn } = fake();
     const logs: string[] = [];
     startServe({ cli: "tailscale", port: 4280, spawn, log: (l) => logs.push(l), platform: "linux" });
-    expect(calls[0]![1]).toEqual(["serve", "--https=443", "http://127.0.0.1:4280"]);
+    expect((calls[0]![1] as string[]).slice(2)).toEqual(["tailscale", "serve", "--https=443", "http://127.0.0.1:4280"]);
     expect((calls[0]![2] as { env: Record<string, string> }).env.TAILSCALE_BE_CLI).toBe("1");
     child.stdout.write("Available within your tailnet\n");
     child.stderr.write("access denied\n");
@@ -110,12 +111,23 @@ describe("startServe", () => {
     child.emit("error", new Error("EACCES"));
     expect(logs[0]).toContain("failed to start: EACCES");
   });
-  it("stop kills; the later exit is not logged", async () => {
+  it("stop closes the watcher's stdin; the later exit is not logged", async () => {
     const { child, spawn } = fake();
     const logs: string[] = [];
     startServe({ cli: "tailscale", port: 1, spawn, log: (l) => logs.push(l), platform: "linux" }).stop();
     child.emit("exit", null);
-    expect(child.killed).toBe(true);
+    expect(child.stdin.writableEnded).toBe(true);
     expect(logs).toEqual([]);
+  });
+});
+
+describe("SERVE_WATCHER", () => {
+  it("kills its serve child when its stdin closes (a SIGKILLed daemon closes it too)", async () => {
+    const w = nodeSpawn(process.execPath, ["-e", SERVE_WATCHER, process.execPath, "-e", "console.log(process.pid);setInterval(() => {}, 1000)"], { stdio: ["pipe", "pipe", "inherit"] });
+    const pid = Number(await new Promise<string>((r) => w.stdout.once("data", (d) => r(String(d)))));
+    const ended = new Promise((r) => w.on("exit", r));
+    w.stdin.end();
+    await ended;
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });
