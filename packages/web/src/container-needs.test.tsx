@@ -83,6 +83,12 @@ describe("side panel, Docker", () => {
     expect(await rowOf()).toBe("Containerx86_64, glibc 2.36: bundle");
   });
 
+  it("a macOS target reads as macOS, not as an unknown C library", async () => {
+    const mac: SideCheck = { ...bundleCheck, facts: { ...bundleCheck.facts, target: { arch: "arm64", libc: "unknown", os: "Darwin" } } };
+    await mount(<SidePanel side={side()} state={{ check: mac }} onRun={() => {}} onCheck={() => {}} />);
+    expect([...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent)[1]).toBe("ContainermacOS, arm64: bundle");
+  });
+
   it("bundle check: no Node.js or build tools rows; the guide shows; WSL has no guide", async () => {
     await mount(<SidePanel side={side()} state={{ check: bundleCheck }} onRun={() => {}} onCheck={() => {}} />);
     const r = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent);

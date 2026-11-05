@@ -17,7 +17,7 @@ import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
 import { kindOf, nameOf, NOUN, sideTarget, startOptIn } from "./side-kinds.ts";
-import { safeKey } from "./side-bundle.ts";
+import { archOf, isDarwin, safeKey, type BundleTarget } from "./side-bundle.ts";
 import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, TARGET_PROBE_LINES_POSIX, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
@@ -189,9 +189,9 @@ export function setupScript(source: string, key: string, kind: "wsl" | "docker" 
   ].join("\n");
 }
 
-/** A Docker side's bundle (side-bundle.ts): its target and the names inside it. */
+/** A Docker or SSH side's bundle (side-bundle.ts): its target and the names inside it. Darwin targets: SSH hosts only. */
 export type SideBundle = {
-  target: "linux-x64" | "linux-arm64";
+  target: BundleTarget;
   /** Absent: the target's own Node.js runs the side (nothing of Node.js is unpacked). */
   nodeDir?: string;
   claudePackage: string;
@@ -224,7 +224,7 @@ function unpackLines(parts: string, withNode: boolean) {
     `  mkdir -p ${withNode ? '"$new/node/bin" ' : ""}"$new/node_modules/@anthropic-ai" "$new/b/pty" "$new/b/claude" "$new/b/sdk" || fail "no folder could be made in $root"`,
     ...(withNode ? [`  tar -xzf "${parts}/node.tar.gz" -C "$new/b" "$nd/bin/node" "$nd/LICENSE" 2>/dev/null && mv "$new/b/$nd/bin/node" "$new/node/bin/node" && mv "$new/b/$nd/LICENSE" "$new/node/LICENSE" || fail "Node.js could not be unpacked"`] : []),
     `  tar -xzf "${parts}/node-pty.tgz" -C "$new/b/pty" 2>/dev/null && mv "$new/b/pty/package" "$new/node_modules/node-pty" || fail "node-pty could not be unpacked"`,
-    // Only this target's prebuild stays (the package also carries Windows and macOS builds).
+    // Only this target's prebuild stays (the package also carries the other platforms' builds).
     '  for p in "$new/node_modules/node-pty/prebuilds"/*; do [ "${p##*/}" = "$tg" ] || rm -rf "$p"; done',
     `  tar -xzf "${parts}/claude.tgz" -C "$new/b/claude" 2>/dev/null && mv "$new/b/claude/package" "$new/node_modules/@anthropic-ai/$cp" || fail "Claude Code could not be unpacked"`,
     `  tar -xzf "${parts}/sdk.tgz" -C "$new/b/sdk" 2>/dev/null && mv "$new/b/sdk/package" "$new/node_modules/@anthropic-ai/claude-agent-sdk" || fail "the Claude Agent SDK could not be unpacked"`,
@@ -247,8 +247,10 @@ function finishLines(found: boolean, before: string[] = []) {
   ];
 }
 
-/** The node of a bundle install: found (`$n`, set by usable_node in the target) or the bundle's own. `arch` is process.arch's name of the target. */
-const foundNodeLines = (b: SideBundle, docker: boolean) => (b.nodeDir ? [] : [...(docker ? [NVM_LINE] : []), USABLE_NODE_FN, `usable_node ${shq(b.target.slice(6))}`]);
+/** The node of a bundle install: found (`$n`, set by usable_node in the target) or the bundle's own. The arch is process.arch's name of the target; a darwin target takes a macOS Node.js (`posix`). */
+const foundNodeLines = (b: SideBundle, docker: boolean) => (b.nodeDir ? [] : [...(docker ? [NVM_LINE] : []), USABLE_NODE_FN, `usable_node ${shq(archOf(b.target))}${isDarwin(b.target) ? " posix" : ""}`]);
+/** `sdk <dir>`: the install has the Agent SDK's native binary package of the bundle's platform. */
+const bundleSdkFn = (b: SideBundle) => `sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-${isDarwin(b.target) ? "darwin" : "linux"}-*; do [ -d "$b" ] && return 0; done; return 1; }`;
 /** Keeps an install that has a Node.js of its own (also when the target has one now) or, in found mode, runs on the found one; else installs. */
 const keepCondition = (b: SideBundle) => `if [ ! -f "$cli" ] || ! sdk "$dir" || ${b.nodeDir ? '[ ! -x "$dir/node/bin/node" ]' : '{ [ ! -x "$dir/node/bin/node" ] && [ -z "$n" ]; }'}; then`;
 
@@ -267,7 +269,7 @@ function bundleScript(source: string, key: string, mode: SideSetup, b: SideBundl
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `src=${q(source)}; ${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}`,
-    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    bundleSdkFn(b),
     VER_FN,
     ...foundNodeLines(b, true),
     mode === "force" ? "if true; then" : keepCondition(b),
@@ -307,7 +309,7 @@ function wslBundleScript(key: string, mode: SideSetup, b: SideBundle, h: NonNull
     `dir="$root/${key.replace(/[^\w.-]/g, "_")}"`,
     'cli="$dir/node_modules/claude-code-ui/dist/cli.js"',
     `${b.nodeDir ? `nd=${q(b.nodeDir)}; ` : ""}cp=${q(b.claudePackage)}; tg=${q(b.target)}; id=${q(h.partsId)}`,
-    'sdk() { for b in "$1"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*; do [ -d "$b" ] && return 0; done; return 1; }',
+    bundleSdkFn(b),
     VER_FN,
     // Another install made from the same parts, hard-linked into $new (any failure: the caller unpacks the parts). The hard links
     // assume installs are immutable: nothing writes in place inside node/ or node_modules/ after the swap (a new build is a new
@@ -486,7 +488,7 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
     installed: c.installed,
     ...(c.installedKey && { installedKey: c.installedKey }),
     ...(c.writable && { writable: c.writable }),
-    ...(c.target && { target: { arch: c.target.arch, libc: c.target.libc, ...(c.target.glibc && { glibc: c.target.glibc }) } }),
+    ...(c.target && { target: { arch: c.target.arch, libc: c.target.libc, ...(c.target.glibc && { glibc: c.target.glibc }), ...(c.target.os && { os: c.target.os }) } }),
     ...(o.install && { install: o.install }),
     ...(c.tools && { tools: c.tools }),
     ...(o.network !== undefined && { network: o.network }),

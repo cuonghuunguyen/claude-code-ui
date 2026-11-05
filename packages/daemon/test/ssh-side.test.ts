@@ -84,7 +84,7 @@ describe("sshError", () => {
 });
 
 describe("prepareSshSide", () => {
-  const probeOut = (arch: string, libc = "glibc") => ["arch=" + arch, "libc=" + libc, "glibc=2.36", "cxxrt=1"].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
+  const probeOut = (arch: string, libc = "glibc", os?: string) => ["arch=" + arch, "libc=" + libc, "glibc=2.36", "cxxrt=1", ...(os ? ["os=" + os] : [])].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
   const pkg = () => {
     const d = dir("pkg-");
     mkdirSync(join(d, "dist", "side"), { recursive: true });
@@ -98,13 +98,13 @@ describe("prepareSshSide", () => {
   const sha = (b: string) => createHash("sha256").update(b).digest("hex");
   const parts = () => [{ file: "node.tar.gz", label: "Node.js", url: "https://n/node", sha256: sha("node") }];
   const okFetch = (async () => new Response("node")) as unknown as typeof fetch;
-  function run(o: { probe?: { code: number | null; stdout?: string; stderr?: string }; copy?: (n: number, dest: string) => { code: number; stdout?: string; stderr?: string }; setup?: "never" | "needed" | "force"; pinned?: boolean; bundleOnly?: boolean; installed?: "current" | "other"; arch?: string; libc?: string; config?: string } = {}) {
+  function run(o: { probe?: { code: number | null; stdout?: string; stderr?: string }; copy?: (n: number, dest: string) => { code: number; stdout?: string; stderr?: string }; setup?: "never" | "needed" | "force"; pinned?: boolean; bundleOnly?: boolean; installed?: "current" | "other"; arch?: string; libc?: string; os?: string; config?: string } = {}) {
     const calls: { cmd: string; args: string[]; script: string; stdin?: string }[] = [];
     let copies = 0;
     const exec: Exec = async (cmd, args, _t, stdin) => {
       const script = decode(args.at(-1)!);
       calls.push({ cmd, args, script, stdin });
-      if (script.includes("uname -m")) return { code: 0, stdout: probeOut(o.arch ?? "x86_64", o.libc) + (o.installed ? `\nCLAUDE_UI_CHECK installed=${o.installed}` : ""), stderr: "", ...o.probe } as { code: number | null; stdout: string; stderr: string };
+      if (script.includes("uname -m")) return { code: 0, stdout: probeOut(o.arch ?? "x86_64", o.libc, o.os) + (o.installed ? `\nCLAUDE_UI_CHECK installed=${o.installed}` : ""), stderr: "", ...o.probe } as { code: number | null; stdout: string; stderr: string };
       const dest = /sh '([^']*)' '[^']*' '[^']*'$/.exec(args.at(-1)!)?.[1] ?? "";
       const r = o.copy?.(copies++, dest) ?? { code: 0, stdout: `${dest}/f\n` };
       return { stdout: "", stderr: "", ...r };
@@ -157,9 +157,19 @@ describe("prepareSshSide", () => {
     expect(r.calls[1]!.stdin).toMatch(/\.tgz$/);
     expect(r.calls[1]!.script).toContain("cat >");
   });
-  it("another arch and macOS-like hosts (no glibc) install with npm too", async () => {
+  it("another arch, a host without a known libc and a BSD install with npm too", async () => {
     expect((await run({ arch: "riscv64" }).result).bundle).toBeUndefined();
-    expect((await run({ arch: "arm64", libc: "unknown" }).result).path).toBe("/tmp/f");
+    expect((await run({ arch: "arm64", libc: "unknown" }).result).bundle).toBeUndefined();
+    const bsd = run({ arch: "amd64", libc: "unknown", os: "FreeBSD" });
+    expect((await bsd.result).bundle).toBeUndefined();
+    expect(bsd.installs).toEqual([{ fallback: "the host runs FreeBSD; the bundle covers Linux and macOS only" }]);
+  });
+  it("a macOS host gets the darwin bundle over ssh stdin, no npm", async () => {
+    const r = run({ arch: "arm64", libc: "unknown", os: "Darwin" });
+    const out = await r.result;
+    expect(out.bundle).toMatchObject({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
+    expect(r.installs).toEqual([{ bundle: true }]);
+    expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
   });
   it("an automatic update (bundleOnly) never uses npm: the installed build runs", async () => {
     const r = run({ libc: "musl", bundleOnly: true });
@@ -366,15 +376,21 @@ describe("checkSshSide: hosts the bundle does not cover", () => {
     return d;
   };
   const check = (o: Record<string, string>, raw?: { code: number; stdout: string; stderr: string }) => checkSshSide({ alias: "box", pkgDir: pkg(), key: "k", exec: async () => raw ?? { code: 0, stdout: out(o), stderr: "" } });
-  it("macOS with Node.js and npm: install with npm, the reason says why", async () => {
-    const c = await check({});
-    expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "npm" }, nodeOk: true } });
+  it("macOS: install with the bundle (no npm, no build tools needed); the target says macOS", async () => {
+    const c = await check({ npm: "0", make: "0", cxx: "0" });
+    expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" }, target: { arch: "arm64", os: "Darwin" } } });
+  });
+  it("BSD with Node.js and npm: install with npm, the reason names the OS", async () => {
+    const c = await check({ os: "FreeBSD", arch: "amd64" });
+    expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "npm", reason: "the host runs FreeBSD; the bundle covers Linux and macOS only" }, nodeOk: true } });
   });
   it("Windows is blocked with its message; no Node.js, no npm and no writable folder each name what is missing", async () => {
     expect(await check({ os: "MINGW64_NT" })).toMatchObject({ verdict: "blocked", reason: "windows_host", message: "SSH: box: Windows SSH hosts are not supported yet." });
     expect(await check({}, { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command" })).toMatchObject({ reason: "windows_host" });
-    expect(await check({ node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
-    expect(await check({ npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
+    // The npm path (a BSD host): its own Node.js and npm are needed. A macOS host gets the bundle, which needs neither.
+    expect(await check({ os: "FreeBSD", node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
+    expect(await check({ os: "FreeBSD", npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
+    expect(await check({ node: "none", foundnode: "0", npm: "0" })).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" } } });
     expect(await check({ writable: "/tmp" })).toMatchObject({ reason: "no_writable_path" });
     expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("no writable home folder") });
   });
@@ -405,6 +421,17 @@ describe("setup script of a host", () => {
       expect(s).not.toContain('usable_node "" posix');
       expect(s).not.toContain("home_not_writable");
     }
+  });
+  it("darwin bundle install: a macOS Node.js counts (posix, its arch), the SDK binary is the darwin one", () => {
+    const found = setupScript("/tmp/x.tar", "k", "ssh", "needed", { target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
+    expect(found).toContain("usable_node 'arm64' posix");
+    expect(found).toContain("claude-agent-sdk-darwin-*");
+    expect(found).not.toContain("claude-agent-sdk-linux-*");
+    const pinned = setupScript("/tmp/x.tar", "k", "ssh", "needed", { target: "darwin-x64", nodeDir: "node-v24.22.1-darwin-x64", claudePackage: "claude-agent-sdk-darwin-x64" });
+    expect(pinned).toContain("nd='node-v24.22.1-darwin-x64'");
+    expect(pinned).not.toContain("usable_node '");
+    // Linux bundles keep the Linux rule (no posix).
+    expect(setupScript("/tmp/x.tar", "k", "ssh", "needed", { target: "linux-x64", claudePackage: "claude-agent-sdk-linux-x64" })).toContain("usable_node 'x64'\n");
   });
   it("messages name what is missing on the host", () => {
     expect(setupMessage("node_missing", "", "SSH: box", "host")).toBe(`Node.js ${NODE_MIN} or newer is not installed on SSH: box. Install it there (e.g. nvm install ${NODE_MIN_MAJOR}), then retry.`);

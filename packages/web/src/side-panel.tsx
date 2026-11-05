@@ -80,7 +80,7 @@ function rowsOf(c: SideCheck, noun: "container" | "distro" | "host" = "container
   // Docker with the bundle (or a build that runs on its own Node.js): the container's Node.js and build tools do not matter.
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const tg = f.target;
-    const target = tg ? `${tg.arch}, ${tg.libc}${tg.glibc ? ` ${tg.glibc}` : ""}` : "Linux";
+    const target = !tg ? "Linux" : tg.os === "Darwin" ? `macOS, ${tg.arch}` : `${tg.arch}, ${tg.libc}${tg.glibc ? ` ${tg.glibc}` : ""}`;
     return [up, { name: t(`app.sidePanel.row.${noun}`), value: f.install?.method === "bundle" ? t(f.install.parts === "download" ? "app.sidePanel.row.bundleDownload" : "app.sidePanel.row.bundle", { target }) : target, status: "ok" }, build];
   }
   return [
