@@ -2132,6 +2132,12 @@ describe("repository config redirection (GH-319)", () => {
       "comment char right after a continuation": "[core]\n\tx = a\\\n# \\\n\thooksPath = /evil\n",
       "semicolon right after a continuation": "[core]\n\tx = a\\\n; \\\n\thooksPath = /evil\n",
       "backslash right after a continuation": "[core]\n\tx = a\\\n\\\\\n\thooksPath = /evil\n[include]\n\tpath = /i\n",
+      "quoted trailing blank": '[include]\n\tpath = "evil "\n',
+      "escaped newline in value": '[include]\n\tpath = "hooks\\n"\n',
+      "form feed at the end": "[include]\n\tpath = inc\f\n",
+      "no-break space at the end": "[core]\n\thooksPath = /x\u00a0\n",
+      "form feed alone": "[core]\n\thooksPath = \f\n",
+      "inner blanks": "[core]\n\thooksPath = /a   b\n",
       "BOM": "\uFEFF[core]\n\thooksPath = /bom\n",
       "other sections are ignored": '[remote "o"]\n\turl = /u\n\tpath = /p\n[core.x]\n\thooksPath = /sub\n',
     };

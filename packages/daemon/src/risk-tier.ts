@@ -204,13 +204,13 @@ export async function tierAsync(tool: string, input: unknown, ctx: TierContext):
   }
 }
 
-const GIT_WORD = /^(git(\.exe)?|.*\/git)$/i;
+const GIT_WORD = /^(git|.*[\\/]git)(\.exe)?$/i;
 /** PreToolUse hook of a worker query: a Bash command with a git segment that the tier rates high goes to canUseTool (the CLI auto-allows read-only git without asking). `input` is the tool input. */
 export async function workerBashHook(input: unknown, cwd: string, read: typeof tierAsync = tierAsync): Promise<HookJSONOutput> {
   const command = (input as { command?: unknown } | null)?.command;
   if (typeof command !== "string") return {};
   // Any word of a segment that is `git` (also after `FOO=1`, `env`, `command`, `xargs`, `$(`); the tier decides. shortcut: a git word built by quoting or expansion is not seen, upgrade if one shows up.
-  if (!command.split(/&&|\|\||[;|\n()`]/).some((seg) => seg.trim().split(/\s+/).some((w) => GIT_WORD.test(w.replace(/['"\\]/g, ""))))) return {};
+  if (!command.split(/&&|\|\||[;|\n()`]/).some((seg) => seg.trim().split(/\s+/).some((w) => GIT_WORD.test(w) || GIT_WORD.test(w.replace(/['"\\]/g, ""))))) return {};
   let t: Tier = "high";
   try {
     t = await read("Bash", input, { cwd, bashCwdPinned: true });

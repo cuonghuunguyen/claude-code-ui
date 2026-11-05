@@ -1723,6 +1723,30 @@ export function parseGitmodules(text: string): { name: string; path: string; url
 }
 
 const CONFIG_MAX = 1024 * 1024;
+/** A config value as git reads it (config.c parse_value): unquoted blanks at the ends dropped, inner runs kept as spaces, quoted text exact, `\n \t \b \\ \"` the only escapes, `#`/`;` outside quotes start a comment. Throws on anything else (git rejects the file too). */
+function redirectValue(raw: string): string {
+  let out = "";
+  let space = 0;
+  let quoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (!quoted && (c === " " || c === "\t" || c === "\r" || c === "\n")) {
+      if (out) space++;
+      continue;
+    }
+    if (!quoted && (c === "#" || c === ";")) break;
+    out += " ".repeat(space);
+    space = 0;
+    if (c === "\\") {
+      const e = ({ n: "\n", t: "\t", b: "\b", "\\": "\\", '"': '"' } as Record<string, string>)[raw[++i] ?? ""];
+      if (e === undefined) throw new Error("config escape not understood");
+      out += e;
+    } else if (c === '"') quoted = !quoted;
+    else out += c;
+  }
+  if (quoted) throw new Error("config quote not closed");
+  return out;
+}
 export type ConfigRedirect = { key: "include" | "hooksPath" | "excludesFile" | "attributesFile"; value: string };
 const CONFIG_KEYS: Record<string, ConfigRedirect["key"]> = { hookspath: "hooksPath", excludesfile: "excludesFile", attributesfile: "attributesFile" };
 /**
@@ -1736,17 +1760,17 @@ export function configRedirects(text: string): ConfigRedirect[] {
   const out: ConfigRedirect[] = [];
   let section: { name: string; sub: boolean } | undefined;
   const keyLine = (line: string) => {
-    const kv = /^([A-Za-z][-A-Za-z0-9]*)\s*(?:=\s*([\s\S]*))?$/.exec(line);
+    const kv = /^([A-Za-z][-A-Za-z0-9]*)[ \t\r]*(?:=([\s\S]*))?$/.exec(line);
     if (!kv || !section) throw new Error(`config line not understood: ${line}`);
     if (kv[2] === undefined) return;
     const k = kv[1]!.toLowerCase();
     const key: ConfigRedirect["key"] | undefined =
       section.name === "include" || section.name === "includeif" ? (k === "path" ? "include" : undefined) : section.name === "core" && !section.sub ? CONFIG_KEYS[k] : undefined;
-    const value = gitConfigValue(kv[2]);
+    const value = redirectValue(kv[2]);
     if (key && value) out.push({ key, value });
   };
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i]!.trimStart();
+    let line = lines[i]!.replace(/^[ \t\r]+/, "");
     if (!line || line[0] === "#" || line[0] === ";") continue;
     // A trailing backslash continues the line only outside a comment (git reads the next line as a key after `# x \`).
     for (let quoted = false, k = 0; ; ) {
@@ -1766,7 +1790,8 @@ export function configRedirects(text: string): ConfigRedirect[] {
       line = line.slice(0, -1) + lines[++i]!;
       k--; // the joined line starts where the backslash was
     }
-    line = line.trim();
+    // Only space, tab, CR trim (as in git): a form feed or no-break space at the end belongs to the name.
+    line = line.replace(/^[ \t\r]+|[ \t\r]+$/g, "");
     if (!line) continue;
     if (line[0] !== "[") {
       keyLine(line);
