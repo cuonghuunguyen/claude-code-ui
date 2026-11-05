@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 type Client = ReturnType<typeof connect>;
 type Row = { path: string; rel?: string; oldPath?: string; nested?: unknown; dirtyOnly?: boolean };
 
-export function CommitBox({ client, cwd, exact, repoName, rows, checked, onChecked, base, onCommitted }: {
+export function CommitBox({ client, cwd, exact, repoName, rows, checked, onChecked, base, onCommitted, onRollback }: {
   client: Client;
   /** The repository the commit goes to. */
   cwd: string;
@@ -27,6 +27,8 @@ export function CommitBox({ client, cwd, exact, repoName, rows, checked, onCheck
   base?: string;
   /** After a successful commit (the file tree and the status refresh). */
   onCommitted?: () => void;
+  /** Rollback of the checked rows' paths (the panel opens the dialog). */
+  onRollback?: (paths: string[]) => void;
 }) {
   const t = useT();
   const { running } = useRemoteOp(cwd);
@@ -125,6 +127,9 @@ export function CommitBox({ client, cwd, exact, repoName, rows, checked, onCheck
           {t("files.changes.amend")}
         </label>
         <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="outline" className="max-md:h-11" disabled={busy || !paths.length} onClick={() => onRollback?.(paths)} data-testid="rollback-button">
+            {t("files.changes.rollback")}
+          </Button>
           <Button size="sm" variant="outline" className="max-md:h-11" disabled={!ready} onClick={() => commit(true)} data-testid="commit-and-push">
             {t("files.changes.commitAndPush")}
           </Button>

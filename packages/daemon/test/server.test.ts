@@ -1123,6 +1123,20 @@ describe("daemon", () => {
     expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
   });
 
+  it("answers git.rollbackPreview, git.rollback and git.rollbackHunk for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const hunk = { newStart: 1, lines: ["-a", "+b"] };
+    const ms = [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { type: "git.rollback", paths: ["a.txt"], token: "t" }, { type: "git.rollbackHunk", path: "a.txt", hunk }];
+    const nulls = [{ preview: null }, { rolledBack: null }, { rolledBack: null }];
+    for (const [i, m] of ms.entries()) {
+      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: nulls[i] });
+    }
+    expect(await c.request({ ...ms[0]!, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...ms[1]!, cwd: webRoot, token: 5 })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...ms[2]!, cwd: webRoot, hunk: { newStart: 1, lines: [] } })).toMatchObject({ code: "bad_request" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";
@@ -1195,6 +1209,9 @@ describe("daemon", () => {
         { type: "git.fileAt", hash, path: "t.txt" },
         { type: "git.fetch" },
         { type: "git.commitFiles", paths: ["t.txt"], message: "m" },
+        { type: "git.rollbackPreview", paths: ["t.txt"] },
+        { type: "git.rollback", paths: ["t.txt"], token: "t" },
+        { type: "git.rollbackHunk", path: "t.txt", hunk: { newStart: 1, lines: ["+x"] } },
         { type: "git.branch", ref: "refs/heads/main" },
         { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
         { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },

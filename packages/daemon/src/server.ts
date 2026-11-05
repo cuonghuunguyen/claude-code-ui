@@ -25,7 +25,7 @@ import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
-import { gitCommitFiles } from "./git-write.ts";
+import { gitCommitFiles, gitRollback, gitRollbackHunk, gitRollbackPreview } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -2277,6 +2277,24 @@ export function createDaemon(opts: {
             return reply({ committed });
           } catch (e) {
             if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.rollbackPreview":
+        case "git.rollback":
+        case "git.rollbackHunk": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Paths and output are never logged. A failed git call may have changed files too.
+          const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: (p: string) => localHistory.before(p, "rollback") };
+          try {
+            if (msg.type === "git.rollbackPreview") return reply({ preview: await gitRollbackPreview(cwd, { paths: msg.paths, ...o }) });
+            const rolledBack = msg.type === "git.rollback" ? await gitRollback(cwd, { paths: msg.paths, token: msg.token, deleteAdded: msg.deleteAdded, ...o }) : await gitRollbackHunk(cwd, { path: msg.path, hunk: msg.hunk, maxBytes: MAX_FILE_BYTES, ...o });
+            markRepoStale(cwd);
+            return reply({ rolledBack });
+          } catch (e) {
+            if (msg.type !== "git.rollbackPreview" && (e instanceof WorktreeError ? e.code === "git_failed" : true)) markRepoStale(cwd);
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
