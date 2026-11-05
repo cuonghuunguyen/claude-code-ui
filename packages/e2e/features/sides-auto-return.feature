@@ -1,16 +1,18 @@
-# GH-458, written and not run in that issue. A fake docker CLI (support/fake-docker.ts) runs a real side process; POSIX only, so it skips itself on
-# Windows. Needs the source checkout (the side runs `main.ts --side` with tsx). The run's config and cache stay in <run>; the side's project is a
+# GH-458, GH-578. A fake docker CLI (support/fake-docker.ts) runs the real bridge (`main.ts side --attach --start`), which starts the Hub of the container
+# (ADR 0009: detached, it outlives the bridge); POSIX only, so it skips itself on
+# Windows. Needs the source checkout (the Hub runs `main.ts` with tsx). The run's config and cache stay in <run>; the side's project is a
 # tmp folder outside the daemon's roots. The bundle path (parts download) is covered by unit tests and the manual steps, not here.
 Feature: Sides come back with the hub without manual steps
 
-  Scenario: A killed side comes back without user action
+  Scenario: A killed bridge reattaches to the same Hub of the container without user action
     Given a fake Docker container "back-dev" that runs a claude-ui side with the project "back-proj"
     When I open the app
     Then the side "back-dev" is ready within 90 seconds
-    When I kill the side process of "back-dev"
-    Then the sidebar shows "Starting…" for the project "back-proj"
-    And the side "back-dev" is ready within 30 seconds
-    And I capture "side-restarted"
+    When I kill the bridge process of "back-dev"
+    Then the sidebar shows "Reconnecting…" for the project "back-proj"
+    And the side "back-dev" is ready within 60 seconds
+    And the Hub of "back-dev" is the one that ran before
+    And I capture "bridge-reattached"
 
   Scenario: A stopped container is not restarted in a loop and starts when it runs again
     Given a fake Docker container "stop-dev" that runs a claude-ui side with the project "stop-proj"
@@ -22,17 +24,19 @@ Feature: Sides come back with the hub without manual steps
     Then the side "stop-dev" is ready within 60 seconds
     And I capture "container-back"
 
-  Scenario: Start with Claude UI off keeps the side off at the next hub start
+  Scenario: Start with Claude UI off keeps the side off at the next hub start when its Hub is gone
     Given a fake Docker container "pref-dev" that runs a claude-ui side with the project "pref-proj"
     When I open the app
     Then the side "pref-dev" is ready within 90 seconds
     When I turn "off" for "pref-dev" in Settings
+    And the container "pref-dev" restarts
     And I restart the daemon with the fake Docker
     Then the project "pref-proj" is not in the sidebar
     When I open Settings › Sides
     Then the Settings row of "pref-dev" says Start with Claude UI is "off"
     And I capture "settings-sides-off"
     When I turn "on" for "pref-dev" in Settings
+    And I turn "off" Update automatically for "pref-dev" in Settings
     And I restart the daemon with the fake Docker
     Then the side "pref-dev" is ready within 90 seconds
 

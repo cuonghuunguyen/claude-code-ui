@@ -276,7 +276,7 @@ export function App() {
   const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
   // GH-458: the status line of a project whose side is not ready; Retry / Update start it again (the state comes back as sessions.changed).
   const sideState = useMemo(
-    () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed") => void client.current?.request({ type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
+    () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed" | "updateRemote") => void client.current?.request(setup === "updateRemote" ? { type: "side.updateRemote", side } : { type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
     [sides, sideOf],
   );
   // Project the new-session tab starts in.

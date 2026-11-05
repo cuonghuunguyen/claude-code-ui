@@ -46,20 +46,22 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
 }
 
 /** What the sidebar says under a project of a side that is not ready; `action`: Retry (side.start) or Update (side.start with setup needed). */
-export type SideStatus = { text: string; action?: "retry" | "update" };
+export type SideStatus = { text: string; action?: "retry" | "update" | "updateRemote" };
 export function sideStatus(side: SideInfo | undefined): SideStatus | undefined {
   if (!side || side.id === LOCAL_SIDE) return undefined;
   if (side.state === "ready") return side.updatePending ? { text: t("side.updatePending") } : undefined;
   if (side.state === "starting") return { text: t("side.starting") };
   if (side.state === "reconnecting") return { text: t("side.reconnecting") };
+  // The Hub there cannot work with this one (ADR 0009): both versions; Update only when the one there is older.
+  if (side.state === "error" && side.mismatch) return { text: t(side.mismatch.remoteOlder ? "side.mismatch" : "side.mismatchNewer", { remote: side.mismatch.remote, local: side.mismatch.local }), ...(side.mismatch.remoteOlder && { action: "updateRemote" as const }) };
   if (side.state === "error") return { text: side.message ?? t("side.couldNotStart"), action: "retry" };
-  // An SSH Side Daemon that ended (Grace period): off with the way back, until the next start.
+  // The Hub there ended (Grace period) (Grace period): off with the way back, until the next start.
   if (side.state === "off" && side.message) return { text: side.message, action: "retry" };
   return side.update ? { text: t("side.needsUpdate"), action: "update" } : { text: t("side.notRunning") };
 }
 
 /** The side of a cwd (as SideInfo) and the start action of its status line. */
-export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefined; act: (side: string, setup?: "needed") => void }>({ of: () => undefined, act: () => {} });
+export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefined; act: (side: string, setup?: "needed" | "updateRemote") => void }>({ of: () => undefined, act: () => {} });
 
 /** Status line under a project of a side that is not ready (Starting…, the error with Retry, Needs an update with Update). */
 export function SideStatusLine({ cwd }: { cwd: string }) {
@@ -72,8 +74,8 @@ export function SideStatusLine({ cwd }: { cwd: string }) {
     <p role="status" className="flex items-center gap-2 py-1 pl-7 text-muted-foreground text-xs max-md:min-h-11" data-testid="sidebar-side-status">
       <span className="min-w-0 break-words">{st.text}</span>
       {st.action && (
-        <button type="button" onClick={() => act(side.id, st.action === "update" ? "needed" : undefined)} className="h-6 shrink-0 rounded-md border px-2 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="sidebar-side-action">
-          {st.action === "update" ? tr("side.update") : tr("side.retry")}
+        <button type="button" onClick={() => act(side.id, st.action === "update" ? "needed" : st.action === "updateRemote" ? "updateRemote" : undefined)} className="h-6 shrink-0 rounded-md border px-2 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="sidebar-side-action">
+          {st.action === "retry" ? tr("side.retry") : tr("side.update")}
         </button>
       )}
     </p>

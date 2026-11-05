@@ -429,7 +429,7 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
     const nd = join(w, "n", B.nodeDir);
     mkdirSync(join(nd, "bin"), { recursive: true });
     // The fake Node.js: --version of the side passes (or fails), --side prints a marker.
-    writeFileSync(join(nd, "bin", "node"), `#!/bin/sh\nfor a in "$@"; do case "$a" in --version) ${o.nodeFails ? "echo 'libstdc++.so.6: cannot open' >&2; exit 127" : o.silent ? "exit 0" : "echo 1.2.3; exit 0"};; --side) echo "bundled side started"; exit 0;; esac; done\n`, { mode: 0o755 });
+    writeFileSync(join(nd, "bin", "node"), `#!/bin/sh\nfor a in "$@"; do case "$a" in --version) ${o.nodeFails ? "echo 'libstdc++.so.6: cannot open' >&2; exit 127" : o.silent ? "exit 0" : "echo 1.2.3; exit 0"};; side) echo "bundled side started"; exit 0;; esac; done\n`, { mode: 0o755 });
     writeFileSync(join(nd, "LICENSE"), "node license");
     writeFileSync(join(nd, "bin", "npm"), "unused");
     execFileSync("tar", ["-czf", join(w, "node.tar.gz"), "-C", join(w, "n"), B.nodeDir]);
@@ -476,7 +476,7 @@ describe.skipIf(!hasTar)("bundle setup script in sh (fake HOME, fake Node.js)", 
     /** A node on PATH that passes the usable_node rule and answers the side's --version and --side. */
     const nodeIn = () => {
       const bin = tmp("fn-");
-      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) echo "$0";; esac\nfor a in "$@"; do case "$a" in --version) echo 1.2.3; exit 0;; --side) echo "found node side started"; exit 0;; esac; done\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\ncase "$1" in -e) echo claude-ui-node-ok;; -p) echo "$0";; esac\nfor a in "$@"; do case "$a" in --version) echo 1.2.3; exit 0;; side) echo "found node side started"; exit 0;; esac; done\n`, { mode: 0o755 });
       return bin;
     };
     const runOn = (home: string, script: string, path: string) => spawnSync("sh", ["-c", script], { cwd: home, encoding: "utf8", env: { PATH: `${path}:/usr/bin:/bin`, HOME: home, ANTHROPIC_API_KEY: "x" } });

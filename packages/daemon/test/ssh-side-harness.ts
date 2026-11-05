@@ -1,17 +1,18 @@
 // Shared by the SSH Side tests (GH-548, GH-549): an in-process Side Daemon and the hub's end of its pipe. No ssh.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { createSideDaemon } from "../src/side-daemon.ts";
+import { createAttachServer } from "../src/side-daemon.ts";
 import { createSides, wslSide, type SideProcess } from "../src/sides.ts";
 import { sideTarget } from "../src/side-kinds.ts";
 
-/** An in-process Side Daemon: `busy` is a turn running; `opened` counts the virtual connections its handler accepted. */
-export function daemon(o: { graceMs?: number; heartbeatMs?: number; build?: string } = {}) {
-  const st = { busy: false, terminals: 0, stopped: 0, exited: 0, opened: 0, closed: 0 };
-  const d = createSideDaemon({
+/** An in-process attach server: `busy` is a turn running, `browsers` the browser connections; `opened` counts the virtual connections its handler accepted. */
+export function daemon(o: { graceMs?: number; heartbeatMs?: number; build?: string; startedBy?: "attach"; helloMs?: number } = {}) {
+  const st = { busy: false, browsers: 0, stopped: 0, exited: 0, opened: 0, closed: 0 };
+  const d = createAttachServer({
     accept: (ws) => (st.opened++, ws.on("close", () => st.closed++)),
     busy: () => st.busy,
-    terminals: () => st.terminals,
+    browsers: () => st.browsers,
+    version: "1.1.0",
     stopIdle: () => void st.stopped++,
     exit: () => void st.exited++,
     // The test hub end does not heartbeat: a long period keeps its pipes alive.
@@ -21,8 +22,8 @@ export function daemon(o: { graceMs?: number; heartbeatMs?: number; build?: stri
   return { d, st };
 }
 
-/** One pipe: the hub's end as a SideProcess; `drop()` is a dead ssh (the bridge ends both streams). */
-export function pipe(d: ReturnType<typeof daemon>["d"]): SideProcess & { drop(): void; sent: string[]; received: string[] } {
+/** One pipe: the hub's end as a SideProcess; `drop()` is a dead ssh (the bridge ends both streams). `hello`: write the hello line (a Hub does it itself). */
+export function pipe(d: ReturnType<typeof daemon>["d"], hello?: [number, number]): SideProcess & { drop(): void; sent: string[]; received: string[] } {
   const toDaemon = new PassThrough();
   const fromDaemon = new PassThrough();
   const exit = new EventEmitter();
@@ -33,7 +34,8 @@ export function pipe(d: ReturnType<typeof daemon>["d"]): SideProcess & { drop():
   const write = fromDaemon.write.bind(fromDaemon) as (c: unknown, ...a: unknown[]) => boolean;
   fromDaemon.write = ((c: unknown, ...a: unknown[]) => (received.push(String(c)), write(c, ...a))) as never;
   d.attach(toDaemon, fromDaemon);
-  // The bridge and ssh end with the Daemon's end of the pipe (a takeover, a Grace expiry), or with a dead ssh (`drop`).
+  if (hello) toDaemon.write(JSON.stringify({ hello: { schema: hello } }) + "\n");
+  // The bridge and ssh end with the Daemon's end of the pipe (a schema mismatch, a Grace expiry), or with a dead ssh (`drop`).
   let gone = false;
   const bye = () => gone || ((gone = true), exit.emit("exit", 255));
   fromDaemon.once("end", bye);
@@ -49,7 +51,6 @@ export function noDaemon(): SideProcess {
   return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
 }
 
-let hubs = 0;
 export function hub(d: ReturnType<typeof daemon>["d"], extra: Partial<Parameters<typeof createSides>[0]> = {}) {
   const pipes: ReturnType<typeof pipe>[] = [];
   const spawned: { setup?: string; attach?: boolean; bundleOnly?: boolean }[] = [];
@@ -59,7 +60,6 @@ export function hub(d: ReturnType<typeof daemon>["d"], extra: Partial<Parameters
     discoverMs: 0,
     // The in-process Daemon does not heartbeat (see `daemon`): the hub's own check would end the pipe after 45 s.
     heartbeatMs: 1e9,
-    hubId: `hub-${++hubs}`,
     ...extra,
   });
   return { sides, pipes, spawned, state: () => sides.list().find((s) => s.id === "ssh:box")!.state };

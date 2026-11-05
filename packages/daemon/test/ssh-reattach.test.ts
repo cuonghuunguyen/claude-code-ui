@@ -1,7 +1,9 @@
-// GH-549 / ADR 0007: Hub restart reattach, takeover and updates of an SSH Side. In-process Side Daemons through the attach seam, fake timers, no ssh.
+// GH-549 / ADR 0009: Hub restart reattach, several Hubs on one Hub and updates of an SSH Side. In-process attach servers, fake timers, no ssh.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { safeKey } from "../src/side-bundle.ts";
-import { createSides, isNewerBuild } from "../src/sides.ts";
+import { createSides, isNewerBuild, type SideProcess } from "../src/sides.ts";
 import { sideTarget } from "../src/side-kinds.ts";
 import { daemon, hub, noDaemon, pipe } from "./ssh-side-harness.ts";
 
@@ -66,7 +68,7 @@ describe("Hub restart", () => {
     const s = store(["ssh:box"]);
     const h = hub(d, { attached: s.attached, next: noDaemon } as never);
     await vi.advanceTimersByTimeAsync(50);
-    expect(row(h)).toMatchObject({ state: "off", message: expect.stringContaining("Open the host again") });
+    expect(row(h)).toMatchObject({ state: "off", message: expect.stringContaining("Open it again") });
     expect(s.st.ids).toEqual([]);
     await vi.advanceTimersByTimeAsync(60 * MIN);
     expect(h.spawned.length).toBe(1);
@@ -96,239 +98,91 @@ describe("Hub restart", () => {
 });
 
 describe("two Hubs", () => {
-  it("the second takes over: the first shows taken over, never attaches again, the Daemon stays", async () => {
+  it("both attach to the same Hub there and both are ready; no takeover", async () => {
     const { d, st } = daemon();
-    const sa = store();
-    const a = hub(d, { attached: sa.attached });
-    const b = hub(d, { attached: store().attached });
-    await a.sides.start("ssh:box");
-    await vi.advanceTimersByTimeAsync(5);
-    await b.sides.start("ssh:box");
-    await vi.advanceTimersByTimeAsync(5);
-    expect(a.pipes[0]!.received.join("")).toContain('{"taken":1}');
-    expect(row(a)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over by another Claude UI/) });
-    expect(row(b).state).toBe("ready");
-    expect(sa.st.ids).toEqual([]);
-    await vi.advanceTimersByTimeAsync(2 * 60 * MIN);
-    expect(a.spawned.length).toBe(1);
-    expect(st.exited).toBe(0);
-    expect(row(a).state).toBe("off");
-    a.sides.close();
-    b.sides.close();
-    d.close();
-  });
-
-  it("Retry on the taken-over Hub takes the Side back", async () => {
-    const { d } = daemon();
     const a = hub(d);
     const b = hub(d);
     await a.sides.start("ssh:box");
     await b.sides.start("ssh:box");
     await vi.advanceTimersByTimeAsync(5);
-    await a.sides.start("ssh:box");
+    a.sides.open("ssh:box", () => {});
+    b.sides.open("ssh:box", () => {});
     await vi.advanceTimersByTimeAsync(5);
     expect(row(a).state).toBe("ready");
-    expect(row(b)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
-    a.sides.close();
-    b.sides.close();
-    d.close();
-  });
-});
-
-describe("an automatic attach never takes the Side from another Hub", () => {
-  it("a reconnect of the first Hub after the second took over is answered with taken: off, no retry; Retry (a user action) takes it back", async () => {
-    const { d, st } = daemon();
-    const sa = store();
-    const a = hub(d, { attached: sa.attached, reconnectMs: [1_000] });
-    const b = hub(d);
-    await a.sides.start("ssh:box");
-    await vi.advanceTimersByTimeAsync(5);
-    a.pipes[0]!.drop(); // a network drop: A will attach again by itself
-    expect(row(a).state).toBe("reconnecting");
-    await b.sides.start("ssh:box"); // B attaches meanwhile
-    await vi.advanceTimersByTimeAsync(5);
-    await vi.advanceTimersByTimeAsync(1_100); // A's automatic attach
-    expect(a.spawned.length).toBe(2);
-    expect(row(a)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
     expect(row(b).state).toBe("ready");
-    expect(sa.st.ids).toEqual([]);
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(a.spawned.length).toBe(2); // no retry
-    await a.sides.start("ssh:box"); // Retry
-    await vi.advanceTimersByTimeAsync(5);
-    expect(row(a).state).toBe("ready");
-    expect(row(b)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
+    expect(st.opened).toBe(2);
     expect(st.exited).toBe(0);
     a.sides.close();
     b.sides.close();
     d.close();
   });
-
-  it("a Hub restart reattaches (same Hub ID, auto) even while its dead pipe is still attached", async () => {
-    const { d } = daemon();
-    const s = store();
-    const a = hub(d, { attached: s.attached, hubId: "me" });
-    await a.sides.start("ssh:box");
-    await vi.advanceTimersByTimeAsync(5);
-    // the old process is gone but its pipe is not detected yet
-    const b = hub(d, { attached: s.attached, hubId: "me" });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(row(b).state).toBe("ready");
-    expect(b.spawned[0]).toMatchObject({ attach: true });
-    b.sides.close();
-    d.close();
-  });
-
-  it("the Hub restart reattach is refused when another Hub attached in the meantime", async () => {
-    const { d } = daemon();
-    const s = store(["ssh:box"]);
-    const other = hub(d, { hubId: "other" });
-    await other.sides.start("ssh:box");
-    await vi.advanceTimersByTimeAsync(5);
-    const b = hub(d, { attached: s.attached, hubId: "me" });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(row(b)).toMatchObject({ state: "off", message: expect.stringMatching(/taken over/) });
-    expect(row(other).state).toBe("ready");
-    expect(s.st.ids).toEqual([]);
-    b.sides.close();
-    other.sides.close();
-    d.close();
-  });
 });
 
-describe("update pending", () => {
-  /** A Hub of build "new"; its spawns attach to the Daemons in order (the last repeats). */
-  function updHub(daemons: ReturnType<typeof daemon>["d"][], extra: Partial<Parameters<typeof createSides>[0]> = {}) {
-    const spawned: { setup?: string; attach?: boolean; bundleOnly?: boolean }[] = [];
-    const pipes: ReturnType<typeof pipe>[] = [];
+describe("update and mismatch", () => {
+  /** A Hub of build "new"; `update` runs (`claude-ui update` there) are counted and exit 0. */
+  function updHub(d: ReturnType<typeof daemon>["d"], extra: Partial<Parameters<typeof createSides>[0]> = {}) {
+    const updates: number[] = [];
     const sides = createSides({
       targets: [sideTarget("ssh", "box")],
-      spawn: (_id, o) => (spawned.push(o), pipes.push(pipe(daemons[Math.min(pipes.length, daemons.length - 1)]!)), pipes.at(-1)!),
+      spawn: (_id, o) => {
+        if (o.run !== "update") return pipe(d);
+        updates.push(1);
+        const exit = new EventEmitter();
+        setTimeout(() => exit.emit("exit", 0), 1);
+        return { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) } as SideProcess;
+      },
       key: () => "new",
-      updateWaitMs: 5_000,
       heartbeatMs: 1e9,
       attached: store(["ssh:box"]).attached,
       ...extra,
     });
-    return { sides, spawned, pipes, row: () => sides.list().find((s) => s.id === "ssh:box")! };
+    return { sides, updates, row: () => sides.list().find((s) => s.id === "ssh:box")! };
   }
 
-  it("a newer Hub attaches to an older Daemon, shows update pending while a turn runs, and updates once nothing runs", async () => {
-    const old = daemon({ build: "old" });
-    old.st.busy = true;
-    old.d.running(true);
-    const fresh = daemon({ build: safeKey("new") });
-    const h = updHub([old.d, fresh.d]);
+  it("an attach-started Hub of an older build is updated; the row shows updatePending", async () => {
+    const old = daemon({ build: "old", startedBy: "attach" });
+    const h = updHub(old.d);
     await vi.advanceTimersByTimeAsync(50);
-    expect(h.spawned).toEqual([expect.objectContaining({ attach: true })]);
-    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
+    expect(h.updates.length).toBe(1);
+    expect(h.row().updatePending).toBe(true);
+    h.sides.close();
+    old.d.close();
+  });
+
+  it("a Hub the user started is never updated; neither the same build nor Update automatically off", async () => {
+    const user = daemon({ build: "old" });
+    const a = updHub(user.d);
+    const same = daemon({ build: safeKey("new"), startedBy: "attach" });
+    const b = updHub(same.d);
+    const off = daemon({ build: "old", startedBy: "attach" });
+    const c = updHub(off.d, { saved: [{ id: "ssh:box", key: "new", update: false }] });
     await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(h.spawned.length).toBe(1); // still running: nothing happens
-    expect(old.st.exited).toBe(0);
-    old.st.busy = false;
-    old.d.running(false);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(h.pipes[0]!.sent.join("")).toContain('{"grace":1}');
-    expect(h.row().state).toBe("starting");
-    await vi.advanceTimersByTimeAsync(1_500); // the idle Daemon expires on its next tick
-    expect(old.st.exited).toBe(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(h.spawned[1]).toMatchObject({ setup: "needed", bundleOnly: true });
-    expect(h.spawned[1]!.attach).toBeUndefined();
-    expect(h.row()).toMatchObject({ state: "ready" });
-    expect(h.row().updatePending).toBeUndefined();
-    h.sides.close();
+    for (const h of [a, b, c]) {
+      expect(h.row().state).toBe("ready");
+      expect(h.row().updatePending).toBeUndefined();
+      expect(h.updates.length).toBe(0);
+      h.sides.close();
+    }
+    user.d.close();
+    same.d.close();
+    off.d.close();
   });
 
-  it("an open terminal counts as running: the update waits until it is closed", async () => {
-    const old = daemon({ build: "old" });
-    old.st.terminals = 1;
-    old.d.running(false);
-    const h = updHub([old.d, daemon({ build: safeKey("new") }).d]);
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
-    expect(h.spawned.length).toBe(1);
-    old.st.terminals = 0; // the Daemon reports the change on its next tick
-    await vi.advanceTimersByTimeAsync(1_100);
-    expect(h.pipes[0]!.sent.join("")).toContain('{"grace":1}');
-    h.sides.close();
-  });
+  /** A Hub there whose ready frame is `frame`. */
+  const readyOf = (frame: object): SideProcess => {
+    const stdout = new PassThrough();
+    stdout.write(JSON.stringify({ ready: true, killTree: true, hb: true, ...frame }) + "\n");
+    const exit = new EventEmitter();
+    return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 255), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } as never;
+  };
 
-  it("a Daemon of the previous build (ready without build) counts as another build", async () => {
-    const old = daemon();
-    old.st.busy = true;
-    old.d.running(true);
-    const h = updHub([old.d]);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
-    h.sides.close();
-  });
-
-  it("the same build: no update pending", async () => {
-    const h = updHub([daemon({ build: safeKey("new") }).d]);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(h.row().state).toBe("ready");
-    expect(h.row().updatePending).toBeUndefined();
-    h.sides.close();
-  });
-
-  it("Update automatically off: no update pending, nothing restarts", async () => {
-    const old = daemon({ build: "old" });
-    const h = updHub([old.d], { saved: [{ id: "ssh:box", key: "new", update: false }] });
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(h.row().state).toBe("ready");
-    expect(h.row().updatePending).toBeUndefined();
-    expect(h.spawned.length).toBe(1);
-    expect(old.st.exited).toBe(0);
-    h.sides.close();
-  });
-
-  it("a launch that still meets the old Daemon tries the update at most twice per Hub run", async () => {
-    const old = daemon({ build: "old" });
-    const h = updHub([old.d]);
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(h.spawned.length).toBe(3); // attach, update try 1, update try 2
-    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
-    await vi.advanceTimersByTimeAsync(60 * MIN);
-    expect(h.spawned.length).toBe(3);
-    h.sides.close();
-  });
-
-  const check = (install: object | undefined, installed = "none") => () => Promise.resolve({ verdict: "install", key: "new", facts: { reachable: true, running: false, installed, ...(install && { install }) } } as never);
-
-  it("no usable bundle on this machine: the old Daemon is not ended (the launch would find nothing installed), no more tries", async () => {
-    const old = daemon({ build: "old" });
-    const h = updHub([old.d], { check: check({ method: "npm", reason: "no bundle" }) });
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(h.row()).toMatchObject({ state: "ready", updatePending: true });
-    expect(h.pipes[0]!.sent.join("")).not.toContain('{"grace":1}');
-    expect(h.spawned.length).toBe(1);
-    expect(old.st.exited).toBe(0);
-    h.sides.close();
-  });
-
-  it("a usable bundle: the update goes on as usual", async () => {
-    const old = daemon({ build: "old" });
-    const h = updHub([old.d, daemon({ build: safeKey("new") }).d], { check: check({ method: "bundle" }) });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(h.spawned[1]).toMatchObject({ setup: "needed", bundleOnly: true });
-    expect(h.row().updatePending).toBeUndefined();
-    h.sides.close();
-  });
-
-  it("the pipe drops while the host is looked at before the update: the reconnect runs, not an update", async () => {
-    const old = daemon({ build: "old" });
-    let release!: (v: never) => void;
-    const slow = () => new Promise<never>((r) => (release = r));
-    const h = updHub([old.d], { check: slow, reconnectMs: [1_000] });
-    await vi.advanceTimersByTimeAsync(50);
-    h.pipes[0]!.drop();
-    expect(h.row().state).toBe("reconnecting");
-    release({ facts: { installed: "none", install: { method: "bundle" } } } as never);
-    await vi.advanceTimersByTimeAsync(1_100);
-    expect(h.spawned[1]).toMatchObject({ attach: true, setup: "never" }); // a reattach, not the update launch
-    expect(h.row().state).toBe("ready");
-    h.sides.close();
+  it("a ready frame without schema or with a range that does not overlap: error with the mismatch (remote older or newer)", async () => {
+    for (const [frame, remoteOlder] of [[{ version: "1.0.0" }, true], [{ schema: [0, 0], version: "0.9.0" }, true], [{ schema: [2, 2], version: "2.0.0" }, false]] as const) {
+      const sides = createSides({ targets: [sideTarget("ssh", "box")], spawn: () => readyOf(frame), version: "1.1.0", heartbeatMs: 1e9 });
+      await sides.start("ssh:box").catch(() => {});
+      expect(sides.list().find((x) => x.id === "ssh:box")).toMatchObject({ state: "error", mismatch: { remoteOlder, local: "1.1.0" } });
+      sides.close();
+    }
   });
 
   it("only an older Daemon is updated: an older Hub does not downgrade a newer Daemon", () => {

@@ -1,71 +1,107 @@
-// `claude-ui side --attach`: the bridge between ssh stdio and the Side Daemon's Unix socket (ADR 0007).
+// `claude-ui side --attach`: the bridge between ssh stdio and the attach socket of the Hub of the machine (ADR 0009).
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { writeDaemonFile } from "../src/ctl/daemon-file.ts";
 import { chmodSync, statSync } from "node:fs";
-import { claimSocket, liveInstall, prepareSockDir, runAttach, sideSocketPath } from "../src/side-attach.ts";
+import { claimSocket, liveInstall, prepareSockDir, runAttach, attachSocketPath } from "../src/side-attach.ts";
 
 let dir: string;
 let server: Server | undefined;
+const servers: Server[] = [];
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "side-attach-"))));
-afterEach(() => (server?.close(), rmSync(dir, { recursive: true, force: true })));
+afterEach(() => (servers.forEach((x) => x.close()), servers.length = 0, rmSync(dir, { recursive: true, force: true })));
 
 const listen = (sock: string) =>
   new Promise<void>((ok) => {
-    server = createServer((c) => c.on("data", (d) => c.write(`echo:${d}`))).listen(sock, ok);
+    servers.push((server = createServer((c) => c.on("data", (d) => c.write(`echo:${d}`))).listen(sock, ok)));
   });
 
-it("no Daemon and no --start: prints the setup error and exits 3", async () => {
+const info = (attach?: string, pid = process.pid) => ({ port: 1, pid, version: "1.1.0", startedAt: "2026-01-01T00:00:00Z", ...(attach && { attach }) });
+const alive = (pid: number) => pid === process.pid;
+const run = (o: Partial<Parameters<typeof runAttach>[0]> = {}) => {
+  const stdin = new PassThrough();
   const stdout = new PassThrough();
-  expect(await runAttach({ sock: join(dir, "none.sock"), stdin: new PassThrough(), stdout })).toBe(3);
-  expect(String(stdout.read())).toBe("CLAUDE_UI_SETUP no_daemon\n");
-});
+  return { stdin, stdout, done: runAttach({ dir, stdin, stdout, alive, waitMs: 3000, gapMs: 150, ...o }) };
+};
+/** Writes a line and waits for the echo; then ends stdin. */
+const bridged = async (r: ReturnType<typeof run>) => {
+  r.stdin.write("hello");
+  await new Promise((ok) => r.stdout.once("data", ok));
+  r.stdin.end();
+  expect(await r.done).toBe(0);
+};
 
-it("bridges stdin to the socket and back; ends when stdin ends", async () => {
+it("a live Hub with an attach socket: bridges stdin to the socket and back; ends when stdin ends", async () => {
   const sock = join(dir, "d.sock");
   await listen(sock);
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const done = runAttach({ sock, stdin, stdout });
-  stdin.write("hello");
-  await new Promise((r) => stdout.once("data", r));
-  expect(String(stdout.read() ?? "echo:hello")).toContain("echo:hello");
-  stdin.end();
-  expect(await done).toBe(0);
+  writeDaemonFile(dir, info(sock));
+  const r = run();
+  const got: string[] = [];
+  r.stdout.on("data", (b) => got.push(String(b)));
+  await bridged(r);
+  expect(got.join("")).toBe("echo:hello");
 });
 
-it("--start: starts the Daemon when none listens, then bridges", async () => {
+it("a live Hub without an attach socket: prints hub_no_attach with its version and exits 3", async () => {
+  writeDaemonFile(dir, info());
+  const r = run();
+  expect(await r.done).toBe(3);
+  expect(String(r.stdout.read())).toBe("CLAUDE_UI_SETUP hub_no_attach 1.1.0\n");
+});
+
+it("a dead pid and --start: starts a Hub, then connects once its daemon.json appears", async () => {
   const sock = join(dir, "s.sock");
+  writeDaemonFile(dir, info(sock, 999999));
   let started = 0;
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const done = runAttach({ sock, stdin, stdout, start: () => (started++, void listen(sock)) });
-  stdin.write("x");
-  await new Promise((r) => stdout.once("data", r));
-  stdin.end();
-  expect(await done).toBe(0);
+  const r = run({ start: () => (started++, void listen(sock).then(() => writeDaemonFile(dir, info(sock)))) });
+  await bridged(r);
   expect(started).toBe(1);
 });
 
-it("the socket path is the install root's dot file, or CLAUDE_UI_SIDE_SOCK", () => {
-  expect(sideSocketPath({}, "/home/u")).toBe("/home/u/.local/share/claude-ui/side/.side.sock");
-  expect(sideSocketPath({ CLAUDE_UI_SIDE_SOCK: "/x/y.sock" }, "/home/u")).toBe("/x/y.sock");
+it("no Hub and no --start: no_daemon, exit 3", async () => {
+  const r = run();
+  expect(await r.done).toBe(3);
+  expect(String(r.stdout.read())).toBe("CLAUDE_UI_SETUP no_daemon\n");
+});
+
+it("a live Hub whose socket refuses, then a new daemon.json with a listening socket: bridges, never starts a second Hub", async () => {
+  const gone = join(dir, "gone.sock");
+  const fresh = join(dir, "fresh.sock");
+  writeDaemonFile(dir, info(gone));
+  setTimeout(() => void listen(fresh).then(() => writeDaemonFile(dir, info(fresh))), 250);
+  const start = vi.fn();
+  await bridged(run({ start }));
+  expect(start).not.toHaveBeenCalled();
+});
+
+it("nothing appears within waitMs: --start ran once, then no_daemon", async () => {
+  const start = vi.fn();
+  const r = run({ start, waitMs: 300 });
+  expect(await r.done).toBe(3);
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(String(r.stdout.read())).toBe("CLAUDE_UI_SETUP no_daemon\n");
+});
+
+it("the attach socket path is CLAUDE_UI_ATTACH_SOCK, else next to daemon.json", () => {
+  expect(attachSocketPath({}, "/home/u/.config/claude-ui", 1, "linux")).toBe("/home/u/.config/claude-ui/attach.sock");
+  expect(attachSocketPath({ CLAUDE_UI_ATTACH_SOCK: "/x/y.sock" }, "/home/u/.config/claude-ui")).toBe("/x/y.sock");
 });
 
 it("a too long path falls back to XDG_RUNTIME_DIR, else /tmp/claude-ui-<uid>", () => {
-  const home = "/h/" + "x".repeat(100);
-  expect(sideSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, home, 1000, "linux")).toBe("/run/user/1000/claude-ui-side.sock");
-  expect(sideSocketPath({}, home, 1000, "linux")).toBe("/tmp/claude-ui-1000/side.sock");
-  expect(sideSocketPath({ XDG_RUNTIME_DIR: "/r/" + "y".repeat(100) }, home, 7, "darwin")).toBe("/tmp/claude-ui-7/side.sock");
+  const cfg = "/h/" + "x".repeat(100);
+  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, cfg, 1000, "linux")).toBe("/run/user/1000/claude-ui-attach.sock");
+  expect(attachSocketPath({}, cfg, 1000, "linux")).toBe("/tmp/claude-ui-1000/attach.sock");
+  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/r/" + "y".repeat(100) }, cfg, 7, "darwin")).toBe("/tmp/claude-ui-7/attach.sock");
   // The limit is 103 bytes on macOS, 107 on Linux.
-  const at = (n: number) => "/" + "h".repeat(n - "/.local/share/claude-ui/side/.side.sock".length - 1);
-  expect(sideSocketPath({}, at(103), 1, "darwin")).toContain(".local/share");
-  expect(sideSocketPath({}, at(104), 1, "darwin")).toBe("/tmp/claude-ui-1/side.sock");
-  expect(sideSocketPath({}, at(107), 1, "linux")).toContain(".local/share");
-  expect(sideSocketPath({}, at(108), 1, "linux")).toBe("/tmp/claude-ui-1/side.sock");
+  const at = (n: number) => "/" + "h".repeat(n - "/attach.sock".length - 1);
+  expect(attachSocketPath({}, at(103), 1, "darwin")).toContain("/attach.sock");
+  expect(attachSocketPath({}, at(104), 1, "darwin")).toBe("/tmp/claude-ui-1/attach.sock");
+  expect(attachSocketPath({}, at(107), 1, "linux")).toContain("hhh");
+  expect(attachSocketPath({}, at(108), 1, "linux")).toBe("/tmp/claude-ui-1/attach.sock");
 });
 
 it("a Daemon records its install folder next to the installs, for the sweep", () => {

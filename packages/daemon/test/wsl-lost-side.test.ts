@@ -39,7 +39,7 @@ describe("GH-298 lost side", () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const exit = new EventEmitter();
-    runSide({ input: stdin, output: stdout, accept: () => {}, git: (() => new Promise(() => {})) as never });
+    runSide({ ready: { schema: [1, 1], version: "1.0.0" },  input: stdin, output: stdout, accept: () => {}, git: (() => new Promise(() => {})) as never });
     const proc = { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess;
     const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => proc });
     await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toMatchObject({ sent: false });

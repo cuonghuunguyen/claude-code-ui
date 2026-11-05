@@ -1,3 +1,5 @@
+> Superseded in part by [ADR 0009](0009-hub-accepts-attach-as-side.md): the Side Daemon, takeover, Hub ID and the separate Side state dir are gone.
+
 # SSH Sides survive their pipe
 
 An SSH Side's Daemon detaches from the ssh pipe that started it and keeps running for a grace period (30 min by default, per host) with no Hub attached; the Hub reattaches with `ssh <host> claude-ui side --attach`, which bridges a new pipe to the Daemon's local socket. WSL and Docker Sides keep dying with their pipe and restarting.

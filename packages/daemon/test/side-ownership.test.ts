@@ -36,7 +36,7 @@ function fakeSide(reply: (m: any) => unknown = (m) => (m.type === "session.list"
       if (r !== undefined) out(r === null ? { type: "reply", reqId: f.m.reqId, result: {} } : { type: "reply", reqId: f.m.reqId, result: r });
     }
   });
-  stdout.write('{"ready":true}\n');
+  stdout.write('{"ready":true,"schema":[1,1],"version":"1.0.0"}\n');
   const ee = new EventEmitter();
   const proc: SideProcess = { stdin, stdout, stderr: new PassThrough(), kill: () => ee.emit("exit", 1), on: (e, l) => ee.on(e, l) };
   const push = (p: object) => stdout.write(JSON.stringify({ push: p }) + "\n");

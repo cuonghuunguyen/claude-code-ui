@@ -114,7 +114,7 @@ describe("with a Docker side configured (the router answers first)", () => {
         const stdin = new PassThrough();
         const stdout = new PassThrough();
         stdin.on("data", () => {});
-        stdout.write(JSON.stringify({ ready: true }) + "\n");
+        stdout.write(JSON.stringify({ ready: true, schema: [1, 1] }) + "\n");
         return { stdin, stdout, stderr: new PassThrough(), kill: () => {}, on: () => {} } as never;
       },
     });

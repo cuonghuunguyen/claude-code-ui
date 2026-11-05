@@ -73,13 +73,20 @@ describe("sideStatus", () => {
     expect(sideStatus(side({ state: "error", message: "WSL: U stopped (exit code 1). Retry to start it again." }))).toEqual({ text: "WSL: U stopped (exit code 1). Retry to start it again.", action: "retry" });
     expect(sideStatus(side({ state: "off", update: true }))).toEqual({ text: "Needs an update", action: "update" });
     expect(sideStatus(side({ state: "off" }))).toEqual({ text: "Not running" });
-    expect(sideStatus(side({ state: "off", message: "The Side Daemon has ended." }))).toEqual({ text: "The Side Daemon has ended.", action: "retry" });
+    expect(sideStatus(side({ state: "off", message: "The remote Hub has ended." }))).toEqual({ text: "The remote Hub has ended.", action: "retry" });
   });
-  it("an SSH Side whose remote Daemon runs another build says update pending, with no action; a taken-over Side shows its message with Retry", () => {
+  it("an SSH Side whose remote Daemon runs another build says update pending, with no action; a Side with a message shows it with Retry", () => {
     expect(sideStatus(side({ id: "ssh:box", state: "ready", updatePending: true }))).toEqual({ text: "Update pending: updates when nothing runs" });
     expect(sideStatus(side({ id: "ssh:box", state: "ready" }))).toBeUndefined();
-    const taken = "SSH: box is taken over by another Claude UI. Retry to take it back.";
-    expect(sideStatus(side({ id: "ssh:box", state: "off", message: taken }))).toEqual({ text: taken, action: "retry" });
+    const msg = "SSH: box stopped. Retry to start it again.";
+    expect(sideStatus(side({ id: "ssh:box", state: "off", message: msg }))).toEqual({ text: msg, action: "retry" });
+  });
+  it("a version mismatch says so: Update action when the remote is older, none when this Hub is older", () => {
+    const m = (remoteOlder: boolean) => side({ id: "ssh:box", state: "error", mismatch: { local: "2.0.0", remote: "1.0.0", localSchema: [2, 2] as [number, number], remoteOlder } });
+    expect(sideStatus(m(true))).toEqual({ text: "Claude UI 1.0.0 there, 2.0.0 here: they cannot work together.", action: "updateRemote" });
+    const newer = sideStatus(m(false));
+    expect(newer?.action).toBeUndefined();
+    expect(newer?.text).not.toBe(sideStatus(m(true))?.text);
   });
 });
 

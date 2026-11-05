@@ -12,9 +12,9 @@ export type FakeDockerConfig = {
   check: { stdout: string };
   /** Answer of the setup script (prints `CLAUDE_UI_SETUP <code>`); the install ends here. */
   setup: { code: number; stdout: string };
-  /** GH-458: one line per `docker` call (its first argument; `setup` for a setup exec) is appended here: the steps count them. */
+  /** GH-458: one line per `docker` call (its first argument; `setup` for a setup exec, and `start` after it when the exec may start a Hub: `side --attach --start`) is appended here: the steps count them. */
   log?: string;
-  /** GH-458: the setup exec runs a real side (`main.ts --side`) as the container's claude-ui; its PID is written to `<home>/side.pid`. `projects`: its roots. */
+  /** GH-458, GH-578: the setup exec runs a real bridge (`main.ts side --attach [--start]`, the arguments the setup script ends with) as the container's claude-ui; its PID is written to `<home>/side.pid`. The bridge starts the Hub of the container (detached, `<home>/.config/claude-ui/daemon.json`). `projects`: its roots. */
   side?: { home: string; repo: string; projects: string };
 };
 
@@ -27,8 +27,9 @@ const answer = (a: { code?: number; stdout?: string; stderr?: string }) => `prin
  */
 export function fakeDockerScript(c: FakeDockerConfig): string {
   const log = (what: string) => (c.log ? `echo ${what} >> ${q(c.log)}; ` : "");
-  // exec keeps the PID: kill of side.pid ends the side, like a container's process ending. cwd = the repo, so `--import tsx` resolves.
-  const side = c.side && `mkdir -p ${q(c.side.home)}; echo $$ > ${q(join(c.side.home, "side.pid"))}; cd ${q(c.side.repo)} && exec env HOME=${q(c.side.home)} XDG_CONFIG_HOME=${q(join(c.side.home, ".config"))} ${q(process.execPath)} --import tsx packages/daemon/src/main.ts --side --roots ${q(c.side.projects)}`;
+  // exec keeps the PID: kill of side.pid ends the bridge, like a dropped pipe. The Hub it started stays (detached, own PID in daemon.json), like in a container.
+  // cwd = the repo, so `--import tsx` resolves; NODE_OPTIONS lets the detached Hub (same main.ts, started by the bridge) load tsx too. The script's last words are the cli arguments.
+  const side = c.side && `mkdir -p ${q(c.side.home)}; echo $$ > ${q(join(c.side.home, "side.pid"))}; case "$s" in *"side --attach --start"*) a="side --attach --start";; *) a="side --attach";; esac; cd ${q(c.side.repo)} && exec env HOME=${q(c.side.home)} XDG_CONFIG_HOME=${q(join(c.side.home, ".config"))} CLAUDE_UI_ROOTS=${q(c.side.projects)} NODE_OPTIONS="--import tsx" ${q(process.execPath)} packages/daemon/src/main.ts $a`;
   return `${c.log ? `echo "$1" >> ${q(c.log)}\n` : ""}case "$1" in
   version) echo linux;;
   ps) printf '%s\\n' ${c.containers.map(q).join(" ")};;
@@ -42,7 +43,7 @@ export function fakeDockerScript(c: FakeDockerConfig): string {
   exec)
     for a in "$@"; do s=$a; done
     case "$s" in
-      *CLAUDE_UI_SETUP*) ${log("setup")}${side ?? answer(c.setup)};;
+      *CLAUDE_UI_SETUP*) ${log("setup")}${c.log ? `case "$s" in *"side --attach --start"*) echo start >> ${q(c.log)};; esac; ` : ""}${side ?? answer(c.setup)};;
       *installed*) ${answer({ stdout: c.check.stdout })};;
       *"uname -m"*) ${answer(c.probe)};;
     esac

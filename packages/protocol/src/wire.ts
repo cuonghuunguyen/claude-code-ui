@@ -158,12 +158,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
    * first when this build is not installed, `force` installs it again.
    */
   | { type: "side.start"; side: string; setup?: SideSetup }
+  /** `error` row with a `mismatch` (remote older), or a ready Side whose Hub an attach started: runs `claude-ui update` there; this Hub attaches again afterwards. */
+  | { type: "side.updateRemote"; side: string }
   /** Read-only look at a side (nothing is installed or started; the hub answers it, a side never sees it): reply `SideCheck`, error `unknown_side`. */
   | { type: "side.check"; side: string }
   /** Add SSH host: writes a `Host` block for `ssh user@host -p N [-i key] [-J jump]` to the ssh config (alias defaults to the host name). Reply `SshAddResult`; error `bad_request` with the reason (bad command, alias exists, no ssh). Broadcasts nothing: the list is read again. */
   | { type: "ssh.add"; command: string; alias?: string }
   /** "Start with Claude UI" (`start`: the hub starts the side with itself) and "Update automatically" (`update`) of a side; reply `{}`; error `unknown_side`, `bad_request`. */
-  | { type: "side.prefs"; side: string; start?: boolean; update?: boolean; /** SSH Side: the Grace period in minutes. */ graceMinutes?: number }
+  | { type: "side.prefs"; side: string; start?: boolean; update?: boolean; /** The Grace period of the Hub an attach started there, in minutes. */ graceMinutes?: number }
   | { type: "session.rewindPreview"; sessionId: string; userMessageId: string }
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
@@ -525,7 +527,7 @@ export function worktreeNameError(name: string): string | undefined {
 export type SideInfo = {
   id: string;
   label: string;
-  /** `reconnecting`: an SSH Side whose pipe dropped; its Side Daemon keeps running and the hub attaches again. */
+  /** `reconnecting`: the pipe to the Hub of the Side dropped; that Hub keeps running and this hub attaches again. */
   state: "off" | "starting" | "ready" | "reconnecting" | "error";
   message?: string;
   phase?: SidePhase;
@@ -539,10 +541,12 @@ export type SideInfo = {
   autoStart?: true;
   /** Only `false`: the hub does not update this side's claude-ui by itself. */
   autoUpdate?: false;
-  /** SSH Side: minutes the remote Side Daemon keeps running with no hub attached (Grace period; default 30). */
+  /** Minutes the Hub that an attach started there keeps running with no hub attached, no browser and no turn (Grace period; default 30). */
   graceMinutes?: number;
-  /** SSH Side, ready: the remote Side Daemon runs another build; the hub updates it once nothing runs (no turn, no open terminal). */
+  /** Ready: the Hub there was started by an attach and runs another build; it is replaced by this build once nothing runs there. */
   updatePending?: true;
+  /** `error`: the Hub there speaks no frame schema of ours (ADR 0009). `remoteOlder`: Update (side.updateRemote) can fix it; else this claude-ui must be updated. `remoteSchema` absent: a Hub without an attach socket. */
+  mismatch?: { local: string; remote: string; localSchema: [number, number]; remoteSchema?: [number, number]; remoteOlder: boolean };
   /** `off` and the installed claude-ui is not this build: an update is needed (Update). */
   update?: true;
   /** A saved side the hub does not list now (a Docker container that is not running); named for Settings and the sidebar. */

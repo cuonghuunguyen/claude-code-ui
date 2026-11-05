@@ -37,7 +37,7 @@ const spawnSide = async (): Promise<SideProcess> => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const exit = new EventEmitter();
-  hostPush = runSide({ input: stdin, output: stdout, accept: side.accept, onEnd: () => exit.emit("exit", 0) }).push;
+  hostPush = runSide({ ready: { schema: [1, 1], version: "1.0.0" },  input: stdin, output: stdout, accept: side.accept, onEnd: () => exit.emit("exit", 0) }).push;
   return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
 };
 const hubPushes: PushPayload[] = [];

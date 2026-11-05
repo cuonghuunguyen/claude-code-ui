@@ -1,4 +1,4 @@
-// GH-548 / ADR 0007: an SSH Side survives its pipe. The Side registry talks to an in-process Side Daemon through the attach seam;
+// GH-548 / ADR 0009: a Side survives its pipe. The Side registry talks to an in-process attach server through the attach seam;
 // a dropped pipe is a destroyed stream pair. Fake timers, no ssh.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -11,10 +11,10 @@ const MIN = 60_000;
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-describe("Side Daemon: the Grace period", () => {
+describe("attach server: the Grace period", () => {
   it("does not count while a Hub is attached or a turn runs; counts while a turn waits on a prompt; at expiry stops idle turns and exits", async () => {
-    const { d, st } = daemon({ graceMs: 30 * MIN });
-    const p = pipe(d);
+    const { d, st } = daemon({ graceMs: 30 * MIN, startedBy: "attach" });
+    const p = pipe(d, [1, 1]);
     await vi.advanceTimersByTimeAsync(2 * 60 * MIN);
     expect(st.exited).toBe(0); // attached: held at 0
     p.drop();
@@ -31,8 +31,8 @@ describe("Side Daemon: the Grace period", () => {
   });
 
   it("the Grace period restarts from full when a long unattended turn ends", async () => {
-    const { d, st } = daemon({ graceMs: 30 * MIN });
-    pipe(d).drop();
+    const { d, st } = daemon({ graceMs: 30 * MIN, startedBy: "attach" });
+    pipe(d, [1, 1]).drop();
     await vi.advanceTimersByTimeAsync(20 * MIN);
     st.busy = true; // a turn starts while unattended
     await vi.advanceTimersByTimeAsync(60 * MIN);
@@ -45,10 +45,10 @@ describe("Side Daemon: the Grace period", () => {
   });
 
   it("a Hub that attaches within the Grace period starts the count over", async () => {
-    const { d, st } = daemon({ graceMs: 30 * MIN });
-    pipe(d).drop();
+    const { d, st } = daemon({ graceMs: 30 * MIN, startedBy: "attach" });
+    pipe(d, [1, 1]).drop();
     await vi.advanceTimersByTimeAsync(29 * MIN);
-    const p = pipe(d);
+    const p = pipe(d, [1, 1]);
     await vi.advanceTimersByTimeAsync(60 * MIN);
     p.drop();
     await vi.advanceTimersByTimeAsync(29 * MIN);
@@ -57,8 +57,8 @@ describe("Side Daemon: the Grace period", () => {
   });
 
   it("the Hub sets the Grace period on attach ({grace: ms})", async () => {
-    const { d, st } = daemon({ graceMs: 30 * MIN });
-    const p = pipe(d);
+    const { d, st } = daemon({ graceMs: 30 * MIN, startedBy: "attach" });
+    const p = pipe(d, [1, 1]);
     p.stdin.write('{"grace":120000}\n');
     await vi.advanceTimersByTimeAsync(10);
     p.drop();
@@ -67,25 +67,54 @@ describe("Side Daemon: the Grace period", () => {
     d.close();
   });
 
-  it("the newest attach takes over: the first pipe's connections close, the Daemon stays", async () => {
-    const { d, st } = daemon();
-    const a = pipe(d);
-    a.stdin.write('{"c":1,"o":1}\n');
+  it("Grace counts only with no pipe, no browser, no turn; a Hub the user started never exits", async () => {
+    const { d, st } = daemon({ graceMs: 10 * MIN, startedBy: "attach" });
+    st.browsers = 1;
+    await vi.advanceTimersByTimeAsync(30 * MIN);
+    expect(st.exited).toBe(0); // a browser holds it
+    st.browsers = 0;
+    await vi.advanceTimersByTimeAsync(11 * MIN);
+    expect(st.exited).toBe(1);
+    d.close();
+    const user = daemon({ graceMs: MIN });
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(user.st.exited).toBe(0);
+    user.d.close();
+  });
+
+  it("two pipes attach at once: both get pushes and running; one dropping leaves the other", async () => {
+    const { d, st } = daemon({ graceMs: MIN, startedBy: "attach" });
+    const a = pipe(d, [1, 1]);
+    const b = pipe(d, [1, 1]);
     await vi.advanceTimersByTimeAsync(10);
-    expect(st.opened).toBe(1);
-    const seen: string[] = [];
-    a.stdout.on("data", (b) => seen.push(String(b)));
-    pipe(d);
-    await vi.advanceTimersByTimeAsync(2_100); // a Hub of the previous build sends no hello: the Daemon waits for it, then takes over
-    expect(seen.join("")).toContain('{"taken":1}'); // the first Hub is told, so it does not attach again
-    expect(st.closed).toBe(1);
-    expect(st.exited).toBe(0);
+    d.push({ sessionId: "s", title: "t", body: "b" });
+    d.running(true);
+    for (const p of [a, b]) {
+      const out = p.received.join("");
+      expect(out).toContain('"push"');
+      expect(out).toContain('{"running":true}');
+    }
+    a.drop();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    expect(st.exited).toBe(0); // b is still attached
+    b.drop();
+    await vi.advanceTimersByTimeAsync(2 * MIN);
+    expect(st.exited).toBe(1);
+    d.close();
+  });
+
+  it("a hello with a schema range that does not overlap gets one ready frame, then the pipe ends", async () => {
+    const { d } = daemon({ startedBy: "attach" });
+    const p = pipe(d, [2, 2]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(p.received.join("").trim().split("\n")).toEqual([expect.stringContaining('"schema":[1,1]')]);
+    expect((p.stdout as unknown as PassThrough).writableEnded).toBe(true);
     d.close();
   });
 
   it("heartbeats both ways every 15 s; 3 missed frames from the Hub end the pipe", async () => {
     const { d, st } = daemon({ heartbeatMs: 15_000 });
-    const p = pipe(d);
+    const p = pipe(d, [1, 1]);
     p.stdin.write('{"c":1,"o":1}\n');
     const out: string[] = [];
     p.stdout.on("data", (b) => out.push(String(b)));
@@ -124,7 +153,7 @@ describe("Side registry: an SSH Side survives the pipe", () => {
     stdin.on("data", (b) => sent.push(String(b)));
     let killed = 0;
     const silent: SideProcess = { stdin, stdout, stderr: new PassThrough(), kill: () => (killed++, exit.emit("exit", 255)), on: (e, l) => exit.on(e, l) };
-    stdout.write('{"ready":true,"killTree":true,"hb":true}\n');
+    stdout.write('{"ready":true,"killTree":true,"hb":true,"schema":[1,1],"version":"1.1.0"}\n');
     const sides = createSides({ targets: [sideTarget("ssh", "box")], spawn: () => silent, reconnectMs: [60_000] });
     await sides.start("ssh:box");
     await vi.advanceTimersByTimeAsync(30_000);
@@ -162,7 +191,7 @@ describe("Side registry: an SSH Side survives the pipe", () => {
     first.drop();
     expect(row().state).toBe("reconnecting");
     await vi.advanceTimersByTimeAsync(2_000 + 10); // the attach finds no Daemon
-    expect(row()).toMatchObject({ state: "off", message: expect.stringContaining("Open the host again") });
+    expect(row()).toMatchObject({ state: "off", message: expect.stringContaining("Open it again") });
     await vi.advanceTimersByTimeAsync(10 * MIN); // no more tries
     expect(calls.length).toBe(2);
     await sides.start("ssh:box"); // the user opens the host: a fresh launch (not attach-only)
@@ -196,13 +225,13 @@ describe("Side registry: an SSH Side survives the pipe", () => {
     sides.close();
   });
 
-  it("WSL keeps its behaviour: a dropped pipe restarts the Side (starting), never reconnecting", async () => {
+  it("WSL reconnects like SSH: a dropped pipe shows reconnecting", async () => {
     const { d } = daemon();
     const h = hub(d);
     await h.sides.start("wsl:Ubuntu");
     await vi.advanceTimersByTimeAsync(5);
     h.pipes[0]!.drop();
-    expect(h.sides.list().find((s) => s.id === "wsl:Ubuntu")!.state).toBe("starting");
+    expect(h.sides.list().find((s) => s.id === "wsl:Ubuntu")!.state).toBe("reconnecting");
     h.sides.close();
   });
 });

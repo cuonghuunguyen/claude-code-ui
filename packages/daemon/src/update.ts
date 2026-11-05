@@ -158,6 +158,11 @@ export function createUpdater(opts: {
   broadcast: (m: UpdateMessage) => void;
   pollMs?: number;
   graceMs?: number;
+  /**
+   * A Hub started by an attach has no launcher and no install of its own to update: "update" retires it. `install` resolves at once (the attaching
+   * Hub brings its build), `restart` calls `onRetire` (no new attach), waits until no turn runs (open terminals do not hold it) and exits 0.
+   */
+  retire?: { onRetire: () => void };
 }) {
   let available: string | undefined;
   let installed: string | undefined;
@@ -188,6 +193,7 @@ export function createUpdater(opts: {
     check,
     /** Checks now and every CHECK_INTERVAL_MS. */
     start() {
+      if (opts.retire) return;
       void check();
       setInterval(check, CHECK_INTERVAL_MS).unref();
     },
@@ -198,10 +204,13 @@ export function createUpdater(opts: {
     },
     /** Installs the available version (once; a second call waits for the first). The daemon keeps running on failure. */
     install(): Promise<string> {
-      const v = available;
-      if (!v) return Promise.reject(new Error("no update available"));
-      if (installed === v) return Promise.resolve(v);
-      installing ??= (async () => {
+      if (opts.retire) return Promise.resolve(opts.current);
+      if (installing) return installing;
+      const p = (async () => {
+        // A Hub that checked before the release has none available yet.
+        const v = available ?? (await check());
+        if (!v) throw new Error("no update available");
+        if (installed === v) return v;
         setState({ phase: "installing" });
         try {
           await installVersion(opts.dir, v, opts);
@@ -213,17 +222,29 @@ export function createUpdater(opts: {
           // Every connection is back at "available".
           setState(undefined);
           throw err;
-        } finally {
-          installing = undefined;
         }
       })();
-      return installing;
+      // Cleared whatever way it ends (a failed look at the registry included), so a later call tries again.
+      installing = p;
+      const clear = () => void (installing === p && (installing = undefined));
+      p.then(clear, clear);
+      return p;
     },
     /**
      * Exits RESTART_CODE once no session is busy for `graceMs` (`now`: at once). Nothing busy but open terminals: once they
      * are closed, or `now`. Returns the busy sessions it waits for.
      */
     restart(now = false): number {
+      if (opts.retire) {
+        opts.retire.onRetire();
+        const n = opts.busy().sessions;
+        const done = () => (clearInterval(waiting), setState({ phase: "restarting" }), opts.exit(0));
+        if (now || !n) return (done(), 0);
+        setState({ phase: "waiting", waitingFor: n, terminals: 0 });
+        clearInterval(waiting);
+        waiting = setInterval(() => !opts.busy().sessions && done(), opts.pollMs ?? 1000).unref();
+        return n;
+      }
       if (!installed) throw new Error("no update installed");
       const first = opts.busy();
       if (now || (!first.sessions && !first.terminals)) return (restartNow(), 0);

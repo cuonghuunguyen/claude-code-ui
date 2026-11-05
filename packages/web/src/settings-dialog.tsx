@@ -281,7 +281,12 @@ function SidesSection({ sides, request, onError }: { sides: SideInfo[]; request:
                     {t("side.retry")}
                   </button>
                 )}
-                {r.id.startsWith("ssh:") && (
+                {!local && sideStatus(r)?.action === "updateRemote" && (
+                  <button type="button" onClick={() => void request({ type: "side.updateRemote", side: r.id }).catch((e: Error) => onError(e.message))} className="mt-1 h-6 rounded-md border px-2 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid={`settings-side-update-remote-${r.id}`}>
+                    {t("side.update")}
+                  </button>
+                )}
+                {!local && (
                   <label className="mt-1 flex items-center gap-2 text-muted-foreground text-xs" title={t("settings.sides.graceHint")}>
                     <span>{t("settings.sides.grace")}</span>
                     <input

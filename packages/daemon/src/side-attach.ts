@@ -1,19 +1,21 @@
-// `claude-ui side --attach` (ADR 0007): a thin bridge between ssh stdio and the Side Daemon's Unix socket. The launching ssh and every
-// later reattach run it; it never speaks the protocol.
+// `claude-ui side --attach` (ADR 0009): a thin bridge between ssh/wsl/docker stdio and the attach socket of the Hub of this machine (named in
+// its daemon.json). Every launch and reattach runs it; it never speaks the protocol.
 import { connect as netConnect, type Server, type Socket } from "node:net";
 import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { readDaemonFile } from "./ctl/daemon-file.ts";
+import { pidAlive } from "./ctl/connect.ts";
 import type { Readable, Writable } from "node:stream";
 
-/** Where the Side Daemon listens: next to the installs (the install sweep never touches a dot name), so a newer build finds an older Daemon. */
-export function sideSocketPath(env: NodeJS.ProcessEnv, home: string, uid: number = process.getuid?.() ?? 0, platform: string = process.platform) {
-  if (env.CLAUDE_UI_SIDE_SOCK) return env.CLAUDE_UI_SIDE_SOCK;
+/** Where a Hub accepts attaching Hubs (ADR 0009): next to its `daemon.json`, else a shorter folder when the path does not fit `sun_path`. */
+export function attachSocketPath(env: NodeJS.ProcessEnv, configDir: string, uid: number = process.getuid?.() ?? 0, platform: string = process.platform) {
+  if (env.CLAUDE_UI_ATTACH_SOCK) return env.CLAUDE_UI_ATTACH_SOCK;
   // sun_path holds 104 bytes on macOS, 108 on Linux, with the NUL.
   const max = platform === "darwin" ? 103 : 107;
-  const long = join(home, ".local", "share", "claude-ui", "side", ".side.sock");
+  const long = join(configDir, "attach.sock");
   if (Buffer.byteLength(long) <= max) return long;
-  const run = env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "claude-ui-side.sock") : "";
-  return run && Buffer.byteLength(run) <= max ? run : join("/tmp", `claude-ui-${uid}`, "side.sock");
+  const run = env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "claude-ui-attach.sock") : "";
+  return run && Buffer.byteLength(run) <= max ? run : join("/tmp", `claude-ui-${uid}`, "attach.sock");
 }
 
 let outer: number | undefined;
@@ -29,8 +31,8 @@ export function listenPrivate(server: Server, path: string) {
 }
 
 /**
- * Where a running Side Daemon records its install folder (`<root>/.live`, read by the install sweep so an update never deletes the build a
- * Daemon still runs on): from the cli path `<root>/<key>/node_modules/claude-code-ui/dist/cli.js`; undefined for any other layout (a source checkout).
+ * Where a running attach-started Hub records its install folder (`<root>/.live`, read by the install sweep so an update never deletes the build a
+ * Hub still runs on): from the cli path `<root>/<key>/node_modules/claude-code-ui/dist/cli.js`; undefined for any other layout (a source checkout).
  */
 export function liveInstall(cli: string): { file: string; dir: string } | undefined {
   const tail = ["node_modules", "claude-code-ui", "dist", "cli.js"];
@@ -50,8 +52,8 @@ export function prepareSockDir(dir: string, uid: number | undefined = process.ge
 }
 
 /**
- * Listens on `path`. EADDRINUSE: a live Daemon owns it (`onLive`, a second start that lost the race leaves); else the file is stale
- * (a dead Daemon's) and is removed only if it is still the file seen at EADDRINUSE, so two starts never remove each other's new socket.
+ * Listens on `path`. EADDRINUSE: a live Hub owns it (`onLive`); else the file is stale
+ * (a dead Hub's) and is removed only if it is still the file seen at EADDRINUSE, so two starts never remove each other's new socket.
  * shortcut: the stat -> rm gap stays (no atomic compare-and-remove on a path), upgrade when a lock file is needed.
  */
 export function claimSocket(server: Server, path: string, o: { onLive: () => void; onError: (e: Error) => void; connect?: (p: string) => Socket }) {
@@ -77,21 +79,39 @@ const tryConnect = (path: string, connect: (p: string) => Socket) =>
   });
 
 /**
- * Bridges `stdin`/`stdout` to the socket until either ends. No Daemon: with `start` it is started (`start()` returns at once) and the
- * socket awaited up to `waitMs`; else `CLAUDE_UI_SETUP no_daemon` is printed and the exit code is 3 (the hub's setup-error contract).
+ * Bridges `stdin`/`stdout` to the attach socket of the Hub in `<dir>/daemon.json` until either ends. Prints `CLAUDE_UI_SETUP <code>` and returns 3 (the
+ * attaching Hub's setup-error contract) when there is no Hub (`no_daemon`) or a live Hub without an attach socket (`hub_no_attach <version>`).
+ * A live Hub whose socket refuses (it retires) is awaited up to `waitMs`, no Hub up to `gapMs` (a Hub that replaces it appears within seconds);
+ * only then, with `start`, a Hub is started (`start()` returns at once) when no live pid is named, and awaited up to `waitMs`.
  */
-export async function runAttach(o: { sock: string; stdin: Readable; stdout: Writable; start?: () => void; waitMs?: number; connect?: (p: string) => Socket }): Promise<number> {
+export async function runAttach(o: { dir: string; stdin: Readable; stdout: Writable; start?: () => void; waitMs?: number; gapMs?: number; connect?: (p: string) => Socket; alive?: (pid: number) => boolean }): Promise<number> {
   const connect = o.connect ?? ((p: string) => netConnect(p));
-  let s = await tryConnect(o.sock, connect);
-  if (!s && o.start) {
-    o.start();
-    for (let t = 0; !s && t < (o.waitMs ?? 15_000); t += 100) {
+  const alive = o.alive ?? pidAlive;
+  const say = (code: string) => (o.stdout.write(`CLAUDE_UI_SETUP ${code}\n`), 3);
+  const find = async (spawned: boolean) => {
+    const t0 = Date.now();
+    let live = spawned;
+    for (;;) {
+      const d = readDaemonFile(o.dir);
+      if (d && alive(d.pid)) {
+        live = true;
+        if (!d.attach) return { noAttach: d.version };
+        const s = await tryConnect(d.attach, connect);
+        if (s) return { sock: s };
+      }
+      if (Date.now() - t0 >= (live ? (o.waitMs ?? 15_000) : (o.gapMs ?? 5_000))) return undefined;
       await new Promise((r) => setTimeout(r, 100));
-      s = await tryConnect(o.sock, connect);
     }
+  };
+  let r = await find(false);
+  if (!r && o.start) {
+    const d = readDaemonFile(o.dir);
+    // A live pid that still refuses is a Hub on its way: never a second one.
+    if (!(d && alive(d.pid))) (o.start(), (r = await find(true)));
   }
-  if (!s) return (o.stdout.write("CLAUDE_UI_SETUP no_daemon\n"), 3);
-  const sock = s;
+  if (!r) return say("no_daemon");
+  if ("noAttach" in r) return say(`hub_no_attach ${r.noAttach}`);
+  const sock = r.sock;
   return new Promise((resolve) => {
     o.stdin.pipe(sock);
     sock.pipe(o.stdout, { end: false });

@@ -1084,8 +1084,8 @@ it("Sides group: an SSH row whose remote Daemon runs another build says update p
   expect(q("settings-side-ssh:two")?.textContent).toContain("Running");
 });
 
-it("Sides group: a taken-over SSH row has a Retry button that sends side.start; a running row has none", async () => {
-  const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "off", message: "SSH: box is taken over by another Claude UI. Retry to take it back." }, { id: "ssh:two", label: "SSH: two", state: "ready" }] });
+it("Sides group: an SSH row with a message has a Retry button that sends side.start; a running row has none", async () => {
+  const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "off", message: "SSH: box stopped. Retry to start it again." }, { id: "ssh:two", label: "SSH: two", state: "ready" }] });
   await pick("sides");
   expect(q("settings-side-retry-ssh:two")).toBeNull();
   const n = calls.length;
@@ -1093,14 +1093,15 @@ it("Sides group: a taken-over SSH row has a Retry button that sends side.start; 
   expect(calls.slice(n)).toContainEqual(expect.objectContaining({ type: "side.start", side: "ssh:box" }));
 });
 
-it("Sides group: an SSH Side has a Grace period field (default 30 min) that sends side.prefs graceMinutes; other kinds have none", async () => {
+it("Sides group: every non-local Side has a Grace period field (default 30 min) that sends side.prefs graceMinutes; local has none", async () => {
   const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "reconnecting" }, { id: "ssh:two", label: "SSH: two", state: "ready", graceMinutes: 45 }, { id: "wsl:Ubuntu", label: "WSL: Ubuntu", state: "ready" }] });
   await pick("sides");
   expect(q("settings-side-ssh:box")?.textContent).toContain("Reconnecting…");
   const box = q("settings-side-grace-ssh:box") as HTMLInputElement;
   expect(box.value).toBe("30");
   expect((q("settings-side-grace-ssh:two") as HTMLInputElement).value).toBe("45");
-  expect(q("settings-side-grace-wsl:Ubuntu")).toBeNull();
+  expect((q("settings-side-grace-wsl:Ubuntu") as HTMLInputElement).value).toBe("30");
+  expect(q("settings-side-grace-local")).toBeNull();
   const type = async (el: HTMLInputElement, v: string) =>
     act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
@@ -1113,6 +1114,17 @@ it("Sides group: an SSH Side has a Grace period field (default 30 min) that send
   await type(box, "0");
   expect(calls).toHaveLength(n);
   expect(box.value).toBe("30");
+});
+
+it("Sides group: a version mismatch shows its text; Update (side.updateRemote) only when the remote is older", async () => {
+  const mm = (remoteOlder: boolean) => ({ local: "2.0.0", remote: "1.0.0", localSchema: [2, 2] as [number, number], remoteOlder });
+  const { q, pick, calls } = await render({ sides: [LOCAL, { id: "ssh:old", label: "SSH: old", state: "error", mismatch: mm(true) }, { id: "ssh:new", label: "SSH: new", state: "error", mismatch: mm(false) }] });
+  await pick("sides");
+  expect(q("settings-side-ssh:old")?.textContent).toContain("Claude UI 1.0.0 there, 2.0.0 here: they cannot work together.");
+  expect(q("settings-side-update-remote-ssh:new")).toBeNull();
+  const n = calls.length;
+  await act(async () => q("settings-side-update-remote-ssh:old")!.click());
+  expect(calls.slice(n)).toContainEqual({ type: "side.updateRemote", side: "ssh:old" });
 });
 
 it("Appearance (GH-510): Language offers System, English, Tiếng Việt; a pick applies at once and is kept", async () => {
