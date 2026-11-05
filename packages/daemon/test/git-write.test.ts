@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { gitBranch } from "../src/git-remote.ts";
@@ -117,6 +117,83 @@ describe("gitCommitFiles", () => {
     await expect(gitCommitFiles(dir, { paths: ["a.txt"], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request", message: expect.stringContaining("merge") });
     expect(run(dir, "rev-parse", "HEAD")).toBe(head);
     expect(existsSync(join(dir, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
+  /** Main and branch f both change a.txt: merging, rebasing or cherry-picking one onto the other conflicts. */
+  function diverged() {
+    const r = repo();
+    run(r.dir, "checkout", "-q", "-b", "f");
+    put(r.dir, "a.txt", "a-f\n");
+    run(r.dir, "commit", "-q", "-am", "f");
+    run(r.dir, "checkout", "-q", "main");
+    put(r.dir, "a.txt", "a-main\n");
+    run(r.dir, "commit", "-q", "-am", "main");
+    return r;
+  }
+  const soft = (cwd: string, ...args: string[]) => {
+    try {
+      run(cwd, ...args);
+    } catch {
+      // a conflict exits non-zero
+    }
+  };
+  /** Refused with `message`; HEAD and the real index (conflict entries included) are unchanged. */
+  async function refused(dir: string, message: string, paths = ["a.txt", "b.txt"]) {
+    const head = run(dir, "rev-parse", "HEAD");
+    const index = run(dir, "ls-files", "-s");
+    put(dir, "b.txt", "b-new\n");
+    await expect(gitCommitFiles(dir, { paths, message: "m", allowed: (p: string) => p.startsWith(dirname(dir)) })).rejects.toMatchObject({ code: "bad_request", message });
+    expect(run(dir, "rev-parse", "HEAD")).toBe(head);
+    expect(run(dir, "ls-files", "-s")).toBe(index);
+  }
+
+  it("refuses during a rebase conflict; the conflict entries stay", async () => {
+    const { dir } = diverged();
+    run(dir, "checkout", "-q", "f");
+    soft(dir, "rebase", "main");
+    expect(run(dir, "ls-files", "-u")).not.toBe("");
+    await refused(dir, "Resolve the conflicts first");
+  });
+
+  it("refuses after a stash pop conflict (no operation state at all)", async () => {
+    const { dir } = repo();
+    put(dir, "a.txt", "a-stash\n");
+    run(dir, "stash", "push", "-q");
+    put(dir, "a.txt", "a-head\n");
+    run(dir, "commit", "-q", "-am", "h");
+    soft(dir, "stash", "pop");
+    expect(run(dir, "ls-files", "-u")).not.toBe("");
+    await refused(dir, "Resolve the conflicts first");
+  });
+
+  it("refuses a merge whose conflicts are resolved: the commit would lose MERGE_HEAD as second parent", async () => {
+    const { dir } = diverged();
+    soft(dir, "merge", "f");
+    put(dir, "a.txt", "a-both\n");
+    run(dir, "add", "a.txt");
+    expect(run(dir, "ls-files", "-u")).toBe("");
+    await refused(dir, "Finish or abort the merge first");
+    expect(existsSync(join(dir, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
+  it("refuses a cherry-pick with resolved conflicts", async () => {
+    const { dir } = diverged();
+    soft(dir, "cherry-pick", "f");
+    put(dir, "a.txt", "a-both\n");
+    run(dir, "add", "a.txt");
+    await refused(dir, "Finish or abort the cherry-pick first");
+  });
+
+  it("refuses a rebase stopped without a conflict, in a linked worktree (git-path aware)", async () => {
+    const { root, dir } = repo();
+    put(dir, "a.txt", "a1\n");
+    run(dir, "commit", "-q", "-am", "one");
+    const wt = join(root, "wt");
+    run(dir, "worktree", "add", "-q", "-b", "w", wt);
+    soft(wt, "rebase", "-q", "--exec", "false", "HEAD~1");
+    expect(run(wt, "ls-files", "-u")).toBe("");
+    expect(existsSync(join(dir, ".git", "worktrees", "wt", "rebase-merge"))).toBe(true);
+    await refused(wt, "Finish or abort the rebase first");
   });
 
   it("an empty path list without amend is bad_request", async () => {

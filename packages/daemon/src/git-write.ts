@@ -1,6 +1,7 @@
 // Git writes of the Changes tab (docs/spec.md "Layout", Changes tab; wire `git.commitFiles`): started by a click, so the
 // repository's hooks run like in a terminal; they never prompt. Later Git ops (rollback, checkout) extend this module.
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
@@ -33,6 +34,12 @@ async function run(top: string, args: string[], env: NodeJS.ProcessEnv, o: { inp
 const bad = (m: string) => new WorktreeError("bad_request", m);
 const ask = async (top: string, args: string[], env: NodeJS.ProcessEnv) => (await run(top, args, env, { soft: true }));
 
+/** The daemon's view of a path git printed (a WSL repository's git prints POSIX). */
+function hostOf(top: string, gitPath: string): string {
+  const w = wslPathOf(top);
+  return w ? wslHostPath(w.root, gitPath) : resolve(top, gitPath);
+}
+
 const LITERAL = ["--literal-pathspecs"];
 const FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
 
@@ -58,20 +65,24 @@ export async function gitCommitFiles(cwd: string, o: { paths: unknown; message: 
     const committed = await exclusive(top, async () => {
       const head = await ask(top, ["rev-parse", "--verify", "-q", "HEAD"], env);
       if (amend && head.code === 1) throw bad("No commit to amend");
-      // The temporary index has no conflict entries and the commit would end the operation with only the checked paths.
-      for (const state of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
-        if ((await ask(top, ["rev-parse", "--verify", "-q", state], env)).code === 0) throw bad("A merge, cherry-pick or revert is in progress: finish it in a terminal");
+      // The temporary index starts from HEAD: it has no conflict entries, and the final `reset` would clear the real index's
+      // ones; a merge commit would lose its second parent. Committing inside these states is the conflict banner's job.
+      if ((await run(top, ["ls-files", "-u", "-z"], env)).out) throw bad("Resolve the conflicts first");
+      for (const [state, op] of [["MERGE_HEAD", "merge"], ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"]]) {
+        if ((await ask(top, ["rev-parse", "--verify", "-q", state], env)).code === 0) throw bad(`Finish or abort the ${op} first`);
       }
+      const [merge, apply] = (await run(top, ["rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply"], env)).out.split("\n");
+      if (existsSync(hostOf(top, merge))) throw bad("Finish or abort the rebase first");
+      if (existsSync(hostOf(top, apply))) throw bad(`Finish or abort the ${existsSync(hostOf(top, `${apply}/applying`)) ? "am" : "rebase"} first`);
       if (o.push) {
         const sym = await ask(top, ["symbolic-ref", "-q", "HEAD"], env);
         if (sym.code === 1) throw bad("HEAD is detached: use Commit");
         branchRef = sym.out;
       }
       const name = `claude-ui-commit-${randomUUID()}.index`;
-      // git's own view of the path (a WSL repository's git prints POSIX); the daemon's view for the clean-up.
+      // git's own view of the path for GIT_INDEX_FILE; the daemon's view for the clean-up.
       const gitPath = (await run(top, ["rev-parse", "--git-path", name], env)).out;
-      const w = wslPathOf(top);
-      const hostPath = w ? wslHostPath(w.root, gitPath) : resolve(top, gitPath);
+      const hostPath = hostOf(top, gitPath);
       const tmp = { ...env, GIT_INDEX_FILE: gitPath };
       let out: string;
       try {
