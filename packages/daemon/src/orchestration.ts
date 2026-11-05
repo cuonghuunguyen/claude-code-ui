@@ -893,7 +893,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_read",
-        `Read a worker's last timeline entries as text. \`name\`: your worker, or a path such as implementer/reviewer. \`part\` (reply id) + \`offset\`: that reply from \`offset\`, ${PAGE} characters per page (`nextOffset`).`,
+        `Read a worker's last timeline entries as text. \`name\`: your worker, or a path such as implementer/reviewer. \`part\` (reply id) + \`offset\`: that reply from \`offset\`, ${PAGE} characters per page (\`nextOffset\`).`,
         {
           name: z.union([name, z.string().regex(PATH, "name must be a worker name or a path of worker names such as a/b")]),
           lastN: z.number().int().min(1).max(200).optional(),
