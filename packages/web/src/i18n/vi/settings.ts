@@ -269,6 +269,9 @@ export default {
   "about.web": "Ứng dụng web",
   "about.daemon": "Daemon",
   "about.hint": "Hãy kèm các thông tin này khi báo lỗi.",
+  "about.updates": "Cập nhật",
+  "about.check": "Kiểm tra cập nhật",
+  "about.autoCheck": "Được kiểm tra khi claude-ui khởi động và mỗi ngày một lần.",
 
   // pairing-form.tsx
   "pairing.invalid": "Đây không phải liên kết hoặc token ghép nối.",

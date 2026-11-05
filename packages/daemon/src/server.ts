@@ -2571,13 +2571,15 @@ export function createDaemon(opts: {
             return fail(e instanceof ConfigError ? e.code : "addons_failed", (e as Error).message);
           }
         }
+        case "update.check":
         case "update.install":
         case "update.restart": {
           if (!updater) return fail("update_unavailable", "updates are off (source checkout, --no-update-check or not started by claude-ui)");
           try {
+            if (msg.type === "update.check") return reply(await updater.checkNow());
             return reply(msg.type === "update.install" ? { installed: await updater.install() } : { waitingFor: updater.restart(msg.now === true) });
           } catch (e) {
-            return fail("update_failed", (e as Error).message);
+            return fail((e as { code?: string }).code ?? "update_failed", (e as Error).message);
           }
         }
         default:

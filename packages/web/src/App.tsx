@@ -44,7 +44,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
+import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -71,7 +71,7 @@ import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
-import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
+import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
 import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
@@ -399,6 +399,8 @@ export function App() {
   const guideStep = useRef<string>(undefined);
   const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" | "palette" }>();
   const [update, setUpdate] = useState<UpdateInfo>();
+  // Bumped by a manual check that finds a version: remounts the notice, so one "Not yet" hid shows again.
+  const [updateShown, setUpdateShown] = useState(0);
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
   const staleDismissed = useRef<string | undefined>(undefined);
@@ -1745,6 +1747,17 @@ export function App() {
   }
   /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
   const openSettingsGroup = (id: string) => (saveSettingsGroup(id), setSettingsOpen(true));
+  // Settings > About and the palette (docs/spec.md "Updates"): a version found now shows the notice again, even one "Not yet" hid.
+  const checkUpdate = async () => {
+    const r = await client.current!.request<UpdateCheckResult>({ type: "update.check" });
+    const latest = r.latest;
+    if (latest) {
+      undismissUpdate();
+      setUpdate((u) => (u?.version === latest ? u : { version: latest, current: r.current }));
+      setUpdateShown((n) => n + 1);
+    }
+    return r;
+  };
   /** Create worktree modal done: a new-session tab in the new worktree. */
   async function openInWorktree(project: string, path: string) {
     setCreatingWt(undefined);
@@ -3167,6 +3180,7 @@ export function App() {
     toggleComputerAwake: computerAwake?.supported ? () => void setComputer(!computerAwake.on) : undefined,
     toggleChrome: chromeOn === undefined ? undefined : () => void client.current!.request({ type: "settings.set", patch: { chrome: { enabled: !chromeOn } } }).catch((e) => setError((e as Error).message)),
     openSettings: () => setSettingsOpen(true),
+    checkUpdate: () => void checkUpdate().then((r) => !r.latest && setToast(tr("app.update.upToDate", { version: r.current })), (e) => setToast(checkError(e))),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast(tr("app.main.tipsReset"))),
     openMcp: project ? () => openMcp() : undefined,
@@ -4295,7 +4309,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4350,7 +4364,7 @@ export function App() {
         )}
       </div>
       <ToastRegion>
-        {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+        {update && <UpdateToast key={updateShown} update={update} request={(m) => client.current!.request(m)} />}
         {stale && !update && (
           <StaleToast
             note={stale}

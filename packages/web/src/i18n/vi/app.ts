@@ -20,6 +20,10 @@ export default {
   "app.update.updateRestart": "Cập nhật và khởi động lại",
   "app.update.notYet": "Chưa",
   "app.update.restartNow": "Khởi động lại ngay",
+  "app.update.off": "Cập nhật bị tắt ở đây: bản mã nguồn, --no-update-check, hoặc Claude UI do máy khác khởi động.",
+  "app.update.checkFailed": "Không kiểm tra được bản cập nhật: {reason}",
+  "app.update.upToDate": "claude-ui {version} là bản mới nhất.",
+  "app.update.checking": "Đang kiểm tra bản cập nhật…",
   // status-bar.tsx / context-meter.tsx
   "app.status.in": "Vào: {tokens}",
   "app.status.out": "Ra: {tokens}",
@@ -150,6 +154,7 @@ export default {
   "app.cmd.focusNext": "Yêu cầu chờ kế tiếp",
   "app.cmd.notificationsFocus": "Đến thông báo",
   "app.cmd.settingsOpen": "Mở cài đặt",
+  "app.cmd.checkUpdate": "Kiểm tra cập nhật",
   "app.cmd.guideStart": "Xem hướng dẫn",
   "app.cmd.tipsReset": "Đặt lại gợi ý phím tắt",
   "app.cmd.sidebarToggle": "Bật/tắt thanh bên",

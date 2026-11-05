@@ -267,6 +267,9 @@ export default {
   "about.web": "Web app",
   "about.daemon": "Daemon",
   "about.hint": "Include these in a bug report.",
+  "about.updates": "Updates",
+  "about.check": "Check for updates",
+  "about.autoCheck": "Checked when claude-ui starts and once a day.",
 
   // pairing-form.tsx
   "pairing.invalid": "That is not a pairing link or token.",

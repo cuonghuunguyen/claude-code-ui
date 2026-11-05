@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { ServerMessage, UpdateState } from "@claude-ui/protocol";
+import type { ServerMessage, UpdateCheckResult, UpdateState } from "@claude-ui/protocol";
 import { configDir } from "./token.ts";
 
 export const PACKAGE = "claude-code-ui";
@@ -78,14 +78,21 @@ export function parseRegistry(value: string | undefined): string | undefined {
   return v;
 }
 
+/** The registry's latest version; throws when the registry does not answer or answers no plain version. */
+export async function registryLatest(opts: { registry?: string; fetch?: typeof fetch } = {}): Promise<string> {
+  const r = await (opts.fetch ?? fetch)(`${opts.registry ?? REGISTRY}/${PACKAGE}/latest`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) throw new Error(`the registry answered ${r.status ?? "an error"}`);
+  const version = ((await r.json()) as { version?: unknown } | null)?.version;
+  if (!isVersion(version)) throw new Error("the registry answered no release version");
+  return version;
+}
+
 /** The registry's latest version when it is newer than `current`; undefined on the same or older version and on any failure. */
 export async function latestNewer(current: string, opts: { registry?: string; fetch?: typeof fetch } = {}) {
   if (!isVersion(current)) return undefined;
   try {
-    const r = await (opts.fetch ?? fetch)(`${opts.registry ?? REGISTRY}/${PACKAGE}/latest`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
-    if (!r.ok) return undefined;
-    const version = ((await r.json()) as { version?: unknown } | null)?.version;
-    return isVersion(version) && compareVersions(version, current) > 0 ? version : undefined;
+    const version = await registryLatest(opts);
+    return compareVersions(version, current) > 0 ? version : undefined;
   } catch {
     return undefined;
   }
@@ -180,12 +187,15 @@ export function createUpdater(opts: {
     opts.exit(RESTART_CODE);
   };
 
-  async function check() {
-    const v = await latestNewer(opts.current, opts);
+  const found = (v: string | undefined) => {
     if (v && v !== available && !state) {
       available = v;
       opts.broadcast({ type: "update_available", version: v, current: opts.current });
     }
+  };
+  async function check() {
+    const v = await latestNewer(opts.current, opts);
+    found(v);
     return v;
   }
 
@@ -196,6 +206,16 @@ export function createUpdater(opts: {
       if (opts.retire) return;
       void check();
       setInterval(check, CHECK_INTERVAL_MS).unref();
+    },
+    /**
+     * `update.check` (Settings > About, the palette): asks the registry now, unlike `check` failing loudly. A newer version also
+     * goes to every connection. Not on an attach-started Hub: it updates with the Hub that attached (code update_unavailable).
+     */
+    async checkNow(): Promise<UpdateCheckResult> {
+      if (opts.retire) throw Object.assign(new Error("this Claude UI was started by another computer and updates with it"), { code: "update_unavailable" });
+      const latest = await registryLatest(opts);
+      found(isVersion(opts.current) && compareVersions(latest, opts.current) > 0 ? latest : undefined);
+      return { current: opts.current, ...(available && { latest: available }) };
     },
     /** What a new connection gets: the available version and the update under way. */
     messages(): UpdateMessage[] {

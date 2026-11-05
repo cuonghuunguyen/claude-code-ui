@@ -323,6 +323,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** `target`: `fence:<lang>` or `tool:<name>`. Reply `{}`. */
   | { type: "addons.pickRenderer"; target: string; name: string }
   // Updates (docs/spec.md "Updates").
+  /** Asks the registry now (Settings > About, the palette); reply UpdateCheckResult. A newer version also goes out as update_available. */
+  | { type: "update.check" }
   /** Installs the available version into the daemon's versions dir; reply UpdateInstallResult. The daemon keeps running. */
   | { type: "update.install" }
   /** Restarts into the installed version once every session is idle (`now`: at once); reply UpdateRestartResult. */
@@ -410,6 +412,8 @@ export type ServerMessage =
  * subagent run); "Restart now" would also end `terminals` terminals. `restarting`: the daemon exits; the browser reconnects.
  */
 export type UpdateState = { phase: "installing" | "restarting" } | { phase: "waiting"; waitingFor: number; terminals: number };
+/** `latest`: the newer version the daemon offers, none when this one is the latest. */
+export type UpdateCheckResult = { current: string; latest?: string };
 export type UpdateInstallResult = { installed: string };
 /** `waitingFor`: 0 when the daemon restarts at once. */
 export type UpdateRestartResult = { waitingFor: number };

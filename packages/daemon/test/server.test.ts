@@ -4452,6 +4452,8 @@ describe("updates", () => {
       await new Promise((r) => setTimeout(r, 20));
       const a = await client(p);
       expect(await a.waitFor((m) => m.type === "update_available")).toEqual({ type: "update_available", version: "0.2.1", current: "0.2.0" });
+      // A manual check (Settings > About) answers with the same version.
+      expect(await a.request({ type: "update.check" })).toMatchObject({ result: { current: "0.2.0", latest: "0.2.1" } });
       const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const sessionId = result.session.id;
       await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
@@ -4471,6 +4473,7 @@ describe("updates", () => {
     }
     const c = await client();
     expect(await c.request({ type: "update.install" })).toMatchObject({ type: "error", code: "update_unavailable" });
+    expect(await c.request({ type: "update.check" })).toMatchObject({ type: "error", code: "update_unavailable" });
     expect(c.inbox.some((m) => m.type === "update_available")).toBe(false);
     c.ws.close();
   });

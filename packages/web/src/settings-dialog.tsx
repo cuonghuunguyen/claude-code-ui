@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -23,6 +23,7 @@ import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
+import type { UpdateInfo } from "./update.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
 import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
@@ -754,7 +755,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker }: { sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker, update, onCheckUpdate }: { update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -959,7 +960,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       body: (
         <>
           {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
-          <AboutSection daemonVersion={daemon?.version} />
+          <AboutSection daemonVersion={daemon?.version} update={update} onCheckUpdate={onCheckUpdate} request={request} />
         </>
       ),
     },

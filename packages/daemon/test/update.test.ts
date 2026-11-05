@@ -129,6 +129,24 @@ describe("createUpdater", () => {
     expect(u.messages()).toEqual([{ type: "update_available", version: "0.2.1", current: "0.2.0" }]);
   });
 
+  it("checkNow asks the registry, announces a newer version and replies with it", async () => {
+    const { u, sent } = setup();
+    expect(await u.checkNow()).toEqual({ current: "0.2.0", latest: "0.2.1" });
+    expect(sent).toEqual([{ type: "update_available", version: "0.2.1", current: "0.2.0" }]);
+    // Asked again (the user dismissed the notice): same answer, no second broadcast.
+    expect(await u.checkNow()).toEqual({ current: "0.2.0", latest: "0.2.1" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("checkNow says up to date without a newer version, and fails when the registry does not answer", async () => {
+    const opts = { current: "0.2.1", dir: dir(), run: fakeNpm(), busy: () => ({ sessions: 0, terminals: 0 }), exit: vi.fn(), broadcast: vi.fn() };
+    expect(await createUpdater({ ...opts, fetch: answer({ version: "0.2.1" }) }).checkNow()).toEqual({ current: "0.2.1" });
+    await expect(createUpdater({ ...opts, fetch: answer({}, false) }).checkNow()).rejects.toThrow(/registry/);
+    await expect(createUpdater({ ...opts, fetch: answer({ version: "next" }) }).checkNow()).rejects.toThrow(/registry/);
+    await expect(createUpdater({ ...opts, fetch: (async () => { throw new Error("offline"); }) as never }).checkNow()).rejects.toThrow(/offline/);
+    expect(opts.broadcast).not.toHaveBeenCalled();
+  });
+
   it("installs, then restarts at once when nothing runs", async () => {
     const { u, sent, exit } = setup();
     await u.check();
@@ -249,6 +267,9 @@ describe("createUpdater", () => {
       const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: answer({ version: "0.2.1" }), run, busy: () => busy, exit, broadcast: () => {}, pollMs: 100, retire: { onRetire: () => void order.push("retire") } });
       return { u, exit, busy, order, run };
     };
+    it("checkNow refuses: it updates with the Hub that attached", async () => {
+      await expect(retiring().u.checkNow()).rejects.toMatchObject({ code: "update_unavailable" });
+    });
     it("install resolves current at once, nothing is installed", async () => {
       const { u, run } = retiring();
       expect(await u.install()).toBe("0.2.0");
