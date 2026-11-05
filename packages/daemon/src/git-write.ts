@@ -271,7 +271,13 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
   info.reset = { soft: [...HARDEN, "reset", "--soft", hash], mixed: [...HARDEN, "reset", "--mixed", hash], hard: [...HARDEN, "reset", "--hard", "--no-recurse-submodules", hash] };
   if (hard) {
     // Tracked changes of the index and work tree, plus untracked files the target tree would overwrite.
-    const names = async (...a: string[]) => (await run(top, ["diff", "--no-renames", "--name-only", "-z", ...a], env)).out.split("\0").filter(Boolean);
+    // Raw stdout: `run` keeps only the last 8000 chars, which would cut the list the dialog and the fingerprint rest on.
+    const names = async (...a: string[]) => {
+      const r = await runGit({ cwd: top, args: [...HARDEN, "diff", "--no-renames", "--name-only", "-z", ...a], env, timeout: writeConfig.timeout, killTree: true }).catch((e: Failure) => {
+        throw new WorktreeError("git_failed", tidy(`${e.stdout?.toString("utf8") ?? ""}\n${e.stderr ?? ""}` || e.message, MAX_ERROR));
+      });
+      return r.stdout.toString("utf8").split("\0").filter(Boolean);
+    };
     const lose = new Set(await names("HEAD"));
     for (const f of await names("--diff-filter=A", "HEAD", hash)) if (await lstat(join(top, f)).then(() => true, () => false)) lose.add(f);
     const paths = [...lose].sort();

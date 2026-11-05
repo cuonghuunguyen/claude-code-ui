@@ -176,6 +176,23 @@ describe("reset", () => {
   });
 });
 
+describe("reset hard preview size", () => {
+  it("lists every lost file when the names total more than 8000 characters, and a late edit of the first is stale", async () => {
+    const r = repo();
+    const names = Array.from({ length: 300 }, (_, i) => `${"d".repeat(40)}${String(i).padStart(3, "0")}.txt`);
+    for (const n of names) put(r.dir, n, "x\n");
+    run(r.dir, "add", "-A");
+    run(r.dir, "commit", "-q", "-m", "many");
+    for (const n of names) put(r.dir, n, "y\n");
+    const c1 = head(r.dir, "HEAD~1");
+    const m = await menu(r, c1, true);
+    expect(m.loseCount).toBe(300);
+    expect(m.lose![0]).toBe(names[0]);
+    put(r.dir, names[0]!, "edited after the preview\n");
+    await expect(gitCommitAction(r.dir, "reset", { ...r.o, hash: c1, headRef: m.headRef, headHash: m.headHash, argv: m.reset!.hard, mode: "hard", dirty: m.dirty })).rejects.toMatchObject({ code: "stale" });
+  });
+});
+
 describe("blocked states", () => {
   it("detached HEAD", async () => {
     const r = repo();
