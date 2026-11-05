@@ -718,7 +718,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_send",
-        "Send text to a worker: steers its running turn, or starts a new turn when idle.",
+        "Send text to a worker: steers its running turn, or starts a new turn when idle or closed.",
         { name, text: text("text") },
         async (a) => {
           let coordinator = cur();
