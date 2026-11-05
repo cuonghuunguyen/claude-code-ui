@@ -100,16 +100,18 @@ export function createShortcut(o: { platform: NodeJS.Platform; env: NodeJS.Proce
     writeFileSync(file, content);
     if (mode) chmodSync(file, mode);
   };
-  const installed = () => existsSync(path);
-  // Data-loss guard: only an entry carrying MARK may be replaced or removed (a .lnk keeps its Description as UTF-16 or ANSI text).
-  const guard = () => {
-    if (!installed()) return;
-    let ours = false;
+  // Data-loss guard: only an entry carrying MARK is ours: it counts as installed and may be replaced or removed (a .lnk keeps its Description as UTF-16 or ANSI text).
+  const ours = () => {
     try {
       const b = readFileSync(o.platform === "darwin" ? join(path, "Contents/Info.plist") : path);
-      ours = b.includes(MARK) || b.includes(Buffer.from(MARK, "utf16le"));
-    } catch {}
-    if (!ours) throw new Error(`${path} exists and was not made by claude-ui; remove or rename it yourself first`);
+      return b.includes(MARK) || b.includes(Buffer.from(MARK, "utf16le"));
+    } catch {
+      return false;
+    }
+  };
+  const installed = () => existsSync(path) && ours();
+  const guard = () => {
+    if (existsSync(path) && !ours()) throw new Error(`${path} exists and was not made by claude-ui; remove or rename it yourself first`);
   };
   return {
     installed,

@@ -118,6 +118,7 @@ describe("createShortcut", () => {
       mkdirSync(path.endsWith(".app") ? join(path, "Contents") : dir, { recursive: true });
       const file = path.endsWith(".app") ? join(path, "Contents/Info.plist") : path;
       writeFileSync(file, "the user's own");
+      expect(shortcut.installed()).toBe(false); // a foreign entry is not ours: the switch shows off
       await expect(shortcut.set(false)).rejects.toThrow(/not made by claude-ui/);
       await expect(shortcut.set(true)).rejects.toThrow(/not made by claude-ui/);
       expect(readFileSync(file, "utf8")).toBe("the user's own");
