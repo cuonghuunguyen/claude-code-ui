@@ -223,6 +223,10 @@ export class Session {
   private staleTimer?: NodeJS.Timeout;
   /** Stream messages received so far: a stale check that sees a newer one keeps the turn. */
   private received = 0;
+  /** Date.now() of the last stream message (or of this object): the stall watchdog reads it with `received` (activity()). */
+  private receivedAt = Date.now();
+  /** Assistant, result, stream, tool progress, compaction status and prompt hook messages received so far (activity()). */
+  private progress = 0;
   /** The first stale check that found the turn ended: the transcript size and message count it saw; a second one must see the same. */
   private staleSeen?: { size: number; received: number };
   /** The CLI compacts the conversation (status compacting until compact_boundary or another status): a silent turn. */
@@ -446,6 +450,14 @@ export class Session {
     this.query = undefined;
     // ponytail: 5 s cap in case the CLI hangs on exit; a later write then leaves a metadata-only transcript stub.
     await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
+  }
+
+  /**
+   * What the CLI sent: all messages and when the last came (a long tool call still sends a heartbeat every 30 s), and `progress`,
+   * the messages that show the turn runs (not the echo of the prompt, which the CLI sends once it took it).
+   */
+  activity() {
+    return { received: this.received, at: this.receivedAt, progress: this.progress };
   }
 
   /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
@@ -1207,6 +1219,9 @@ export class Session {
   /** One SDK message of this session's live query. */
   private receive(m: SDKMessage, q: Query) {
     this.received++;
+    this.receivedAt = Date.now();
+    // Compaction and a prompt hook run before the first reply of a healthy turn: they count, so no_start does not fire on them.
+    if (["assistant", "result", "stream_event", "tool_progress"].includes(m.type) || (m.type === "system" && (m.subtype === "status" || m.subtype === "compact_boundary" || (m.subtype === "hook_started" && m.hook_event === "UserPromptSubmit")))) this.progress++;
     this.armStale();
     if ((m.type === "user" || m.type === "assistant") && m.uuid) {
       this.known.add(m.uuid);
