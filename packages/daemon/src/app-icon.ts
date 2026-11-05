@@ -1,5 +1,5 @@
-// The app icon (docs/spec.md "Static files"): /app-icon serves the `app.icon` setting as an image, /manifest.webmanifest
-// swaps its icons for it. Both are unauthenticated like the static files (an installed app fetches them without the token).
+// The app icon and name (docs/spec.md "Static files"): /app-icon serves the `app.icon` setting as an image, /manifest.webmanifest
+// swaps in that icon and the `app.name`. Both are unauthenticated like the static files (an installed app fetches them without the token).
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -21,14 +21,14 @@ export function iconFile(icon: string): { body: Buffer; type: string; image: boo
 const COMMON = { "cache-control": "no-cache", "x-content-type-options": "nosniff" } as const;
 const notModified = (req: IncomingMessage, etag: string) => (req.headers["if-none-match"] ?? "").split(",").some((t) => t.trim() === "*" || t.trim().replace(/^W\//, "") === etag);
 
-/** Handles GET/HEAD /app-icon and /manifest.webmanifest; false = not ours (or the built-in icon is set: static serves the manifest). `icon`: reads the current setting, only for these two paths. */
-export function serveAppIcon(req: IncomingMessage, res: ServerResponse, root: string, path: string, getIcon: () => string): boolean {
+/** Handles GET/HEAD /app-icon and /manifest.webmanifest; false = not ours (or neither icon nor name is set: static serves the manifest). `getApp`: reads the current setting, only for these two paths. */
+export function serveAppIcon(req: IncomingMessage, res: ServerResponse, root: string, path: string, getApp: () => { icon: string; name: string }): boolean {
   if (path !== "/app-icon" && path !== "/manifest.webmanifest") return false;
   if (req.method !== "GET" && req.method !== "HEAD") return false;
-  const icon = getIcon();
+  const { icon, name } = getApp();
   if (path === "/manifest.webmanifest") {
-    if (!icon) return false;
-    void manifest(req, res, root, icon);
+    if (!icon && !name) return false;
+    void manifest(req, res, root, icon, name);
     return true;
   }
   if (!icon) return void res.writeHead(302, { location: "/icon.svg", "cache-control": "no-cache" }).end(), true;
@@ -40,11 +40,14 @@ export function serveAppIcon(req: IncomingMessage, res: ServerResponse, root: st
   return true;
 }
 
-async function manifest(req: IncomingMessage, res: ServerResponse, root: string, icon: string) {
+async function manifest(req: IncomingMessage, res: ServerResponse, root: string, icon: string, name: string) {
   try {
     const m = JSON.parse(await readFile(join(root, "manifest.webmanifest"), "utf8")) as Record<string, unknown>;
-    const f = iconFile(icon);
-    m.icons = [{ src: `/app-icon?v=${hashOf(icon).slice(0, 8)}`, sizes: f.image ? `${APP_ICON_PX}x${APP_ICON_PX}` : "any", type: f.type, purpose: "any" }];
+    if (name) m.name = m.short_name = name;
+    if (icon) {
+      const f = iconFile(icon);
+      m.icons = [{ src: `/app-icon?v=${hashOf(icon).slice(0, 8)}`, sizes: f.image ? `${APP_ICON_PX}x${APP_ICON_PX}` : "any", type: f.type, purpose: "any" }];
+    }
     const body = Buffer.from(JSON.stringify(m));
     res.writeHead(200, { ...COMMON, "content-type": "application/manifest+json", "content-length": body.length }).end(req.method === "HEAD" ? undefined : body);
   } catch {

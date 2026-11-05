@@ -1,4 +1,5 @@
 // Unread markers (docs/spec.md "Layout", "Session view UX"): a session needed input or finished since this browser last showed it.
+import { APP_NAME_DEFAULT } from "@claude-ui/protocol";
 import type { SessionView } from "./store.ts";
 
 /** Where this browser last showed a session in a focused, visible tab. Seqs are per daemon run, hence the epoch. */
@@ -8,7 +9,7 @@ export const isUnread = (v: SessionView, seen: Seen | undefined) => v.attentionS
 
 export const seenNow = (v: SessionView): Seen => ({ epoch: v.logEpoch, seq: v.lastSeq });
 
-export const tabTitle = (unread: number) => (unread ? `(${unread}) Claude UI` : "Claude UI");
+export const tabTitle = (unread: number, name = APP_NAME_DEFAULT) => (unread ? `(${unread}) ${name}` : name);
 
 const KEY = "claude-ui.seen";
 

@@ -4,12 +4,12 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
 import { saveLabel, useLabels } from "./labels.ts";
-import { saveAppIcon, useAppIcon } from "./app-icon.ts";
+import { saveApp, useAppIcon, useAppName } from "./app-icon.ts";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -198,12 +198,16 @@ function LanguageRow() {
 function AppIconRow({ request }: { request: <T>(msg: Request) => Promise<T> }) {
   const t = useT();
   const icon = useAppIcon();
+  const name = useAppName();
+  // The default name is no custom name: the dialog shows it as the placeholder.
+  const custom = name === APP_NAME_DEFAULT ? "" : name;
   const [editing, setEditing] = useState(false);
   return (
     <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11" data-testid="settings-app-icon">
       {icon ? <LabelIcon icon={icon} className="size-8 text-2xl" /> : <img alt="" src="/icon.svg" className="size-8 shrink-0 rounded-sm" />}
       <div className="min-w-0 flex-1">
         <span id="settings-app-icon-label" className="block text-sm">{t("settings.appIcon.label")}</span>
+        <span className="block truncate font-medium text-sm" data-testid="settings-app-name">{name}</span>
         <span id="settings-app-icon-hint" className="block text-muted-foreground text-xs">{t("settings.appIcon.hint")}</span>
       </div>
       <button type="button" onClick={() => setEditing(true)} aria-describedby="settings-app-icon-hint" className="h-8 shrink-0 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-app-icon-change">
@@ -211,13 +215,12 @@ function AppIconRow({ request }: { request: <T>(msg: Request) => Promise<T> }) {
       </button>
       <LabelDialog
         open={editing}
-        nameless
         iconPx={APP_ICON_PX}
         iconMax={APP_ICON_MAX}
         title={t("settings.appIcon.label")}
-        fallbackName=""
-        label={icon ? { icon } : undefined}
-        onSave={(l) => saveAppIcon(request, l?.icon ?? "")}
+        fallbackName={APP_NAME_DEFAULT}
+        label={icon || custom ? { ...(custom && { name: custom }), ...(icon && { icon }) } : undefined}
+        onSave={(l) => saveApp(request, { icon: l?.icon ?? "", name: l?.name?.trim() ?? "" })}
         onClose={() => setEditing(false)}
       />
     </div>

@@ -30,7 +30,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -140,27 +140,34 @@ it("Close finished workers is on by default and its switch sends a patch of that
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { orchestration: { closeFinished: false } } });
 }, 15000);
 
-it("Appearance: App icon row shows the built-in icon, Change opens a nameless dialog and an emoji saves as app.icon", async () => {
+it("Appearance: App name and icon row shows the built-in icon and name, Change saves a name and an emoji as app.name and app.icon", async () => {
   const { q, calls, pick } = await render();
   await pick("appearance");
   expect(q("settings-app-icon")!.querySelector("img")!.getAttribute("src")).toBe("/icon.svg");
+  expect(q("settings-app-name")!.textContent).toBe("Claude UI");
   expect(q("settings-app-icon")!.textContent).toContain("every browser");
   await act(async () => q("settings-app-icon-change")!.click());
   expect(q("label-dialog")).not.toBeNull();
-  expect(q("label-name")).toBeNull();
+  expect((q("label-name") as HTMLInputElement).placeholder).toBe("Claude UI");
+  const type = (id: string, v: string) =>
+    act(async () => {
+      const i = q(id) as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, v);
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  await type("label-name", " Work ");
   await act(async () => q("label-icon-emoji")!.click());
-  await act(async () => {
-    const i = q("label-emoji") as HTMLInputElement;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(i, "🚀");
-    i.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await type("label-emoji", "🚀");
   await act(async () => q("label-save")!.click());
-  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "🚀" } } });
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "🚀", name: "Work" } } });
   expect(q("settings-app-icon")!.textContent).toContain("🚀");
+  expect(q("settings-app-name")!.textContent).toBe("Work");
   expect(q("label-dialog")).toBeNull();
   await act(async () => q("settings-app-icon-change")!.click());
+  expect((q("label-name") as HTMLInputElement).value).toBe("Work");
   await act(async () => q("label-reset")!.click());
-  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "" } } });
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "", name: "" } } });
+  expect(q("settings-app-name")!.textContent).toBe("Claude UI");
 });
 
 it("Appearance: an older daemon without the app setting shows no App icon row", async () => {

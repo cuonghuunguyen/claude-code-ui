@@ -13,12 +13,13 @@ let dir: string;
 let server: Server;
 let port: number;
 let icon = "";
+let name = "";
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "claude-ui-app-icon-"));
   writeFileSync(join(dir, "manifest.webmanifest"), JSON.stringify(MANIFEST));
   server = createServer((req, res) => {
-    if (!serveAppIcon(req, res, resolve(dir), new URL(req.url ?? "/", "http://x").pathname, () => icon)) res.writeHead(404, { "x-fell-through": "1" }).end();
+    if (!serveAppIcon(req, res, resolve(dir), new URL(req.url ?? "/", "http://x").pathname, () => ({ icon, name }))) res.writeHead(404, { "x-fell-through": "1" }).end();
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   port = (server.address() as AddressInfo).port;
@@ -91,4 +92,22 @@ it("the manifest swaps its icons for the custom one and keeps the other fields",
   const e = JSON.parse((await get("/manifest.webmanifest")).body.toString());
   expect(e.icons[0]).toMatchObject({ sizes: "any", type: "image/svg+xml" });
   expect(e.icons[0].src).not.toBe(m.icons[0].src);
+});
+
+it("the manifest with only a name: name and short_name replaced, icons kept", async () => {
+  icon = "";
+  name = "Work";
+  const m = JSON.parse((await get("/manifest.webmanifest")).body.toString());
+  expect([m.name, m.short_name]).toEqual(["Work", "Work"]);
+  expect(m.icons).toEqual(MANIFEST.icons);
+  name = "";
+});
+
+it("the manifest with a name and an icon: both swapped", async () => {
+  icon = "🚀";
+  name = "Work";
+  const m = JSON.parse((await get("/manifest.webmanifest")).body.toString());
+  expect([m.name, m.short_name]).toEqual(["Work", "Work"]);
+  expect(m.icons[0]).toMatchObject({ sizes: "any", type: "image/svg+xml" });
+  name = "";
 });

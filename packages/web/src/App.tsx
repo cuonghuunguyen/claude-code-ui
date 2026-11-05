@@ -132,8 +132,8 @@ import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
 import { FINISHED_MAX_AGE_MS, nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
-import { setAppIcon, useAppIcon } from "./app-icon.ts";
-import { announcement, faviconHref, setAppleTouchIcon, setFavicon } from "./attention.ts";
+import { setApp, useAppIcon, useAppName } from "./app-icon.ts";
+import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { baseName, inDir, joinPath, relPath } from "./paths.ts";
@@ -1380,7 +1380,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setAppIcon(m.settings.app?.icon), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
+      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1405,7 +1405,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setAppIcon(r.settings.app?.icon), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1539,12 +1539,14 @@ export function App() {
   useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
   useEffect(() => void (activeId === FOCUS_TAB && setBottomMax(false)), [activeId]);
   const appIcon = useAppIcon();
+  const appName = useAppName();
   const everWaiting = useRef(false);
   if (waitingN > 0) everWaiting.current = true;
   useEffect(() => {
-    document.title = tabTitle(waitingN);
+    document.title = tabTitle(waitingN, appName);
+    setAppleTitle(appName);
     setFavicon(faviconHref(waitingN, appIcon));
-  }, [waitingN, appIcon]);
+  }, [waitingN, appIcon, appName]);
   useEffect(() => setAppleTouchIcon(appIcon), [appIcon]);
 
   // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).

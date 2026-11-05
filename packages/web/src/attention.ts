@@ -37,3 +37,9 @@ export function setAppleTouchIcon(icon: string) {
   const href = icon ? "/app-icon" : "/apple-touch-icon.png";
   if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
 }
+
+/** The name iOS gives the page when it is added to the home screen (the installed app's name elsewhere comes from the manifest). */
+export function setAppleTitle(name: string) {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-title"]');
+  if (meta && meta.getAttribute("content") !== name) meta.setAttribute("content", name);
+}

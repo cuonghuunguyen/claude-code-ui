@@ -1437,7 +1437,7 @@ export function createDaemon(opts: {
     }
     // Pairing probe: a browser cannot read the 401 of a rejected WebSocket upgrade, so it asks here (client.ts).
     if (path === "/auth") return void res.writeHead(isToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1]) ? 204 : 401).end();
-    if (serveAppIcon(req, res, root, path, () => appSettings.get().app.icon)) return;
+    if (serveAppIcon(req, res, root, path, () => appSettings.get().app)) return;
     serveStatic(req, res, root, path);
   });
 

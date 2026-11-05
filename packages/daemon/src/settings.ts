@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { APP_ICON_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -27,10 +27,12 @@ const relativeEntry = (s: string) => !/^([\\/]|[A-Za-z]:)/.test(s) && s.split(/[
 export const DATA_ICON = /^data:image\/(png|webp|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
 /** An emoji (no whitespace or control characters) or a raster data URL of at most `max` characters. */
 const iconOk = (icon: string, max: number) => (icon.startsWith("data:") ? icon.length <= max && DATA_ICON.test(icon) : icon.length >= 1 && icon.length <= LABEL_EMOJI_MAX && !/[\s\0-\x1f\x7f]/.test(icon));
+/** A label name: 1..LABEL_NAME_MAX characters, no control characters, not only whitespace. */
+const nameOk = (name: unknown) => typeof name === "string" && name.length <= LABEL_NAME_MAX && name.trim() !== "" && !/[\0-\x1f\x7f]/.test(name);
 const labelOk = (l: unknown) => {
   if (!isObj(l) || !Object.keys(l).length || Object.keys(l).some((k) => k !== "name" && k !== "icon")) return false;
   const { name, icon } = l;
-  if (name !== undefined && !(typeof name === "string" && name.length <= LABEL_NAME_MAX && name.trim() !== "" && !/[\0-\x1f\x7f]/.test(name))) return false;
+  if (name !== undefined && !nameOk(name)) return false;
   if (icon === undefined) return true;
   if (typeof icon !== "string") return false;
   return icon.startsWith("data:") ? icon.length <= LABEL_ICON_MAX && DATA_ICON.test(icon) : icon.length >= 1 && icon.length <= LABEL_EMOJI_MAX && !/[\s\0-\x1f\x7f]/.test(icon);
@@ -80,7 +82,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     openRepositoryInParentFolders: { valid: (v) => (PARENT_FOLDER_MODES as readonly unknown[]).includes(v), label: "Open repository in parent folders", rule: `one of ${PARENT_FOLDER_MODES.join(", ")}` },
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
-  app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" } },
+  app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },
 };
 const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
 // Entries are replaced, never mutated: a shallow copy of a map is enough.

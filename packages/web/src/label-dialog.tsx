@@ -26,8 +26,6 @@ type Props = {
   /** `undefined` = Reset. Rejects with the daemon's message, shown in the dialog. */
   onSave: (label: Label | undefined) => Promise<void>;
   onClose: () => void;
-  /** No name field (the app icon): Save sends only `icon`. */
-  nameless?: boolean;
   /** Side of the saved square image, default LABEL_ICON_PX. */
   iconPx?: number;
   /** Data URL characters the saved image may take, default LABEL_ICON_MAX. */
@@ -42,7 +40,7 @@ export function LabelDialog(p: Props) {
   );
 }
 
-function Body({ title, fallbackName, label, onSave, onClose, nameless = false, iconPx = LABEL_ICON_PX, iconMax = LABEL_ICON_MAX }: Props) {
+function Body({ title, fallbackName, label, onSave, onClose, iconPx = LABEL_ICON_PX, iconMax = LABEL_ICON_MAX }: Props) {
   const t = useT();
   const kept = iconSrc(label?.icon);
   const [name, setName] = useState(label?.name ?? "");
@@ -127,12 +125,10 @@ function Body({ title, fallbackName, label, onSave, onClose, nameless = false, i
           className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-2"
           onSubmit={(e) => (e.preventDefault(), !busy && submit())}
         >
-          {!nameless && (
-            <label className="flex flex-col gap-1 text-sm">
-              {t("label.name")}
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder={fallbackName} maxLength={LABEL_NAME_MAX} autoFocus className={INPUT} data-testid="label-name" />
-            </label>
-          )}
+          <label className="flex flex-col gap-1 text-sm">
+            {t("label.name")}
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={fallbackName} maxLength={LABEL_NAME_MAX} autoFocus className={INPUT} data-testid="label-name" />
+          </label>
           <fieldset className="flex flex-col gap-2">
             <legend className="pb-1 text-sm">{t("label.icon")}</legend>
             <div role="radiogroup" aria-label={t("label.icon")} className="flex gap-1">
