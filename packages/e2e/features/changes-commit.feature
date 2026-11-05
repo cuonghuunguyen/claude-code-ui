@@ -68,3 +68,35 @@ Feature: Changes tab commits the checked files
     Then the Changes result line says "Committed"
     And the page has no horizontal scroll
     And I capture "phone-committed"
+
+  Scenario: Commit is refused with an unresolved merge conflict
+    Given the scratch project has an unresolved merge conflict
+    And the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
+    And I check the file "a.txt" in the Changes tab
+    And I type the commit message "refused"
+    And I click "Commit" in the commit box
+    Then the Changes error shows "Resolve the conflicts first"
+    And the project head is unchanged
+    And the project still has a merge in progress
+    And I capture "conflict-refused"
+
+  Scenario: Commit is refused with a resolved merge that is not finished
+    Given the scratch project has a merge with its conflicts resolved but not committed
+    And the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
+    And I check the file "a.txt" in the Changes tab
+    And I type the commit message "refused"
+    And I click "Commit" in the commit box
+    Then the Changes error shows "Finish or abort the merge first"
+    And the project head is unchanged
+    And the project still has a merge in progress
+    And I capture "merge-refused"

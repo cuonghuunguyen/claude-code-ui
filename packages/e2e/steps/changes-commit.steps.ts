@@ -62,3 +62,26 @@ Then("the commit box and its buttons are inside the viewport", async ({ page }) 
     expect(b!.x + b!.width).toBeLessThanOrEqual(vw + 0.5);
   }
 });
+
+let head = "";
+const merging = (path: string, resolve: boolean) => {
+  git(path, "-c", "user.name=t", "-c", "user.email=t@example.com", "checkout", "-q", "-b", "side");
+  writeFileSync(join(path, "c.txt"), "side\n");
+  git(path, "add", "c.txt");
+  git(path, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "side c");
+  git(path, "checkout", "-q", "main");
+  writeFileSync(join(path, "c.txt"), "main\n");
+  git(path, "add", "c.txt");
+  git(path, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "main c");
+  try { git(path, "merge", "side"); } catch { /* conflict expected */ }
+  if (resolve) { writeFileSync(join(path, "c.txt"), "both\n"); git(path, "add", "c.txt"); }
+  head = git(path, "rev-parse", "HEAD");
+};
+Given("the scratch project has an unresolved merge conflict", async ({ project }) => merging(project.path, false));
+Given("the scratch project has a merge with its conflicts resolved but not committed", async ({ project }) => merging(project.path, true));
+Then("the project head is unchanged", async ({ project }) => {
+  expect(git(project.path, "rev-parse", "HEAD")).toBe(head);
+});
+Then("the project still has a merge in progress", async ({ project }) => {
+  git(project.path, "rev-parse", "-q", "--verify", "MERGE_HEAD");
+});
