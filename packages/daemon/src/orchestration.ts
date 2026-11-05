@@ -508,7 +508,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
           console.log(`session ${s.id}: worker turn ended, CLI closed (Close finished workers)`);
           wake(s.id);
         }
-        route(s.id, captured, e);
+        // Already inside the ordered step: route would queue the event behind this worker's later ones.
+        deliver(resolve(linkOf(s.id)?.coordinatorId ?? captured), e);
       });
     route(s.id, captured, e);
   }
