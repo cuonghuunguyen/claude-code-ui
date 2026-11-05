@@ -11,6 +11,7 @@ import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, M
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
+import { createLocalHistory, HistoryError } from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
@@ -298,6 +299,8 @@ export function createDaemon(opts: {
   projects?: Projects;
   /** App-wide settings (settings.json); in memory when omitted. Readers call `get()` each time. */
   appSettings?: AppSettings;
+  /** Local history store (GH-565); main.ts passes `<configDir>/history`. Default: a fresh folder in the temp dir (tests; created on first entry). */
+  historyDir?: string;
   /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
   secrets?: Secrets;
   /** Test seam (GH-447): the fetch of the Jira client. */
@@ -371,6 +374,7 @@ export function createDaemon(opts: {
       queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
     },
     allowBypass: opts.allowBypass,
+    onFileEdit: (path: string, original: string) => localHistory.before(path, "agent", original),
     // `live` of the session list changed (CLI started or dropped).
     onLiveChange: () => broadcast({ type: "sessions.changed" }),
     supportsAuto,
@@ -413,6 +417,8 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
+  const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
@@ -1653,6 +1659,29 @@ export function createDaemon(opts: {
         if (code === "EISDIR") return fail("not_a_file", `not a file: ${path}`);
         return fail("fs_error", String(err));
       };
+      /** fs.write and history.restore: the conflict check, the history entry of the content being replaced, then the write. */
+      const writeChecked = (file: string, path: string, content: string, baseMtime: number | undefined, reason: "save" | "restore" = "save") => {
+        let fd: number | undefined;
+        try {
+          fd = openChecked(file, OPEN_WRITE);
+          const st = fstatSync(fd);
+          if (!st.isFile()) return fail("not_a_file", `not a file: ${path}`);
+          if (baseMtime !== undefined && st.mtimeMs !== baseMtime) return fail("conflict", `changed on disk since it was read: ${path}`);
+          localHistory.before(file, reason);
+          const data = Buffer.from(content);
+          ftruncateSync(fd, 0);
+          writeAll(fd, data);
+          // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
+          closeSync(fd);
+          fd = undefined;
+          clearSearchCache();
+          return reply({ mtime: statSync(file).mtimeMs });
+        } catch (err) {
+          return fsFail(err, path);
+        } finally {
+          if (fd !== undefined) closeSync(fd);
+        }
+      };
       const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
@@ -2207,7 +2236,7 @@ export function createDaemon(opts: {
           const inside = (p: string) => inRoots(real(p) ?? p);
           // No filter text in the log (it may hold a secret).
           try {
-            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, allowed: inside }) });
+            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, path: msg.path, allowed: inside }) });
             if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) });
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
@@ -2407,25 +2436,28 @@ export function createDaemon(opts: {
           const file = allowed(msg.path);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           if (typeof msg.content !== "string") return fail("bad_content", "content must be a string");
-          let fd: number | undefined;
+          return writeChecked(file, msg.path, msg.content, msg.baseMtime);
+        }
+        case "history.list":
+        case "history.read":
+        case "history.restore":
+        case "history.rename":
+        case "history.delete":
+        case "history.create": {
           try {
-            fd = openChecked(file, OPEN_WRITE);
-            const st = fstatSync(fd);
-            if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
-            if (msg.baseMtime !== undefined && st.mtimeMs !== msg.baseMtime)
-              return fail("conflict", `changed on disk since it was read: ${msg.path}`);
-            const data = Buffer.from(msg.content);
-            ftruncateSync(fd, 0);
-            writeAll(fd, data);
-            // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
-            closeSync(fd);
-            fd = undefined;
-            clearSearchCache();
-            return reply({ mtime: statSync(file).mtimeMs });
-          } catch (err) {
-            return fsFail(err, msg.path);
-          } finally {
-            if (fd !== undefined) closeSync(fd);
+            if (msg.type === "history.list") return reply({ entries: await localHistory.list(msg.path) });
+            if (msg.type === "history.create") return reply({ entry: await localHistory.create(msg.path, msg.label) });
+            if (typeof msg.id !== "string") return fail("bad_request", "id must be a string");
+            if (msg.type === "history.read") return reply({ content: await localHistory.read(msg.path, msg.id) });
+            if (msg.type === "history.rename") return await localHistory.rename(msg.path, msg.id, msg.label), reply({});
+            if (msg.type === "history.delete") return await localHistory.remove(msg.path, msg.id), reply({});
+            const content = await localHistory.read(msg.path, msg.id);
+            const file = allowed(msg.path)!;
+            // The conflict check comes first inside writeChecked; the current content is snapshotted there, with reason restore.
+            return writeChecked(file, msg.path, content, msg.baseMtime, "restore");
+          } catch (e) {
+            if (e instanceof HistoryError) return fail(e.code, e.message);
+            throw e;
           }
         }
         case "fs.create": {
