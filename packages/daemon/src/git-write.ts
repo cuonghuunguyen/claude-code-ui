@@ -204,7 +204,7 @@ export async function gitContinue(cwd: string, o: { kind: unknown } & RemoteOpti
   });
 }
 
-/** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `reset --merge` (the conflicted files back to HEAD, other unstaged changes stay; a failed `stash pop` keeps its entry). Null outside a work tree. */
+/** Conflict banner Abort: `<kind> --abort`; kind `conflict`: the conflicted paths back to HEAD (other work stays; a failed `stash pop` keeps its entry). Null outside a work tree. */
 export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions): Promise<Written | null> {
   const kind = kindOf(o.kind);
   return pinScope(async () => {
@@ -212,9 +212,19 @@ export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions
     if (!top) return null;
     return exclusive(top, async () => {
       const env = await writeEnvNoEditor(top);
-      await sameOperation(top, kind);
-      const { out } = await run(top, kind === "conflict" ? ["reset", "--merge"] : [kind, "--abort"], env);
-      return { output: out, refs: await gitRefs(top, o.allowed) };
+      const op = await sameOperation(top, kind);
+      if (kind !== "conflict") return { output: (await run(top, [kind, "--abort"], env)).out, refs: await gitRefs(top, o.allowed) };
+      // Only the conflicted paths go back to HEAD (`reset --merge` would also drop other staged work). One that HEAD lacks (added by the stash) is removed.
+      const files = op.conflicted;
+      const inHead = new Set((await run(top, [...LITERAL, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...files], env)).out.split("\0").filter(Boolean));
+      const tracked = files.filter((f) => inHead.has(f));
+      const added = files.filter((f) => !inHead.has(f));
+      if (tracked.length) await run(top, [...LITERAL, "restore", "--source=HEAD", "--staged", "--worktree", ...FROM_STDIN], env, { input: tracked.join("\0") });
+      if (added.length) {
+        await run(top, [...LITERAL, "rm", "-q", "-f", "--cached", ...FROM_STDIN], env, { input: added.join("\0") });
+        await Promise.all(added.map((f) => rm(join(top, f), { force: true })));
+      }
+      return { output: "", refs: await gitRefs(top, o.allowed) };
     });
   });
 }

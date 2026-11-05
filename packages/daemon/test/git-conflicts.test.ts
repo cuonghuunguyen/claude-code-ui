@@ -263,9 +263,12 @@ describe("conflicts", () => {
       return r;
     };
     const a = mk();
+    put(a.dir, "keep.txt", "staged\n");
+    run(a.dir, "add", "keep.txt");
     await gitAbort(a.dir, { kind: "conflict", ...a.o });
     expect(readFileSync(join(a.dir, "a.txt"), "utf8")).toBe("changed in head\n");
     expect(run(a.dir, "stash", "list")).not.toBe("");
+    expect(run(a.dir, "status", "--porcelain")).toBe("A  keep.txt");
     const b = mk();
     const h = head(b.dir);
     resolved(b, "mine\n");
