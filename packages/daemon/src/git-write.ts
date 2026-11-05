@@ -1,12 +1,12 @@
 // Git writes of the Changes tab (docs/spec.md "Layout", Changes tab; wire `git.commitFiles`): started by a click, so the
 // repository's hooks run like in a terminal; they never prompt. Later Git ops (rollback, checkout) extend this module.
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import type { GitCommitted, GitRollbackFile, GitRollbackPreview } from "@claude-ui/protocol";
-import { openChecked, readAll, writeAll } from "./fd-check.ts";
+import { openChecked, OPEN_READ, readAll, sameFile } from "./fd-check.ts";
 import { gitRefs, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { exclusive, gitBranch, HARDEN, MAX_ERROR, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { runGit } from "./git-runner.ts";
@@ -108,8 +108,6 @@ export async function gitCommitFiles(cwd: string, o: { paths: unknown; message: 
   });
 }
 
-/** Read and write: the hunk is applied to what is read from the same checked descriptor. */
-const OPEN_RW = constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 const MAX_HUNK_LINES = 100_000;
 const NO_EOL = "\\ No newline at end of file";
 type WireHunk = { newStart: number; lines: string[] };
@@ -170,7 +168,10 @@ function entriesOf(status: string, files: Set<string>): { entries: Entry[]; reco
     const tag = r[0];
     if (tag === "?") {
       const path = r.slice(2);
-      if (files.has(path)) (entries.push({ path, kind: "A", unmerged: false, untracked: true }), records.push(r));
+      if (!files.has(path)) continue;
+      records.push(r);
+      // One row per path: an index delete with an untracked copy of the same path stays the tracked entry.
+      if (!entries.some((e) => e.path === path)) entries.push({ path, kind: "A", unmerged: false, untracked: true });
     } else if (tag === "1" || tag === "u" || tag === "2") {
       const f = r.split(" ");
       const path = f.slice(tag === "1" ? 8 : tag === "2" ? 9 : 10).join(" ");
@@ -282,7 +283,7 @@ export async function gitRollbackHunk(cwd: string, o: { path: unknown; hunk: unk
       if (!o.allowed(file)) throw new WorktreeError("cwd_not_allowed", `outside the allowlisted roots: ${path}`);
       let fd: number | undefined;
       try {
-        fd = openChecked(file, OPEN_RW);
+        fd = openChecked(file, OPEN_READ);
         const st = fstatSync(fd);
         if (!st.isFile()) throw bad(`not a file: ${path}`);
         if (st.size > o.maxBytes) throw bad(`larger than ${o.maxBytes} bytes: ${path}`);
@@ -296,8 +297,17 @@ export async function gitRollbackHunk(cwd: string, o: { path: unknown; hunk: unk
         const next = revertHunk(bom ? text.slice(1) : text, h);
         if (next === undefined) throw new WorktreeError("stale", "The file changed since the diff was shown");
         o.snapshot(file);
-        ftruncateSync(fd, 0);
-        writeAll(fd, Buffer.from(bom ? `\uFEFF${next}` : next));
+        // Atomic: a temp file beside the target (same mode), renamed over it; any error leaves the original. A path swapped for a link meanwhile is replaced, never followed.
+        const tmp = `${file}.claude-ui-${randomUUID()}.tmp`;
+        try {
+          writeFileSync(tmp, bom ? `\uFEFF${next}` : next, { flag: "wx", mode: st.mode & 0o7777 });
+          chmodSync(tmp, st.mode & 0o7777);
+          if (!sameFile(fd, file)) throw Object.assign(new Error("changed during the request"), { code: "ECHANGED" });
+          renameSync(tmp, file);
+        } catch (e) {
+          rmSync(tmp, { force: true });
+          throw e;
+        }
       } catch (e) {
         if (e instanceof WorktreeError) throw e;
         throw new WorktreeError("git_failed", (e as { code?: string }).code === "ECHANGED" ? `changed during the request: ${path}` : String(e));

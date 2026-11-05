@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync, statSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -82,6 +82,17 @@ describe("gitRollback", () => {
     expect(existsSync(join(dir, "n1.txt")) || existsSync(join(dir, "n2.txt"))).toBe(false);
     expect(run(dir, "status", "--porcelain")).toBe("");
     expect(seen.map((s) => s.text).sort()).toEqual(["n1\n", "n2\n"]);
+  });
+
+  it("lists a path once when it is deleted in the index and present as an untracked copy", async () => {
+    const { dir, o } = repo();
+    run(dir, "rm", "-q", "--cached", "a.txt");
+    put(dir, "a.txt", "changed\n");
+    const p = await gitRollbackPreview(dir, { paths: ["a.txt"], ...o });
+    expect(p?.files).toEqual([{ path: "a.txt", kind: "D" }]);
+    await roll(dir, o, ["a.txt"]);
+    expect(get(dir, "a.txt")).toBe("a0\n");
+    expect(run(dir, "status", "--porcelain")).toBe("");
   });
 
   it("deleteAdded on an added file already deleted from the work tree unstages it", async () => {
@@ -223,6 +234,30 @@ describe("gitRollbackHunk", () => {
     await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "../a.txt")).rejects.toMatchObject({ code: "bad_request" });
     await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "a.txt", 1)).rejects.toMatchObject({ code: "bad_request" });
     expect(get(dir, "a.txt")).toBe("a0\n");
+  });
+
+  it.skipIf(!posix || process.getuid?.() === 0)("is atomic: a failed write leaves the original and no temp file; a success keeps the mode", async () => {
+    const { dir, o } = repo();
+    put(dir, "x.txt", "one\ntwo\n");
+    run(dir, "add", "-A");
+    run(dir, "commit", "-q", "-m", "x");
+    put(dir, "x.txt", "one\nTWO\n");
+    chmodSync(join(dir, "x.txt"), 0o640);
+    const hunk = { newStart: 1, lines: [" one", "-two", "+TWO"] };
+    const files = () => readdirSync(dir).sort();
+    const before = files();
+    chmodSync(dir, 0o555); // the temp file cannot be created
+    try {
+      await expect(gitRollbackHunk(dir, { path: "x.txt", hunk, maxBytes: 1e6, ...o })).rejects.toBeTruthy();
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(get(dir, "x.txt")).toBe("one\nTWO\n");
+    expect(files()).toEqual(before);
+    await gitRollbackHunk(dir, { path: "x.txt", hunk, maxBytes: 1e6, ...o });
+    expect(get(dir, "x.txt")).toBe("one\ntwo\n");
+    expect(statSync(join(dir, "x.txt")).mode & 0o777).toBe(0o640);
+    expect(files()).toEqual(before);
   });
 
   it.skipIf(!posix)("refuses a symlink pointing outside the allowed roots", async () => {
