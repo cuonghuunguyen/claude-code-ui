@@ -143,3 +143,7 @@ When("I open the sidebar drawer if the phone layout hides it", async ({ page }) 
   const drawer = page.getByTestId("open-drawer");
   if (await drawer.isVisible()) await drawer.click();
 });
+
+Then("the chat shows no stalled notice", async ({ page }) => {
+  await expect(page.getByText(/stalled/i)).toHaveCount(0);
+});

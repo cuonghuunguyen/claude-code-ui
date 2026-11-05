@@ -11,6 +11,7 @@ Feature: Finished workers close their Claude process by themselves
   Scenario: Settings shows Close finished workers on, in English and Vietnamese
     When I open Settings › Orchestration
     Then the Orchestration switch "Close finished workers" is on
+    And the Orchestration switch row "Stall alert after (minutes)" shows its label
     And I capture "close finished setting desktop"
     When the viewport is 390x844
     Then the Orchestration switch "Close finished workers" is on
@@ -23,6 +24,7 @@ Feature: Finished workers close their Claude process by themselves
     And I open Settings › Orchestration
     Then the Orchestration switch row "Đóng worker đã xong" shows its label
     And the Orchestration switch "Đóng worker đã xong" is on
+    And the Orchestration switch row "Cảnh báo treo sau (phút)" shows its label
     And the page has no horizontal scroll
     And I capture "close finished setting phone vi"
     When the viewport is 1440x900
@@ -42,6 +44,7 @@ Feature: Finished workers close their Claude process by themselves
     When I allow the permission request
     Then the sidebar lists the worker "second"
     And the sidebar worker "first" is closed
+    And the chat shows no stalled notice
     And I capture "second worker after first closed"
     When I open Settings › Orchestration
     And I set the Orchestration setting "Maximum workers per tree" to 4
