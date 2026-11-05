@@ -273,6 +273,12 @@ describe("workerBashHook", () => {
     expect(await workerBashHook({ command: "cd x && git diff" }, "/w", s.read as never)).toEqual(ask);
     expect(s.calls).toHaveLength(1);
   });
+  it("finds git behind an assignment, env, command, xargs and a subshell", async () => {
+    for (const command of ["FOO=1 git show HEAD", "env git show HEAD", "command git show HEAD", "ls | xargs git show", "echo $(git show HEAD)"]) {
+      const s = stub("high");
+      expect(await workerBashHook({ command }, "/w", s.read as never), command).toEqual(ask);
+    }
+  });
   it("asks when the tier read throws", async () => {
     expect(await workerBashHook({ command: "git log" }, "/w", (async () => { throw new Error("x"); }) as never)).toEqual(ask);
   });

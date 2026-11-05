@@ -143,6 +143,8 @@ async function configTargets(top: string, own: string, common: string): Promise<
     }
     for (const { key, value } of found) {
       let v = value;
+      // A WSL repository: git in the distro reads the distro's home, not the Windows one.
+      if (wsl && v.startsWith("~")) return "unreadable";
       if (v === "~" || v.startsWith("~/")) v = join(homedir(), v.slice(1));
       else if (v.startsWith("~") || v.startsWith("%(prefix)/")) return "unreadable";
       else if (wsl && v.startsWith("/")) v = wslHostPath(wsl.root, v);
@@ -1744,10 +1746,27 @@ export function configRedirects(text: string): ConfigRedirect[] {
     if (key && value) out.push({ key, value });
   };
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i]!.trim();
+    let line = lines[i]!.trimStart();
     if (!line || line[0] === "#" || line[0] === ";") continue;
-    // An odd number of trailing backslashes continues the line (`\\` is an escaped backslash).
-    while (/(?:^|[^\\])(?:\\\\)*\\$/.test(line) && i + 1 < lines.length) line = line.slice(0, -1) + lines[++i]!;
+    // A trailing backslash continues the line only outside a comment (git reads the next line as a key after `# x \`).
+    for (let quoted = false, k = 0; ; ) {
+      let cont = false;
+      for (; k < line.length; k++) {
+        const c = line[k]!;
+        if (c === "\\") {
+          if (k === line.length - 1) cont = true;
+          else k++;
+        } else if (c === '"') quoted = !quoted;
+        else if (!quoted && (c === "#" || c === ";")) {
+          line = line.slice(0, k);
+          break;
+        }
+      }
+      if (!cont || i + 1 >= lines.length) break;
+      line = line.slice(0, -1) + lines[++i]!;
+    }
+    line = line.trim();
+    if (!line) continue;
     if (line[0] !== "[") {
       keyLine(line);
       continue;

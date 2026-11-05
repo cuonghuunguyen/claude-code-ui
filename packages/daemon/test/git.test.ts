@@ -2125,6 +2125,10 @@ describe("repository config redirection (GH-319)", () => {
       "comment lines and blank lines": "# c\n; d\n\n[core]\n\t# hooksPath = /no\n\thooksPath = /yes\n",
       "multiple include paths": "[include]\n\tpath = /a\n\tpath = /b\n",
       "empty value": "[core]\n\thooksPath =\n",
+      "comment ending in a backslash does not continue": "[core]\n\tfoo = bar ; note \\\n\thooksPath = /tmp/evil1\n",
+      "header comment ending in a backslash": "[core] # x \\\n\texcludesFile = /tmp/evil2\n",
+      "value comment then key": "[core]\n\thooksPath = /x ; c \\\n\tattributesFile = /x2\n",
+      "continuation inside quotes": '[core]\n\thooksPath = "/a\\\nb"\n',
       "BOM": "\uFEFF[core]\n\thooksPath = /bom\n",
       "other sections are ignored": '[remote "o"]\n\turl = /u\n\tpath = /p\n[core.x]\n\thooksPath = /sub\n',
     };
