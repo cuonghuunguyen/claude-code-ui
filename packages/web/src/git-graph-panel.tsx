@@ -511,6 +511,11 @@ function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }:
     );
     return () => void (live = false);
   }, [d.hash, f.path]);
+  // Stable file objects: @pierre/diffs re-parses and re-highlights the whole file on a new object (seconds on a big file).
+  const files = useMemo(
+    () => sides && { old: { name: f.oldPath ?? f.path, contents: sides.before }, new: { name: f.path, contents: sides.after } },
+    [sides, f.oldPath, f.path],
+  );
   const options = useMemo(
     () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle: narrow ? ("unified" as const) : storedStyle(), themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
     [narrow, dark, colorTheme],
@@ -532,7 +537,7 @@ function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }:
         {!err && (!sides || (sides.before !== sides.after && !drawn)) && <p className="p-2 text-muted-foreground">{tr("files.changes.loadingDiff")}</p>}
         {sides && sides.before === sides.after && <p className="p-2 text-muted-foreground">{f.status === "R" ? tr("files.changes.renamedOnly") : tr("files.changes.noContent")}</p>}
         {sides && sides.before !== sides.after && (
-          <MultiFileDiff oldFile={{ name: f.oldPath ?? f.path, contents: sides.before }} newFile={{ name: f.path, contents: sides.after }} options={options} />
+          <MultiFileDiff oldFile={files!.old} newFile={files!.new} options={options} />
         )}
       </div>
     </div>
