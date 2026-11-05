@@ -103,6 +103,22 @@ describe("gitCommitFiles", () => {
     expect(run(dir, "status", "--porcelain")).toBe(" M a.txt");
   });
 
+  it("refuses while a merge is in progress; nothing is committed and MERGE_HEAD stays", async () => {
+    const { dir, inside } = repo();
+    run(dir, "checkout", "-q", "-b", "f");
+    put(dir, "a.txt", "a-f\n");
+    put(dir, "b.txt", "b-f\n");
+    run(dir, "commit", "-q", "-am", "f");
+    run(dir, "checkout", "-q", "main");
+    put(dir, "c.txt", "c1\n");
+    run(dir, "commit", "-q", "-am", "c");
+    run(dir, "merge", "-q", "--no-commit", "f");
+    const head = run(dir, "rev-parse", "HEAD");
+    await expect(gitCommitFiles(dir, { paths: ["a.txt"], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request", message: expect.stringContaining("merge") });
+    expect(run(dir, "rev-parse", "HEAD")).toBe(head);
+    expect(existsSync(join(dir, ".git", "MERGE_HEAD"))).toBe(true);
+  });
+
   it("an empty path list without amend is bad_request", async () => {
     const { dir, inside } = repo();
     await expect(gitCommitFiles(dir, { paths: [], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });

@@ -58,6 +58,10 @@ export async function gitCommitFiles(cwd: string, o: { paths: unknown; message: 
     const committed = await exclusive(top, async () => {
       const head = await ask(top, ["rev-parse", "--verify", "-q", "HEAD"], env);
       if (amend && head.code === 1) throw bad("No commit to amend");
+      // The temporary index has no conflict entries and the commit would end the operation with only the checked paths.
+      for (const state of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
+        if ((await ask(top, ["rev-parse", "--verify", "-q", state], env)).code === 0) throw bad("A merge, cherry-pick or revert is in progress: finish it in a terminal");
+      }
       if (o.push) {
         const sym = await ask(top, ["symbolic-ref", "-q", "HEAD"], env);
         if (sym.code === 1) throw bad("HEAD is detached: use Commit");
