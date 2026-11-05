@@ -37,6 +37,12 @@ describe("retireAttachHub", () => {
     await s.run();
     expect(s.log).not.toHaveBeenCalled();
   });
+  it("a token the Hub rejects, or a missing token, stops the start: no second Hub beside a live one", async () => {
+    for (const code of ["token_rejected", "no_token"]) {
+      const s = setup(withFile("attach"), { ask: async () => Promise.reject(new CtlError(3, code, "denied")) });
+      await expect(s.run()).rejects.toThrow("denied");
+    }
+  });
   it("asks once, says waiting only when turns run, resolves when the pid dies", async () => {
     for (const waitingFor of [0, 2]) {
       let polls = 0;

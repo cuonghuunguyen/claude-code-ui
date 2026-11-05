@@ -14,8 +14,8 @@ export async function retireAttachHub(o: { dir: string; alive: (pid: number) => 
   try {
     waitingFor = (await o.ask(d.port, o.token())).waitingFor;
   } catch (e) {
-    // Gone, or not answering as a Hub (a stale daemon.json whose pid another process now uses): nothing to wait for.
-    if (!o.alive(d.pid) || (e instanceof CtlError && e.exit === 3)) return;
+    // Gone, or not answering as a Hub (`not_running`: a stale daemon.json whose pid another process now uses): nothing to wait for.
+    if (!o.alive(d.pid) || (e instanceof CtlError && e.code === "not_running")) return;
     throw e;
   }
   if (waitingFor > 0) o.log(`claude-ui: a Claude UI started by another computer's attach runs here (pid ${d.pid}); waiting for its ${waitingFor} running turn(s) to finish.`);
