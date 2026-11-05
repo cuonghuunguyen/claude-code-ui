@@ -24,7 +24,7 @@ function fakeSession(id: string, live = true): any {
   });
 }
 
-type Cfg = { enabled: boolean; workerCap: number; workerCapTotal: number; maxDepth: number; maxChildren: number; coordinatorPermissions: boolean; workerMode: string; workerNotifications: boolean };
+type Cfg = { enabled: boolean; workerCap: number; workerCapTotal: number; maxDepth: number; maxChildren: number; coordinatorPermissions: boolean; workerMode: string; workerNotifications: boolean; closeFinished: boolean };
 
 function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const sessions = new Map<string, any>();
@@ -32,7 +32,7 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const created: { cwd: string; s: any; init: any }[] = [];
   const agentCalls: string[] = [];
   const agentBox: { list: string[]; fail?: string } = { list: ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer", "a:dup", "b:dup", "local-x"] };
-  const settings: Cfg = { enabled: true, workerCap: 10, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, ...cfg };
+  const settings: Cfg = { enabled: true, workerCap: 10, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: false, ...cfg };
   const removed: string[] = [];
   const o = createOrchestration({
     links,

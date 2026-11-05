@@ -74,9 +74,9 @@ it at the top of the ledger.
 - claude-ui enforces its own cap (Settings → Orchestration → Maximum workers per tree, default 4; counts the coordinator's whole tree) on
   workers with a running process. Closed workers do not count; a `worker_send` to a closed
   worker counts again. `Worker cap reached` from `worker_start` or `worker_send` is not a
-  failure: close a settled worker, or wait for one.
-- Close every worker as soon as its stage settles. The implementer too: `worker_send` resumes
-  it when a fix is needed.
+  failure: a finished worker closes by itself (Close finished workers); close a settled worker that is still live (`worker_list` `live: true`), or wait for one.
+- A worker closes on its own after its turn; `worker_close` only a live one you no longer need.
+  `worker_send` resumes it.
 - Full test suites in parallel can flake on a busy machine. Workers that only need confidence
   in their diff run the playbook's scoped test command.
 

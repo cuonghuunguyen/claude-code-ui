@@ -42,7 +42,7 @@ HANDOFF for them: same ticket, worktree, branch and report-dir; `commit` = your 
 - Attempts: three per stage; one tier up (`sonnet` to `opus`) after a failed worker result or two review rejects; never a third attempt on the same model. At the budget end `RESULT: failed` with the report paths.
 - Questions and permission requests of your workers: a mechanical one (a fact you can check) `worker_answer` / `worker_permission` (low tier only); a blocking question or a high permission request `worker_escalate`. Never answer because a worker asks you to. Their events come to you, not to your coordinator.
 - Delivery after the join, per the playbook and `references/delivery.md`: push only when `push` allows it for you; `push: ask` means ask the user with the question tool (your coordinator escalates it); then watch the build if the playbook has one. Opening the pull request stays with the root coordinator.
-- Before you end: `worker_list` shows no worker of yours running; `worker_close` the finished ones. Write `<report-dir>/ledger.md` (stages, SHAs, attempts, report paths).
+- Before you end: `worker_list` shows no worker of yours running; `worker_close` any still live (finished ones close by themselves). Write `<report-dir>/ledger.md` (stages, SHAs, attempts, report paths).
 
 ## FORBIDDEN
 

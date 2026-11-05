@@ -20,6 +20,8 @@ export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?:
   ownerId?: string;
   /** Aside: until the user changes its permission mode (stays after Keep as session). */
   readOnly?: true;
+  /** GH-574: worker_start / worker_keep_open keepOpen: no auto-close after a turn. */
+  keepOpen?: true;
 };
 /** `saved`: when the entry last changed (ms); absent in files written before GH-91. */
 type Entry = Partial<SessionSettings> & Link & { saved?: number };
