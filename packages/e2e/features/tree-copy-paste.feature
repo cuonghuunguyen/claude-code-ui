@@ -137,11 +137,20 @@ Feature: Copy, cut, paste, drag and drop in the Files tree (GH-555)
     And the tree lists the row "dest"
     And I capture "os-folder-refused"
 
-  Scenario: The tree menu fits a phone
-    Given the viewport is 390x844
+  Scenario: A file copied in the OS is pasted into a folder
+    Given the viewport is 1440x900
     And the app is open
     And I open the scratch project
     And I start a new Haiku session
+    When I open the Files tab of the side panel
+    And the system clipboard holds the project file "moveme/inner.txt"
+    And I press "ControlOrMeta+v" on the tree row "dest"
+    Then the project has "dest/inner.txt" on disk with the text "inner"
+    And I capture "os-file-pasted"
+
+  Scenario: The tree menu fits a phone
+    Given the viewport is 390x844
+    And a Haiku session with one finished reply
     When I open the Files tab of the side panel
     And I open the tree menu of "dest"
     Then the tree menu items "Cut, Copy, Paste" are visible

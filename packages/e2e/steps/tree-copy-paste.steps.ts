@@ -17,8 +17,12 @@ Then("the tree lists the row {string}", async ({ page }, rel: string) => {
   await expect(row(page, rel)).toBeVisible({ timeout: 30_000 });
 });
 
-Then("the tree lists no row {string}", async ({ page }, rel: string) => {
-  await expect(page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`)).toHaveCount(0, { timeout: 30_000 });
+// Exact: "other/moveme" must not count as "moveme".
+Then("the tree lists no row {string}", async ({ page, project }, rel: string) => {
+  const tail = `/${project.name}/${rel}`;
+  await expect
+    .poll(() => page.locator('[data-testid="tree-entry"]').evaluateAll((els, t) => els.filter((e) => (e as HTMLElement).dataset.path?.endsWith(t)).length, tail), { timeout: 30_000 })
+    .toBe(0);
 });
 
 Then("the project has {string} on disk with the text {string}", async ({ project }, rel: string, text: string) => {
@@ -131,4 +135,9 @@ Then("the tree menu items {string} are visible", async ({ page }, names: string)
     await item.scrollIntoViewIfNeeded();
     await expect(item).toBeVisible();
   }
+});
+
+When("the system clipboard holds the project file {string}", async ({ project }, rel: string) => {
+  if (process.platform !== "darwin") throw new Error("needs macOS (osascript)");
+  execFileSync("osascript", ["-e", `set the clipboard to (POSIX file "${join(project.path, rel)}")`]);
 });
