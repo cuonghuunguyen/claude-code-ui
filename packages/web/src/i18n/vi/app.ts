@@ -282,6 +282,7 @@ export default {
   "app.sidePanel.row.found": "Đã có",
   "app.sidePanel.action.install": "Cài đặt",
   "app.sidePanel.action.update": "Cập nhật",
+  "app.sidePanel.action.updateRemote": "Cập nhật ở đó",
   "app.sidePanel.action.reinstall": "Cài lại",
   "app.sidePanel.notRunning": "{side} chưa chạy.",
   "app.sidePanel.noun.container": "container",

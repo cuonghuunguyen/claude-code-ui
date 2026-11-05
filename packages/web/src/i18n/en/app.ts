@@ -280,6 +280,7 @@ export default {
   "app.sidePanel.row.found": "Found",
   "app.sidePanel.action.install": "Install",
   "app.sidePanel.action.update": "Update",
+  "app.sidePanel.action.updateRemote": "Update there",
   "app.sidePanel.action.reinstall": "Reinstall",
   "app.sidePanel.notRunning": "{side} is not running.",
   "app.sidePanel.noun.container": "container",

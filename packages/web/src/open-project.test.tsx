@@ -212,7 +212,7 @@ describe("side chooser", () => {
     facts: { reachable: true, node: "v22.1.0", nodeOk: true, buildTools: { make: true, python3: true, cxx: true }, installed: verdict === "install" ? "none" : verdict === "update" ? "other" : "current", ...facts },
     ...more,
   });
-  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install")), dockerState?: DockerState) {
+  async function renderSides(s: SideInfo[], onStartSide = vi.fn(async (_id: string, _setup?: string) => {}), keepStorage = false, onCheckSide = vi.fn(async (_id: string) => chk("install")), dockerState?: DockerState, onUpdateRemote?: (side: string) => Promise<unknown>) {
     if (!keepStorage) localStorage.clear();
     const onPick = vi.fn(async (_cwd: string, _side?: string) => {});
     const recent: RecentProject[] = [{ cwd: "/home/u/api", sessionCount: 2, lastActivity: Date.now() }];
@@ -220,7 +220,7 @@ describe("side chooser", () => {
     document.body.append(el);
     root = createRoot(el);
     const show = (sides: SideInfo[]) =>
-      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} docker={dockerState} onStartSide={onStartSide} onCheckSide={onCheckSide} recent={recent} sideOf={sideOf} />));
+      act(async () => root!.render(<OpenProjectDialog open onOpenChange={() => {}} list={sideList} onPick={onPick} sides={sides} docker={dockerState} onStartSide={onStartSide} onCheckSide={onCheckSide} onUpdateRemote={onUpdateRemote} recent={recent} sideOf={sideOf} />));
     await show(s);
     const input = () => document.querySelector<HTMLInputElement>('[data-testid="folder-input"]');
     const kinds = () => [...document.querySelectorAll<HTMLElement>('[data-testid="side-kind"]')];
@@ -708,6 +708,31 @@ describe("side chooser", () => {
       expect(onStartSide).not.toHaveBeenCalled();
       await click(byId("side-retry")!);
       expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "never");
+    });
+
+    it("an older Hub there (version mismatch) says both versions and offers Update there, never Reinstall; Update there sends side.updateRemote", async () => {
+      const text = "WSL: Ubuntu runs Claude UI 1.1.0, this is 1.4.0: they cannot work together. Update it there; it attaches by itself afterwards.";
+      const old = sides("error", text).map((x) => (x.id === "wsl:Ubuntu" ? { ...x, mismatch: { local: "1.4.0", remote: "1.1.0", localSchema: [1, 1] as [number, number], remoteOlder: true } } : x));
+      const update = vi.fn(async (_id: string) => ({}));
+      const { kind, click, byId, status, onStartSide } = await renderSides(old, undefined, false, vi.fn(async () => chk("installed")), undefined, update);
+      await click(kind("WSL"));
+      expect(status()).toContain("runs Claude UI 1.1.0");
+      expect(status()).not.toContain("hub_no_attach");
+      expect(byId("side-install")).toBeNull();
+      expect(byId("side-update-remote")!.textContent).toBe("Update there");
+      await click(byId("side-update-remote")!);
+      expect(update).toHaveBeenCalledWith("wsl:Ubuntu");
+      expect(onStartSide).not.toHaveBeenCalled();
+    });
+
+    it("a newer Hub there (version mismatch) has no Update there: this Claude UI is the one to update", async () => {
+      const text = "WSL: Ubuntu runs Claude UI 2.0.0, newer than this 1.4.0: they cannot work together. Update this Claude UI.";
+      const newer = sides("error", text).map((x) => (x.id === "wsl:Ubuntu" ? { ...x, mismatch: { local: "1.4.0", remote: "2.0.0", localSchema: [1, 1] as [number, number], remoteOlder: false } } : x));
+      const { kind, click, byId, status } = await renderSides(newer, undefined, false, vi.fn(async () => chk("installed")), undefined, vi.fn(async () => ({})));
+      await click(kind("WSL"));
+      expect(status()).toContain("Update this Claude UI");
+      expect(byId("side-update-remote")).toBeNull();
+      expect(byId("side-install")).toBeNull();
     });
 
     it("the error alert sits outside the live region", async () => {

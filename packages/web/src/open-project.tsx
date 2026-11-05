@@ -41,6 +41,7 @@ export function OpenProjectDialog({
   onAddSshHost,
   onStartSide,
   onCheckSide,
+  onUpdateRemote,
   sideOf = () => LOCAL_SIDE,
 }: {
   open: boolean;
@@ -55,6 +56,8 @@ export function OpenProjectDialog({
   onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
+  /** `side.updateRemote`: updates the older Hub there that cannot work with this one; resolves once its update command succeeded. */
+  onUpdateRemote?: (side: string) => Promise<unknown>;
   /** Side of a recent project. */
   sideOf?: (cwd: string) => string;
   /** Projects that are not added but have sessions, newest first: offered above the folders (OpenCode's "Recent projects"). */
@@ -101,7 +104,7 @@ export function OpenProjectDialog({
             </Dialog.Close>
           </div>
           {sides && (sides.length > 1 || docker || ssh) ? (
-            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} docker={docker} ssh={ssh} onAddSshHost={onAddSshHost} onStartSide={onStartSide} onCheckSide={onCheckSide} sideOf={sideOf} />
+            <SidePicker input={input} list={list} onPick={pick} recent={recent} sides={sides} docker={docker} ssh={ssh} onAddSshHost={onAddSshHost} onStartSide={onStartSide} onCheckSide={onCheckSide} onUpdateRemote={onUpdateRemote} sideOf={sideOf} />
           ) : (
             <Browser input={input} list={list} onPick={pick} recent={recent} />
           )}
@@ -128,6 +131,7 @@ function SidePicker({
   onAddSshHost,
   onStartSide,
   onCheckSide,
+  onUpdateRemote,
   sideOf,
 }: {
   input: React.RefObject<HTMLInputElement | null>;
@@ -140,6 +144,8 @@ function SidePicker({
   onAddSshHost?: (command: string) => Promise<string>;
   onStartSide?: (side: string, setup?: SideSetup) => Promise<unknown>;
   onCheckSide?: (side: string) => Promise<SideCheck>;
+  /** `side.updateRemote`: updates the older Hub there that cannot work with this one; resolves once its update command succeeded. */
+  onUpdateRemote?: (side: string) => Promise<unknown>;
   sideOf: (cwd: string) => string;
 }) {
   // The chosen kind and, for WSL and Docker, its side; Docker without one shows the container list.
@@ -177,6 +183,18 @@ function SidePicker({
       patch(id, { busy: undefined, error: undefined, failed: undefined });
     } catch (e) {
       patch(id, { busy: undefined, error: (e as Error).message, failed: mode });
+    }
+  };
+  /** Update there (a version mismatch): the side shows `starting` with the daemon's text until the new Hub there attaches. */
+  const updateRemote = async (id: string) => {
+    if (!onUpdateRemote) return;
+    patch(id, { busy: { mode: "never" }, error: undefined, failed: undefined });
+    try {
+      await onUpdateRemote(id);
+      focusInput.current = true;
+      patch(id, { busy: undefined });
+    } catch (e) {
+      patch(id, { busy: undefined, error: (e as Error).message });
     }
   };
   /** The read-only check. A side that turns out installed starts by itself (setup never: installs nothing), unless a start from this dialog failed or the side is in error: its panel then shows Retry and Reinstall. */
@@ -295,7 +313,7 @@ function SidePicker({
       ) : !current ? (
         <ContainerStep kind={kind} input={input} containers={members} stateWord={stateWord} isReady={isReady} onPick={(id) => void choose(id)} onAddHost={kind === "ssh" ? onAddSshHost : undefined} />
       ) : !ready ? (
-        <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} />
+        <SidePanel key={current.id} side={current} state={panels[current.id] ?? {}} onRun={(m) => void run(current.id, m)} onCheck={() => void runCheck(current.id)} onUpdateRemote={onUpdateRemote && (() => void updateRemote(current.id))} />
       ) : (
         <>
           {current?.message && (

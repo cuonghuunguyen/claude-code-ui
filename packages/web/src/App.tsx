@@ -4237,6 +4237,7 @@ export function App() {
         }}
         onStartSide={(side, setup) => client.current!.request({ type: "side.start", side, ...(setup && { setup }) })}
         onCheckSide={(side) => client.current!.request<SideCheck>({ type: "side.check", side })}
+        onUpdateRemote={(side) => client.current!.request({ type: "side.updateRemote", side })}
         sideOf={sideOf.sideOf}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}

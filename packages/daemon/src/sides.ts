@@ -1066,7 +1066,8 @@ export function createSides(opts: {
           s.gits.delete(gid);
         }
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
-        if (!wasReady) reject(new Error(message));
+        // A mismatch rejects with what the row says (both versions, the way out), not the setup code.
+        if (!wasReady) reject(new Error(mismatched && !updating ? mismatchText : message));
         routers.forEach((r) => r.detach(s.id));
         changed();
       });
