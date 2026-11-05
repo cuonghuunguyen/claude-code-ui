@@ -2,6 +2,7 @@
 // coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { foreignPointer } from "./remote-path.ts";
 import { gitReadOnly, repoSafety, repoSafetyAsync, type RepoSafety } from "./git-readonly.ts";
 
@@ -201,4 +202,20 @@ export async function tierAsync(tool: string, input: unknown, ctx: TierContext):
   } catch {
     return "high";
   }
+}
+
+const GIT_WORD = /^(git(\.exe)?|.*\/git)$/i;
+/** PreToolUse hook of a worker query: a Bash command with a git segment that the tier rates high goes to canUseTool (the CLI auto-allows read-only git without asking). `input` is the tool input. */
+export async function workerBashHook(input: unknown, cwd: string, read: typeof tierAsync = tierAsync): Promise<HookJSONOutput> {
+  const command = (input as { command?: unknown } | null)?.command;
+  if (typeof command !== "string") return {};
+  // shortcut: a git word inside quotes or a subshell is not split out; the CLI's own parser still decides those, upgrade if one shows up.
+  if (!command.split(/&&|\|\||[;|\n]/).some((seg) => GIT_WORD.test(seg.trim().split(/\s+/)[0] ?? ""))) return {};
+  let t: Tier = "high";
+  try {
+    t = await read("Bash", input, { cwd, bashCwdPinned: true });
+  } catch {}
+  return t === "high"
+    ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "read-only git that may print a file on the read deny list" } }
+    : {};
 }

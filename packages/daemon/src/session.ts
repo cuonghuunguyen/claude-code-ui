@@ -8,6 +8,7 @@ import {
   type Options,
   type PermissionResult,
   type PermissionUpdate,
+  type PreToolUseHookInput,
   type Query,
   type SDKControlGetContextUsageResponse,
   type SDKConversationResetMessage,
@@ -47,7 +48,7 @@ import { PartIndex } from "./part-index.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
-import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
+import { tierAsync, workerBashHook, type Tier, type TierContext } from "./risk-tier.ts";
 
 type Listener = (e: Event) => void;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
@@ -346,6 +347,10 @@ export class Session {
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
+        // The CLI auto-allows read-only git without canUseTool; the hook sends the high-tier ones there (a worker only).
+        ...(this.bashPinned && {
+          hooks: { PreToolUse: [{ matcher: "Bash", hooks: [async (i) => workerBashHook((i as PreToolUseHookInput).tool_input, this.cwd, this.opts.tier ?? tierAsync)] }] },
+        }),
         mcpServers: this.opts.mcpServers?.(this.id),
         ...(agent && { agent }),
       },
