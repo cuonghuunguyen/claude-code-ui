@@ -17,7 +17,7 @@ import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
-import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
+import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
@@ -574,7 +574,7 @@ export function createDaemon(opts: {
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
     const sp = perfMon.span("worktree.list");
-    const entry = { stamp, list: gitOutside(cwd).then((out) => (out ? null : listWorktrees(cwd))).finally(() => sp.end()) };
+    const entry = { stamp, list: listWorktrees(cwd, (p) => inRoots(real(p) ?? p)).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -588,7 +588,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd, { ignoreSubmodules: appSettings.get().git.ignoreSubmodules }))).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitStatus(cwd, { allowed: (p) => inRoots(real(p) ?? p), ignoreSubmodules: appSettings.get().git.ignoreSubmodules }).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -2122,11 +2122,12 @@ export function createDaemon(opts: {
           const dir = allowed(msg.path);
           if (!dir) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
-            const entries = readdirSync(dir, { withFileTypes: true }).map(
+            const entries = readdirChecked(dir).map(
               (e): FsEntry => ({ name: e.name, path: join(dir, e.name), isDir: e.isDirectory() }),
             );
             return reply({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)) });
           } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ECHANGED") return fail("path_not_allowed", "changed during the request");
             return fail("fs_error", String(err));
           }
         }
@@ -2457,12 +2458,27 @@ export function createDaemon(opts: {
               watched.delete(path);
             }
           for (const path of msg.paths) {
-            const real = allowed(path);
-            if (!real || watched.has(path)) continue;
-            const listener = (curr: Stats, prev: Stats) =>
-              curr.mtimeMs !== prev.mtimeMs && send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
-            watchFile(real, { interval: WATCH_INTERVAL_MS }, listener);
-            watched.set(path, { real, listener });
+            const canon = allowed(path);
+            if (!canon || watched.has(path)) continue;
+            // Parent folder dev/ino (not the file's: an atomic rename-write changes the file's inode).
+            const dir = dirname(canon);
+            let id;
+            try {
+              id = statSync(dir, { bigint: true });
+            } catch {
+              continue;
+            }
+            // GH-323: a link or swapped folder ends the watch, nothing is sent. A deleted file (real undefined) still reports.
+            const listener = (curr: Stats, prev: Stats) => {
+              const r = real(canon);
+              const now = statSync(dir, { bigint: true, throwIfNoEntry: false });
+              if ((r !== undefined && r !== canon) || !now || now.dev !== id.dev || now.ino !== id.ino) {
+                unwatchFile(canon, listener);
+                watched.delete(path);
+              } else if (curr.mtimeMs !== prev.mtimeMs) send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
+            };
+            watchFile(canon, { interval: WATCH_INTERVAL_MS }, listener);
+            watched.set(path, { real: canon, listener });
           }
           return reply({ watching: [...watched.keys()] });
         }

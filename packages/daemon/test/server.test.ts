@@ -12,7 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
-import { openChecked } from "../src/fd-check.ts";
+import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { createProjects } from "../src/projects.ts";
@@ -33,7 +33,7 @@ vi.mock("../src/git.ts", async (importOriginal) => {
 // The seam between allowed() and the open: a test runs code there (a swap) through mockImplementationOnce; behaviour unchanged.
 vi.mock("../src/fd-check.ts", async (importOriginal) => {
   const fd = await importOriginal<typeof import("../src/fd-check.ts")>();
-  return { ...fd, openChecked: vi.fn(fd.openChecked) };
+  return { ...fd, openChecked: vi.fn(fd.openChecked), readdirChecked: vi.fn(fd.readdirChecked) };
 });
 
 const added = (...cwds: string[]) => {
@@ -1629,6 +1629,41 @@ describe("daemon", () => {
       expect(JSON.stringify(reply), type).not.toContain("outside secret");
       expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
     }
+  });
+
+  it.skipIf(!posix)("fs.list refuses a folder swapped for a symlink between the root check and the read (GH-323)", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    writeFileSync(join(outsideDir, "outside-secret.txt"), "x");
+    const dir = join(webRoot, "swap-list");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "f.txt"), "inside");
+    const real = vi.mocked(readdirChecked).getMockImplementation()!;
+    vi.mocked(readdirChecked).mockImplementationOnce((path) => {
+      rmSync(dir, { recursive: true });
+      symlinkSync(outsideDir, dir);
+      return real(path);
+    });
+    const c = await client();
+    const reply = await c.request({ type: "fs.list", path: dir });
+    expect(reply).toMatchObject({ code: "path_not_allowed" });
+    expect(JSON.stringify(reply)).not.toContain("outside-secret");
+  });
+
+  it.skipIf(!posix)("fs.watch sends nothing for a watched file whose folder became a link (GH-323)", { timeout: 10_000 }, async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    writeFileSync(join(outsideDir, "f.txt"), "outside");
+    const dir = join(webRoot, "swap-watch");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "f.txt");
+    writeFileSync(file, "inside");
+    const c = await client();
+    await c.request({ type: "fs.watch", paths: [file] });
+    rmSync(dir, { recursive: true });
+    symlinkSync(outsideDir, dir);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(outsideDir, "f.txt"), "outside changed");
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(c.inbox.some((m) => m.type === "fs.changed" && m.path === file)).toBe(false);
   });
 
   it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
