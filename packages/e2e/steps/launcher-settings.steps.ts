@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { runDir, shortcutDir } from "../support/paths.ts";
-import { Then, When } from "./fixtures.ts";
+import { Given, Then, When } from "./fixtures.ts";
 
 const sw = (page: Page) => page.getByTestId("settings-launcher-shortcut");
 const entry = () => join(shortcutDir(runDir()), { darwin: "Claude UI.app", win32: "Claude UI.lnk" }[process.platform as string] ?? "claude-ui.desktop");
@@ -72,4 +72,25 @@ Then("the launcher shortcut row is below the back button", async ({ page }) => {
   expect(row!.y).toBeGreaterThanOrEqual(back!.y + back!.height - 1);
   // The section heading starts below the last line of the shortcut hint.
   expect(heading!.y).toBeGreaterThanOrEqual(shortcutRow!.y + shortcutRow!.height - 1);
+});
+
+// The file the guard reads: Info.plist inside the macOS bundle, else the entry itself.
+const foreignFile = () => (process.platform === "darwin" ? join(entry(), "Contents/Info.plist") : entry());
+const FOREIGN = "the user's own file";
+
+Given("a foreign file sits at the launcher shortcut path", async () => {
+  mkdirSync(join(foreignFile(), ".."), { recursive: true });
+  writeFileSync(foreignFile(), FOREIGN);
+});
+
+When("I click the launcher shortcut switch", async ({ page }) => {
+  await sw(page).click();
+});
+
+Then("the foreign launcher shortcut file is untouched", async () => {
+  expect(readFileSync(foreignFile(), "utf8")).toBe(FOREIGN);
+});
+
+When("I remove the foreign launcher shortcut file", async () => {
+  rmSync(entry(), { recursive: true, force: true });
 });
