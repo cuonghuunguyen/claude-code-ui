@@ -56,7 +56,7 @@ describe("generators", () => {
   });
   it("Windows script", () => {
     const s = windowsScript({ lnk: "C:\\U\\O'Brien\\Claude UI.lnk", comspec: "C:\\Windows\\system32\\cmd.exe", icon: "C:\\c\\claude-ui.ico", cwd: "C:\\U" });
-    for (const part of ["CreateShortcut('C:\\U\\O''Brien\\Claude UI.lnk')", "TargetPath = 'C:\\Windows\\system32\\cmd.exe'", "Arguments = '/c call claude-ui open >nul 2>&1 || claude-ui'", "IconLocation = 'C:\\c\\claude-ui.ico,0'", "$s.Save()"]) expect(s).toContain(part);
+    for (const part of ["CreateShortcut('C:\\U\\O''Brien\\Claude UI.lnk')", "TargetPath = 'C:\\Windows\\system32\\cmd.exe'", "Arguments = '/c call claude-ui open >nul 2>&1 || claude-ui'", "IconLocation = 'C:\\c\\claude-ui.ico,0'", "$s.Save()", "(claude-ui-launcher-shortcut)"]) expect(s).toContain(part);
   });
   it("shortcutPath per OS and override", () => {
     expect(shortcutPath("darwin", {}, "/h")).toBe("/h/Applications/Claude UI.app");
