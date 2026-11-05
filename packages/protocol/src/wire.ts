@@ -246,6 +246,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
+  | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
+  | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
   | { type: "git.operation"; cwd: string; exact?: true }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */

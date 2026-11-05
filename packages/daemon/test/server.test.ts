@@ -1137,6 +1137,30 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
   });
 
+  it("answers git.branchCreate and git.checkout for a cwd inside the roots only, with checked arguments and the local_changes code", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    for (const m of [{ type: "git.branchCreate", name: "x" }, { type: "git.checkout", ref: "refs/heads/x" }]) {
+      expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
+    }
+    expect(await c.request({ type: "git.checkout", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.branchCreate", cwd: webRoot, name: "-x" })).toMatchObject({ code: "bad_request" });
+    const repo = join(webRoot, "coproj");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "t.txt"), "1\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "first");
+    git("checkout", "-q", "-b", "other");
+    writeFileSync(join(repo, "t.txt"), "2\n");
+    git("commit", "-q", "-am", "second");
+    git("checkout", "-q", "main");
+    writeFileSync(join(repo, "t.txt"), "mine\n");
+    expect(await c.request({ type: "git.checkout", cwd: repo, ref: "refs/heads/other" })).toMatchObject({ code: "local_changes" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";

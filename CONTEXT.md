@@ -226,7 +226,7 @@ Discarding the uncommitted changes of a file or a hunk, back to HEAD; an added f
 _Avoid_: revert (a commit that undoes another commit), discard, reset
 
 **Smart checkout**:
-Checkout of a branch when local changes conflict with it: stash the changes, check out, re-apply them. IntelliJ's term.
+Checkout of a branch when local changes conflict with it: stash the tracked changes, check out, re-apply them (staged state is not kept). IntelliJ's term.
 
 **Local history**:
 Snapshots of a file's content kept by claude-ui outside git (ADR 0010): on a Files-tab save, on an agent Edit/Write, and before a claude-ui git write that loses content. Restorable from the Timeline. VS Code's term.
