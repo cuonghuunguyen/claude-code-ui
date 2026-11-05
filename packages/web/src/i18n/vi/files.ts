@@ -94,6 +94,7 @@ export default {
   "files.paste.intoItself": "Không thể dán “{name}” vào chính nó.",
   "files.paste.osFolder": "Không thể dán thư mục từ bảng nhớ tạm của hệ thống; hãy kéo thả vào cây thư mục.",
   "files.paste.linksSkipped": { other: "Đã bỏ qua {count} liên kết (liên kết không được sao chép giữa các máy)." },
+  "files.paste.sourceKept": "Nguồn chưa được di chuyển hay xóa.",
   "files.paste.tooLarge": "Hơn 512 MB: chưa dán gì cả.",
   "files.paste.empty": "Không có gì để dán.",
   // file-tree.tsx, file-tree-model.ts

@@ -92,6 +92,7 @@ export default {
   "files.paste.intoItself": "“{name}” cannot be pasted into itself.",
   "files.paste.osFolder": "Folders cannot be pasted from the system clipboard; drag them into the tree.",
   "files.paste.linksSkipped": { one: "{count} link skipped (links are not copied between machines).", other: "{count} links skipped (links are not copied between machines)." },
+  "files.paste.sourceKept": "The source was not moved or deleted.",
   "files.paste.tooLarge": "More than 512 MB: nothing was pasted.",
   "files.paste.empty": "Nothing to paste.",
   // file-tree.tsx, file-tree-model.ts

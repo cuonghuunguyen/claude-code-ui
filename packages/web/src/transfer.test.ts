@@ -187,6 +187,26 @@ describe("runTransfer (GH-555)", () => {
     expect(w.fs.a!.get("/a/e/d/l")).toEqual({ kind: "link", target: "x" });
   });
 
+  it("a cut across Daemons keeps the source when a link inside was skipped", async () => {
+    const w = world({ a: { "/a/d": { kind: "dir" }, "/a/d/l": { kind: "link", target: "x" }, "/a/d/f": file("1") }, b: { "/b": { kind: "dir" } } });
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/d", true)], target: { side: "b", dir: "/b", names: [] }, op: "cut", resolve: keep });
+    expect(r).toMatchObject({ done: ["/b/d"], moved: [], kept: ["d"], linksSkipped: 1 });
+    expect(w.fs.a!.has("/a/d/l")).toBe(true);
+    expect(w.types("fs.delete").every((m) => m.side === "b")).toBe(true);
+  });
+
+  it("a same-Daemon cut that fails with EXDEV falls back to copy then delete", async () => {
+    const w = world({ a: { "/p/f": file("1"), "/p/d": { kind: "dir" } } });
+    const send: Send = async (m) => {
+      if (m.type === "fs.rename" && m.dir) throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "fs_error" });
+      return w.send(m);
+    };
+    const r = await runTransfer({ send, items: [dmn("a", "/p/f")], target: { side: "a", dir: "/p/d", names: [] }, op: "cut", resolve: keep });
+    expect(r.done).toEqual(["/p/d/f"]);
+    expect(w.fs.a!.has("/p/f")).toBe(false);
+    expect(w.fs.a!.get("/p/d/f")).toEqual(file("1"));
+  });
+
   it("caps refuse before any write request", async () => {
     const w = world({ a: { "/a/d": { kind: "dir" }, "/a/d/1": file("1") }, b: { "/b": { kind: "dir" } } });
     const send: Send = async (m) => {

@@ -584,7 +584,7 @@ export function FileTree({
           ),
       });
     } catch (e) {
-      r = { done: [], moved: [], skipped: [], linksSkipped: 0, error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
+      r = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
     }
     clearTimeout(timer);
     abort.current = undefined;
@@ -593,7 +593,7 @@ export function FileTree({
     setBusyPath(undefined);
     if (r.error) setOpError(opErrorText(r.error.code, r.error.message, r.error.name));
     else if (r.cancelled) setNote(tr("files.paste.cancelled"));
-    else if (r.linksSkipped) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }));
+    else if (r.linksSkipped) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }) + (r.kept.length ? ` ${tr("files.paste.sourceKept")}` : ""));
     else if (warn) setOpError(warn);
     if (!r.done.length) return;
     if (op === "cut") {
