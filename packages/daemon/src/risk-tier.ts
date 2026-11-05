@@ -210,7 +210,7 @@ export async function workerBashHook(input: unknown, cwd: string, read: typeof t
   const command = (input as { command?: unknown } | null)?.command;
   if (typeof command !== "string") return {};
   // Any word of a segment that is `git` (also after `FOO=1`, `env`, `command`, `xargs`, `$(`); the tier decides. shortcut: a git word built by quoting or expansion is not seen, upgrade if one shows up.
-  if (!command.split(/&&|\|\||[;|\n()`]/).some((seg) => seg.trim().split(/\s+/).some((w) => GIT_WORD.test(w)))) return {};
+  if (!command.split(/&&|\|\||[;|\n()`]/).some((seg) => seg.trim().split(/\s+/).some((w) => GIT_WORD.test(w.replace(/['"\\]/g, ""))))) return {};
   let t: Tier = "high";
   try {
     t = await read("Bash", input, { cwd, bashCwdPinned: true });

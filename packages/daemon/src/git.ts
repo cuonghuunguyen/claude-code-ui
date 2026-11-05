@@ -1764,6 +1764,7 @@ export function configRedirects(text: string): ConfigRedirect[] {
       }
       if (!cont || i + 1 >= lines.length) break;
       line = line.slice(0, -1) + lines[++i]!;
+      k--; // the joined line starts where the backslash was
     }
     line = line.trim();
     if (!line) continue;

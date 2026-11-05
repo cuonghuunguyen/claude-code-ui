@@ -2129,6 +2129,9 @@ describe("repository config redirection (GH-319)", () => {
       "header comment ending in a backslash": "[core] # x \\\n\texcludesFile = /tmp/evil2\n",
       "value comment then key": "[core]\n\thooksPath = /x ; c \\\n\tattributesFile = /x2\n",
       "continuation inside quotes": '[core]\n\thooksPath = "/a\\\nb"\n',
+      "comment char right after a continuation": "[core]\n\tx = a\\\n# \\\n\thooksPath = /evil\n",
+      "semicolon right after a continuation": "[core]\n\tx = a\\\n; \\\n\thooksPath = /evil\n",
+      "backslash right after a continuation": "[core]\n\tx = a\\\n\\\\\n\thooksPath = /evil\n[include]\n\tpath = /i\n",
       "BOM": "\uFEFF[core]\n\thooksPath = /bom\n",
       "other sections are ignored": '[remote "o"]\n\turl = /u\n\tpath = /p\n[core.x]\n\thooksPath = /sub\n',
     };
