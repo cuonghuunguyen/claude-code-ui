@@ -3,7 +3,7 @@
 import { createJsonFile } from "./json-file.ts";
 import { APP_ICON_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -64,6 +64,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   power: { keepAwake: bool("Keep computer awake") },
   performance: { monitor: bool("Performance monitor") },
   chrome: { enabled: bool("Claude in Chrome") },
+  history: { enabled: bool("Local history"), exclude: strings("Local history excluded paths") },
   jira: {
     url: { valid: (v) => v === "" || jiraUrl(v), label: "Jira URL", rule: "empty or an http(s) address without user name or password", patch: (v) => v === "" || (jiraUrl(v) && !jiraUrlProblem(v as string)), patchRule: "empty or an https address without user name or password (http only for localhost or 127.0.0.1)" },
     email: { valid: (v) => typeof v === "string" && v.length <= 254 && !/[\s]/.test(v), label: "Jira email", rule: "an email address" },
