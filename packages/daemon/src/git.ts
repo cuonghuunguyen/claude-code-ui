@@ -1411,7 +1411,7 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
     if (author || text) args.push("--fixed-strings", "--regexp-ignore-case");
     if (author) args.push(`--author=${author}`);
     if (text) args.push(`--grep=${text}`);
-    args.push(...(ref ? ["--end-of-options", ref] : ["--all"]), "--");
+    args.push(...(ref ? ["--end-of-options", ref] : ["--exclude=refs/stash", "--all"]), "--");
     const key = `${top}\0${args.join("\0")}`;
     let out: string;
     const hit = !o.fresh && cacheable(stamp) ? logCache.get(key) : undefined;

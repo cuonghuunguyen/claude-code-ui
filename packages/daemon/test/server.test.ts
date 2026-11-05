@@ -1137,6 +1137,18 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
   });
 
+  it("answers git.stashList, git.stashPush, git.stashApply, git.stashPop and git.stashDrop for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    const hash = "a".repeat(40);
+    const msgs = [{ type: "git.stashList" }, { type: "git.stashPush" }, { type: "git.stashApply", index: 0, hash }, { type: "git.stashPop", index: 0, hash }, { type: "git.stashDrop", index: 0, hash }];
+    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.stashList", cwd: webRoot })).toMatchObject({ result: { stashes: null } });
+    for (const m of msgs.slice(1)) expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.stashDrop", cwd: webRoot, index: -1, hash })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.stashPush", cwd: webRoot, message: 5 })).toMatchObject({ code: "bad_request" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";
@@ -1214,6 +1226,11 @@ describe("daemon", () => {
         { type: "git.continue", kind: "merge" },
         { type: "git.abort", kind: "merge" },
         { type: "git.operation" },
+        { type: "git.stashList" },
+        { type: "git.stashPush" },
+        { type: "git.stashApply", index: 0, hash },
+        { type: "git.stashPop", index: 0, hash },
+        { type: "git.stashDrop", index: 0, hash },
         { type: "git.branch", ref: "refs/heads/main" },
         { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
         { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },

@@ -24,12 +24,14 @@ const set = (path: string, next: RemoteOpState) => {
 export type CommitRequest = { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true };
 /** Conflict banner: Continue and Abort of the operation `kind` the banner showed. */
 export type OperationRequest = { type: "git.continue" | "git.abort"; cwd: string; kind: GitOperationKind; exact?: true };
+/** Graph tab stash section: push, and apply, pop or drop of the entry the list showed (`hash`). */
+export type StashRequest = { type: "git.stashPush"; cwd: string; message?: string; includeUntracked?: boolean; exact?: true } | { type: "git.stashApply" | "git.stashPop" | "git.stashDrop"; cwd: string; index: number; hash: string; exact?: true };
 export type OpReply = GitRemoteResult & Partial<GitCommitFilesResult> & Partial<GitWriteResult>;
 /**
  * Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes.
  * `done`: the result line, or a function of the reply; `onDone`: runs after a success.
  */
-export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
+export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
   const at = msg.cwd;
   if (get(at).running !== undefined) return false;
   set(at, { ...get(at), running, result: undefined });

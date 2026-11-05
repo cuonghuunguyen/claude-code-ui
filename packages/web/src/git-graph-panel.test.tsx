@@ -1059,3 +1059,16 @@ it("without exact no request carries it", async () => {
   await mount(c);
   expect(c.sent.some((m) => "exact" in m)).toBe(false);
 });
+
+it("the Stashes toggle shows the stash section and loads the list", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(el.querySelector("[data-testid=stash-section]")).toBeNull();
+  expect(c.sent.some((m) => m.type === "git.stashList")).toBe(false);
+  const btn = el.querySelector<HTMLButtonElement>("[data-testid=graph-stashes]")!;
+  await act(async () => btn.click());
+  await flush();
+  expect(btn.getAttribute("aria-pressed")).toBe("true");
+  expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
+  expect(c.sent.filter((m) => m.type === "git.stashList")).toHaveLength(1);
+});

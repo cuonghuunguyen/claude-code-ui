@@ -24,7 +24,7 @@ import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
-import { gitAbort, gitCommitFiles, gitContinue, gitMergeRebase } from "./git-write.ts";
+import { gitAbort, gitCommitFiles, gitContinue, gitMergeRebase, gitStash, gitStashList, gitStashPush } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -2287,6 +2287,37 @@ export function createDaemon(opts: {
           try {
             return reply({ operation: await gitOperationOf(cwd, (p) => inRoots(real(p) ?? p)) });
           } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.stashList": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            return reply({ stashes: await gitStashList(cwd, { allowed: (p) => inRoots(real(p) ?? p) }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.stashPush":
+        case "git.stashApply":
+        case "git.stashPop":
+        case "git.stashDrop": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          const inside = (p: string) => inRoots(real(p) ?? p);
+          const VERB = { "git.stashApply": "apply", "git.stashPop": "pop", "git.stashDrop": "drop" } as const;
+          // Output is never logged. A hook may have changed files even when the run failed.
+          try {
+            const written = msg.type === "git.stashPush"
+              ? await gitStashPush(cwd, { message: msg.message, includeUntracked: msg.includeUntracked, allowed: inside })
+              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
