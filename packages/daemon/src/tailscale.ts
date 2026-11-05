@@ -84,13 +84,16 @@ export async function tailscalePreflight(o: { port: number; platform: NodeJS.Pla
   return { cli, hostname: status.hostname, serve: served === "free" };
 }
 
-/** Runs `tailscale serve` as its child and kills it when its stdin closes: the daemon holds the pipe, so even a SIGKILLed daemon leaves no serve behind.
+/** Runs `tailscale serve` as its child and kills it when its stdin closes or it gets SIGINT, SIGTERM or SIGHUP: the daemon holds the pipe, so even a SIGKILLed daemon leaves no serve behind.
  * POSIX kills the child's process group: macOS /usr/local/bin/tailscale is a sh wrapper without exec, so killing only the wrapper orphans the real serve.
  * Windows spawns tailscale.exe directly (no wrapper), so killing the child is enough. */
 export const SERVE_WATCHER = `const [cli, ...a] = process.argv.slice(1);
 const posix = process.platform !== "win32";
 const c = require("node:child_process").spawn(cli, a, { stdio: ["ignore", "inherit", "inherit"], windowsHide: true, detached: posix });
-process.stdin.on("close", () => { try { if (posix) return void process.kill(-c.pid); } catch {} c.kill(); }).resume();
+const stop = () => { try { if (posix) return void process.kill(-c.pid); } catch {} c.kill(); };
+process.stdin.on("close", stop).resume();
+// Ctrl+C or a closed terminal signals the watcher too (same foreground group), but not the detached serve: stop it before exiting.
+for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(s, () => (stop(), process.exit(1)));
 c.on("exit", (code) => process.exit(code ?? 1));
 c.on("error", (e) => (console.error(e.message), process.exit(1)));`;
 
