@@ -4,9 +4,7 @@ Feature: Merge and Rebase from the branch menu, and the conflict banner of the C
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project has the branch "feature" that conflicts with main on "a.txt"
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
+    And a Haiku session with one finished reply
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
     And I open the branch menu on the chip "refs/heads/feature"
