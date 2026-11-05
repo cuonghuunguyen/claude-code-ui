@@ -65,3 +65,19 @@ Then("the project branch {string} tracks {string}", async ({ project }, branch: 
 Then("the file {string} contains {string}", async ({ project }, file: string, text: string) => {
   await expect.poll(() => readFileSync(join(project.path, file), "utf8"), { timeout: 30_000 }).toContain(text);
 });
+
+When("I select the commit row {string}", async ({ page }, subject: string) => {
+  await page.getByTestId("graph-panel").getByTestId("commit-row").filter({ hasText: subject }).first().getByText(subject).click();
+  await expect(page.getByTestId("commit-details")).toContainText(subject, { timeout: 30_000 });
+});
+
+When("I open the branch menu on the chip {string} in the commit details", async ({ page }, ref: string) => {
+  await page.getByTestId("commit-details").locator(`[data-testid="commit-ref"][data-ref="${ref}"]`).first().click({ button: "right" });
+  const menu = page.getByTestId("branch-menu");
+  await expect(menu).toBeVisible({ timeout: 30_000 });
+  await expect(menu.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
+});
+
+Then("the branch menu offers a new branch from the short hash of {string}", async ({ page, project }, branch: string) => {
+  await expect(page.getByTestId("branch-new")).toHaveText(`New branch from ${git(project.path, "rev-parse", branch).slice(0, 7)}…`);
+});

@@ -84,3 +84,14 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     Then the Graph shows the error "worktree"
     And the project is on the branch "main"
     And I capture "other-worktree"
+
+  Scenario: New branch from a chip in the commit details offers the shown commit
+    Given the viewport is 1440x900
+    And the scratch project is a git repository with an origin inside the allowed roots
+    And the scratch project's main has the local commit "local work"
+    And a Haiku session with one finished reply
+    When I open the Graph tab of the side panel
+    And I select the commit row "local work"
+    And I open the branch menu on the chip "refs/heads/main" in the commit details
+    Then the branch menu offers a new branch from the short hash of "main"
+    And I capture "details-chip-new-branch"
