@@ -1727,16 +1727,21 @@ const CONFIG_MAX = 1024 * 1024;
 function redirectValue(raw: string): string {
   let out = "";
   let space = 0;
+  let odd = false;
   let quoted = false;
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i]!;
     if (!quoted && (c === " " || c === "\t" || c === "\r" || c === "\n")) {
       if (out) space++;
+      if (out && c !== " ") odd = true;
       continue;
     }
     if (!quoted && (c === "#" || c === ";")) break;
+    // Git versions differ on a tab or CR between words (kept or turned into a space): fail closed.
+    if (space && odd) throw new Error("config value has a tab or CR inside");
     out += " ".repeat(space);
     space = 0;
+    odd = false;
     if (c === "\\") {
       const e = ({ n: "\n", t: "\t", b: "\b", "\\": "\\", '"': '"' } as Record<string, string>)[raw[++i] ?? ""];
       if (e === undefined) throw new Error("config escape not understood");
@@ -1766,7 +1771,8 @@ export function configRedirects(text: string): ConfigRedirect[] {
     const k = kv[1]!.toLowerCase();
     const key: ConfigRedirect["key"] | undefined =
       section.name === "include" || section.name === "includeif" ? (k === "path" ? "include" : undefined) : section.name === "core" && !section.sub ? CONFIG_KEYS[k] : undefined;
-    const value = redirectValue(kv[2]);
+    // Only a redirecting key's value is parsed: a tab or an odd escape in any other key is none of our business.
+    const value = key && redirectValue(kv[2]);
     if (key && value) out.push({ key, value });
   };
   for (let i = 0; i < lines.length; i++) {

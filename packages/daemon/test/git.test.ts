@@ -2169,6 +2169,10 @@ describe("repository config redirection (GH-319)", () => {
       expect(() => configRedirects("[core]\n\t=== nonsense\n")).toThrow();
       expect(() => configRedirects("hooksPath = x\n")).toThrow();
       expect(() => configRedirects("[core\n")).toThrow();
+      expect(() => configRedirects("[core]\n\thooksPath = /r/x\tevil\n")).toThrow();
+      expect(() => configRedirects("[core]\n\thooksPath = /r/x\revil\n")).toThrow();
+      expect(configRedirects('[alias]\n\tx = a\tb \\q "oops\n')).toEqual([]);
+      expect(configRedirects("[core]\n\thooksPath = /r/x\t\n")).toEqual([{ key: "hooksPath", value: "/r/x" }]);
       expect(() => configRedirects("#".repeat(1024 * 1024 + 1))).toThrow();
     });
   });

@@ -274,7 +274,7 @@ describe("workerBashHook", () => {
     expect(s.calls).toHaveLength(1);
   });
   it("finds git behind an assignment, env, command, xargs and a subshell", async () => {
-    for (const command of ["FOO=1 git show HEAD", "env git show HEAD", "command git show HEAD", "ls | xargs git show", "echo $(git show HEAD)", '"git" show HEAD:x', "'git' show HEAD:x", "g\\it show HEAD"]) {
+    for (const command of ["FOO=1 git show HEAD", "env git show HEAD", "command git show HEAD", "ls | xargs git show", "echo $(git show HEAD)", '"git" show HEAD:x', "'git' show HEAD:x", "g\\it show HEAD", "C:\\x\\git.exe status", "/c/x/git.exe status"]) {
       const s = stub("high");
       expect(await workerBashHook({ command }, "/w", s.read as never), command).toEqual(ask);
     }
