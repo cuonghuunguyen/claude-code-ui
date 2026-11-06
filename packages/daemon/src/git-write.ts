@@ -586,3 +586,97 @@ export async function gitRollbackHunk(cwd: string, o: { path: unknown; hunk: unk
     });
   });
 }
+
+// ---- New branch, checkout and Smart checkout (GH-561) ----
+
+/** git's refusal when tracked local changes would be lost; the switch runs with `LC_ALL=C`, so the text is English. */
+const LOCAL_CHANGES = /Your local changes to the following files would be overwritten by checkout/;
+const REMOTE_REF = /^refs\/remotes\/[^\0-\x20\x7f~^:?*[\\/][^\0-\x20\x7f~^:?*[\\]*\/[^\0-\x20\x7f~^:?*[\\]+$/;
+
+/** The refusals shared by both requests: a boolean `smart`, and no unfinished operation. */
+const refuseOperation = async (top: string) => {
+  const op = await gitOperation(top);
+  if (op) throw bad(op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`);
+};
+
+/**
+ * `git switch <args>`. Tracked changes that would be overwritten: `local_changes` (the UI offers Smart checkout), or with `smart` stash them,
+ * switch and `stash pop` (a conflict stops like a merge: `operation`). Staged state is not restored (plain `pop`, no `--index`).
+ */
+async function switchTo(top: string, args: string[], smart: boolean, env: NodeJS.ProcessEnv, allowed: (p: string) => boolean): Promise<Written> {
+  const lc = { ...env, LC_ALL: "C" };
+  try {
+    const { out } = await run(top, ["switch", ...args], lc);
+    return { output: out, refs: await gitRefs(top, allowed) };
+  } catch (e) {
+    if (!(e instanceof WorktreeError) || e.code !== "git_failed" || !LOCAL_CHANGES.test(e.message)) throw e;
+    if (!smart) throw new WorktreeError("local_changes", e.message);
+  }
+  const from = (await run(top, ["symbolic-ref", "--short", "-q", "HEAD"], env, { soft: true }).catch(() => ({ out: "" }))).out || "HEAD";
+  // shortcut: no "snapshot before" call yet, Local history and Timeline (#565) is not on this base; call it before the stash push when it lands.
+  await run(top, ["stash", "push", "-m", `claude-ui smart checkout ${from} -> ${args[args.length - 1]}`], env);
+  const stash = (await run(top, ["rev-parse", "refs/stash"], env)).out;
+  let switched: string;
+  try {
+    switched = (await run(top, ["switch", ...args], lc)).out;
+  } catch (e) {
+    const back = await run(top, ["stash", "pop"], env).then(() => "", () => "\nYour changes are kept in the stash: run git stash pop in a terminal.");
+    throw back && e instanceof WorktreeError ? new WorktreeError(e.code, e.message + back) : e;
+  }
+  // Another process may have pushed a stash since: popping would apply its entry.
+  if ((await run(top, ["rev-parse", "-q", "--verify", "refs/stash"], env, { soft: true })).out !== stash) {
+    return { output: `${switched}\nYour changes stay in the stash: run git stash pop in a terminal.`, refs: await gitRefs(top, allowed) };
+  }
+  try {
+    const popped = await runStop(top, ["stash", "pop"], env, allowed);
+    return { ...popped, output: `${switched}\n${popped.output}`.trim() };
+  } catch (e) {
+    throw new WorktreeError("git_failed", `${(e as Error).message}\nYour changes are kept in the stash: run git stash pop in a terminal.`);
+  }
+}
+
+/** Shared frame of both requests: pin, top, lock, no unfinished operation. */
+async function switching(cwd: string, o: RemoteOptions, fn: (top: string, env: NodeJS.ProcessEnv) => Promise<Written>): Promise<Written | null> {
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    return exclusive(top, async () => {
+      await refuseOperation(top);
+      return fn(top, await writeEnvNoEditor(top));
+    });
+  });
+}
+const smartOf = (s: unknown) => {
+  if (s !== undefined && typeof s !== "boolean") throw bad("smart must be a boolean");
+  return s === true;
+};
+
+/** `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash. */
+export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unknown; checkout?: unknown; smart?: unknown } & RemoteOptions): Promise<Written | null> {
+  const { name, at } = o;
+  if (typeof name !== "string" || !name || name.length > 255 || name.startsWith("-") || name.includes("\0")) throw bad("Not a valid branch name");
+  if (at !== undefined && !isHash(at)) throw bad("at must be a commit hash");
+  if (o.checkout !== undefined && typeof o.checkout !== "boolean") throw bad("checkout must be a boolean");
+  const smart = smartOf(o.smart);
+  return switching(cwd, o, async (top, env) => {
+    await run(top, ["check-ref-format", "--branch", name], env).catch(() => {
+      throw bad("Not a valid branch name");
+    });
+    if (!o.checkout) return { output: (await run(top, ["branch", name, ...(at ? [at] : ["HEAD"])], env)).out, refs: await gitRefs(top, o.allowed) };
+    return switchTo(top, ["-c", name, ...(at ? [at] : [])], smart, env, o.allowed);
+  });
+}
+
+/** Checks out a local branch (`refs/heads/x`), or a remote branch (`refs/remotes/r/b`) as a new local branch that tracks it. */
+export async function gitCheckout(cwd: string, o: { ref: unknown; smart?: unknown } & RemoteOptions): Promise<Written | null> {
+  const remote = typeof o.ref === "string" && REMOTE_REF.test(o.ref) && !o.ref.endsWith("/HEAD") && o.ref.length <= 255 && !o.ref.includes("..") && !o.ref.includes("@{");
+  const ref = remote ? (o.ref as string) : branchRef(o.ref);
+  const smart = smartOf(o.smart);
+  return switching(cwd, o, async (top, env) => {
+    if (remote) {
+      if ((await run(top, ["rev-parse", "--verify", "-q", `${ref}^{commit}`], env, { soft: true })).code !== 0) throw bad("Not a remote branch");
+      return switchTo(top, ["--track", ref], smart, env, o.allowed);
+    }
+    return switchTo(top, ["--no-guess", ref.slice("refs/heads/".length)], smart, env, o.allowed);
+  });
+}

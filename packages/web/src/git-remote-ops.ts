@@ -30,20 +30,20 @@ export type OperationRequest = { type: "git.continue" | "git.abort"; cwd: string
 export type OpReply = GitRemoteResult & Partial<GitCommitFilesResult> & Partial<GitWriteResult> & Partial<GitRollbackResult>;
 /**
  * Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes.
- * `done`: the result line, or a function of the reply; `onDone`: runs after a success.
+ * `done`: the result line, or a function of the reply; `onDone`: runs after a success; `onFail`: true = the caller handles that failure (no result line).
  */
-export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest | RollbackRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
+export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest | RollbackRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void, onFail?: (e: RequestError) => boolean): boolean {
   const at = msg.cwd;
   if (get(at).running !== undefined) return false;
   set(at, { ...get(at), running, result: undefined });
-  const end = (result: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
+  const end = (result?: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
   client.request<OpReply>(msg).then(
     (r) => {
       noteRefs(at, r.remote?.refs ?? r.committed?.refs ?? r.written?.refs ?? undefined);
       end({ ok: true, text: typeof done === "string" ? done : done(r), output: (r.remote ?? r.committed ?? r.written ?? r.rolledBack)?.output || undefined });
       onDone?.(r);
     },
-    (e: RequestError) => end({ ok: false, text: e.message || t("files.gitFailed") }),
+    (e: RequestError) => end(onFail?.(e) ? undefined : { ok: false, text: e.message || t("files.gitFailed") }),
   );
   return true;
 }

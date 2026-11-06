@@ -263,6 +263,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
+  | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
+  | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
   /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
   | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
   /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */

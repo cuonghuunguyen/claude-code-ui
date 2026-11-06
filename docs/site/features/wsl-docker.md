@@ -46,6 +46,8 @@ A side that has run once starts again with Claude UI, and again by itself if it 
 
 Every `Host` entry of your ssh config (`~/.ssh/config`, and the files it `Include`s) is a side named `SSH: <alias>`. It needs `ssh` on your computer. Linux and macOS hosts work. Windows hosts do not yet.
 
+Sessions and terminals get the environment of your login shell on the host (`~/.zprofile`, `~/.zshrc`, `~/.bash_profile` ...), so tools from Homebrew, nvm or sdkman are found. After you edit those files, restart the host's Hub (stop the side, then start it). fish and tcsh: plain environment.
+
 ### How to open a project on an SSH host
 
 1. Click **Open project**.
