@@ -29,6 +29,7 @@ import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
@@ -289,6 +290,11 @@ export function FilesPanel({
         </nav>
   );
 
+  // Timeline (GH-565): under the tree, in the column and in the drawer; not in the file dialog (its viewer would nest in the dialog).
+  const timeline = !dialog && (
+    <TimelinePanel client={client} cwd={cwd} path={active?.path} repos={repos} stamp={`${gitNudge}:${gitStamp ?? ""}:${active?.mtime ?? ""}`} dirty={!!active && isDirty(active)} mtime={active?.mtime} />
+  );
+
   return (
     <div ref={rootRef} className="@container flex min-h-0 flex-1 flex-col" data-testid="files-panel" data-layout={wide ? "beside" : "drawer"}>
       <div className="flex items-center gap-1 border-b px-2 py-1 text-xs">
@@ -353,6 +359,7 @@ export function FilesPanel({
           style={!empty && treeWidth ? { width: `min(${treeWidth}px, calc(100% - 240px))` } : undefined}
         >
           {treeNav}
+          {timeline}
         </div>
       )}
       {wide && treeShown && !empty && (
@@ -376,6 +383,7 @@ export function FilesPanel({
           }}
         >
           {treeNav}
+          {timeline}
         </div>
       )}
       <div inert={overlay} className={cn("flex min-h-0 min-w-0 flex-col", empty && treeShown ? "flex-none" : "flex-1")}>

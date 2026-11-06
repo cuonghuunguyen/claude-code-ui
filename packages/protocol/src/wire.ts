@@ -191,6 +191,17 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number; exact?: true }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
+  /** Local history of a file (docs/spec.md "Local history"; `path` must be inside the roots, else `path_not_allowed`). Reply HistoryListResult, newest first. */
+  | { type: "history.list"; path: string }
+  /** Content of one entry (`not_found` for an unknown id). Reply `{ content }`. */
+  | { type: "history.read"; path: string; id: string }
+  /** Snapshots the current content (reason `restore`), then writes the entry's content like fs.write (`conflict` when `baseMtime` differs). Reply `{ mtime }`. */
+  | { type: "history.restore"; path: string; id: string; baseMtime?: number }
+  /** `label`: 1..100 characters, no control characters. Reply `{}`. */
+  | { type: "history.rename"; path: string; id: string; label: string }
+  | { type: "history.delete"; path: string; id: string }
+  /** A named entry of the file on disk (no merge, no dedupe; `too_large` over 256 KB). Reply `{ entry }`. */
+  | { type: "history.create"; path: string; label: string }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
   | { type: "fs.create"; path: string; dir?: boolean }
   /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
@@ -223,7 +234,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Repository list of `cwd` (docs/spec.md "git.repos"): own repository, nested repositories and submodules found as VS Code finds them (Settings › Git), file system only (no git process). `openFiles`: absolute paths of open editor tabs (at most 50). `fresh`: skip the 10 s cache. Reply GitReposResult. */
   | { type: "git.repos"; cwd: string; openFiles?: string[]; fresh?: true }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
-  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true }
+  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true; /** Timeline (GH-565): `path` relative to the top; only the commits touching that file (`HEAD --follow`, no `ref`, no `branches` in the reply). */ path?: string }
   /** Reply GitCommitResult. */
   | { type: "git.commit"; cwd: string; hash: string; exact?: true }
   /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent, `bad_request` "Submodule: open its repository" for a gitlink (submodule) path. Reply `{ content }`. */
@@ -254,6 +265,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
   | { type: "git.operation"; cwd: string; exact?: true }
+  /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
+  | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
+  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
+  | { type: "git.commitMessageCancel" }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
@@ -669,6 +684,12 @@ export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" 
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
+/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. */
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named"] as const;
+export type HistoryReason = (typeof HISTORY_REASONS)[number];
+/** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
+export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };
+export type HistoryListResult = { entries: HistoryEntry[] };
 /** `refs`: full ref names pointing here ("HEAD" first when HEAD points here). `time`: author time, unix seconds. */
 export type GitCommit = { hash: string; parents: string[]; author: string; email: string; time: number; subject: string; refs: string[] };
 /**
@@ -704,6 +725,8 @@ export type GitRemote = { output: string; refs: string | null };
 /** `remote` null outside a git work tree. */
 export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
 /** `committed` is null outside a git work tree. */
+/** `truncated`: the diff in the prompt was cut (the file list was complete). */
+export type GitCommitMessageResult = { message: string; truncated?: true };
 export type GitCommitFilesResult = { committed: GitCommitted | null };
 export type GitRemoteResult = { remote: GitRemote | null };
 /** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
@@ -773,6 +796,10 @@ export const LABEL_EMOJI_MAX = 16;
 export const LABEL_ICON_MAX = 32_000;
 /** Entries per map. */
 export const LABEL_ENTRIES_MAX = 200;
+/** Longest commit message instruction, global or per project (GH-559). */
+export const COMMIT_INSTRUCTION_MAX = 4000;
+/** What Claude is asked when no instruction is set (the Settings › Git placeholder shows it). */
+export const DEFAULT_COMMIT_INSTRUCTION = "Write a conventional commit message: a subject line of at most 72 characters in the imperative mood (type(scope): summary), a blank line, then a short body that explains what changed and why. Plain text.";
 /** Side of the saved square image icon, in pixels. */
 export const LABEL_ICON_PX = 64;
 /** Side of the saved square app icon, in pixels (the PWA icon size). */
@@ -788,6 +815,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   performance: { monitor: boolean };
   /** Claude in Chrome (GH-514): new non-worker sessions run the CLI with --chrome; applies when a session's query (re)starts. */
   chrome: { enabled: boolean };
+  /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */
+  history: { enabled: boolean; exclude: string[] };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
   jira: { url: string; email: string; template: string; /** Ticket filter: the JQL of the Ticket tab's list and text search; "" = my open tickets. */ jql: string };
   /** Settings › Git (VS Code's git extension settings, same names and values; openRepositoryInParentFolders defaults to always and prompt behaves as always). */
@@ -805,6 +834,10 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     detectSubmodulesLimit: number;
     ignoreSubmodules: boolean;
     openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+    /** GH-559: what Claude is asked for when it writes a commit message; "" = the built-in instruction. At most COMMIT_INSTRUCTION_MAX chars. */
+    commitMessageInstruction: string;
+    /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
+    commitMessageInstructions: Record<string, string>;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

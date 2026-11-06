@@ -1419,6 +1419,31 @@ describe("Session context usage", () => {
     expect(plan.refresh.mock.calls[0]![0]).toBe(plan.rateLimit.mock.calls[0]![1]);
   });
 
+  it("onFileEdit reports the text an Edit replaced, not a Write that created the file (Local history)", async () => {
+    const call = (id: string, name: string, file_path: string) => ({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: randomUUID(), role: "assistant", model: "m", content: [{ type: "tool_use", id, name, input: { file_path } }], usage: { input_tokens: 0, output_tokens: 0 } } });
+    const result = (id: string, originalFile: string | null) => ({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, tool_use_result: { originalFile } });
+    const query = () => {
+      const q = (async function* () {
+        yield call("e1", "Edit", "/r/a.txt") as never;
+        yield result("e1", "old text") as never;
+        yield call("w1", "Write", "/r/new.txt") as never;
+        yield result("w1", null) as never;
+        yield call("e2", "Edit", "/r/b.txt") as never;
+        yield result("e2", "older") as never;
+        yield { type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, duration_api_ms: 0, num_turns: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] } as never;
+      })();
+      return Object.assign(q, { supportedCommands: async () => [], getContextUsage: async () => fakeUsage, close: () => void q.return(undefined) });
+    };
+    const onFileEdit = vi.fn();
+    const s = new Session("/tmp", { query: query as never, onFileEdit });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    // The Write sits between two Edits: both Edit results have arrived when the Write was processed.
+    await vi.waitFor(() => expect(onFileEdit).toHaveBeenCalledTimes(2));
+    expect(onFileEdit.mock.calls).toEqual([["/r/a.txt", "old text"], ["/r/b.txt", "older"]]);
+  });
+
   it("a turn ended by the usage limit reports onLimitStop with the rejected event's reset time", async () => {
     limitState.resetsAt = 0;
     const onLimitStop = vi.fn();
