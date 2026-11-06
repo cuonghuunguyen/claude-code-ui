@@ -14,6 +14,7 @@ import { ViewerDialog } from "./viewer-dialog.tsx";
 
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: () => <div data-testid="pierre-diff" />,
+  FileDiff: () => <div data-testid="pierre-diff" />,
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

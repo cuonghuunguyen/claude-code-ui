@@ -4096,6 +4096,7 @@ export function App() {
                           onReload={reloadRepos}
                           onGitWrite={editors.nudge}
                           onResolve={(prompt) => (addonImpl.current.insert(panelTarget.sessionId!, prompt), setPane("session"))}
+                          onSend={(m) => (setInsert(m), setPane("session"))}
                           project={projectOf(panelTarget.cwd, worktrees)}
                         />
                       )
@@ -4111,6 +4112,7 @@ export function App() {
                         onOpen={(path) => (setOpenFile({ path }), reveal("files"))}
                         sessionId={NEW_TAB}
                         reveal={changesReveal}
+                        onSend={(m) => (setInsert(m), setPane("session"))}
                         repos={repoList}
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
@@ -5643,7 +5645,7 @@ function PromptBox({
     if (!insert) return;
     // A quote (GH-56) is prompt text, never part of a shell command.
     if (insert.startsWith(">")) setBash(false);
-    const r = insert.startsWith(">") ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
+    const r = insert.startsWith(">") || insert.includes("\n") ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
     edit(r.text, r.caret);
     onInserted?.();
     input.current?.focus();

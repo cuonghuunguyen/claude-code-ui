@@ -2,8 +2,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
-import { parseDiffFromFile, type DiffLineAnnotation } from "@pierre/diffs";
-import { FileDiff as PierreFileDiff, MultiFileDiff } from "@pierre/diffs/react";
+import { parseDiffFromFile, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
+import { FileDiff as PierreFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,7 +22,7 @@ import { t, useT } from "./i18n.ts";
 import { DIFF_MODES, loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
 import { offer, streak } from "./recommendations.ts";
 import { commitable, commitPaths, eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
-import { mediaKind, readFailure, textFailure } from "./files.ts";
+import { fileMention, mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
@@ -31,7 +31,7 @@ import { ConflictBanner } from "./conflict-banner.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { ofRepo } from "./git-branch-menu.tsx";
 import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
-import { hunkAnchor, wireHunk } from "./hunk.ts";
+import { diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
 import { RollbackDialog, RollbackMenu } from "./rollback-dialog.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
@@ -252,6 +252,7 @@ export function ChangesPanel({
   onGitWrite,
   onResolve,
   project,
+  onSend,
 }: {
   client: Client;
   view: SessionView;
@@ -278,6 +279,8 @@ export function ChangesPanel({
   ignoreSubmodules?: boolean;
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
+  /** Add to prompt and Send selection to Claude: the text goes into the prompt box. Without it the panel offers neither. */
+  onSend?: (text: string) => void;
   /** After a commit: files changed on disk's git state (the file tree marks). */
   onGitWrite?: () => void;
   /** "Resolve with Claude": gets the prompt to put into the session's prompt box (never sent). Absent: no button. */
@@ -720,7 +723,7 @@ export function ChangesPanel({
     void runRemoteOp(client, { type: "git.rollbackHunk", cwd: gitCwd, ...(repo && { exact: true as const }), path: row.rel!, hunk }, ofRepo(t("files.changes.rolledBackHunk", { name: filePath(row.path, cwd).name }), repoName), ofRepo(t("files.changes.rollingBack"), repoName), onGitWrite);
   const hunkProps = (r: Row) => (commitMode && (r.kind === "M" || r.kind === "R") && !r.submodule && !r.nested && r.rel !== undefined ? { onHunk: (h: { newStart: number; lines: string[] }) => rollbackHunk(r, h), hunkDisabled: opRunning } : {});
   const rowMenu = (r: Row, node: ReactElement) => (
-    <RollbackMenu enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))}>
+    <RollbackMenu enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))} onMention={onSend && r.kind !== "D" ? () => onSend(fileMention(r.path, cwd)) : undefined}>
       {node}
     </RollbackMenu>
   );
@@ -909,7 +912,7 @@ export function ChangesPanel({
                   </button>
                   </div>
                   ))}
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(r)} />}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(r)} onSend={onSend} />}
                 </li>
               );
             })}
@@ -961,7 +964,7 @@ export function ChangesPanel({
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">{t("files.changes.listCut")}</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
-          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(active)} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(active)} onSend={onSend} />}
         </div>
       )}
     </div>
@@ -1006,7 +1009,7 @@ export function KindBadge({ kind, untracked }: { kind: Kind; untracked?: boolean
 }
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo, onHunk, hunkDisabled }: { onHunk?: (hunk: { newStart: number; lines: string[] }) => void; hunkDisabled?: boolean; row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
+function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo, onHunk, hunkDisabled, onSend }: { onSend?: (text: string) => void; onHunk?: (hunk: { newStart: number; lines: string[] }) => void; hunkDisabled?: boolean; row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
   useT();
   const { path } = row;
   const dark = useDark();
@@ -1014,37 +1017,75 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   // Drawn once the highlighter is loaded (seconds on a first load): until then a loading line.
   const [drawn, setDrawn] = useState(false);
   // One header per file, like OpenCode's (file header off in the library): the panel's own, with the relative path.
+  const [range, setRange] = useState<SelectedLineRange | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const selectable = onSend !== undefined;
   const options = useMemo(
-    () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle: style, themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
-    [style, dark, colorTheme],
+    () => ({
+      ...DIFF_OPTIONS,
+      theme: diffThemes(colorTheme),
+      diffStyle: style,
+      themeType: dark ? ("dark" as const) : ("light" as const),
+      disableFileHeader: true,
+      onPostRender: () => setDrawn(true),
+      // Line numbers: click, Shift+click or drag. The box takes focus so Alt+K works right after a click.
+      enableLineSelection: selectable,
+      onLineSelected: (r: SelectedLineRange | null) => (setRange(r), r && box.current?.focus({ preventScroll: true })),
+    }),
+    [style, dark, colorTheme, selectable],
   );
   const files = useMemo(
     () => (row.before === undefined || row.after === undefined ? undefined : { old: { name: row.oldPath ?? path, contents: row.before }, new: { name: path, contents: row.after } }),
     [path, row.oldPath, row.before, row.after],
   );
   const same = files !== undefined && row.before === row.after;
-  // Hunk Rollback (GH-558): the library's own parse of the two sides, one button after the last change of each hunk.
-  const parsed = useMemo(() => (files && onHunk !== undefined && !same ? parseDiffFromFile(files.old, files.new) : undefined), [files, onHunk !== undefined, same]);
+  // The library's own parse of the two sides: hunk Rollback (GH-558, one button after the last change of each hunk) and the line selection read it.
+  const parsed = useMemo(() => (files && !same ? parseDiffFromFile(files.old, files.new) : undefined), [files, same]);
   // The annotation carries no data (the options type is not generic): the hunk is found again by its line.
   const anchors = useMemo(() => {
+    if (!onHunk) return undefined;
     const at = new Map<string, HunkMeta>();
     parsed?.hunks.forEach((_, i) => {
       const a = hunkAnchor(parsed, i);
       if (a) at.set(`${a.side}:${a.lineNumber}`, { index: i, first: a.first, last: a.last });
     });
     return parsed && { at, lines: [...at.keys()].map((k): DiffLineAnnotation => ({ side: k.startsWith("a") ? "additions" : "deletions", lineNumber: Number(k.split(":")[1]) })) };
-  }, [parsed]);
+  }, [parsed, onHunk !== undefined]);
   const sub = row.submodule;
   const nested = row.nested;
+  // Add to prompt for the file (nothing selected, like the Files tab; a deleted file is not on disk) or the selected diff lines.
+  const send = () => {
+    const rel = relPath(path, cwd).replace(/\\/g, "/");
+    const text = (range && parsed && diffSelection(parsed, range, rel)) || (row.kind === "D" ? undefined : fileMention(path, cwd));
+    if (text) onSend?.(text);
+  };
+  const sendButton = onSend && !sub && !nested && !row.image && !row.error && !same && files && (
+    <Button size="sm" variant="ghost" className="max-md:h-11" title={t("files.panel.sendSelectionTitle")} onClick={send} data-testid="diff-send-selection">
+      {t("files.panel.sendSelection")}
+    </Button>
+  );
   const dirtyText = row.dirty ? t("files.changes.dirtyText", { count: row.dirty }) : "";
   return (
-    <div className={inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col"} data-testid="file-diff" data-diff-style={style}>
+    <div
+      ref={box}
+      tabIndex={-1}
+      className={cn("outline-none", inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col")}
+      data-testid="file-diff"
+      data-diff-style={style}
+      onKeyDown={(e) => {
+        // `code`: Option+K types "˚" on macOS.
+        if (selectable && sendButton && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyK") (e.preventDefault(), send());
+      }}
+    >
       {inline ? (
-        !sub && !nested && inDir(path, cwd) && (
-          <div className="flex justify-end px-2 pt-1">
-            <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
-              <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
-            </Button>
+        (sendButton || (!sub && !nested && inDir(path, cwd))) && (
+          <div className="flex justify-end gap-1 px-2 pt-1">
+            {sendButton}
+            {!sub && !nested && inDir(path, cwd) && (
+              <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
+                <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
+              </Button>
+            )}
           </div>
         )
       ) : (
@@ -1057,6 +1098,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           {sub && <SubmoduleBadge />}
           {nested && <RepoBadge />}
           {row.stats && <StatsText stats={row.stats} />}
+          {sendButton}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
           {!sub && !nested && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
@@ -1109,13 +1151,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
         ) : same ? (
           <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? t("files.changes.renamedOnly") : t("files.changes.noContent")) : t("files.changes.noAgainstBefore")}</p>
         ) : files ? (
-          parsed && anchors ? (
+          parsed && (
             <PierreFileDiff
               fileDiff={parsed}
               options={options}
-              lineAnnotations={anchors.lines}
+              lineAnnotations={anchors?.lines}
               renderAnnotation={(a) => {
-                const m = anchors.at.get(`${a.side}:${a.lineNumber}`);
+                const m = anchors?.at.get(`${a.side}:${a.lineNumber}`);
                 return m && (
                 <div className="flex justify-end px-2 py-0.5">
                   <Button
@@ -1133,8 +1175,6 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
                 );
               }}
             />
-          ) : (
-            <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
           )
         ) : (
           !row.error &&
