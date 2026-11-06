@@ -4056,6 +4056,9 @@ export function App() {
                           repos={repoList}
                           ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
+                          onGitWrite={editors.nudge}
+                          onResolve={(prompt) => (addonImpl.current.insert(panelTarget.sessionId!, prompt), setPane("session"))}
+                          project={projectOf(panelTarget.cwd, worktrees)}
                         />
                       )
                     ) : (
@@ -4073,6 +4076,9 @@ export function App() {
                         repos={repoList}
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
+                        onGitWrite={editors.nudge}
+                        onResolve={(prompt) => (newSession(panelTarget.cwd), setInsert(prompt))}
+                        project={projectOf(panelTarget.cwd, worktrees)}
                         emptyText={tr("app.changes.empty")}
                       />
                     ),
@@ -4314,7 +4320,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4325,6 +4331,7 @@ export function App() {
           sessionId={viewer?.sessionId}
           repos={(viewer?.cwd ?? shown!.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
+          project={projectOf(viewer?.cwd ?? shown!.cwd, worktrees)}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
           onOpenInTab={(p) => (setViewer(undefined), openFileTab(p, viewer?.sessionId))}

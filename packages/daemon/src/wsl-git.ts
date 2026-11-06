@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { wslPathOf } from "@claude-ui/protocol";
 import { BATCH_SSH, type GitRunOptions, type GitRunOutput, type GitRunner } from "./git-runner.ts";
 
-const FORWARD_ENV = ["GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_ASKPASS", "SSH_ASKPASS", "GCM_INTERACTIVE"];
+const FORWARD_ENV = ["GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_ASKPASS", "SSH_ASKPASS", "GCM_INTERACTIVE", "GIT_INDEX_FILE", "GIT_EDITOR"];
 /** The repository pin of git.ts (`pinFor`): paths git must use as they are, never re-discovered. */
 const PIN_ENV = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
 /** A pin value that is no path in the distro: git is not run (an unpinned git would re-discover the repository, #317). */

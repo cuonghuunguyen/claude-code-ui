@@ -24,6 +24,10 @@ _Avoid_: server, remote, machine
 How long a Hub that an attach started keeps running with no Hub attached, no browser connected and no turn running (30 min by default, per Side). A Hub the user started never ends by it. A Hub that reattaches within it finds turns and terminals as they were.
 _Avoid_: timeout, keep-alive (the heartbeat that detects a dropped pipe)
 
+**Conflict banner**:
+The strip at the top of the Changes tab while the repository has an unfinished merge, rebase, cherry-pick, revert or am, or unmerged files alone. It lists the conflicted files and offers Resolve with Claude, Continue (Mark resolved) and Abort; the commit box is hidden meanwhile.
+_Avoid_: merge bar, conflict panel
+
 **Label**:
 The name and icon a user chose for a Project or a Side, stored in the Daemon settings and shared by all browsers. It replaces the folder name or machine label in the UI only; the folder name still finds the project.
 _Avoid_: alias, nickname

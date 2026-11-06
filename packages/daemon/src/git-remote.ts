@@ -4,7 +4,7 @@ import { isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
-import { ceilingEnv, gitDirsOf, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
+import { ceilingEnv, gitDirsOf, gitOperation, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
 import { BATCH_SSH, runGit } from "./git-runner.ts";
 import { redact } from "./plugins.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -20,7 +20,7 @@ export const FETCH_ARGS = [...HARDEN, "fetch", "--all", "--no-recurse-submodules
 /** Push, pull and fetch never follow submodules (their remotes are not checked against the roots) and push sends no tags the dialog does not show. */
 const PUSH = [...HARDEN, "push", "--no-recurse-submodules", "--no-follow-tags"];
 const MAX_OUTPUT = 8000;
-const MAX_ERROR = 4000;
+export const MAX_ERROR = 4000;
 const AUTH_FAILURE = /terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|Authentication failed|BatchMode/i;
 const AUTH_HINT = "The daemon cannot ask for credentials: set up a credential helper, ssh-agent or known_hosts in a terminal, then retry.";
 
@@ -42,11 +42,16 @@ export function tidy(text: string, max: number): string {
   return t.length > max ? t.slice(t.length - max) : t;
 }
 
-/** Env of every remote operation: no prompt of any kind (credentials come from the user's helpers and ssh-agent only). */
+/** Env of every git write: the repository pin, no prompt of any kind. */
+export async function writeEnv(top: string): Promise<NodeJS.ProcessEnv> {
+  return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never" };
+}
+
+/** Env of every remote operation: `writeEnv` (credentials come from the user's helpers and ssh-agent only) and a BatchMode ssh. */
 export async function remoteEnv(top: string, sshCommand: string): Promise<NodeJS.ProcessEnv> {
   // A WSL repository's git never sees the Windows ssh variables (`wslEnv`); only its own core.sshCommand counts.
   const ownSsh = (wslPathOf(top) ? "" : process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || sshCommand;
-  return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
+  return { ...(await writeEnv(top)), ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
 }
 
 /**
@@ -71,11 +76,11 @@ export function localRemotePath(url: string, top: string): string | undefined {
   return isAbsolute(u) ? u : resolve(top, u);
 }
 
-/** One remote operation per repository (all its worktrees): a second one is refused, not queued. */
+/** One write operation (fetch, push, pull, commit) per repository (all its worktrees): a second one is refused, not queued. */
 const running = new Set<string>();
-async function exclusive<T>(top: string, fn: () => Promise<T>): Promise<T> {
+export async function exclusive<T>(top: string, fn: () => Promise<T>): Promise<T> {
   const key = gitDirsOf(top)?.common ?? top;
-  if (running.has(key)) throw new WorktreeError("busy", "A fetch, push or pull is already running in this repository");
+  if (running.has(key)) throw new WorktreeError("busy", "Another git operation is running in this repository");
   running.add(key);
   try {
     return await fn();
@@ -186,7 +191,7 @@ export function checkedOutOf(worktree: string, top: string): string | undefined 
 }
 
 /** Everything the menu shows and the exact argv of each action, re-read from git. */
-async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
+export async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remotes: Set<string>): Promise<GitBranchInfo> {
   const f = (...fields: string[]) => `--format=${fields.join(`%1f`)}%1e`;
   const rows = (out: string) => out.split(RS).map((r) => r.replace(/^\n/, "")).filter(Boolean).map((r) => r.split(US));
   const own = rows((await local(top, ["for-each-ref", f("%(refname)", "%(objectname)", "%(upstream)", "%(upstream:remotename)", "%(upstream:remoteref)", "%(push:remotename)", "%(worktreepath)"), "--", ref], env)).out).find((r) => r[0] === ref);
@@ -237,7 +242,24 @@ async function branchInfo(top: string, ref: string, env: NodeJS.ProcessEnv, remo
   else if (info.checkedOut === "here") info.pull = [...HARDEN, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", upRemote, upRef];
   else if (info.checkedOut) why.pull = `Checked out in ${info.checkedOut}: pull there`;
   else info.pull = [...HARDEN, "fetch", "--no-recurse-submodules", upRemote, `${upRef}:${ref}`];
-  if (why.push || why.forcePush || why.pull) info.why = why;
+  // Merge and rebase act on HEAD: what the menu showed of it (`headRef`, `headHash`) is checked again before the run.
+  const head = (await local(top, ["rev-parse", "--verify", "-q", "HEAD"], env)).out;
+  const headRef = (await local(top, ["symbolic-ref", "-q", "HEAD"], env)).out;
+  if (headRef) info.headRef = headRef;
+  if (head) info.headHash = head;
+  const op = await gitOperation(top);
+  const blocked = !headRef ? "HEAD is detached" : !head ? "No commits yet" : headRef === ref ? "This is the current branch" : op ? (op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`) : undefined;
+  if (blocked) {
+    why.merge = blocked;
+    why.rebase = blocked;
+  } else {
+    // The short name gives the message "Merge branch 'x'" (the full ref would print `refs/heads/x`); when git reads it as something else (a tag), the full ref.
+    const short = ref.slice(11);
+    const same = (await local(top, ["rev-parse", "--verify", "-q", `${short}^{commit}`], env)).out === info.local;
+    info.merge = [...HARDEN, "merge", "--no-edit", same ? short : ref];
+    info.rebase = [...HARDEN, "rebase", ref];
+  }
+  if (Object.keys(why).length) info.why = why;
   return info;
 }
 

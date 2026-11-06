@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -37,6 +37,7 @@ import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts";
 import { ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
@@ -736,7 +737,7 @@ function LauncherShortcutRow({ installed, request, onInstalled, onError }: { ins
   );
 }
 
-type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
+type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
 /** The group and section title of a daemon section. */
@@ -805,6 +806,13 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "history",
+    rows: [
+      { key: "enabled", kind: "switch" },
+      { key: "exclude", kind: "list" },
+    ],
+  },
+  {
     id: "git",
     rows: [
       { key: "autoRepositoryDetection", kind: "select", options: ["true", "false", "subFolders", "openEditors"].map((value) => ({ value })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
@@ -816,6 +824,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "detectSubmodulesLimit", kind: "number", min: 0, max: 100 },
       { key: "ignoreSubmodules", kind: "switch" },
       { key: "openRepositoryInParentFolders", kind: "select", options: ["always", "never", "prompt"].map((value) => ({ value })) },
+      { key: "commitMessageInstruction", kind: "text" },
     ],
   },
 ];
@@ -824,7 +833,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker, update, onCheckUpdate }: { update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -899,6 +908,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         const hint = rk(sec.id, row.key, "hint");
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        if (row.kind === "text") return <InstructionSetting key={row.key} id={id} label={label} hint={hint} value={value as string} placeholder={DEFAULT_COMMIT_INSTRUCTION} onSave={(next) => void save(patch(next))} />;
         if (row.kind === "list") return <ListSetting key={row.key} id={id} label={label} hint={hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
           <div key={row.key} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
@@ -946,6 +956,19 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           {t("settings.launcher.url", { port: String(settings.launcher.port) })}
         </p>
       )}
+      {sec.id === "git" && project && (
+        <InstructionSetting
+          id="settings-git-projectInstruction"
+          label={t("settings.git.projectInstruction.label", { project: project.name })}
+          hint={t("settings.git.projectInstruction.hint")}
+          value={settings.git.commitMessageInstructions[project.cwd] ?? ""}
+          placeholder={settings.git.commitMessageInstruction || DEFAULT_COMMIT_INSTRUCTION}
+          onSave={(next) => {
+            const { [project.cwd]: _, ...rest } = settings.git.commitMessageInstructions;
+            void save({ git: { commitMessageInstructions: next ? { ...rest, [project.cwd]: next } : rest } });
+          }}
+        />
+      )}
     </section>
       )}
     </>
@@ -962,6 +985,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const focus = daemonGroup("focus");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
+  const localHistory = daemonGroup("history");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
   const groups: Group[] = [
     { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection app={settings?.app} request={request} /> },
@@ -1011,6 +1035,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           },
         ]
       : []),
+    ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira

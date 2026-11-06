@@ -118,6 +118,11 @@ export default {
   "settings.section.focus": "Focus",
   "settings.section.usageLimit": "Giới hạn mức dùng",
   "settings.section.performance": "Hiệu năng",
+  "settings.section.history": "Lịch sử cục bộ",
+  "settings.row.history.enabled.label": "Lưu lịch sử cục bộ",
+  "settings.row.history.enabled.hint": "Giữ nội dung trước đó của tệp mỗi khi bạn lưu, Claude sửa hoặc một thao tác git thay thế nó, để so sánh và khôi phục từ Dòng thời gian trong Tệp. Tối đa 50 bản và 256 KB mỗi tệp, lưu trong thư mục cấu hình của daemon.",
+  "settings.row.history.exclude.label": "Đường dẫn bị loại trừ",
+  "settings.row.history.exclude.hint": "Mẫu glob của các tệp không bao giờ có lịch sử, so khớp trên đường dẫn tuyệt đối với dấu /. Ví dụ: **/dist/**.",
   "settings.section.chrome": "Claude in Chrome",
   "settings.row.chrome.enabled.label": "Claude in Chrome",
   "settings.row.chrome.enabled.hint": "Các phiên có thể dùng Chrome của bạn qua tiện ích Claude in Chrome, như claude --chrome. Cần Chrome có tiện ích trên máy chạy daemon, đăng nhập cùng tài khoản claude.ai với Claude Code. Phiên đầu tiên tự đăng ký kết nối của tiện ích (native messaging host). Áp dụng cho phiên khởi động hoặc tiếp tục sau thay đổi; không bao giờ cho worker điều phối.",
@@ -192,6 +197,10 @@ export default {
   "settings.row.git.ignoreSubmodules.hint": "Bỏ qua các thay đổi của submodule trong cây tệp.",
   "settings.row.git.openRepositoryInParentFolders.label": "Mở kho mã trong thư mục cha",
   "settings.row.git.openRepositoryInParentFolders.hint": "Điều khiển việc có mở kho mã nằm trong thư mục cha của không gian làm việc hoặc tệp đang mở hay không. Mặc định always (VS Code: prompt); prompt hoạt động như always ở đây cho đến khi có hộp thoại hỏi.",
+  "settings.row.git.commitMessageInstruction.label": "Chỉ dẫn viết nội dung commit",
+  "settings.row.git.commitMessageInstruction.hint": "Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn. Để trống: dùng chỉ dẫn có sẵn (chữ xám).",
+  "settings.git.projectInstruction.label": "Chỉ dẫn viết nội dung commit cho {project}",
+  "settings.git.projectInstruction.hint": "Chỉ áp dụng cho dự án này; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên.",
 
   // perf-settings.tsx
   "perf.nothingYet": "Chưa có gì.",
