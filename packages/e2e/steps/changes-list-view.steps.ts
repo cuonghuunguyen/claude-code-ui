@@ -12,8 +12,8 @@ Given("the scratch project is a git repository with uncommitted files deep in si
 
 Then("the Changes list rows are {string}", async ({ page }, rows: string) => {
   const list = page.getByTestId("changes-panel").locator("ul[aria-label='Changed files'] button");
-  // A file row ends in its A/D/R badge; only the name is compared.
-  await expect(list).toHaveText(rows.split(", ").map((r) => new RegExp(`^${r.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ADR]?$`)), { timeout: 30_000 });
+  // A file row ends in its A/D/R/U badge; only the name is compared.
+  await expect(list).toHaveText(rows.split(", ").map((r) => new RegExp(`^${r.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ADRU]?$`)), { timeout: 30_000 });
 });
 
 When("I switch the Changes list view", async ({ page }) => {
