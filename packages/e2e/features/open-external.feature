@@ -20,9 +20,7 @@ Feature: Open a file or folder in the file manager, an editor or the default app
 
   Scenario: Files tree: a folder offers no default app
     Given the viewport is 390x844
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
+    And a Haiku session with one finished reply
     When I open the Files tab of the side panel
     And I open the tree menu of "src"
     Then the menu offers the open-in-app items "reveal"
