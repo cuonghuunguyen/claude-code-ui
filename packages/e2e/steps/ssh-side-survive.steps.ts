@@ -1,6 +1,6 @@
 // An SSH Side survives the pipe (GH-548, ADR 0009: the Hub of the host stays): see features/ssh-side-survive.feature. POSIX with docker and the ssh tools only.
 // Shared steps (throwaway host, choose host, open project folder, Settings › Sides, close Settings) live in ssh-side.steps.ts / create-worktree.steps.ts.
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { openApp } from "../support/flow.ts";
@@ -20,7 +20,9 @@ When("the SSH host {string} becomes unreachable", async ({}, _alias: string) => 
 });
 
 When("the SSH host {string} becomes reachable again", async ({}, _alias: string) => {
-  if (existsSync(original())) copyFileSync(original(), config());
+  if (!existsSync(original())) return;
+  copyFileSync(original(), config());
+  rmSync(original()); // a later repeat runs on a new host and port: a stale copy would restore a dead port
 });
 
 // The Hub's ssh process of the host: its command line holds the run's config path and the alias after `--`.
