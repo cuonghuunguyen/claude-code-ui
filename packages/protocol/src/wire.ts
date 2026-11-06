@@ -131,6 +131,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "claude.account.add"; name: string; token: string }
   /** Removes a token account; when it was the active one the account falls back to Default. Reply SettingsResult; broadcasts `settings_changed`. Hub only. */
   | { type: "claude.account.remove"; id: string }
+  /** Checks a token account with one minimal CLI turn (Haiku, no tools) in a throwaway CLI config; never changes the active account or any session. Reply {} on success; errors claude_auth (token refused: invalid, expired, revoked), claude_test_failed (network, timeout, other; message = the CLI's one-line reason), bad_settings (unknown id, cloud provider env). Hub only. */
+  | { type: "claude.account.test"; id: string }
   /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
   | { type: "jira.test" }
   /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). Reply JiraSearchResult; errors as `jira.test`. */

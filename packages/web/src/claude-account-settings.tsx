@@ -2,9 +2,9 @@
 // runs the CLI login, and keeps token accounts. A token (from `claude setup-token`) is write-only: this page never shows one.
 import { useState } from "react";
 import type { ClaudeAccountInfo, SettingsResult } from "@claude-ui/protocol";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, LoaderCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Request } from "./client.ts";
+import type { Request, RequestError } from "./client.ts";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
 
@@ -16,6 +16,20 @@ export function ClaudeAccountSection({ active, accounts, envToken, request, onRe
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+  // Test results live here only: gone when Settings closes, never stored or broadcast (GH-627).
+  const [tests, setTests] = useState<Record<string, { busy: true } | { ok: boolean; text: string }>>({});
+  const test = async (id: string) => {
+    setTests((x) => ({ ...x, [id]: { busy: true } }));
+    let r: { ok: boolean; text: string };
+    try {
+      await request({ type: "claude.account.test", id });
+      r = { ok: true, text: t("settings.account.testOk") };
+    } catch (e) {
+      const { message, code } = e as RequestError;
+      r = { ok: false, text: code === "claude_auth" ? t("settings.account.testRefused", { message }) : message };
+    }
+    setTests((x) => ({ ...x, [id]: r }));
+  };
   const run = async (msg: Request, done?: () => void) => {
     setBusy(true);
     try {
@@ -40,17 +54,29 @@ export function ClaudeAccountSection({ active, accounts, envToken, request, onRe
         {choices.map((c) => {
           const on = c.id === active || (!envToken && active === "" && c.id === "cli");
           const own = accounts.some((a) => a.id === c.id);
+          const res = tests[c.id];
           return (
-            <div key={c.id || "default"} className={ROW}>
+            <div key={c.id || "default"} className={`${ROW} flex-wrap`}>
               <button type="button" role="radio" aria-checked={on} disabled={busy} onClick={() => !on && pick(c.id)} data-testid="settings-account-option" className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-1 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11">
                 <span className="min-w-0 flex-1 truncate">{c.name}</span>
                 {own && <span className="text-muted-foreground text-xs" data-testid="settings-account-token-set">{t("settings.account.tokenSet")}</span>}
                 {on && <CheckIcon className="size-3.5 shrink-0" aria-hidden />}
               </button>
               {own && (
+                <Button variant="outline" size="sm" className={btn} disabled={tests[c.id] && "busy" in tests[c.id]!} aria-busy={tests[c.id] && "busy" in tests[c.id]!} onClick={() => void test(c.id)} data-testid="settings-account-test">
+                  {tests[c.id] && "busy" in tests[c.id]! && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}
+                  {t("settings.account.test")}
+                </Button>
+              )}
+              {own && (
                 <Button variant="destructive" size="sm" className={btn} disabled={busy} onClick={() => void run({ type: "claude.account.remove", id: c.id })} data-testid="settings-account-remove">
                   {t("settings.account.remove")}
                 </Button>
+              )}
+              {res && !("busy" in res) && (
+                <span role={res.ok ? "status" : "alert"} title={res.text} className={`min-w-0 basis-full truncate px-1 text-xs ${res.ok ? "text-muted-foreground" : "text-destructive"}`} data-testid="settings-account-test-result" data-ok={res.ok}>
+                  {res.text}
+                </span>
               )}
             </div>
           );

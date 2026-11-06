@@ -1,6 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
-import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,6 +33,7 @@ import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
+import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
@@ -441,6 +442,21 @@ export function createDaemon(opts: {
     return a === "cli" ? "CLI login" : a ? secrets.claudeAccounts().find((x) => x.id === a)?.name : undefined;
   };
   setClaudeToken(accountToken());
+  /** `claude.account.test` in flight by account id: a second request awaits the same CLI run. */
+  const accountTests = new Map<string, Promise<ReturnType<typeof testOutcome>>>();
+  const testAccount = (id: string, token: string, env: NodeJS.ProcessEnv) => {
+    let p = accountTests.get(id);
+    if (!p) {
+      // Throwaway CLI config: the test touches neither ~/.claude nor the keychain login (the env token wins).
+      const dir = mkdtempSync(join(tmpdir(), "claude-ui-test-"));
+      p = (async () => testOutcome(await (opts.cli ?? runCli)(TEST_ARGS, dir, "", TEST_TIMEOUT_MS, { ...env, CLAUDE_CONFIG_DIR: dir }), token))().finally(() => {
+        rmSync(dir, { recursive: true, force: true });
+        accountTests.delete(id);
+      });
+      accountTests.set(id, p);
+    }
+    return p;
+  };
   const broadcastSettings = (settings = appSettings.get()) => {
     const r = settingsReply(settings);
     broadcast({ type: "settings_changed", settings, jiraToken: r.jiraToken, claudeAccounts: r.claudeAccounts });
@@ -2095,6 +2111,19 @@ export function createDaemon(opts: {
           }
           broadcastSettings();
           return reply(settingsReply());
+        }
+        case "claude.account.test": {
+          const token = typeof msg.id === "string" ? secrets.claudeToken(msg.id) : undefined;
+          if (!token) return fail("bad_settings", "Claude account: unknown account");
+          const env = { ...claudeEnv(process.env, token), CLAUDE_CODE_MAX_RETRIES: "0" };
+          if (!usesOauthToken(env)) return fail("bad_settings", "a cloud provider (Bedrock, Vertex, Foundry) is on in the daemon environment: token accounts are not used");
+          try {
+            const o = await testAccount(msg.id, token, env);
+            return o.ok ? reply({}) : fail(o.code, o.message);
+          } catch (e) {
+            if (e instanceof ConfigError) return fail("claude_test_failed", e.message.replaceAll(token, "***"));
+            throw e;
+          }
         }
         case "jira.test":
         case "jira.search": {

@@ -95,3 +95,28 @@ Feature: Claude account: log in through the CLI, switch account from the usage r
     And I capture "ring-default-is-cli"
     When I remove the Claude token accounts
 
+  Scenario: The account test of a refused token shows the error and keeps the account
+    Given the viewport is 1440x900
+    And a Haiku session with one finished reply
+    And I record the websocket frames
+    When I add the Claude token account "bad" with the token "sk-ant-oat01-TESTSECRET" in Settings and keep the default
+    And I test the Claude token account "bad"
+    Then the account test of "bad" shows an error containing "401"
+    And Settings checks "CLI login" and not "bad"
+    And I capture "account-test-refused"
+    When I close Settings
+    And I send the prompt "Reply with exactly: OK"
+    Then a new Claude reply is shown
+    When I remove the Claude token accounts
+    Then the token appears in no websocket frame, daemon log or web bundle
+
+  Scenario: The account test fits a phone screen
+    Given the viewport is 390x844
+    And a Haiku session with one finished reply
+    When I add the Claude token account "bad" with the token "invalid-token" in Settings and keep the default
+    And I test the Claude token account "bad"
+    Then the account test of "bad" shows an error containing "401"
+    And the Test button of the Claude token account "bad" is at least 44px high
+    And the page does not scroll sideways
+    And I capture "account-test-phone"
+    When I remove the Claude token accounts

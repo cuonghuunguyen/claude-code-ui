@@ -221,3 +221,25 @@ Then("Settings checks {string} and not {string}", async ({ page }, on: string, o
   await expect(rows.filter({ hasText: on })).toHaveAttribute("aria-checked", "true");
   await expect(rows.filter({ hasText: off })).toHaveAttribute("aria-checked", "false");
 });
+
+// GH-627: Settings › Claude account › Test of a token row (the real CLI refuses the fake token with a 401).
+const accountRow = (page: import("@playwright/test").Page, name: string) => page.locator('[data-testid="settings-account-list"] > div').filter({ hasText: name });
+
+When("I test the Claude token account {string}", async ({ page }, name: string) => {
+  const test = accountRow(page, name).getByTestId("settings-account-test");
+  await test.click();
+  await expect(test).toBeDisabled();
+  await expect(test).toHaveAttribute("aria-busy", "true");
+});
+
+Then("the account test of {string} shows an error containing {string}", async ({ page }, name: string, text: string) => {
+  const result = accountRow(page, name).getByTestId("settings-account-test-result");
+  await expect(result).toContainText(text, { timeout: 60_000 });
+  await expect(result).toHaveAttribute("data-ok", "false");
+  await expect(accountRow(page, name).getByTestId("settings-account-test")).toBeEnabled();
+});
+
+Then("the Test button of the Claude token account {string} is at least 44px high", async ({ page }, name: string) => {
+  const box = await accountRow(page, name).getByTestId("settings-account-test").boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+});
