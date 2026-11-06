@@ -32,7 +32,8 @@ import { GitOpResult } from "./git-op-result.tsx";
 import { ofRepo } from "./git-branch-menu.tsx";
 import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
 import { diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
-import { RollbackDialog, RollbackMenu } from "./rollback-dialog.tsx";
+import { RollbackDialog, RollbackMenu, type RowMenuItem } from "./rollback-dialog.tsx";
+import { externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -239,6 +240,7 @@ export function ChangesPanel({
   view,
   cwd,
   onOpen,
+  onCopy,
   hidden,
   onCount,
   sessionId,
@@ -258,6 +260,8 @@ export function ChangesPanel({
   view: SessionView;
   cwd: string;
   onOpen: (path: string) => void;
+  /** GH-612: Copy path and Copy relative path in a row's menu. */
+  onCopy?: (text: string, what: string) => void;
   hidden?: boolean;
   onCount?: (n: number) => void;
   /** Keys the panel's own diff mode choice (kept in memory while the page lives). */
@@ -295,6 +299,7 @@ export function ChangesPanel({
   const changes = useMemo(() => fresh, [key]);
   const [disk, setDisk] = useState<Record<string, Disk>>({});
   const [reload, setReload] = useState(0);
+  const openExt = useOpenExternal();
   const [selected, setSelected] = useState<string>();
   const [chosen, setChosen] = useState(loadStyle);
   const narrow = useNarrow();
@@ -722,8 +727,17 @@ export function ChangesPanel({
   const rollbackHunk = (row: Row, hunk: { newStart: number; lines: string[] }) =>
     void runRemoteOp(client, { type: "git.rollbackHunk", cwd: gitCwd, ...(repo && { exact: true as const }), path: row.rel!, hunk }, ofRepo(t("files.changes.rolledBackHunk", { name: filePath(row.path, cwd).name }), repoName), ofRepo(t("files.changes.rollingBack"), repoName), onGitWrite);
   const hunkProps = (r: Row) => (commitMode && (r.kind === "M" || r.kind === "R") && !r.submodule && !r.nested && r.rel !== undefined ? { onHunk: (h: { newStart: number; lines: string[] }) => rollbackHunk(r, h), hunkDisabled: opRunning } : {});
+  /** GH-612: Open, Copy path, Copy relative path, then open in an app (not for a repository or submodule row; disabled once the file is deleted). */
+  const rowSections = (r: Row): RowMenuItem[][] => {
+    if (r.nested || r.submodule) return [];
+    const local = openExt?.isLocal(cwd) ? openExt : undefined;
+    return [
+      [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => onCopy(r.path, "path") }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
+      local ? externalEntries({ isDir: false, editors: local.editors, disabled: r.kind === "D" }).map((x) => ({ label: x.label, testId: `row-${x.testId}`, disabled: x.disabled, run: () => local.run(r.path, x.how, cwd) })) : [],
+    ];
+  };
   const rowMenu = (r: Row, node: ReactElement) => (
-    <RollbackMenu enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))} onMention={onSend && r.kind !== "D" ? () => onSend(fileMention(r.path, cwd)) : undefined}>
+    <RollbackMenu sections={rowSections(r)} enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))} onMention={onSend && r.kind !== "D" ? () => onSend(fileMention(r.path, cwd)) : undefined}>
       {node}
     </RollbackMenu>
   );

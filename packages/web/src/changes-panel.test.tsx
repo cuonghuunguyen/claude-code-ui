@@ -110,6 +110,7 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
   return Object.assign({ request, onFsChanged } as unknown as ReturnType<typeof connect>, { changed, calls: request });
 }
 
+import { OpenExternalContext, type OpenExternal } from "./open-external-menu.ts";
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 // Each row by its accessible name: kind, path relative to cwd, stats.
 const rows = () => [...el.querySelectorAll("[data-testid=changed-file]")].map((b) => b.getAttribute("aria-label"));
@@ -1704,4 +1705,29 @@ it("Continue sends git.continue with the banner's kind, then the list reads agai
   expect(gitCalls(client, "git.continue")).toEqual([{ type: "git.continue", cwd: "/p", kind: "merge" }]);
   expect(gitCalls(client, "git.diff").length).toBeGreaterThanOrEqual(2);
   expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Continued the merge");
+});
+
+it("right click on a row offers Open, Copy path and, in an app-capable browser, Reveal / Open in editor / default app (GH-612)", async () => {
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  const run = vi.fn();
+  const onCopy = vi.fn();
+  const panel = (ext?: OpenExternal) => (
+    <OpenExternalContext value={ext}>
+      <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} onCopy={onCopy} />
+    </OpenExternalContext>
+  );
+  const menu = async () => {
+    await act(async () => void el.querySelector("[data-testid=changed-file]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    return [...document.querySelectorAll("[role=menuitem]")].map((x) => x.getAttribute("data-testid"));
+  };
+  await act(async () => root.render(panel()));
+  await flush();
+  expect(await menu()).toEqual(["row-open", "row-copyPath", "row-copyRel"]);
+  await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-copyRel]")!.click());
+  expect(onCopy).toHaveBeenCalledWith("a.ts", "relative path");
+  await act(async () => root.render(panel({ editors: [{ id: "code", label: "VS Code" }], isLocal: () => true, run })));
+  await flush();
+  expect(await menu()).toEqual(["row-open", "row-copyPath", "row-copyRel", "row-ext-menu-reveal", "row-ext-menu-code", "row-ext-menu-default"]);
+  await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-ext-menu-code]")!.click());
+  expect(run).toHaveBeenCalledWith("/p/a.ts", "code", "/p");
 });

@@ -71,7 +71,7 @@ describe("daemonEnv", () => {
   });
   it("drops every inherited CLAUDE_UI_* and sets only the ones the test needs", () => {
     const e = daemonEnv({ CLAUDE_UI_LAN: "1", CLAUDE_UI_ALLOW_BYPASS: "1", CLAUDE_UI_CLAUDE_BIN: "x", CLAUDE_UI_OPEN: "1", OTHER: "o" }, "/run", 5555);
-    expect(Object.keys(e).filter((k) => k.startsWith("CLAUDE_UI_")).sort()).toEqual(["CLAUDE_UI_OPEN", "CLAUDE_UI_ROOTS", "CLAUDE_UI_SHORTCUT_DIR", "CLAUDE_UI_SSH_CONFIG"]);
+    expect(Object.keys(e).filter((k) => k.startsWith("CLAUDE_UI_")).sort()).toEqual(["CLAUDE_UI_OPEN", "CLAUDE_UI_OPEN_LOG", "CLAUDE_UI_ROOTS", "CLAUDE_UI_SHORTCUT_DIR", "CLAUDE_UI_SSH_CONFIG"]);
     expect(e.CLAUDE_UI_OPEN).toBe("0");
     expect(e.OTHER).toBe("o");
   });

@@ -492,6 +492,14 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it.skipIf(win32)("fs.openExternal of a side path is side_unsupported", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    expect(await c.request({ type: "fs.openExternal", path: join(wslRoot, "s.png"), cwd: wslRoot, with: "reveal" })).toMatchObject({ type: "error", code: "side_unsupported" });
+    c.ws.close();
+  });
+
   it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });

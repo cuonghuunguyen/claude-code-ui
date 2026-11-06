@@ -129,3 +129,10 @@ it("GH-176 an artifact tab menu has one Move to Artifacts row", () => {
   const flat = tabMenuSections({ ...all, pinned: undefined, pane: { label: "Artifact", item: "artifact" }, split: { can: true } }).flat();
   expect(flat.filter((e) => e.id === "moveToArtifacts")).toEqual([expect.objectContaining({ label: "Move to Artifacts", testId: "tab-menu-moveToArtifacts" })]);
 });
+
+it("GH-612 a file tab gets the open-in-app section after its file section, and no other tab does", () => {
+  const external = [{ id: "ext:reveal" as const, how: "reveal" as const, label: "Reveal in Finder", testId: "ext-menu-reveal" }];
+  const ids = (s: Parameters<typeof tabMenuSections>[0]) => tabMenuSections(s).map((x) => x.map((e) => e.id));
+  expect(ids({ ...all, pane: { label: "File", item: "file" }, external })).toContainEqual(["ext:reveal"]);
+  expect(ids({ ...all, pane: { label: "Files" }, external }).flat()).not.toContain("ext:reveal");
+});

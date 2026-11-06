@@ -125,12 +125,12 @@ const table = (head: string[], rows: string[][]) => {
 const OPENER_WAIT_MS = 5_000;
 
 /** Runs the opener; rejects when it cannot start or exits non-zero (a launcher that was still running after OPENER_WAIT_MS counts as launched). */
-export function runOpener(cmd: string, args: string[], waitMs = OPENER_WAIT_MS): Promise<void> {
+export function runOpener(cmd: string, args: string[], waitMs = OPENER_WAIT_MS, o: { verbatim?: boolean; ignoreExit?: boolean; env?: Record<string, string>; detached?: boolean } = {}): Promise<void> {
   return new Promise((ok, fail) => {
-    const c = spawn(cmd, args, { stdio: "ignore", windowsHide: true });
+    const c = spawn(cmd, args, { stdio: "ignore", windowsHide: true, windowsVerbatimArguments: o.verbatim, env: o.env, detached: o.detached });
     const timer = setTimeout(() => (c.unref(), ok()), waitMs);
     c.once("error", (e) => (clearTimeout(timer), fail(e)));
-    c.once("exit", (code) => (clearTimeout(timer), code ? fail(new Error(`${cmd} exited with code ${code}`)) : ok()));
+    c.once("exit", (code) => (clearTimeout(timer), code && !o.ignoreExit ? fail(new Error(`${cmd} exited with code ${code}`)) : ok()));
   });
 }
 
