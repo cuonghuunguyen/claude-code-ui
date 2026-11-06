@@ -249,6 +249,16 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /** Changes tab Commit: commits exactly `paths` (relative to the repository top, as `git.diff` names them; a rename: both sides) with their working-tree content; other index and work-tree entries stay; hooks run. `amend`: rewrites HEAD (no path: its message only). `push`: the reply also carries the push dialog data of HEAD's branch. Reply GitCommitFilesResult. */
   | { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true }
+  /** Branch menu Merge: `git merge --no-edit <ref>` into HEAD, as `git.branch` showed it (`local`, `headRef`, `headHash` and `argv` are the shown values; a change is `stale`). A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.merge"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Branch menu Rebase: `git rebase <ref>` of HEAD, same fields as `git.merge`. Reply GitWriteResult. */
+  | { type: "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Conflict banner Continue: marks the conflicted files resolved (refused while conflict markers remain), then `<kind> --continue`; kind `conflict` only clears the unmerged entries. `kind` is the operation the banner showed (a different one now is `stale`). Reply GitWriteResult. */
+  | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
+  | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
+  | { type: "git.operation"; cwd: string; exact?: true }
   /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
   | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
   /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
@@ -693,7 +703,15 @@ export type GitCommitResult = { commit: GitCommitDetail };
  * `base`: the full hash of the before side; absent before the first commit (every file A, before side empty). `ref`: the branch compared (branch mode).
  * `branches`: local and remote branches for the picker (branch mode only). `truncated`: list cut at 3000 files.
  */
-export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean };
+export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean; /** The unfinished merge, rebase, cherry-pick, revert, am or unmerged state of the repository (the conflict banner). */ operation?: GitOperation };
+/** `conflict`: unmerged entries and no state file (stash pop, `checkout -m`). */
+export type GitOperationKind = "merge" | "rebase" | "cherry-pick" | "revert" | "am" | "conflict";
+/** `conflicted`: unmerged paths relative to the repository top, at most 3000. */
+export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
+/** `operation` null: nothing unfinished, or outside a work tree. */
+export type GitOperationResult = { operation: GitOperation | null };
+/** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
+export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
 /** `diff` null outside a git work tree. */
 export type GitDiffResult = { diff: GitDiff | null };
 /** A remote operation's git output (redacted, at most 8000 chars) and the refs stamp after it. */
@@ -724,7 +742,12 @@ export type GitBranchInfo = {
   push?: string[];
   forcePush?: string[];
   pull?: string[];
-  why?: { push?: string; forcePush?: string; pull?: string };
+  /** HEAD's branch (`refs/heads/x`) and commit: what Merge and Rebase were computed against. Absent when HEAD is detached or unborn. */
+  headRef?: string;
+  headHash?: string;
+  merge?: string[];
+  rebase?: string[];
+  why?: { push?: string; forcePush?: string; pull?: string; merge?: string; rebase?: string };
 };
 /** `branch` null outside a git work tree. */
 export type GitBranchResult = { branch: GitBranchInfo | null };

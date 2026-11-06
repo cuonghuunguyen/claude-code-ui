@@ -1,7 +1,7 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
+import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
 import { CommitBox } from "./commit-box.tsx";
+import { ConflictBanner } from "./conflict-banner.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { useRemoteOp } from "./git-remote-ops.ts";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -242,6 +243,7 @@ export function ChangesPanel({
   ignoreSubmodules,
   onReload,
   onGitWrite,
+  onResolve,
   project,
 }: {
   client: Client;
@@ -271,6 +273,8 @@ export function ChangesPanel({
   onReload?: () => void;
   /** After a commit: files changed on disk's git state (the file tree marks). */
   onGitWrite?: () => void;
+  /** "Resolve with Claude": gets the prompt to put into the session's prompt box (never sent). Absent: no button. */
+  onResolve?: (prompt: string) => void;
   /** The project folder (key of the per-project commit message instruction). */
   project?: string;
 }) {
@@ -364,8 +368,20 @@ export function ChangesPanel({
     );
     return () => void (live = false);
   }, [client, gitCwd, known, effective, refChoice, reload, view.state, key, hidden]);
+  // Session mode has no git.diff: the unfinished operation (the banner) is asked alone, skipped outside a repository.
+  const [sessionOp, setSessionOp] = useState<{ repo: string; op?: GitOperation }>();
+  useEffect(() => {
+    if (gitMode || hidden || !git) return;
+    let live = true;
+    client.request<GitOperationResult>({ type: "git.operation", cwd: gitCwd, ...ex }).then(
+      (r) => live && setSessionOp({ repo: gitCwd, op: r.operation ?? undefined }),
+      () => live && setSessionOp(undefined),
+    );
+    return () => void (live = false);
+  }, [client, gitCwd, gitMode, git, reload, view.state, key, hidden]);
   const gdNow = gd.mode === effective && gd.repo === gitCwd;
   const gitDiff = gdNow ? gd.diff : undefined;
+  const operation = gitMode ? gitDiff?.operation : sessionOp?.repo === gitCwd ? sessionOp.op : undefined;
   const gitError = gitMode && gdNow ? gd.error : undefined;
   const gitLoading = gitMode && !gdNow;
   // Submodules of the selected repository with uncommitted changes in tracked files: `git.status` of each (git.diff of the superproject does not list them).
@@ -820,12 +836,10 @@ export function ChangesPanel({
         </div>
       )}
       {notGit}
-      {commitMode && (
-        <>
-          <CommitBox client={client} cwd={gitCwd} project={project} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />
-          <GitOpResult cwd={gitCwd} {...OP_RESULT_IDS} />
-        </>
-      )}
+      {operation && <ConflictBanner client={client} cwd={gitCwd} exact={!!repo} operation={operation} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} onOpen={onOpen} onResolve={onResolve} />}
+      {commitMode && !operation && <CommitBox client={client} cwd={gitCwd} project={project} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />}
+      {/* The result of a Continue or Abort stays after the banner is gone, in every mode. */}
+      {git !== false && <GitOpResult cwd={gitCwd} {...OP_RESULT_IDS} />}
       {message ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           {message}

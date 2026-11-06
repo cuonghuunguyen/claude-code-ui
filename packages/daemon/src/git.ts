@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "n
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitOperation, type GitOperationKind, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import ignore from "ignore";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -1633,6 +1633,37 @@ async function untrackedLines(top: string, path: string): Promise<number | undef
   }
 }
 
+/** The daemon's view of a path git printed (a WSL repository's git prints POSIX). */
+export function hostOf(top: string, gitPath: string): string {
+  const w = wslPathOf(top);
+  return w ? wslHostPath(w.root, gitPath) : resolve(top, gitPath);
+}
+
+const MAX_CONFLICTED = 3000;
+/**
+ * The unfinished operation of the repository at `top` (the conflict banner, and the refusal of Commit): a merge, rebase, cherry-pick, revert or am
+ * (state file, per linked worktree through `--git-path`), else `conflict` when only unmerged entries remain (stash pop, `checkout -m`; git leaves no
+ * marker of the origin). Undefined when nothing is unfinished.
+ */
+export async function gitOperation(top: string): Promise<GitOperation | undefined> {
+  const marks = ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"];
+  const [paths, unmerged] = await Promise.all([g(top, ["rev-parse", ...marks.flatMap((m) => ["--git-path", m])]), g(top, ["ls-files", "-u", "-z"])]);
+  const [rebaseMerge, rebaseApply, mergeHead, pickHead, revertHead] = paths.split("\n").map((p) => hostOf(top, p)) as [string, string, string, string, string];
+  const there = (p: string) => existsSync(p);
+  const kind: GitOperationKind | undefined = there(rebaseMerge) ? "rebase" : there(rebaseApply) ? (there(join(rebaseApply, "applying")) ? "am" : "rebase") : there(mergeHead) ? "merge" : there(pickHead) ? "cherry-pick" : there(revertHead) ? "revert" : undefined;
+  const conflicted = [...new Set(unmerged.split("\0").filter(Boolean).map((r) => r.slice(r.indexOf("\t") + 1)))].slice(0, MAX_CONFLICTED);
+  if (kind) return { kind, conflicted };
+  return conflicted.length ? { kind: "conflict", conflicted } : undefined;
+}
+
+/** `gitOperation` of the repository of `cwd`; null outside a work tree (the Session mode banner, wire `git.operation`). */
+export async function gitOperationOf(cwd: string, allowed: (p: string) => boolean): Promise<GitOperation | null> {
+  return pinScope(async () => {
+    const top = await topIn(cwd, allowed);
+    return top ? ((await gitOperation(top)) ?? null) : null;
+  });
+}
+
 export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean; ignoreSubmodules?: boolean };
 /** The working tree (staged, unstaged, untracked) against HEAD or a merge base (docs/spec.md "Layout", changes tab); null outside a git work tree. */
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
@@ -1678,7 +1709,8 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
     batch.forEach((path, j) => files.push({ status: "A", path, untracked: true, ...(counts[j] !== undefined && { added: counts[j], removed: 0 }) }));
   }
   files.sort(byPath);
-  return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }) };
+  const operation = await gitOperation(top);
+  return { prefix, ...(base && { base }), ...(ref && { ref }), files: files.slice(0, MAX_COMMIT_FILES), ...(branches && { branches }), ...(cut && { truncated: true }), ...(operation && { operation }) };
 }
 
 const GITMODULES_MAX = 1024 * 1024;

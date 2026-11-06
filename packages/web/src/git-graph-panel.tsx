@@ -16,7 +16,7 @@ import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
-import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
+import { runRemoteOp, useRemoteOp, type OpReply } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -181,7 +181,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
   const { running: op, settled } = useRemoteOp(cwd);
-  const runRemote = (msg: RemoteRequest, done: string, running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
+  const runRemote = (msg: RemoteRequest, done: string | ((r: OpReply) => string), running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
   useEffect(() => {
