@@ -23,6 +23,15 @@ Feature: Open a project on an SSH host
     Then the terminal shows "GH546-42"
     And I capture "ssh-project"
 
+  Scenario: A terminal on the SSH host has the PATH of the login profile
+    Given a throwaway SSH host
+    When I choose the SSH host "e2e-ok" in Open project
+    And I open the remote project folder
+    And I toggle the terminal from the titlebar
+    And I type "command -v gh592-tool" in the terminal
+    Then the terminal shows "/opt/gh592/bin/gh592-tool"
+    And I capture "ssh-login-path"
+
   Scenario: A session on a host without a Claude login says so
     Given a throwaway SSH host
     When I choose the SSH host "e2e-ok" in Open project

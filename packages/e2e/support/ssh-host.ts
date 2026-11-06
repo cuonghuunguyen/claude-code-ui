@@ -33,6 +33,9 @@ const BOOT = [
   "mkdir -p /run/sshd /root/.ssh",
   'echo "$PUBKEY" > /root/.ssh/authorized_keys',
   "chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys",
+  // GH-592: a login profile with noise on stdout and a PATH entry; sessions and terminals must get the PATH, the noise must not break the protocol.
+  "mkdir -p /opt/gh592/bin && printf '#!/bin/sh\\necho gh592\\n' > /opt/gh592/bin/gh592-tool && chmod +x /opt/gh592/bin/gh592-tool",
+  "printf 'echo GH592-profile-noise\\nexport PATH=/opt/gh592/bin:$PATH\\n' > /root/.bash_profile",
   `mkdir -p ${REMOTE_PROJECT} && cd ${REMOTE_PROJECT} && git init -q && echo e2e > hello.txt`,
   "exec /usr/sbin/sshd -D -e",
 ].join(" && ");
