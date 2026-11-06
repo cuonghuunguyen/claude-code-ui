@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { HistoryReason } from "@claude-ui/protocol";
 import { gitDiff, gitOperation } from "../src/git.ts";
 import { gitBranch } from "../src/git-remote.ts";
 import { gitAbort, gitContinue, gitMergeRebase } from "../src/git-write.ts";
@@ -38,7 +39,8 @@ function repo() {
   run(dir, "checkout", "-q", "main");
   put(dir, "a.txt", "main\n");
   run(dir, "commit", "-q", "-am", "main");
-  return { root, dir, o: { allowed: (p: string) => p.startsWith(root) } };
+  const seen: { path: string; reason: HistoryReason; text: string }[] = [];
+  return { root, dir, o: { allowed: (p: string) => p.startsWith(root), snapshot: (p: string, reason: HistoryReason, c?: string) => void seen.push({ path: p, reason, text: c ?? readFileSync(p, "utf8") }) }, seen };
 }
 type R = ReturnType<typeof repo>;
 const head = (dir: string) => run(dir, "rev-parse", "HEAD");
@@ -276,6 +278,27 @@ describe("conflicts", () => {
     expect(await gitOperation(b.dir)).toBeUndefined();
     expect(readFileSync(join(b.dir, "a.txt"), "utf8")).toBe("mine\n");
     expect(head(b.dir)).toBe(h);
+  });
+  it("Abort snapshots the conflict-marker text with reason abort: kind conflict, and a merge together with other tracked edits", async () => {
+    const c = repo();
+    put(c.dir, "a.txt", "stashed\n");
+    run(c.dir, "stash", "push", "-q");
+    put(c.dir, "a.txt", "changed in head\n");
+    run(c.dir, "commit", "-q", "-am", "x");
+    tryRun(c.dir, "stash", "pop");
+    const marked = readFileSync(join(c.dir, "a.txt"), "utf8");
+    expect(marked).toContain("<<<<<<<");
+    await gitAbort(c.dir, { kind: "conflict", ...c.o });
+    expect(c.seen).toEqual([{ path: join(c.dir, "a.txt"), reason: "abort", text: marked }]);
+    const m = repo();
+    tryRun(m.dir, "merge", "other");
+    const mergeMarked = readFileSync(join(m.dir, "a.txt"), "utf8");
+    await gitAbort(m.dir, { kind: "merge", ...m.o });
+    // b.txt came in staged from the merge: a tracked change vs HEAD the abort drops as well.
+    expect(m.seen.map((x) => ({ ...x, path: x.path.slice(m.dir.length + 1) })).sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+      { path: "a.txt", reason: "abort", text: mergeMarked },
+      { path: "b.txt", reason: "abort", text: "b\n" },
+    ]);
   });
   it("kind conflict: Abort removes a conflicted path that HEAD lacks (deleted by us)", async () => {
     const r = repo();

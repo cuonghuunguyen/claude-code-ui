@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { HistoryReason } from "@claude-ui/protocol";
 import { gitCommitAction, gitCommitMenu } from "../src/git-write.ts";
 
 vi.setConfig({ testTimeout: process.platform === "win32" ? 120_000 : 60_000 });
@@ -26,7 +27,8 @@ function repo() {
     run(dir, "commit", "-q", "-m", `c${n}`);
   }
   run(dir, "branch", "other", "HEAD~2");
-  return { root, dir, o: { allowed: (p: string) => p.startsWith(root) } };
+  const seen: { path: string; reason: HistoryReason; text: string }[] = [];
+  return { root, dir, o: { allowed: (p: string) => p.startsWith(root), snapshot: (p: string, reason: HistoryReason, c?: string) => void seen.push({ path: p, reason, text: c ?? readFileSync(p, "utf8") }) }, seen };
 }
 type R = ReturnType<typeof repo>;
 const menu = async (r: R, hash: string, hard = false) => (await gitCommitMenu(r.dir, { ...r.o, hash, hard: hard || undefined }))!;
@@ -159,6 +161,24 @@ describe("reset", () => {
     expect(m.loseCount).toBe(2);
     await act(r, "reset", other(r), "hard");
     expect(read(r.dir, "n.txt")).toBe("n\n");
+  });
+  it("hard snapshots each lost file (modified tracked and overwritten untracked) with reason reset; soft and mixed snapshot nothing", async () => {
+    const r = repo();
+    run(r.dir, "checkout", "-q", "other");
+    put(r.dir, "n.txt", "n\n");
+    run(r.dir, "add", "-A");
+    run(r.dir, "commit", "-q", "-m", "n");
+    run(r.dir, "checkout", "-q", "main");
+    put(r.dir, "a.txt", "dirty\n");
+    put(r.dir, "n.txt", "mine\n");
+    await act(r, "reset", head(r.dir, "HEAD~1"), "soft");
+    await act(r, "reset", head(r.dir, "HEAD"), "mixed");
+    expect(r.seen).toEqual([]);
+    await act(r, "reset", other(r), "hard");
+    expect(r.seen.map((s) => ({ ...s, path: s.path.slice(r.dir.length + 1) })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "a.txt", reason: "reset", text: "dirty\n" },
+      { path: "n.txt", reason: "reset", text: "mine\n" },
+    ]);
   });
   it("hard is stale after a lost file changes, after HEAD moved, and for another command", async () => {
     const r = repo();

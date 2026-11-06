@@ -371,6 +371,7 @@ export default {
   "files.timeline.reason.checkout": "Trước khi checkout",
   "files.timeline.reason.reset": "Trước khi reset",
   "files.timeline.reason.stash-drop": "Trước khi xóa stash",
+  "files.timeline.reason.abort": "Trước khi hủy",
   "files.timeline.reason.restore": "Trước khi khôi phục",
   "files.timeline.reason.named": "Bản có tên",
   "files.timeline.reason.paste": "Trước khi dán",

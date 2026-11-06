@@ -735,7 +735,7 @@ export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
 /** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. `paste`: a paste replaced the file (GH-555). */
-export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named", "paste"] as const;
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "abort", "restore", "named", "paste"] as const;
 export type HistoryReason = (typeof HISTORY_REASONS)[number];
 /** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
 export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };

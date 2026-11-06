@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { HistoryReason } from "@claude-ui/protocol";
 import { gitBranchCreate, gitCheckout } from "../src/git-write.ts";
 
 vi.setConfig({ testTimeout: process.platform === "win32" ? 120_000 : 60_000 });
@@ -44,7 +45,8 @@ function repo() {
   run(dir, "push", "-q", "origin", "feat");
   run(dir, "branch", "-q", "-D", "feat");
   run(dir, "fetch", "-q", "origin");
-  return { root, dir, first, o: { allowed: (p: string) => p.startsWith(root) } };
+  const seen: { path: string; reason: HistoryReason; text: string }[] = [];
+  return { root, dir, first, o: { allowed: (p: string) => p.startsWith(root), snapshot: (p: string, reason: HistoryReason, c?: string) => void seen.push({ path: p, reason, text: c ?? readFileSync(p, "utf8") }) }, seen };
 }
 const head = (dir: string) => run(dir, "rev-parse", "HEAD");
 const cur = (dir: string) => run(dir, "symbolic-ref", "HEAD");
@@ -129,6 +131,15 @@ describe("gitCheckout", () => {
     expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toContain("mine");
     expect(run(r.dir, "stash", "list")).toBe("");
   });
+  it("smart snapshots the dirty tracked files before the stash with reason checkout; a plain checkout snapshots nothing", async () => {
+    const r = repo();
+    await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" });
+    await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/main" });
+    expect(r.seen).toEqual([]);
+    put(r.dir, "a.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n");
+    await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true });
+    expect(r.seen).toEqual([{ path: join(r.dir, "a.txt"), reason: "checkout", text: "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n" }]);
+  });
   it("smart with a pop conflict: operation conflict, stash kept", async () => {
     const r = repo();
     put(r.dir, "a.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n");
@@ -168,6 +179,6 @@ describe("gitCheckout", () => {
     tryRun(r.dir, "merge", "other");
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" }))).toBe("bad_request");
     expect(await code(gitBranchCreate(r.dir, { ...r.o, name: "x" }))).toBe("bad_request");
-    expect(await code(gitCheckout(r.dir, { allowed: () => false, ref: "refs/heads/other" }))).toBe("cwd_not_allowed");
+    expect(await code(gitCheckout(r.dir, { allowed: () => false, snapshot: () => {}, ref: "refs/heads/other" }))).toBe("cwd_not_allowed");
   });
 });

@@ -369,6 +369,7 @@ export default {
   "files.timeline.reason.checkout": "Before checkout",
   "files.timeline.reason.reset": "Before reset",
   "files.timeline.reason.stash-drop": "Before stash drop",
+  "files.timeline.reason.abort": "Before abort",
   "files.timeline.reason.restore": "Before restore",
   "files.timeline.reason.named": "Named entry",
   "files.timeline.reason.paste": "Before paste",
