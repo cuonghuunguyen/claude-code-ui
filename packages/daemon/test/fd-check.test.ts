@@ -2,7 +2,7 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openChecked, OPEN_READ, OPEN_WRITE, sameFile } from "../src/fd-check.ts";
+import { openChecked, OPEN_READ, OPEN_WRITE, readdirChecked, sameFile } from "../src/fd-check.ts";
 import { readSync } from "node:fs";
 
 let base: string;
@@ -60,5 +60,18 @@ describe("sameFile", () => {
     closeSync(fdIn);
     closeSync(fdOut);
     expect(readFileSync(inside, "utf8")).toBe("inside");
+  });
+});
+
+describe("readdirChecked", () => {
+  it("returns the entries of a canonical in-root folder", () => {
+    expect(readdirChecked(join(root, "d")).map((e) => e.name)).toEqual(["a.txt"]);
+  });
+
+  it.skipIf(process.platform === "win32")("throws ECHANGED when the folder is a link", () => {
+    const canonical = join(root, "d");
+    renameSync(canonical, join(root, "d0"));
+    symlinkSync(join(outside, "d"), canonical);
+    expect(() => readdirChecked(canonical)).toThrow(expect.objectContaining({ code: "ECHANGED" }));
   });
 });

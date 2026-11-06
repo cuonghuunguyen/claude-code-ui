@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import fuzzysort from "fuzzysort";
 import type { GitRepo } from "@claude-ui/protocol";
-import { limiter, pinEnv } from "./git.ts";
+import { gitEscapes, limiter, pinEnv } from "./git.ts";
 import { runGit } from "./git-runner.ts";
 
 const SKIP = new Set([".git", "node_modules"]);
@@ -46,10 +46,10 @@ const listings = new Map<string, { at: number; files: Promise<string[]> }>();
 export const clearSearchCache = () => listings.clear();
 
 /** Cached listing per repository: `ttl` ms, the in-flight load is shared, a failed load is not kept, at most `cached` repositories. */
-function gitFiles(dir: string): Promise<string[]> {
+function gitFiles(dir: string, allowed: (p: string) => boolean): Promise<string[]> {
   const hit = listings.get(dir);
   if (hit && Date.now() - hit.at < searchLimits.ttl) return hit.files;
-  const files = loadGitFiles(dir).catch(() => {
+  const files = loadGitFiles(dir, allowed).catch(() => {
     if (listings.get(dir) === entry) listings.delete(dir);
     return [];
   });
@@ -61,7 +61,9 @@ function gitFiles(dir: string): Promise<string[]> {
 }
 
 /** In a git work tree: tracked and untracked files minus gitignored and deleted ones; empty outside one or in an ignored folder. An embedded repository or submodule shows as one entry. */
-async function loadGitFiles(dir: string): Promise<string[]> {
+async function loadGitFiles(dir: string, allowed: (p: string) => boolean): Promise<string[]> {
+  // A repository whose git dirs or config point outside the roots is not read by git (config files are opened, UNC ones too): the caller walks the folder instead.
+  if (await gitEscapes(dir, allowed)) return [];
   // Two calls: `-t` (the only one-call way to see deleted files) is semi-deprecated in git.
   const [files, del] = await Promise.all([git(dir, ["--cached", "--others", "--exclude-standard"]), git(dir, ["--deleted"])]);
   const deleted = new Set(del);
@@ -99,13 +101,13 @@ export function fuzzyRank(paths: string[], query: string, dir?: string): string[
  * Respects .gitignore inside a git work tree; a folder git lists nothing for (not a repo, or ignored as a whole) is walked.
  * `repos` (git.repos of `dir`): each repository strictly under `dir` is listed by its own git, a nested folder or gitlink is replaced by its files.
  */
-export async function searchFiles(dir: string, query: string, limit = 50, repos: GitRepo[] = []): Promise<string[]> {
+export async function searchFiles(dir: string, query: string, limit = 50, repos: GitRepo[] = [], allowed: (p: string) => boolean = () => true): Promise<string[]> {
   const inner = repos.filter((r) => !r.outsideRoots && r.rel !== "" && !r.rel.startsWith("..")).sort((a, b) => b.rel.length - a.rel.length);
   const ownerOf = (p: string) => inner.find((r) => p === r.rel || p.startsWith(`${r.rel}/`));
-  const top = await gitFiles(dir);
+  const top = await gitFiles(dir, allowed);
   const [rootFiles, ...nested] = await Promise.all([
     top.length ? Promise.resolve(top.filter((p) => !ownerOf(p))) : walk(dir, new Set(inner.map((r) => r.rel))),
-    ...inner.map(async (r) => (await gitSlot(() => gitFiles(r.path))).map((f) => `${r.rel}/${f}`).filter((p) => ownerOf(p) === r)),
+    ...inner.map(async (r) => (await gitSlot(() => gitFiles(r.path, allowed))).map((f) => `${r.rel}/${f}`).filter((p) => ownerOf(p) === r)),
   ]);
   // Fair share: a huge parent must not starve the nested repositories of the cap.
   const lists = [rootFiles!, ...nested];
