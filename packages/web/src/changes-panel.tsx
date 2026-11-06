@@ -41,7 +41,7 @@ export type DiffStyle = "unified" | "split";
 type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
 /** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
-type Row = { path: string; /** Relative to the repository top, as git names it (git modes). */ rel?: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
+type Row = { path: string; /** Relative to the repository top, as git names it (git modes). */ rel?: string; kind: Kind; /** Git modes: an added file not in the index. Shown as `U`; `kind` stays `A`. */ untracked?: boolean; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
   /** A gitlink row (git modes): no file to read or diff. */
   submodule?: { from?: string; to?: string };
   /** A submodule with uncommitted changes in tracked files (`git.status` of it): the files; `dirtyOnly`: its gitlink did not move, so the row exists for this. */
@@ -59,10 +59,12 @@ type HunkMeta = { index: number; first: number; last: number };
 const OP_RESULT_IDS = { testId: "changes-op-result", errorId: "changes-op-error" };
 const SUB_PROBES = 10;
 const SUB_PARALLEL = 4;
-const KIND_KEY = { A: "files.changes.added", D: "files.changes.deleted", M: "files.changes.modified", R: "files.changes.renamed" } as const;
+const KIND_KEY = { A: "files.changes.added", D: "files.changes.deleted", M: "files.changes.modified", R: "files.changes.renamed", U: "files.changes.untracked" } as const;
 const kindTitle = (k: keyof typeof KIND_KEY) => t(KIND_KEY[k]);
+/** The badge letter of a row: untracked additions show `U`. */
+const badgeOf = (r: { kind: Kind; untracked?: boolean }) => (r.kind === "A" && r.untracked ? "U" : r.kind);
 const MODE_KEY = { session: "files.changes.modeSession", uncommitted: "files.changes.modeUncommitted", branch: "files.changes.modeBranch" } as const;
-const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning" } as const;
+const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning", U: "text-warning" } as const;
 
 // Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
 const STYLE_KEY = "claude-ui.diffStyle";
@@ -467,6 +469,7 @@ export function ChangesPanel({
         path: r.path,
         rel: r.rel,
         kind: r.kind,
+        ...(r.untracked && { untracked: true }),
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
         ...(r.submodule && { submodule: r.submodule }),
         ...(r.nested && { nested: r.nested }),
@@ -610,7 +613,7 @@ export function ChangesPanel({
   const label = (r: Row) =>
     r.nested
       ? t("files.changes.repoLabel", { path: relPath(r.path, cwd) })
-      : `${kindTitle(r.kind)} ${relPath(r.path, cwd)}${r.submodule ? `, ${t("files.changes.submodule")}${r.dirty ? `, ${t("files.changes.modifiedContent")}` : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
+      : `${kindTitle(badgeOf(r))} ${relPath(r.path, cwd)}${r.submodule ? `, ${t("files.changes.submodule")}${r.dirty ? `, ${t("files.changes.modifiedContent")}` : ""}` : r.stats ? `, +${r.stats.added} -${r.stats.removed}` : ""}`;
   const rowIcon = (r: Row) => (r.nested ? <RepoIcon kind="nested" /> : r.submodule ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={r.path} className="size-4 shrink-0" />);
   const treeRow =
     "flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7";
@@ -655,7 +658,7 @@ export function ChangesPanel({
             {r.submodule && <SubmoduleBadge />}
             {r.nested && <RepoBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
-            {r.kind !== "M" && !r.nested && <KindBadge kind={r.kind} />}
+            {r.kind !== "M" && !r.nested && <KindBadge kind={r.kind} untracked={r.untracked} />}
           </button>
         </li>
         ))}</Fragment>
@@ -900,7 +903,7 @@ export function ChangesPanel({
                     </span>
                     {r.submodule && <SubmoduleBadge />}
                     {r.nested && <RepoBadge />}
-                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[r.kind])}>{kindTitle(r.kind)}</span>}
+                    {r.kind !== "M" && !r.nested && <span className={cn("shrink-0 text-xs", KIND_COLOR[badgeOf(r)])}>{kindTitle(badgeOf(r))}</span>}
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
@@ -992,11 +995,12 @@ export function RepoBadge() {
   );
 }
 
-export function KindBadge({ kind }: { kind: Kind }) {
+export function KindBadge({ kind, untracked }: { kind: Kind; untracked?: boolean }) {
   useT();
+  const k = badgeOf({ kind, untracked });
   return (
-    <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[kind])} title={kindTitle(kind)} data-testid="change-badge">
-      {kind}
+    <span className={cn("w-4 shrink-0 text-center font-[530] font-mono text-[11px]", KIND_COLOR[k])} title={kindTitle(k)} data-testid="change-badge">
+      {k}
     </span>
   );
 }
@@ -1045,7 +1049,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
         )
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
-          {!nested && <KindBadge kind={row.kind} />}
+          {!nested && <KindBadge kind={row.kind} untracked={row.untracked} />}
           {nested ? <RepoIcon kind="nested" /> : sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
             {row.oldShown ? `${row.oldShown} → ${relPath(path, cwd)}` : relPath(path, cwd)}

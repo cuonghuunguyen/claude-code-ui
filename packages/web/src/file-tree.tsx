@@ -44,7 +44,7 @@ const MARK_STYLE: Record<Mark, { text: string; label: () => string }> = {
   M: { text: "text-info", label: () => t("files.mark.modified") },
   R: { text: "text-info", label: () => t("files.mark.renamed") },
   A: { text: "text-success", label: () => t("files.mark.added") },
-  U: { text: "text-success", label: () => t("files.mark.untracked") },
+  U: { text: "text-warning", label: () => t("files.mark.untracked") },
   D: { text: "text-destructive", label: () => t("files.mark.deleted") },
 };
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };

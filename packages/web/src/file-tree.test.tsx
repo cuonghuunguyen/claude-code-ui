@@ -75,7 +75,7 @@ it("file rows show the file-type icon (data-icon) and folder rows a folder icon"
   t.unmount();
 });
 
-it("git.diff marks: a modified file shows M in text-info, an untracked one U in text-success, the parent folder a dot; the name ends with the state", async () => {
+it("git.diff marks: a modified file shows M in text-info, an untracked one U in text-warning, the parent folder a dot; the name ends with the state", async () => {
   const t = setup({ gitStamp: "idle|1" }, { "git.diff": diff });
   await t.render();
   await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
@@ -84,7 +84,7 @@ it("git.diff marks: a modified file shows M in text-info, an untracked one U in 
   expect(mark("/p/src/app.ts").textContent).toBe("M");
   expect(mark("/p/src/app.ts").className).toContain("text-info");
   expect(mark("/p/new.ts").textContent).toBe("U");
-  expect(mark("/p/new.ts").className).toContain("text-success");
+  expect(mark("/p/new.ts").className).toContain("text-warning");
   expect(mark("/p/src").className).toContain("rounded-full");
   expect(t.row("/p/src/app.ts").textContent).toBe("app.ts" + "M" + ", modified");
   expect(t.row("/p/src").textContent).toBe("src, contains changes");
