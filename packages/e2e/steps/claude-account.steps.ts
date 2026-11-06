@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { REPO_ROOT } from "../support/daemon.ts";
 import { expect } from "@playwright/test";
 import { sendPrompt } from "../support/flow.ts";
 import { TURN_MS } from "../support/ui.ts";
@@ -108,6 +111,96 @@ When("I remove the Claude token accounts", async ({ page }) => {
     await remove.first().click();
     await expect(remove).toHaveCount(n - 1);
   }
+  // Removing the active account falls back to Default (the first row); no-op check when none was active.
+  await expect(page.getByTestId("settings-account-option").first()).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("settings-dialog")).toBeHidden();
+});
+
+Then("the failed turn shows exactly one {string} warning", async ({ page }, error: string) => {
+  // Let a late duplicate row arrive before counting.
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId("raw-part").filter({ hasText: error })).toHaveCount(1);
+});
+
+When("I use the Claude login button in Settings", async ({ page }) => {
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-account").click();
+  await page.getByTestId("settings-claude-login").click();
+  await page.keyboard.press("Escape");
+});
+
+// Frames of the page's websocket(s) from here on (a reload makes the page connect again under the listener).
+const frames: { dir: "sent" | "recv"; data: string }[] = [];
+When("I record the websocket frames", async ({ page }) => {
+  frames.length = 0;
+  page.on("websocket", (ws) => {
+    ws.on("framesent", (f) => frames.push({ dir: "sent", data: String(f.payload) }));
+    ws.on("framereceived", (f) => frames.push({ dir: "recv", data: String(f.payload) }));
+  });
+  await page.reload();
+  await expect(page.getByTestId("assistant-text").first()).toBeVisible({ timeout: 30_000 });
+});
+
+Then("the Claude account list shows {string} and the token field is empty", async ({ page }, note: string) => {
+  await page.keyboard.press("Escape");
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-account").click();
+  await expect(page.getByTestId("settings-account-token-set")).toHaveText(note);
+  await expect(page.getByTestId("settings-account-token")).toHaveValue("");
+  expect(await page.getByTestId("settings-account").innerText()).not.toContain("TESTSECRET");
+  await page.getByTestId("settings-account").screenshot();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-dialog")).toBeHidden();
+});
+
+Then("the usage ring label names the account {string}", async ({ page }, name: string) => {
+  const m = page.getByTestId("plan-meter");
+  await expect(m).toHaveAttribute("aria-label", new RegExp(`${name}:`));
+});
+
+Then("the models are requested again", async () => {
+  const n = () => frames.filter((f) => f.dir === "sent" && f.data.includes('"models.list"')).length;
+  const before = n();
+  expect(before).toBeGreaterThan(0);
+  // The first request is the page load; a switch asks again.
+  await expect.poll(n, { timeout: 15_000 }).toBeGreaterThan(1);
+});
+
+When("I pick the Claude account {string} in Settings", async ({ page }, name: string) => {
+  await page.keyboard.press("Escape");
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-account").click();
+  await page.getByTestId("settings-account-option").filter({ hasText: name }).click();
+  await expect(page.getByTestId("settings-account-option").filter({ hasText: name })).toHaveAttribute("aria-checked", "true");
+});
+
+Then("the account list is not offering {string}", async ({ page }, name: string) => {
+  await expect(page.getByTestId("plan-account-option").filter({ hasText: name })).toHaveCount(0);
+});
+
+Then("the token appears in no websocket frame, daemon log or web bundle", async ({ daemon }) => {
+  const secret = "TESTSECRET";
+  expect(frames.length).toBeGreaterThan(0);
+  // The page sends the token once, in claude.account.add; nothing else sent and nothing received may carry it.
+  const leaks = frames.filter((f) => f.data.includes(secret) && !(f.dir === "sent" && f.data.includes('"claude.account.add"')));
+  expect(leaks.map((f) => f.dir)).toEqual([]);
+  expect(frames.filter((f) => f.dir === "sent" && f.data.includes(secret)).length).toBe(1);
+  expect(readFileSync(daemon.log, "utf8")).not.toContain(secret);
+  const hits: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (readFileSync(p).includes(secret)) hits.push(p);
+    }
+  };
+  walk(join(REPO_ROOT, "packages", "web", "dist"));
+  expect(hits).toEqual([]);
 });
