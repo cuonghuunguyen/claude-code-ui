@@ -137,14 +137,14 @@ if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(),
 const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
   const key = sideKey();
   // A live Hub there with an overlapping schema is bridged through its own cli (GH-619): nothing is installed or sent.
-  const hub = runArgs !== "update" ? await findHub(() => execRun("docker", ["exec", name, "sh", "-c", HUB_PROBE], 15_000)) : undefined;
+  const hub = await findHub({ runArgs, setup, pinned, run: () => execRun("docker", ["exec", name, "sh", "-c", HUB_PROBE], 15_000) });
   if (hub) return sideChild(spawn("docker", dockerExecArgs(name, hubBridgeScript(hub.exec)), { stdio: "pipe", windowsHide: true }));
   const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
   return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle, runArgs)), { stdio: "pipe", windowsHide: true }));
 };
 /** WSL side: a covered distro installs from the host's verified cached parts read through /mnt (no npm, network or compile in the distro), else from npm. */
 const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
-  const hub = runArgs !== "update" ? await findHub(() => execRun("wsl.exe", wslArgs(distro, HUB_PROBE), 30_000)) : undefined;
+  const hub = await findHub({ runArgs, setup, pinned, run: () => execRun("wsl.exe", wslArgs(distro, HUB_PROBE), 30_000) });
   if (hub) return sideChild(spawn("wsl.exe", wslArgs(distro, hubBridgeScript(hub.exec)), { stdio: "pipe", windowsHide: true }));
   const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
   return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle, runArgs)), { stdio: "pipe", windowsHide: true }));
@@ -152,7 +152,7 @@ const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase
 /** SSH side: the bundle (a covered Linux host) or the npm tarball (any other POSIX host) goes through ssh stdin, then `ssh <alias>` runs the setup script. */
 const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
   const key = sideKey();
-  const hub = runArgs !== "update" ? await findHub(() => execRun("ssh", sshArgs(alias, HUB_PROBE, [], sshConfig), 30_000)) : undefined;
+  const hub = await findHub({ runArgs, setup, pinned, run: () => execRun("ssh", sshArgs(alias, HUB_PROBE, [], sshConfig), 30_000), fatal: (r) => sshError(alias, r) });
   if (hub) return sideChild(spawn("ssh", sshArgs(alias, hubBridgeScript(hub.exec), [], sshConfig), { stdio: "pipe", windowsHide: true }));
   // A reattach installs and starts nothing: it only bridges to the Hub that runs (setup never: no probe, no bundle).
   const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });

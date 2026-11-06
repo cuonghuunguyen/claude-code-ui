@@ -20,4 +20,4 @@ A Side machine (SSH host, WSL distro, Docker container) may already run a Hub of
 ## Consequences
 
 - A container that bind-mounts the host's `~/.claude` runs a second Hub over the same transcripts; that case is not protected.
-- The frame schema range is the compatibility contract between independently updated Hubs, and for the bridge too: the attaching Hub runs the bridge of the Hub there (`exec` in its `daemon.json`) and installs its own build only when no Hub runs there or the schemas do not overlap.
+- The frame schema range is the compatibility contract between independently updated Hubs, and for the bridge too: the attaching Hub runs the bridge of the Hub there (`exec` in its `daemon.json`) and installs its own build only when no Hub runs there or the schemas do not overlap. The bridge command line (`side --attach [--start]`) is part of that contract: a Hub's cli must keep accepting it.

@@ -5,6 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { readDaemonFile } from "./ctl/daemon-file.ts";
 import { pidAlive } from "./ctl/connect.ts";
+import type { SideSetup } from "@claude-ui/protocol";
 import { parseHub, type Hub } from "./hub-probe.ts";
 import { shq } from "./sides.ts";
 import type { Readable, Writable } from "node:stream";
@@ -130,12 +131,21 @@ export const hubExec = () => [process.execPath, ...process.execArgv.filter((a) =
 /** Runs the bridge of the Hub there: every word quoted. `--start`: when that Hub died since the probe, a Hub of the same build starts (nothing is installed: the cli is there). */
 export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" ")} side --attach --start`;
 
-/** The Hub that `run` (a probe through the Side's transport) finds; any failure counts as no Hub: the install path then reports the real error. */
-export async function findHub(run: () => Promise<{ stdout: string }>): Promise<Hub | undefined> {
+/**
+ * The Hub that `run` (a probe through the Side's transport) finds. No probe for an update, Reinstall (`force`) or a pinned start: those must reach the install
+ * even when the Hub there has a broken `exec` (its cli folder swept, its Node.js removed). A probe that fails to run counts as no Hub (the install path
+ * reports the real error); `fatal` names an error that the install path would hit too (ssh unreachable): thrown at once, not after a second timeout.
+ */
+export async function findHub(o: { runArgs: string; setup: SideSetup; pinned?: boolean; run: () => Promise<{ code: number | null; stdout: string; stderr: string }>; fatal?: (r: { code: number | null; stderr: string }) => string | undefined }): Promise<Hub | undefined> {
+  if (o.runArgs === "update" || o.setup === "force" || o.pinned) return undefined;
+  let r;
   try {
-    // The exit code is not read: the probe ends non-zero when no Hub runs.
-    return parseHub((await run()).stdout);
+    r = await o.run();
   } catch {
     return undefined;
   }
+  const msg = o.fatal?.(r);
+  if (msg) throw new Error(msg);
+  // The exit code is not read otherwise: the probe ends non-zero when no Hub runs.
+  return parseHub(r.stdout);
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HUB_PROBE, parseHub } from "../src/hub-probe.ts";
-import { findHub, hubBridgeScript } from "../src/side-attach.ts";
+import { findHub, hubBridgeScript, hubExec } from "../src/side-attach.ts";
 
 const info = (o: Record<string, unknown> = {}) => ({ port: 1, pid: 2, version: "1.2.1", startedAt: "x", attach: "/x/attach.sock", schema: [1, 1], exec: ["/usr/bin/node", "/a b/cli.js"], ...o });
 const line = (v: unknown) => `motd\nCLAUDE_UI_CHECK hub=${Buffer.from(typeof v === "string" ? v : JSON.stringify(v)).toString("base64")}\nbye\r\n`;
@@ -28,10 +28,36 @@ describe("hubBridgeScript", () => {
   });
 });
 
+describe("hubExec", () => {
+  it("keeps the loader flags and drops debugger flags", () => {
+    const prev = process.execArgv;
+    process.execArgv = ["--import", "tsx", "--inspect=9229", "--debug-port=1"];
+    try {
+      expect(hubExec().slice(1, -1)).toEqual(["--import", "tsx"]);
+    } finally {
+      process.execArgv = prev;
+    }
+  });
+});
+
 describe("findHub", () => {
-  it("a failing probe is no Hub", async () => {
-    expect(await findHub(async () => ({ stdout: line(info()) }))).toMatchObject({ version: "1.2.1" });
-    expect(await findHub(async () => Promise.reject(new Error("x")))).toBeUndefined();
+  const r = (o: Record<string, unknown> = {}) => ({ code: 0, stdout: line(info()), stderr: "", ...o });
+  const find = (o: Record<string, unknown> = {}, res = r()) => findHub({ runArgs: "attach", setup: "needed", run: async () => res, ...o } as Parameters<typeof findHub>[0]);
+  it("finds a compatible Hub, whatever the probe's exit code", async () => {
+    expect(await find()).toMatchObject({ version: "1.2.1" });
+    expect(await find({}, r({ code: 1 }))).toMatchObject({ version: "1.2.1" });
+  });
+  it("a probe that throws is no Hub", async () => {
+    expect(await find({ run: () => Promise.reject(new Error("x")) })).toBeUndefined();
+  });
+  it("an update, Reinstall or pinned start does not probe (a Hub with a broken exec must not block the install)", async () => {
+    let n = 0;
+    const run = async () => (n++, r());
+    for (const o of [{ runArgs: "update" }, { setup: "force" }, { pinned: true }]) expect(await find({ run, ...o })).toBeUndefined();
+    expect(n).toBe(0);
+  });
+  it("an error the install path would hit too is thrown at once", async () => {
+    await expect(find({ fatal: () => "SSH: box is not reachable" }, r({ code: 255 }))).rejects.toThrow("not reachable");
   });
 });
 
