@@ -1137,6 +1137,54 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
   });
 
+  it("git.commitMessage: checked arguments, the reply, and a cancel that stops only this connection's generation", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "cm-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "a.txt"), "hello\n");
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    let prompt = "";
+    const query = ((a: { prompt: unknown; options: { abortController?: AbortController } }) => {
+      if (typeof a.prompt !== "string") return (fakeQuery as never as (x: unknown) => unknown)(a);
+      const text = (prompt = a.prompt);
+      return (async function* () {
+        if (text.includes("WAIT")) {
+          started();
+          await new Promise<void>((r) => a.options.abortController!.signal.addEventListener("abort", () => r(), { once: true }));
+        } else yield { type: "result", subtype: "success", is_error: false, result: "feat: hello" };
+      })();
+    }) as never;
+    const appSettings = createSettings();
+    appSettings.set({ git: { commitMessageInstructions: { "/proj": "WAIT for it" }, commitMessageInstruction: "global" } });
+    const d = createDaemon({ webRoot, token, roots: [repo], query, appSettings });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const p = (d.address() as AddressInfo).port;
+      const c = await client(p);
+      const other = await client(p);
+      const m = { type: "git.commitMessage", cwd: repo, paths: ["a.txt"] };
+      expect(await c.request({ ...m, cwd: join(repo, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, paths: [] })).toMatchObject({ code: "bad_request" });
+      expect(await c.request({ ...m, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+      expect(await c.request({ ...m, project: 5 })).toMatchObject({ code: "bad_request" });
+      expect(await c.request(m)).toMatchObject({ result: { message: "feat: hello" } });
+      expect(prompt).toContain("global");
+      expect(prompt).toContain("+hello");
+      const waiting = c.request({ ...m, project: "/proj" });
+      await running;
+      await other.request({ type: "git.commitMessageCancel" });
+      expect(await Promise.race([waiting, new Promise((r) => setTimeout(() => r("pending"), 200))])).toBe("pending");
+      await c.request({ type: "git.commitMessageCancel" });
+      expect(await waiting).toMatchObject({ type: "error", code: "cancelled" });
+      // A cancel right behind the request, before the repository check finished, still stops it.
+      const early = c.request(m);
+      await c.request({ type: "git.commitMessageCancel" });
+      expect(await early).toMatchObject({ type: "error", code: "cancelled" });
+    } finally {
+      d.close();
+    }
+  });
+
   it("answers git.branchCreate and git.checkout for a cwd inside the roots only, with checked arguments and the local_changes code", async () => {
     const c = await client();
     const outside = join(webRoot, "..");
