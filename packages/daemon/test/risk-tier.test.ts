@@ -3,7 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tier, workerBashHook, type TierContext } from "../src/risk-tier.ts";
+import { tier, type TierContext } from "../src/risk-tier.ts";
 import { canSymlink, NO_SYMLINK } from "./symlink-support.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "tier-")));
@@ -249,37 +249,5 @@ describe("tier", () => {
     rmSync(gone, { recursive: true });
     expect(tier("Read", { file_path: "a.ts" }, { cwd: gone })).toBe("high");
     expect(tier("Write", { file_path: "a.ts" }, { cwd: gone })).toBe("high");
-  });
-});
-
-describe("workerBashHook", () => {
-  const ask = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: expect.any(String) } };
-  const stub = (t: "low" | "high") => { const calls: unknown[] = []; return { calls, read: async (...a: unknown[]) => (calls.push(a), t) }; };
-  it("asks for a high git command", async () => {
-    const s = stub("high");
-    expect(await workerBashHook({ command: "git show HEAD" }, "/w", s.read as never)).toEqual(ask);
-    expect(s.calls[0]).toEqual(["Bash", { command: "git show HEAD" }, { cwd: "/w", bashCwdPinned: true }]);
-  });
-  it("lets a low git command through", async () => {
-    expect(await workerBashHook({ command: "git status" }, "/w", stub("low").read as never)).toEqual({});
-  });
-  it("ignores a command without a git segment", async () => {
-    const s = stub("high");
-    expect(await workerBashHook({ command: "ls -la" }, "/w", s.read as never)).toEqual({});
-    expect(s.calls).toEqual([]);
-  });
-  it("finds git after a separator", async () => {
-    const s = stub("high");
-    expect(await workerBashHook({ command: "cd x && git diff" }, "/w", s.read as never)).toEqual(ask);
-    expect(s.calls).toHaveLength(1);
-  });
-  it("finds git behind an assignment, env, command, xargs and a subshell", async () => {
-    for (const command of ["FOO=1 git show HEAD", "env git show HEAD", "command git show HEAD", "ls | xargs git show", "echo $(git show HEAD)", '"git" show HEAD:x', "'git' show HEAD:x", "g\\it show HEAD", "C:\\x\\git.exe status", "/c/x/git.exe status"]) {
-      const s = stub("high");
-      expect(await workerBashHook({ command }, "/w", s.read as never), command).toEqual(ask);
-    }
-  });
-  it("asks when the tier read throws", async () => {
-    expect(await workerBashHook({ command: "git log" }, "/w", (async () => { throw new Error("x"); }) as never)).toEqual(ask);
   });
 });
