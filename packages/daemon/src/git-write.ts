@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview } from "@claude-ui/protocol";
+import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { branchInfo, branchRef, exclusive, gitBranch, HARDEN, MAX_ERROR, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { openChecked, OPEN_READ, readAll, sameFile } from "./fd-check.ts";
@@ -678,5 +678,69 @@ export async function gitCheckout(cwd: string, o: { ref: unknown; smart?: unknow
       return switchTo(top, ["--track", ref], smart, env, o.allowed);
     }
     return switchTo(top, ["--no-guess", ref.slice("refs/heads/".length)], smart, env, o.allowed);
+  });
+}
+
+// ---- Stash (docs/spec.md "Layout", Graph tab; wire `git.stash*`) ----
+
+/** The Graph tab's stash list, newest first. Not cached: `refsStamp` misses a drop of a non-top entry. Null outside a work tree. */
+export async function gitStashList(cwd: string, o: RemoteOptions): Promise<GitStash[] | null> {
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    // shortcut: first 500 entries only, upgrade when someone keeps more
+    // Raw stdout: `run` keeps only the last 8000 chars, which cuts a long list.
+    const out = (await runGit({ cwd: top, args: [...HARDEN, "stash", "list", "-z", "--max-count=500", "--format=%H%x1f%gs%x1f%ct"], env: await writeEnv(top), timeout: writeConfig.timeout, killTree: true })).stdout.toString("utf8");
+    return out.split("\0").filter(Boolean).map((row, index) => {
+      const [hash, message, time] = row.trim().split("\x1f");
+      return { index, hash, message, time: Number(time) };
+    });
+  });
+}
+
+/** `git stash push [--include-untracked] [-m message]`. Nothing to save (the stash ref did not move) is `bad_request`. Null outside a work tree. */
+export async function gitStashPush(cwd: string, o: { message?: unknown; includeUntracked?: unknown } & RemoteOptions): Promise<Written | null> {
+  const message = o.message === undefined ? "" : o.message;
+  if (typeof message !== "string" || message.length > 4096 || message.includes("\0")) throw bad("message must be text of at most 4096 characters");
+  if (o.includeUntracked !== undefined && typeof o.includeUntracked !== "boolean") throw bad("includeUntracked must be a boolean");
+  const text = message.trim();
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    return exclusive(top, async () => {
+      const env = await writeEnv(top);
+      await refuseOperation(top);
+      const before = (await ask(top, ["rev-parse", "-q", "--verify", "refs/stash"], env)).out;
+      const { out } = await run(top, ["stash", "push", ...(o.includeUntracked ? ["--include-untracked"] : []), ...(text ? ["-m", text] : [])], env);
+      if ((await ask(top, ["rev-parse", "-q", "--verify", "refs/stash"], env)).out === before) throw bad("No local changes to save");
+      return { output: out, refs: await gitRefs(top, o.allowed) };
+    });
+  });
+}
+
+/**
+ * `git stash apply|pop|drop stash@{index}`; `hash` is the entry's commit as the list showed it: a stash pushed or dropped elsewhere shifts the
+ * indices, then `stale`. Apply and pop stopping on conflicts is a success with `operation`. Drop is allowed during an unfinished operation. Null outside a work tree.
+ */
+export async function gitStash(cwd: string, verb: "apply" | "pop" | "drop", o: { index: unknown; hash: unknown } & RemoteOptions): Promise<Written | null> {
+  const { index, hash } = o;
+  if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index > 9999 || !isHash(hash)) throw bad("index and hash must be a stash position and its commit hash");
+  const ref = `stash@{${index}}`;
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    return exclusive(top, async () => {
+      const env = await writeEnv(top);
+      // A missing entry exits 128, not 1: both mean the list changed.
+      const now = await ask(top, ["rev-parse", "-q", "--verify", `${ref}^{commit}`], env).then((r) => r.out, () => "");
+      if (now !== hash) throw new WorktreeError("stale", "The stash list changed: reload");
+      if (verb === "drop") {
+        // shortcut: no "snapshot before" yet, Local history and Timeline (#565) is not on this base; call it here before the drop.
+        const { out } = await run(top, ["stash", "drop", ref], env);
+        return { output: out, refs: await gitRefs(top, o.allowed) };
+      }
+      await refuseOperation(top);
+      return runStop(top, ["stash", verb, ref], env, o.allowed);
+    });
   });
 }

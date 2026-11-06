@@ -1069,6 +1069,19 @@ it("without exact no request carries it", async () => {
   expect(c.sent.some((m) => "exact" in m)).toBe(false);
 });
 
+it("the Stashes toggle shows the stash section and loads the list", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(el.querySelector("[data-testid=stash-section]")).toBeNull();
+  expect(c.sent.some((m) => m.type === "git.stashList")).toBe(false);
+  const btn = el.querySelector<HTMLButtonElement>("[data-testid=graph-stashes]")!;
+  await act(async () => btn.click());
+  await flush();
+  expect(btn.getAttribute("aria-pressed")).toBe("true");
+  expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
+  expect(c.sent.filter((m) => m.type === "git.stashList")).toHaveLength(1);
+});
+
 const localChanges = () => Promise.reject(Object.assign(new Error("error: Your local changes to the following files would be overwritten by checkout:\n\ta.txt"), { code: "local_changes" }));
 
 it("Checkout sends git.checkout and says so; the current branch's item is disabled with the reason", async () => {

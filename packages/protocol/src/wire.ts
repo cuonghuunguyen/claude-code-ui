@@ -288,6 +288,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
   | { type: "git.operation"; cwd: string; exact?: true }
+  /** Graph tab stash list of `cwd`'s repository, newest first (at most 500). Reply GitStashListResult. */
+  | { type: "git.stashList"; cwd: string; exact?: true }
+  /** Stash the local changes (`git stash push`); `includeUntracked`: also untracked files. Nothing to save: `bad_request`. Reply GitWriteResult. */
+  | { type: "git.stashPush"; cwd: string; message?: string; includeUntracked?: boolean; exact?: true }
+  /** Apply, pop or drop `stash@{index}`; `hash`: the entry's commit as the list showed it (another one there now: `stale`). Apply/pop conflict: a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.stashApply" | "git.stashPop" | "git.stashDrop"; cwd: string; index: number; hash: string; exact?: true }
   /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
   | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
   /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
@@ -759,6 +765,10 @@ export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
 export type GitOperationResult = { operation: GitOperation | null };
 /** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
 export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
+/** One stash entry: `message` is the reflog subject ("On main: wip"), `time` seconds like \`GitCommit.time\`. */
+export type GitStash = { index: number; hash: string; message: string; time: number };
+/** `stashes` null outside a git work tree. */
+export type GitStashListResult = { stashes: GitStash[] | null };
 /** `diff` null outside a git work tree. */
 export type GitDiffResult = { diff: GitDiff | null };
 /** A remote operation's git output (redacted, at most 8000 chars) and the refs stamp after it. */

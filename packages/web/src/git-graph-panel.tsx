@@ -16,7 +16,8 @@ import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
-import { runRemoteOp, useRemoteOp, type OpReply } from "./git-remote-ops.ts";
+import { StashSection } from "./git-stash.tsx";
+import { runRemoteOp, useRemoteOp, type OpReply, type StashRequest } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -155,6 +156,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const [notGit, setNotGit] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [reload, setReload] = useState(0);
+  const [stashOpen, setStashOpen] = useState(false);
   // The branch HEAD points to, from the first page (absent when detached: no branch in the list).
   const [head, setHead] = useState<string>();
   // The refs stamp of the loaded first page. On return to the tab, a fresh stamp (git.refs: file stats, no git process) is
@@ -183,7 +185,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
   const { running: op, settled } = useRemoteOp(cwd);
-  const runRemote = (msg: RemoteRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean) => void (!notGit && runRemoteOp(client, msg, done, running, undefined, onFail));
+  const runRemote = (msg: RemoteRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean) => void (!notGit && runRemoteOp(client, msg, done, running, undefined, onFail));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
   useEffect(() => {
@@ -334,6 +336,9 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
         <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, of(tr("files.graph.fetched")), `${of(tr("files.graph.fetching"))}…`)} title={tr("files.graph.fetchAll")} aria-label={tr("files.graph.fetch")} aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
         </Button>
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" aria-pressed={stashOpen} onClick={() => setStashOpen((o) => !o)} title={tr("files.graph.stashes")} aria-label={tr("files.graph.stashes")} data-testid="graph-stashes">
+          <ArchiveIcon />
+        </Button>
         <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => ((freshNext.current = true), setReload((n) => n + 1), onRefresh?.())} title={tr("files.graph.refresh")} aria-label={tr("files.graph.refresh")}>
           <RotateCwIcon />
         </Button>
@@ -342,6 +347,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
         {op ?? ""}
       </span>
       <GitOpResult cwd={cwd} />
+      {!notGit && <StashSection client={client} cwd={cwd} exact={exact} repoName={repoName} version={reload} busy={!!op} onRun={runRemote} open={stashOpen} />}
       {notGit ? (
         <p className="m-auto p-4 text-muted-foreground">{tr("files.graph.notGit")}</p>
       ) : (
