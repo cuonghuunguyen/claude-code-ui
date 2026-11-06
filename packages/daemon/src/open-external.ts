@@ -3,6 +3,7 @@ import { dirname, posix, win32 } from "node:path";
 import { appendFileSync } from "node:fs";
 import type { EditorId } from "@claude-ui/protocol";
 import { runOpener } from "./ctl/commands.ts";
+import { shellEnv } from "./terminals.ts";
 import { winQuote } from "./update.ts";
 
 export type OpenWith = "reveal" | "default" | EditorId;
@@ -59,7 +60,7 @@ export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: stri
   }
   if (how === "default") {
     if (isDir) throw new Error("a folder has no default app");
-    return platform === "darwin" ? { cmd: "open", args: [path] } : win ? { cmd: "explorer.exe", args: [path] } : { cmd: "xdg-open", args: [path] };
+    return platform === "darwin" ? { cmd: "open", args: [path] } : win ? { cmd: "explorer.exe", args: [`"${path}"`], verbatim: true, ignoreExit: true } : { cmd: "xdg-open", args: [path] };
   }
   if (!launcher) throw new Error(`${EDITORS[how].label} is not installed`);
   // A folder opens as the workspace itself; a file opens beside its session folder.
@@ -74,7 +75,8 @@ export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: stri
 }
 
 /** Starts the command detached; rejects when it cannot start or fails. */
-export const spawnOpen = (c: OpenCommand) => runOpener(c.cmd, c.args, undefined, { verbatim: c.verbatim, ignoreExit: c.ignoreExit });
+// The user's environment without the daemon's PORT and CLAUDE_UI_* (as terminals); detached on POSIX so a foreground viewer or IDE outlives the daemon's Ctrl+C.
+export const spawnOpen = (c: OpenCommand) => runOpener(c.cmd, c.args, undefined, { verbatim: c.verbatim, ignoreExit: c.ignoreExit, env: shellEnv(), detached: process.platform !== "win32" });
 
 /** CLAUDE_UI_OPEN_LOG (end-to-end tests): records the command as a JSON line instead of starting an app. */
 export const logOpen = (file: string) => async (c: OpenCommand) => void appendFileSync(file, JSON.stringify({ cmd: c.cmd, args: c.args }) + "\n");

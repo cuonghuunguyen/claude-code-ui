@@ -11,7 +11,7 @@ describe("openCommand", () => {
   });
   it("default app: files only", () => {
     expect(openCommand("darwin", "default", "/p/a.pdf", "/p", false)).toEqual({ cmd: "open", args: ["/p/a.pdf"] });
-    expect(openCommand("win32", "default", "C:\\p\\a & b.pdf", "C:\\p", false)).toEqual({ cmd: "explorer.exe", args: ["C:\\p\\a & b.pdf"] });
+    expect(openCommand("win32", "default", "C:\\p\\a & b.pdf", "C:\\p", false)).toEqual({ cmd: "explorer.exe", args: ['"C:\\p\\a & b.pdf"'], verbatim: true, ignoreExit: true });
     expect(openCommand("linux", "default", "/p/a.pdf", "/p", false)).toEqual({ cmd: "xdg-open", args: ["/p/a.pdf"] });
     expect(() => openCommand("linux", "default", "/p/d", "/p", true)).toThrow(/folder/);
   });
