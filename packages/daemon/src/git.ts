@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readdir, readFile, realpath, stat, unlink } from "n
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitDiff, type GitOperation, type GitOperationKind, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
+import { BRANCH_MAX, branchFolder, checkoutFolder, GIT_LOG_MAX_LIMIT, worktreeNameError, type BranchRow, type WorktreeBranchesResult, wslHostPath, wslPathOf, type GitCommit, type GitCommitDetail, type GitBlame, type GitDiff, type GitOperation, type GitOperationKind, type GitRepo, type GitReposResult, type Settings, type GitFileChange, type GitLog, type GitStatus, type Worktree, type WorktreeRemoveResult, type WorktreeStatusResult, isRemoteOf, pullRequestOf, remoteRepoOf, type PullRequestBranchesResult } from "@claude-ui/protocol";
 import ignore from "ignore";
 import { runGit } from "./git-runner.ts";
 import { foreignPointer } from "./remote-path.ts";
@@ -427,7 +427,7 @@ async function worktreeList(cwd: string): Promise<Worktree[] | null> {
 
 // ---- Worktree create / remove (docs/spec.md "Worktrees") ----
 
-export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "local_changes" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported" | "cancelled" | "timeout" | "generate_failed";
+export type WorktreeErrorCode = "not_git" | "cwd_not_allowed" | "bad_name" | "bad_base" | "exists" | "not_worktree" | "not_removable" | "has_sessions_running" | "git_failed" | "local_changes" | "bad_request" | "not_found" | "too_large" | "busy" | "stale" | "remote_not_allowed" | "pr_other_repo" | "pr_not_found" | "pr_unsupported" | "cancelled" | "not_a_file" | "timeout" | "generate_failed";
 export class WorktreeError extends Error {
   constructor(readonly code: WorktreeErrorCode, message: string, readonly size?: number) {
     super(message);
@@ -1588,6 +1588,52 @@ export async function gitFileAt(cwd: string, hash: string, path: string, allowed
     if (size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, size);
     return stdout.subarray(nl + 1, nl + 1 + size);
   });
+}
+
+/** `git blame --porcelain` output to per-line hashes. A header `<hash> <orig> <final> [<n>]` starts an entry, a `\t` line ends it; the all-zero hash is a line not committed. */
+export function parseBlame(out: string): GitBlame {
+  const commits: GitBlame["commits"] = {};
+  const lines: GitBlame["lines"] = [];
+  let hash = "";
+  let final = 0;
+  for (const l of out.split("\n")) {
+    const h = /^([0-9a-f]{40}|[0-9a-f]{64}) \d+ (\d+)(?: \d+)?$/.exec(l);
+    if (h) {
+      hash = h[1]!;
+      final = Number(h[2]);
+    } else if (l.startsWith("\t")) {
+      lines[final - 1] = /^0+$/.test(hash) ? null : hash;
+    } else if (!/^0+$/.test(hash)) {
+      const c = (commits[hash] ??= { author: "", time: 0, summary: "" });
+      if (l.startsWith("author ") && !c.author) c.author = l.slice(7);
+      else if (l.startsWith("author-time ") && !c.time) c.time = Number(l.slice(12));
+      else if (l.startsWith("summary ") && !c.summary) c.summary = l.slice(8).slice(0, MAX_SUBJECT);
+    }
+  }
+  return { commits, lines };
+}
+/**
+ * `git blame` of the working-tree file `path` (relative to the repository top): uncommitted lines are `null`. null outside a work
+ * tree; WorktreeError not_found / not_a_file / too_large (with `size`, before any git process) / cwd_not_allowed. A file not in HEAD: `untracked`.
+ * shortcut: the worktree read applies `.gitattributes` clean filters like `git.diff` does (open issue "Daemon git diff reads still run repository clean filters"), upgrade with that fix.
+ */
+export async function gitBlame(cwd: string, path: string, allowed: (p: string) => boolean, max: number): Promise<GitBlame | null> {
+  const p = repoPath(path);
+  const top = await topIn(cwd, allowed);
+  if (!top) return null;
+  const abs = join(top, p);
+  // A symlinked folder inside the top must not reach files outside the roots.
+  if (!allowed(real(abs))) throw new WorktreeError("cwd_not_allowed", "The file is outside the allowed roots");
+  const st = await lstat(abs).catch(() => null);
+  if (!st) throw new WorktreeError("not_found", `No such file: ${p}`);
+  if (!st.isFile()) throw new WorktreeError("not_a_file", `Not a file: ${p}`);
+  if (st.size > max) throw new WorktreeError("too_large", `larger than ${max} bytes: ${p}`, st.size);
+  try {
+    return parseBlame(await graphTask(() => g(top, ["-c", "blame.ignoreRevsFile=", "blame", "--porcelain", "--no-textconv", "--", p])));
+  } catch (e) {
+    if (/no such path .* in HEAD|no such ref: HEAD|does not have any commits/i.test((e as Error).message)) return { commits: {}, lines: [], untracked: true };
+    throw e;
+  }
 }
 
 /** `refs/heads/x` / `refs/remotes/o/x` to `x` / `o/x`. */

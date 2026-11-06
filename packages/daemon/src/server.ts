@@ -23,7 +23,7 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase } from "./git-write.ts";
@@ -2237,6 +2237,7 @@ export function createDaemon(opts: {
         case "git.log":
         case "git.diff":
         case "git.commit":
+        case "git.blame":
         case "git.fileAt": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
@@ -2250,6 +2251,7 @@ export function createDaemon(opts: {
               const c = await gitShow(cwd, msg.hash, inside);
               return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");
             }
+            if (msg.type === "git.blame") return reply({ blame: await gitBlame(cwd, msg.path, inside, MAX_FILE_BYTES) });
             const buf = await gitFileAt(cwd, msg.hash, msg.path, inside, MAX_FILE_BYTES);
             const t = decodeText(buf);
             return "code" in t ? fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length) : reply({ content: t.content });

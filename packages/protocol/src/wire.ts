@@ -250,6 +250,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.commit"; cwd: string; hash: string; exact?: true }
   /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent, `bad_request` "Submodule: open its repository" for a gitlink (submodule) path. Reply `{ content }`. */
   | { type: "git.fileAt"; cwd: string; hash: string; path: string; exact?: true }
+  /** Annotate (GH-564): `git blame` of the working-tree file (`path` relative to the repository top), so uncommitted lines come back `null`. Reply GitBlameResult. `too_large` (with `size`) over the editor read limit (2 MiB), `not_found`, `not_a_file`, `cwd_not_allowed`, `bad_request` bad path. */
+  | { type: "git.blame"; cwd: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
   | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
@@ -726,6 +728,12 @@ export type GitCommit = { hash: string; parents: string[]; author: string; email
 export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[]; refs?: string; head?: string };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
+/** `author` / `time` (author time, unix s) / `summary` of one blamed commit. */
+export type GitBlameCommit = { author: string; time: number; summary: string };
+/** `lines[i]`: full hash of the commit of line i+1, `null` = not committed. `untracked`: the file is not in HEAD (or no commit yet): `lines` empty, every line not committed. */
+export type GitBlame = { commits: Record<string, GitBlameCommit>; lines: (string | null)[]; untracked?: true };
+/** `blame` null outside a git work tree. */
+export type GitBlameResult = { blame: GitBlame | null };
 /** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). `submodule`: a gitlink (mode 160000) row; `from`/`to`: full commit recorded on the before/after side (absent: not a gitlink there, or unknown: the working-tree side). Such rows have no `added`/`removed`. */
 export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean; submodule?: { from?: string; to?: string } };
 /** `message`: full message. `refs`: always `[]` from `git.commit` (no decoration: slow with thousands of refs); the client shows the refs of the commit from `git.log`. `truncated`: more than 3000 files changed, list cut. */

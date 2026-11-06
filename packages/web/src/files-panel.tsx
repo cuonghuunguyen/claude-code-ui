@@ -6,7 +6,7 @@ import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
-import type { FsMediaResult } from "@claude-ui/protocol";
+import type { FsMediaResult, GitBlameResult, GitRepo } from "@claude-ui/protocol";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { tipMiddleClick } from "./recommendations.ts";
@@ -18,20 +18,23 @@ import { cn } from "@/lib/utils";
 import { trapTab } from "./focus-trap.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import { openContextMenuFromKey } from "./tab-menu.ts";
-import type { connect, ConnectionStatus } from "./client.ts";
+import type { connect, ConnectionStatus, RequestError } from "./client.ts";
 import { useT } from "./i18n.ts";
 import { matchesKey } from "./shortcuts.ts";
 import { useDark } from "./theme.ts";
 import { loadLanguage, syntaxStyle } from "./code-theme.ts";
-import { baseName, inDir, relPath } from "./paths.ts";
+import { baseName, inDir, relPath, repoDir } from "./paths.ts";
+import { repoOfPath } from "./file-tree-model.ts";
 import type { RepoList } from "./repo-choice.ts";
 import { MediaView } from "./media-view.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { FILE_LINK_PROPS, FileBaseContext, FileImageContext, FileLinkContext } from "./file-links.tsx";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { blameBase, blameEffects } from "./blame-gutter.ts";
+import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
-import { docText, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
+import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -64,6 +67,7 @@ export function FilesPanel({
   onShowChanges,
   repos,
   onShowGraph,
+  onOpenCommit,
   openPath,
   openLine,
   openFocus,
@@ -102,6 +106,8 @@ export function FilesPanel({
   repos?: RepoList;
   /** Show graph on a repository folder (the tree sets the repository selector first). */
   onShowGraph?: () => void;
+  /** Annotate: a click on a commit of the gutter opens it in the Graph (the repository selector set to `repo`). */
+  onOpenCommit?: (repo: GitRepo, hash: string) => void;
   openPath?: string;
   /** With `openPath`: the line to put the cursor on. */
   openLine?: number;
@@ -478,7 +484,7 @@ export function FilesPanel({
           {tr("files.loadingFile")}
         </p>
       ) : active ? (
-        <FileEditor store={store} path={active.path} cwd={cwd} client={client} viewRef={editor} onSend={onSend} onFolder={revealFolder} onLink={openLink} place={placeButton} />
+        <FileEditor store={store} path={active.path} cwd={cwd} client={client} viewRef={editor} onSend={onSend} onFolder={revealFolder} onLink={openLink} place={placeButton} repos={repos} onOpenCommit={onOpenCommit} />
       ) : (
         !treeShown && <p className="m-auto p-4 text-muted-foreground text-sm" data-testid="files-empty">{tr("files.panel.openFromTree")}</p>
       )}
@@ -499,11 +505,16 @@ export function FileEditor({
   onFolder,
   onLink,
   place,
+  repos,
+  onOpenCommit,
 }: {
   store: EditorStore;
   path: string;
   cwd: string;
   client: Client;
+  /** Annotate (GH-564): the repositories of the cwd (the toggle shows for a file inside one) and the click on a commit. */
+  repos?: RepoList;
+  onOpenCommit?: (repo: GitRepo, hash: string) => void;
   /** The mounted CodeEditor's view (Send selection reads it); one ref per mounted editor. */
   viewRef: RefObject<EditorView | undefined>;
   onSend: (mention: string) => void;
@@ -526,6 +537,37 @@ export function FileEditor({
   const previewDoc = useDeferredValue(active?.draft ?? "");
   const previewBase = useMemo(() => ({ base: path.slice(0, Math.max(path.length - baseName(path).length - 1, 1)), root: cwd }), [path, cwd]);
   useEffect(() => viewRef.current?.requestMeasure(), [view]);
+
+  // Annotate: git blame of the saved file in its own repository; re-run on a new disk version (save, outside write). Kept across tabs, not persisted.
+  const [annotate, setAnnotate] = useState(false);
+  const [blame, setBlame] = useState<{ path: string; entries: BlameEntry[] }>();
+  const [annotateNotice, setAnnotateNotice] = useState<string>();
+  const repo = onOpenCommit && repos?.list ? repoOfPath(path, repos.list, cwd) : undefined;
+  const top = repo ? repoDir(cwd, repo.rel) : undefined;
+  const rel = top ? relPath(path, top).replaceAll("\\", "/") : undefined;
+  const text = !!active && !active.media;
+  useEffect(() => {
+    setAnnotateNotice(undefined);
+    if (!annotate || !top || !rel || !text) return setBlame(undefined);
+    const tab = store.get().tabs[path];
+    if (tab && isDirty(tab)) return (setBlame(undefined), setAnnotateNotice(tr("files.annotate.saveFirst")));
+    let live = true;
+    client.request<GitBlameResult>({ type: "git.blame", cwd: top, exact: true, path: rel }).then(
+      (r) => {
+        if (!live) return;
+        const now = store.get().tabs[path];
+        if (!r.blame) return setBlame(undefined);
+        if (now && isDirty(now)) return (setBlame(undefined), setAnnotateNotice(tr("files.annotate.saveFirst")));
+        setBlame({ path, entries: blameEntries(r.blame, (now?.draft ?? "").split(/\r\n|\r|\n/).length) });
+      },
+      (e: RequestError) => {
+        if (!live) return;
+        setBlame(undefined);
+        setAnnotateNotice(e.code === "too_large" ? tr("files.annotate.tooLarge", { size: e.size === undefined ? "" : ` (${fileSize(e.size)})` }) : e.message);
+      },
+    );
+    return () => void (live = false);
+  }, [annotate, path, active?.mtime, top, rel, text]);
   if (!active) return null;
   const { save, update } = store;
   const placeHeader = place && (
@@ -605,11 +647,21 @@ export function FileEditor({
             >
               {tr("files.panel.sendSelection")}
             </Button>
+            {repo && (
+              <Button size="xs" variant="outline" aria-pressed={annotate} onClick={() => setAnnotate((a) => !a)} className="max-md:h-11 pointer-coarse:h-11" data-testid="editor-annotate">
+                {tr("files.annotate.toggle")}
+              </Button>
+            )}
             <Button size="xs" className="max-md:h-11 pointer-coarse:h-11" disabled={!isDirty(active) || !!active.conflict} onClick={() => void save(path)} data-testid="editor-save">
               {tr("files.panel.save")}
             </Button>
             {place}
           </div>
+          {annotateNotice && (
+            <p className="border-b px-2 py-1 text-muted-foreground text-xs" role="status" data-testid="annotate-notice">
+              {annotateNotice}
+            </p>
+          )}
           <div className="flex min-h-0 flex-1">
             <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
               <CodeEditor
@@ -623,6 +675,7 @@ export function FileEditor({
                 goto={goto?.path === path ? goto : undefined}
                 onGoto={store.clearGoto}
                 onSave={() => void save(path)}
+                blame={repo && onOpenCommit ? { entries: annotate && blame?.path === path ? blame.entries : null, onOpen: (hash) => onOpenCommit(repo, hash) } : undefined}
               />
             </div>
             {md && view !== "source" && (
@@ -796,6 +849,12 @@ export const chromeTheme = {
   // Gutter like the diff's: no rule, line numbers in --diffs-fg-number's mix, numbers 1ch apart from the code and at least 3ch wide.
   ".cm-gutters": { backgroundColor: "var(--card)", color: "color-mix(in lab, var(--foreground) 65%, var(--card))", borderRight: "none" },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 1ch", minWidth: "3ch" },
+  // Annotate gutter (GH-564): hash, date and author of the commit of the line, a run of one commit labelled once; 24ch (12ch below md: hash and start of the date).
+  ".cm-blame": { width: "24ch", flexShrink: "0", fontStyle: "normal" },
+  ".cm-blame .cm-gutterElement": { boxSizing: "border-box", width: "24ch", padding: "0 1ch", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  ".cm-blame-mark": { cursor: "pointer", display: "block", overflow: "hidden", textOverflow: "ellipsis", outlineOffset: "-1px" },
+  ".cm-blame-mark:focus-visible": { outline: "2px solid var(--ring)" },
+  ".cm-blame-none": { fontStyle: "italic", cursor: "default", opacity: "0.8" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--accent)" },
   ".cm-activeLineGutter": { color: "var(--foreground)" },
   // Autocomplete and other tooltips: the look of the prompt's command picker (bg-popover, border, shadow-md, rounded rows). Selected row: OpenCode's raised-hover background as --secondary plus a --foreground left bar, so keyboard selection reaches 3:1.
@@ -830,6 +889,7 @@ export const chromeTheme = {
   ".cm-button": { backgroundImage: "none", backgroundColor: "var(--secondary)", color: "var(--secondary-foreground)", border: "1px solid var(--border)", borderRadius: "4px" },
   // Go to line (Ctrl+G) dialog.
   ".cm-dialog": { backgroundColor: "var(--card)", color: "var(--foreground)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" },
+  "@media (width < 48rem)": { ".cm-blame, .cm-blame .cm-gutterElement": { width: "12ch" } },
   "@media (width < 64rem)": { ".cm-scroller": { lineHeight: "24px" } },
   // Touch: 44px targets (the repo's pointer-coarse rule). The close button joins the options row instead of narrowing the search field.
   "@media (pointer: coarse)": {
@@ -868,9 +928,12 @@ export function CodeEditor({
   goto,
   onGoto,
   store,
+  blame,
 }: {
   path: string;
   doc: string;
+  /** Annotate (GH-564): the gutter's entries (null: no gutter) and the click on a commit. */
+  blame?: { entries: BlameEntry[] | null; onOpen: (hash: string) => void };
   /** The shared editor store: the view parks its state (cursor, undo history) here on unmount and takes it back on mount. */
   store?: EditorStore;
   viewRef: RefObject<EditorView | undefined>;
@@ -889,6 +952,8 @@ export function CodeEditor({
   const reported = useRef(doc);
   const cb = useRef({ onChange, onSave, onSend });
   cb.current = { onChange, onSave, onSend };
+  const open = useRef(blame?.onOpen);
+  open.current = blame?.onOpen;
 
   const dark = useDark();
 
@@ -912,6 +977,7 @@ export function CodeEditor({
             doc,
             extensions: [
               basicSetup,
+              blameBase,
               lineBreaks(doc),
               wiringC.of(wiring()),
               languageC.of([]),
@@ -947,6 +1013,13 @@ export function CodeEditor({
     v.focus();
     onGoto?.();
   }, [goto?.key]);
+
+  // Annotate: after a remount too (the parked state keeps its markers, the host passes the current entries).
+  const entries = blame?.entries ?? null;
+  useEffect(() => {
+    const v = view.current;
+    if (v && !readOnly) v.dispatch({ effects: blameEffects(v.state.doc, entries, (h) => open.current?.(h)) });
+  }, [entries, path]);
 
   useEffect(() => view.current?.dispatch({ effects: darkC.reconfigure(EditorView.darkTheme.of(dark)) }), [dark]);
 
