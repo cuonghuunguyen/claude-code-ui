@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync, writeSync, type Dirent } from "node:fs";
 
 /** Canonical path (symlinks resolved), or undefined when it does not exist. */
 export function real(path: string) {
@@ -55,4 +55,14 @@ export function readAll(fd: number, size: number): Buffer {
 export function writeAll(fd: number, data: Buffer): void {
   let at = 0;
   while (at < data.length) at += writeSync(fd, data, at, data.length - at, at);
+}
+
+/** Entries of a canonical in-root folder; it must still be that folder after the read (no link component, same dev/ino). Else throws ECHANGED. */
+export function readdirChecked(canonical: string): Dirent[] {
+  const before = statSync(canonical, { bigint: true });
+  const entries = readdirSync(canonical, { withFileTypes: true });
+  const after = statSync(canonical, { bigint: true });
+  if (real(canonical) !== canonical || before.dev !== after.dev || before.ino !== after.ino)
+    throw Object.assign(new Error("changed during the request"), { code: "ECHANGED" });
+  return entries;
 }

@@ -1,9 +1,9 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { createJsonFile } from "./json-file.ts";
-import { APP_ICON_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -43,6 +43,13 @@ const labels = (label: string): Check => ({
   label,
   rule: `at most ${LABEL_ENTRIES_MAX} entries, each with a name (1 to ${LABEL_NAME_MAX} characters) and/or an icon (an emoji or a small png, webp or jpeg image)`,
 });
+const instruction = (v: unknown, min: number) => typeof v === "string" && v.length >= min && v.length <= COMMIT_INSTRUCTION_MAX && !v.includes("\0");
+// shortcut: the whole map is one setting and a patch replaces it (see labels); split into per-key patches if two browsers collide.
+const instructions = (label: string): Check => ({
+  valid: (v) => isObj(v) && Object.keys(v).length <= LABEL_ENTRIES_MAX && Object.entries(v).every(([k, t]) => k.length >= 1 && k.length <= 4096 && !k.includes("\0") && instruction(t, 1)),
+  label,
+  rule: `at most ${LABEL_ENTRIES_MAX} entries of 1 to ${COMMIT_INSTRUCTION_MAX} characters`,
+});
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
@@ -81,6 +88,8 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     detectSubmodulesLimit: intIn("Detect submodules limit", 0, 100),
     ignoreSubmodules: bool("Ignore submodules"),
     openRepositoryInParentFolders: { valid: (v) => (PARENT_FOLDER_MODES as readonly unknown[]).includes(v), label: "Open repository in parent folders", rule: `one of ${PARENT_FOLDER_MODES.join(", ")}` },
+    commitMessageInstruction: { valid: (v) => instruction(v, 0), label: "Commit message instruction", rule: `at most ${COMMIT_INSTRUCTION_MAX} characters` },
+    commitMessageInstructions: instructions("Commit message instructions per project"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },

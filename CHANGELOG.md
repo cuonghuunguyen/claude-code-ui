@@ -6,7 +6,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 
 ### Fixed
 
-- Tailscale: Ctrl+C on `claude-ui --tailscale`, a closed terminal or a SIGTERM no longer leaves `tailscale serve` running. The next start then refused with "served by a foreground tailscale serve/funnel command". 1.2.0 was not published to npm; this release contains it.
+- Tailscale: Ctrl+C on `claude-ui --tailscale`, a closed terminal or a SIGTERM no longer leaves `tailscale serve` running. The next start then refused with "served by a foreground tailscale serve/funnel command".
 
 ## 1.2.0 - 2026-11-05
 
