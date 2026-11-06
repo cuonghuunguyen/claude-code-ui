@@ -42,7 +42,10 @@ Feature: Claude writes the commit message of the checked files (GH-559)
     When I open Settings and choose the Git group
     And I set the commit message instruction to "Write one short line."
     And I set the commit message instruction of the project to "Answer in French."
-    And I reload the page and open Settings Git again
+    # After a reload the new-session tab picks the project with the newest activity, which can be an earlier scenario's: pick ours again.
+    And I reload the page
+    And I start a new Haiku session
+    And I open Settings and choose the Git group
     Then the commit message instruction is "Write one short line."
     And the commit message instruction of the project is "Answer in French."
     And I capture "commit-message-instructions"
