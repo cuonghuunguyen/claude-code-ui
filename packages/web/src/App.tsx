@@ -45,6 +45,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
+import { rawItems } from "./transfer.ts";
 import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -5788,8 +5789,15 @@ function PromptBox({
       setSendError((attachError.current = tr("app.prompt.attachFailed", { message: (e as Error).message })));
     }
   };
+  /** Attaches the files of a paste or drop; a folder cannot be uploaded, so it is skipped with an error. */
+  const attachFrom = (dt: DataTransfer) => {
+    const raw = rawItems(dt);
+    const files = raw.flatMap((r) => (r.entry?.isDirectory || !r.file ? [] : [r.file]));
+    void attach(files);
+    if (files.length < raw.length) setSendError((attachError.current = tr("app.prompt.attachFolder")));
+  };
   const onPaste = (e: ClipboardEvent) => {
-    if (![...e.clipboardData.files].some((f) => f.type.startsWith("image/"))) {
+    if (!e.clipboardData.files.length) {
       // Claude Code: a large text paste is one numbered chip, not text in the box. A shell command stays literal.
       const content = bash ? "" : normalizePaste(e.clipboardData.getData("text/plain") ?? "");
       if (!isLargePaste(content)) return;
@@ -5806,11 +5814,11 @@ function PromptBox({
       return;
     }
     e.preventDefault();
-    void attach(e.clipboardData.files);
+    attachFrom(e.clipboardData);
   };
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
-    void attach(e.dataTransfer.files);
+    attachFrom(e.dataTransfer);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.

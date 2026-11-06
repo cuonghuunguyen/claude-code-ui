@@ -643,6 +643,7 @@ export default {
   "app.prompt.asideNotOpened": "Chưa mở câu hỏi bên lề: {message}",
   "app.prompt.notQueued": "Chưa xếp hàng: {message}",
   "app.prompt.attachFailed": "Đính kèm thất bại: {message}",
+  "app.prompt.attachFolder": "Không thể đính kèm thư mục; hãy nhắc đến thư mục bằng @.",
   "app.prompt.attachTooBig": "Đính kèm thất bại: {name} lớn hơn {mb} MB",
   "app.prompt.alreadySent": "Đã gửi rồi",
   "app.prompt.sendNowFailed": "Gửi ngay thất bại: {message}",
