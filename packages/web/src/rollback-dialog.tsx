@@ -85,20 +85,27 @@ export function RollbackDialog({ client, cwd, exact, repoName, paths, onClose, o
   );
 }
 
-/** Right click, long press or Shift+F10 on `children` (one row) offers Rollback… for its paths; `children` becomes the trigger element. */
-export function RollbackMenu({ children, enabled, onRollback, className }: { children: ReactElement; enabled: boolean; onRollback: () => void; className?: string }) {
+/** Right click, long press or Shift+F10 on `children` (one row) offers Add to prompt (`onMention`) and Rollback… (`enabled`) for its paths; `children` becomes the trigger element. */
+export function RollbackMenu({ children, enabled, onRollback, onMention, className }: { children: ReactElement; enabled: boolean; onRollback: () => void; onMention?: () => void; className?: string }) {
   const t = useT();
   const key = useKeyContextMenu();
-  if (!enabled) return children;
+  if (!enabled && !onMention) return children;
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger render={children} {...key} />
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-2rem)]", className)}>
-            <ContextMenu.Item className={ITEM} onClick={onRollback} data-testid="row-rollback">
-              {t("files.changes.rollbackMenu")}
-            </ContextMenu.Item>
+            {onMention && (
+              <ContextMenu.Item className={ITEM} onClick={onMention} data-testid="row-mention">
+                {t("files.menu.mention")}
+              </ContextMenu.Item>
+            )}
+            {enabled && (
+              <ContextMenu.Item className={ITEM} onClick={onRollback} data-testid="row-rollback">
+                {t("files.changes.rollbackMenu")}
+              </ContextMenu.Item>
+            )}
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>

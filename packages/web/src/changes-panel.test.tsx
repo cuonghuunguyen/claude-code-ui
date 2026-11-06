@@ -12,7 +12,7 @@ import { resetPageForTests, setRecommendationHost } from "./recommendations.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
-const diff = vi.hoisted(() => ({ options: undefined as undefined | { theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
+const diff = vi.hoisted(() => ({ options: undefined as undefined | { enableLineSelection?: boolean; onLineSelected?: (r: unknown) => void; theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
   // The hunk Rollback annotations are drawn by the caller's `renderAnnotation`; the stub places them under the diff.
@@ -1595,6 +1595,67 @@ it("a hunk's Rollback sends the hunk at once, no dialog; none for an added file 
   expect(gitCalls(client, "git.rollbackHunk")).toEqual([{ type: "git.rollbackHunk", cwd: "/p", path: "a.ts", hunk: { newStart: 1, lines: [" a", "-b", "+X", " c"] } }]);
   expect(document.querySelector("[data-testid=rollback-dialog]")).toBeNull();
   expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back a change in a.ts");
+});
+
+// ---- Add to prompt, Send selection to Claude (GH-611) ----
+const mountSend = async (kind: "M" | "D", mode: "session" | "uncommitted", onSend?: (t: string) => void) => {
+  saveDiffMode(mode);
+  const git = { status: REPO, diff: D([{ status: kind, path: "a.ts", added: 1, removed: 1 }]), at: { [`${BASE}:a.ts`]: "a\nb\nc\n" } };
+  const client = fakeClient(kind === "D" ? {} : { "/p/a.ts": "a\nX\nc\n" }, git);
+  const parts = mode === "session" ? [edit("e1", "/p/a.ts", "b", "X")] : [];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} onSend={onSend} />));
+  await flush();
+};
+const menuOf = async () => {
+  const row = el.querySelector<HTMLElement>("[data-testid=changed-file]")!.parentElement!;
+  await act(async () => void row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await flush();
+  return ["row-mention", "row-rollback"].filter((id) => document.querySelector(`[data-testid=${id}]`));
+};
+
+it("a row menu in Session mode offers only Add to prompt", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  expect(await menuOf()).toEqual(["row-mention"]);
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=row-mention]")!.click());
+  expect(onSend).toHaveBeenCalledWith("@a.ts");
+});
+
+it("Uncommitted: Add to prompt and Rollback…", async () => {
+  await mountSend("M", "uncommitted", vi.fn());
+  expect(await menuOf()).toEqual(["row-mention", "row-rollback"]);
+});
+
+it("a deleted file has no Add to prompt", async () => {
+  await mountSend("D", "uncommitted", vi.fn());
+  expect(await menuOf()).toEqual(["row-rollback"]);
+});
+
+it("no row menu and no button without onSend", async () => {
+  await mountSend("M", "session");
+  expect(await menuOf()).toEqual([]);
+  expect(el.querySelector("[data-testid=diff-send-selection]")).toBeNull();
+});
+
+it("the diff header button and Alt+K send the file when no line is selected", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  const box = () => el.querySelector<HTMLElement>("[data-testid=file-diff]")!;
+  expect(diff.options).toMatchObject({ enableLineSelection: true });
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=diff-send-selection]")!.click());
+  expect(onSend).toHaveBeenLastCalledWith("@a.ts");
+  await act(async () => void box().dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", altKey: true, bubbles: true })));
+  expect(onSend).toHaveBeenCalledTimes(2);
+  await act(async () => void box().dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", altKey: true, ctrlKey: true, bubbles: true })));
+  expect(onSend).toHaveBeenCalledTimes(2);
+});
+
+it("a line selection sends the numbered diff lines", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  await act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!({ start: 2, side: "deletions", end: 2, endSide: "additions" }));
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=diff-send-selection]")!.click());
+  expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
 });
 
 // ---- Conflict banner (GH-560) ----
