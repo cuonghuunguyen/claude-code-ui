@@ -116,6 +116,11 @@ export default {
   "settings.section.focus": "Focus",
   "settings.section.usageLimit": "Usage limits",
   "settings.section.performance": "Performance",
+  "settings.section.history": "Local history",
+  "settings.row.history.enabled.label": "Keep local history",
+  "settings.row.history.enabled.hint": "Keeps the previous content of a file each time you save it, Claude edits it or a git action replaces it, so you can compare and restore it from the Timeline in Files. Up to 50 entries and 256 KB per file, stored in the daemon config folder.",
+  "settings.row.history.exclude.label": "Excluded paths",
+  "settings.row.history.exclude.hint": "Glob patterns of files that never get a history, matched on the absolute path with / separators. Example: **/dist/**.",
   "settings.section.chrome": "Claude in Chrome",
   "settings.row.chrome.enabled.label": "Claude in Chrome",
   "settings.row.chrome.enabled.hint": "Sessions can use your Chrome through the Claude in Chrome extension, like claude --chrome. Needs Chrome with the extension on the daemon's computer, signed in to the same claude.ai account as Claude Code. The first session registers the extension's connection (native messaging host) by itself. Applies to sessions started or resumed after the change; never to orchestration workers.",
@@ -169,6 +174,10 @@ export default {
   "settings.row.git.ignoreSubmodules.hint": "Ignore modifications to submodules in the file tree.",
   "settings.row.git.openRepositoryInParentFolders.label": "Open repository in parent folders",
   "settings.row.git.openRepositoryInParentFolders.hint": "Control whether a repository in parent folders of workspaces or open files should be opened. Default always (VS Code: prompt); prompt behaves as always here until a prompt exists.",
+  "settings.row.git.commitMessageInstruction.label": "Commit message instruction",
+  "settings.row.git.commitMessageInstruction.hint": "What Claude is asked when it writes a commit message for the checked files. Empty: the built-in instruction (shown grey).",
+  "settings.git.projectInstruction.label": "Commit message instruction for {project}",
+  "settings.git.projectInstruction.hint": "Only for this project; wins over the instruction above. Empty: use the instruction above.",
 
   // perf-settings.tsx
   "perf.nothingYet": "Nothing yet.",

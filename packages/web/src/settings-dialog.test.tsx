@@ -20,7 +20,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ project, legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { project?: { cwd: string; name: string }; legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -30,7 +30,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -67,6 +67,7 @@ async function render({ legacy = false, sides, docker, failGet = false, tokenRes
     return (
       <SettingsDialog
         open={open}
+        project={project}
         changed={changed}
         sides={sides}
         docker={docker}
@@ -444,7 +445,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Local history", "Git", "Jira", "Claude in Chrome", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1228,4 +1229,35 @@ it("Sides group: an SSH host row has the pencil and shows its custom name (GH-51
   expect(q("settings-side-ssh:box")?.textContent).toContain("SSH: box");
   expect(q("settings-side-ssh:box")?.querySelector("button[aria-label*='box']")).not.toBeNull();
   expect(q("settings-side-start-ssh:box")?.getAttribute("aria-checked")).toBe("false");
+});
+
+const typeText = async (el: HTMLTextAreaElement, v: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void el.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+};
+
+it("Settings › Git: the global commit message instruction shows the built-in one as placeholder and saves on blur", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const ta = q("settings-git-commitMessageInstruction-input") as HTMLTextAreaElement;
+  expect(ta.placeholder).toContain("conventional commit message");
+  expect(q("settings-git-projectInstruction")).toBeNull();
+  await typeText(ta, "  Short subject only.  ");
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageInstruction: "Short subject only." } } });
+  expect((q("settings-git-commitMessageInstruction-input") as HTMLTextAreaElement).value).toBe("Short subject only.");
+});
+
+it("Settings › Git: the project row saves the map with the key; blank removes the key and keeps the others", async () => {
+  const { q, pick, calls } = await render({ project: { cwd: "/p/app", name: "app" } });
+  await pick("git");
+  const id = "settings-git-projectInstruction";
+  expect(q(id)?.textContent).toContain("Commit message instruction for app");
+  await typeText(q(`${id}-input`) as HTMLTextAreaElement, "Use Vietnamese.");
+  const sets = () => calls.filter((c) => c.type === "settings.set");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageInstructions: { "/p/app": "Use Vietnamese." } } } });
+  await typeText(q(`${id}-input`) as HTMLTextAreaElement, "   ");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageInstructions: {} } } });
 });
