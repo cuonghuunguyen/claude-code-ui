@@ -84,16 +84,16 @@ export const ArtifactsPane = memo(function ArtifactsPane({ view, owner, label, l
     requestAnimationFrame(() => box.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')?.focus());
   };
   const list = (
-    <div role="listbox" aria-label={label} data-testid="artifacts-list" onKeyDown={key} className={cn("flex min-h-0 flex-col overflow-auto", wide ? "w-64 shrink-0 border-r" : "flex-1")}>
+    <div role="listbox" aria-label={label} data-testid="artifacts-list" onKeyDown={key} className={cn("flex min-h-0 flex-col overflow-auto", wide ? "w-48 shrink-0 border-r" : "flex-1")}>
       {rows.map((r) => (
         <button key={r.partId} type="button" role="option" aria-selected={r.partId === sel.partId} tabIndex={r.partId === sel.partId ? 0 : -1} data-testid="artifact-row" onClick={() => choose(r)} className={cn("flex min-h-11 flex-col gap-0.5 border-b px-3 py-2 text-left text-sm md:min-h-0", r.partId === sel.partId && wide ? "bg-muted" : "hover:bg-muted/50")}>
           <span className="flex items-baseline gap-2">
-            <span data-testid="artifact-row-title" className="min-w-0 flex-1 truncate font-medium">
+            <span data-testid="artifact-row-title" title={r.title} className="min-w-0 flex-1 truncate font-medium">
               {r.title}
             </span>
             {r.at !== undefined && <span className="shrink-0 text-muted-foreground text-xs">{timeAgo(r.at)}</span>}
           </span>
-          {r.fileName && r.fileName !== r.title && <span className="truncate text-muted-foreground text-xs">{r.fileName}</span>}
+          {r.fileName && r.fileName !== r.title && <span title={r.fileName} className="truncate text-muted-foreground text-xs">{r.fileName}</span>}
         </button>
       ))}
     </div>
