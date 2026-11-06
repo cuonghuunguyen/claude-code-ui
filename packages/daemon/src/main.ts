@@ -14,7 +14,8 @@ import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
 import { createDaemon } from "./server.ts";
 import { createAttachServer } from "./side-daemon.ts";
-import { attachSocketPath, claimSocket, liveInstall, prepareSockDir, runAttach } from "./side-attach.ts";
+import { attachSocketPath, claimSocket, findHub, hubBridgeScript, hubExec, liveInstall, prepareSockDir, runAttach } from "./side-attach.ts";
+import { HUB_PROBE } from "./hub-probe.ts";
 import { SIDE_SCHEMA } from "./side-frame.ts";
 import { createKeepAwake, inhibitorFor } from "./keep-awake.ts";
 import { markUsed, safeKey, sideCacheDir } from "./side-bundle.ts";
@@ -135,17 +136,24 @@ if (existsSync(join(sideCacheDir(), safeKey(version)))) markUsed(sideCacheDir(),
 /** Docker side: the container must run and gets the bundle (or this package for npm), then `docker exec -i <name> sh -c <setup script>`. */
 const spawnDocker = async (name: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
   const key = sideKey();
+  // A live Hub there with an overlapping schema is bridged through its own cli (GH-619): nothing is installed or sent.
+  const hub = runArgs !== "update" ? await findHub(() => execRun("docker", ["exec", name, "sh", "-c", HUB_PROBE], 15_000)) : undefined;
+  if (hub) return sideChild(spawn("docker", dockerExecArgs(name, hubBridgeScript(hub.exec)), { stdio: "pipe", windowsHide: true }));
   const sent = await prepareDockerSide({ name, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
   return sideChild(spawn("docker", dockerExecArgs(name, setupScript(sent.path, key, "docker", effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle, runArgs)), { stdio: "pipe", windowsHide: true }));
 };
 /** WSL side: a covered distro installs from the host's verified cached parts read through /mnt (no npm, network or compile in the distro), else from npm. */
 const spawnWsl = async (distro: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
+  const hub = runArgs !== "update" ? await findHub(() => execRun("wsl.exe", wslArgs(distro, HUB_PROBE), 30_000)) : undefined;
+  if (hub) return sideChild(spawn("wsl.exe", wslArgs(distro, hubBridgeScript(hub.exec)), { stdio: "pipe", windowsHide: true }));
   const bundle = await prepareWslSide({ distro, pkgDir: sidePackage, setup, pinned, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
   return sideChild(spawn("wsl.exe", wslArgs(distro, setupScript(sidePackage, sideKey(), "wsl", effectiveSetup(setup, bundleOnly, !!bundle), bundle, runArgs)), { stdio: "pipe", windowsHide: true }));
 };
 /** SSH side: the bundle (a covered Linux host) or the npm tarball (any other POSIX host) goes through ssh stdin, then `ssh <alias>` runs the setup script. */
 const spawnSsh = async (alias: string, setup: SideSetup, onPhase: (p: SidePhase) => void, onInstall?: (i: { bundle: true } | { fallback: string }) => void, pinned?: boolean, bundleOnly?: boolean, runArgs = attachArgs(false)): Promise<SideProcess> => {
   const key = sideKey();
+  const hub = runArgs !== "update" ? await findHub(() => execRun("ssh", sshArgs(alias, HUB_PROBE, [], sshConfig), 30_000)) : undefined;
+  if (hub) return sideChild(spawn("ssh", sshArgs(alias, hubBridgeScript(hub.exec), [], sshConfig), { stdio: "pipe", windowsHide: true }));
   // A reattach installs and starts nothing: it only bridges to the Hub that runs (setup never: no probe, no bundle).
   const sent = await prepareSshSide({ alias, config: sshConfig, pkgDir: sidePackage, key, cacheDir: join(configDir(), "side-pack"), setup, pinned, bundleOnly, onPhase, onInstall, bundle: { cacheRoot: sideCacheDir(), version, registry } });
   return sideChild(spawn("ssh", sshArgs(alias, setupScript(sent.path, key, "ssh", sent.never ? "never" : effectiveSetup(setup, bundleOnly, !!sent.bundle), sent.bundle, runArgs), [], sshConfig), { stdio: "pipe", windowsHide: true }));
@@ -274,9 +282,9 @@ server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   const owned = await attachOwned;
   // Without the socket, the live Hub that owns it stays the one bridges find (this write must not hide its `attach`).
   const prev = owned ? undefined : readDaemonFile(dir);
-  const keptAttach = prev && prev.attach && pidAlive(prev.pid) ? { attach: prev.attach, ...(prev.schema && { schema: prev.schema }) } : {};
+  const keptAttach = prev && prev.attach && pidAlive(prev.pid) ? { attach: prev.attach, ...(prev.schema && { schema: prev.schema }), ...(prev.exec && { exec: prev.exec }) } : {};
   try {
-    process.on("exit", claimDaemonFile(dir, { port: actual, pid: process.pid, version, startedAt: new Date().toISOString(), ...(owned && attachSock ? { attach: attachSock, schema: [...SIDE_SCHEMA] as [number, number] } : keptAttach), ...(startedBy && { startedBy }) }));
+    process.on("exit", claimDaemonFile(dir, { port: actual, pid: process.pid, version, startedAt: new Date().toISOString(), ...(owned && attachSock ? { attach: attachSock, schema: [...SIDE_SCHEMA] as [number, number], exec: hubExec() } : keptAttach), ...(startedBy && { startedBy }) }));
   } catch (e) {
     console.error(`claude-ui: cannot write daemon.json: ${(e as Error).message}`);
   }

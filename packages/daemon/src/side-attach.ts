@@ -5,6 +5,8 @@ import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { readDaemonFile } from "./ctl/daemon-file.ts";
 import { pidAlive } from "./ctl/connect.ts";
+import { parseHub, type Hub } from "./hub-probe.ts";
+import { shq } from "./sides.ts";
 import type { Readable, Writable } from "node:stream";
 
 /** Where a Hub accepts attaching Hubs (ADR 0009): next to its `daemon.json`, else a shorter folder when the path does not fit `sun_path`. */
@@ -120,4 +122,20 @@ export async function runAttach(o: { dir: string; stdin: Readable; stdout: Writa
     o.stdin.on("end", () => sock.end());
     o.stdin.on("error", () => sock.destroy());
   });
+}
+
+/** `[node, ...execArgv, cli.js]` of this process, for daemon.json `exec` (GH-619). Debugger flags are dropped: a bridge replaying `--inspect` would clash on its port. */
+export const hubExec = () => [process.execPath, ...process.execArgv.filter((a) => !/^--(inspect|debug)/.test(a)), process.argv[1]!];
+
+/** Runs the bridge of the Hub there: every word quoted, no `--start` (when that Hub is gone, the row gets `no_daemon` and the next start probes again). */
+export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" ")} side --attach`;
+
+/** The Hub that `run` (a probe through the Side's transport) finds; any failure counts as no Hub: the install path then reports the real error. */
+export async function findHub(run: () => Promise<{ stdout: string }>): Promise<Hub | undefined> {
+  try {
+    // The exit code is not read: the probe ends non-zero when no Hub runs.
+    return parseHub((await run()).stdout);
+  } catch {
+    return undefined;
+  }
 }

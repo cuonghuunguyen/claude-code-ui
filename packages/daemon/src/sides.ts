@@ -19,6 +19,7 @@ import { SideGone } from "./wsl-git.ts";
 import { kindOf, nameOf, NOUN, sideTarget, startOptIn } from "./side-kinds.ts";
 import { archOf, isDarwin, safeKey, type BundleTarget } from "./side-bundle.ts";
 import { bundleParts, installMethodOf, NVM_LINE, parseTarget, sideBuild, TARGET_PROBE_LINES, TARGET_PROBE_LINES_POSIX, USABLE_NODE_FN, VER_FN, type ContainerTarget } from "./side-bundle.ts";
+import { HUB_PROBE, parseHub } from "./hub-probe.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame, schemaOverlap, SIDE_SCHEMA, type Schema } from "./side-frame.ts";
@@ -349,7 +350,7 @@ export const hasBuild = (pkgDir: string, docker: boolean) => existsSync(join(pkg
 /**
  * Read-only script for `side.check`, run where the setup script runs (same shell, same nvm): prints `CLAUDE_UI_CHECK <k>=<v>` lines
  * (node, make, python3, cxx, package [wsl], writable [docker], then installed and installedKey). It never installs,
- * writes, copies, starts the side, reads a file's contents or prints an environment variable's value: HOME, PATH and NVM_DIR only
+ * writes, copies, starts the side, reads a file's contents (but `daemon.json`: port, pid, version, socket path, schema, exec; no token) or prints an environment variable's value: HOME, PATH and NVM_DIR only
  * name places (a writable home folder is reported as the text $HOME).
  */
 export function checkScript(key: string, kind: "wsl" | "docker" | "ssh", source = "") {
@@ -387,6 +388,8 @@ export function checkScript(key: string, kind: "wsl" | "docker" | "ssh", source 
     '  elif [ -d "$dir" ]; then emit installed other; emit installedKey "${dir##*/}"',
     "  else emit installed none; fi",
     "fi",
+    // A live Hub there (GH-619): the one file this script reads, daemon.json.
+    HUB_PROBE,
     // An SSH host may run anything: the probe of its OS tells a Windows host (not supported) from a POSIX one.
     ...(host ? ['emit os "$(uname -s 2>/dev/null)"'] : []),
   ].join("\n");
@@ -409,6 +412,8 @@ type Checked = {
   target?: ContainerTarget;
   tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
   bundled?: boolean;
+  /** A live Hub there that a start bridges through (GH-619). */
+  hub?: { version: string };
 };
 
 /** The `CLAUDE_UI_CHECK` lines of a check script's output (other lines are shell start-up noise); undefined when the script did not get to its last line. */
@@ -422,6 +427,7 @@ export function parseCheck(out: string): Checked | undefined {
   if (inst !== "current" && inst !== "other" && inst !== "none") return undefined;
   const node = kv.get("node");
   const flag = (k: string) => kv.get(k) === "1";
+  const hub = parseHub(out);
   return {
     ...(node && node !== "none" && { node }),
     ...(kv.has("foundnode") && { foundNode: flag("foundnode") }),
@@ -434,6 +440,7 @@ export function parseCheck(out: string): Checked | undefined {
     ...(kv.get("installedKey") && { installedKey: kv.get("installedKey") }),
     ...(kv.has("arch") && { target: parseTarget(out), tools: { tar: flag("tar"), gzip: flag("gzip"), npm: flag("npm"), git: flag("git"), cxxRuntime: flag("cxxrt") } }),
     ...(kv.has("bundled") && { bundled: flag("bundled") }),
+    ...(hub && { hub: { version: hub.version } }),
   };
 }
 
@@ -493,7 +500,10 @@ export function verdictOf(o: { key: string; label: string; kind: "wsl" | "docker
     ...(c.tools && { tools: c.tools }),
     ...(o.network !== undefined && { network: o.network }),
     ...(c.bundled !== undefined && { bundled: c.bundled }),
+    ...(c.hub && { hub: c.hub }),
   };
+  // A bridge through the Hub there needs no build, Node.js or build tools of ours.
+  if (c.hub) return { verdict: "installed", key, facts };
   // A Node.js or build-tools block on the npm path says why the bundle is not used.
   const why = o.install?.method === "npm" && o.install.reason ? ` (claude-ui installs with npm here: ${o.install.reason}.)` : "";
   const blocked = (reason: SideCheckReason, detail?: string): SideCheck => ({ verdict: "blocked", reason, message: checkMessage(reason, label, { docker, detail, name: o.name, noun: o.noun }) + (reason === "node_missing" || reason === "node_old" || reason === "build_tools_missing" ? why : ""), key, facts });
