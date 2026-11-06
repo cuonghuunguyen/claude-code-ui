@@ -1,7 +1,7 @@
 // Plan usage meter (Claude Code /usage): the headline window (the worst one when warning) as ring + percent in the titlebar; click shows every window with its reset time.
 import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
 import { Ring } from "./context-meter.tsx";
 import { dateFormat, t, useT } from "./i18n.ts";
@@ -76,9 +76,14 @@ function headline(windows: PlanWindow[], level: PlanLevel) {
   return worst.reduce((a, w) => (w.percent > a.percent ? w : a), worst[0]!) ?? windows.find((w) => w.active) ?? windows[0];
 }
 
+/** The Claude accounts the ring's popover can switch to (GH-615). `active`: the setting (`""` Default, `"cli"`, a token account's id). `envToken`: Default is a token of the daemon's environment (else Default and CLI login are the same login). */
+export type PlanAccounts = { accounts: { id: string; name: string }[]; active: string; envToken: boolean; onSwitch: (id: string) => void; onManage?: () => void };
+
 /** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
-export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bottom" }) {
+export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "top" | "bottom"; switcher?: PlanAccounts }) {
   const t = useT();
+  const choices = switcher ? [...(switcher.envToken ? [{ id: "", name: t("app.plan.accountDefault") }] : []), { id: "cli", name: t("app.plan.accountCli") }, ...switcher.accounts] : [];
+  const canSwitch = choices.length > 1;
   const limited = usage.status === "rejected";
   // Mounted only while open: "in 2h 5m" stays current while it shows.
   const now = useNow(15_000, true);
@@ -93,15 +98,20 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
           <Popover.Title className="font-medium">{t("app.plan.name")}</Popover.Title>
           {usage.plan && <span className="text-muted-foreground text-xs">{t("app.plan.planName", { plan: `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)}` })}</span>}
         </div>
+        {usage.account && (
+          <p data-testid="plan-account" className="mt-1 text-muted-foreground text-xs">
+            {t("app.plan.account", { name: usage.account })}
+          </p>
+        )}
         {usage.auth === "oauth_token" && (
           <p data-testid="plan-auth-note" className="mt-2 text-muted-foreground text-xs">
-            {usage.windows.length ? t("app.plan.oauthPartial") : `${t("app.plan.oauthUnavailable")}. ${t("app.plan.oauthNote")}`}
+            {usage.windows.length ? t("app.plan.oauthPartial") : `${t("app.plan.oauthUnavailable")}. ${usage.account ? t("app.plan.oauthAccountNote") : t("app.plan.oauthNote")}`}
           </p>
         )}
         {limited && (
           <p data-testid="plan-limit" className="mt-2 flex items-start gap-1.5 text-destructive text-xs">
             <TriangleAlertIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-            {`${limitText(usage)}.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt, now)}` : ""}`}
+            {`${limitText(usage)}.${usage.statusResetsAt ? ` ${resetText(usage.statusResetsAt, now)}` : ""}${canSwitch ? ` ${t("app.plan.switchHint")}` : ""}`}
           </p>
         )}
         {usage.windows.length > 0 && <ul className="mt-3 flex flex-col gap-3">
@@ -123,13 +133,34 @@ export function PlanPopup({ usage, side }: { usage: PlanUsage; side: "top" | "bo
             );
           })}
         </ul>}
+        {canSwitch && (
+          <div data-testid="plan-accounts" className="mt-3 border-t pt-2">
+            <p className="mb-1 text-muted-foreground text-xs">{t("app.plan.switchAccount")}</p>
+            <div role="radiogroup" aria-label={t("app.plan.accountsLabel")} className="flex flex-col">
+              {choices.map((c) => {
+                const on = c.id === switcher!.active || (!switcher!.envToken && switcher!.active === "" && c.id === "cli");
+                return (
+                  <button key={c.id || "default"} type="button" role="radio" aria-checked={on} data-testid="plan-account-option" onClick={() => !on && switcher!.onSwitch(c.id)} className="flex h-8 items-center gap-2 rounded-md px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11">
+                    <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                    {on && <CheckIcon className="size-3.5 shrink-0" aria-hidden />}
+                  </button>
+                );
+              })}
+            </div>
+            {switcher!.onManage && (
+              <button type="button" data-testid="plan-manage-accounts" onClick={switcher!.onManage} className="mt-1 h-8 rounded-md px-2 text-muted-foreground text-xs underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11">
+                {t("app.plan.manageAccounts")}
+              </button>
+            )}
+          </div>
+        )}
       </Popover.Popup>
     </Popover.Positioner>
   </Popover.Portal>
   );
 }
 
-export function PlanMeter({ usage }: { usage: PlanUsage }) {
+export function PlanMeter({ usage, switcher }: { usage: PlanUsage; switcher?: PlanAccounts }) {
   const t = useT();
   const level = planLevel(usage);
   // Settings > Usage limits > Usage ring shows: the number and ring follow the chosen window; level, color and icon stay with the worst one.
@@ -141,11 +172,12 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
     : unavailable
       ? t("app.plan.oauthUnavailable")
       : t("app.plan.summaryWindow", { name: NAME[level](), window: head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : t("app.plan.noWindows") });
+  const named = usage.account ? `${usage.account}: ${summary}` : summary;
   return (
     <Popover.Root>
       <Popover.Trigger
-        aria-label={t("app.plan.showDetails", { summary })}
-        title={summary}
+        aria-label={t("app.plan.showDetails", { summary: named })}
+        title={named}
         data-testid="plan-meter"
         data-level={level}
         data-unavailable={unavailable || undefined}
@@ -159,7 +191,7 @@ export function PlanMeter({ usage }: { usage: PlanUsage }) {
         )}
         {head ? `${head.percent}%` : "–"}
       </Popover.Trigger>
-      <PlanPopup usage={usage} side="bottom" />
+      <PlanPopup usage={usage} side="bottom" switcher={switcher} />
     </Popover.Root>
   );
 }

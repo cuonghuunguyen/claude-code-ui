@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -58,4 +58,31 @@ it("bindJiraToken binds a token saved without URL in one write and never rebinds
   s.bindJiraToken("https://b.example.com");
   expect(s.jiraTokenOrigin()).toBe("https://a.example.com");
   expect(s.jiraToken("https://a.example.com")).toBe("tok");
+});
+
+it("Claude token accounts: add, list without tokens, remove; invalid name or token refused; the file is 0600 (GH-615)", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "secrets-")), "secrets.json");
+  const s = createSecrets({ file });
+  const id = s.addClaudeAccount("Work", "sk-ant-oat01-TESTSECRET");
+  expect(s.claudeAccounts()).toEqual([{ id, name: "Work" }]);
+  expect(JSON.stringify(s.claudeAccounts())).not.toContain("TESTSECRET");
+  expect(s.claudeToken(id)).toBe("sk-ant-oat01-TESTSECRET");
+  expect(createSecrets({ file }).claudeToken(id)).toBe("sk-ant-oat01-TESTSECRET");
+  if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+  expect(() => s.addClaudeAccount("", "tok")).toThrow(/name/);
+  expect(() => s.addClaudeAccount("A\nB", "tok")).toThrow(/name/);
+  expect(() => s.addClaudeAccount("x", "has space")).toThrow(/token/);
+  s.removeClaudeAccount(id);
+  expect(s.claudeAccounts()).toEqual([]);
+  expect(s.claudeToken(id)).toBeUndefined();
+});
+
+it("Claude accounts and the Jira token live side by side in the file", () => {
+  const s = createSecrets({ file: join(mkdtempSync(join(tmpdir(), "secrets-")), "secrets.json") });
+  const id = s.addClaudeAccount("A", "tok-a");
+  s.setJiraToken("jira-tok", "https://example.com");
+  expect(s.jiraToken("https://example.com")).toBe("jira-tok");
+  expect(s.claudeToken(id)).toBe("tok-a");
+  s.setJiraToken(null);
+  expect(s.claudeToken(id)).toBe("tok-a");
 });

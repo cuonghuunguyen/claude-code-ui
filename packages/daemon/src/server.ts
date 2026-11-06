@@ -31,6 +31,8 @@ import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
+import { claudeBin } from "./claude-bin.ts";
+import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
@@ -314,6 +316,8 @@ export function createDaemon(opts: {
   pingMs?: number;
   /** The Claude login is CLAUDE_CODE_OAUTH_TOKEN (plan-usage.ts fallback); default: whether the env var is set. Never its value. */
   oauthToken?: boolean;
+  /** Test seam: the program `terminal.create {login}` runs (default: the SDK's bundled Claude CLI, called with `auth login`). */
+  claudeBin?: string;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
@@ -362,7 +366,7 @@ export function createDaemon(opts: {
     }
   };
   // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? usesOauthToken() });
+  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? (() => usesOauthToken(claudeEnv())), account: () => accountName() });
   /** Options of every session: settings changes are saved under its ID. */
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
@@ -426,7 +430,21 @@ export function createDaemon(opts: {
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
-  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
+  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), claudeAccounts: secrets.claudeAccounts(), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
+  /** The Claude account of the settings as the CLI env takes it: undefined = Default, null = CLI login, a token; an unknown id (removed, hand edit) is Default. */
+  const accountToken = () => {
+    const a = appSettings.get().claude.account;
+    return a === "cli" ? null : a ? secrets.claudeToken(a) : undefined;
+  };
+  const accountName = () => {
+    const a = appSettings.get().claude.account;
+    return a === "cli" ? "CLI login" : a ? secrets.claudeAccounts().find((x) => x.id === a)?.name : undefined;
+  };
+  setClaudeToken(accountToken());
+  const broadcastSettings = (settings = appSettings.get()) => {
+    const r = settingsReply(settings);
+    broadcast({ type: "settings_changed", settings, jiraToken: r.jiraToken, claudeAccounts: r.claudeAccounts });
+  };
   // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
   const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });
   setPerf(perfMon);
@@ -487,7 +505,7 @@ export function createDaemon(opts: {
   });
   const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
   const root = resolve(opts.webRoot);
-  // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
+  // Model list cached until the Claude login or account changes (claudeLoginChanged).
   let models: ReturnType<typeof listModels> | undefined;
   // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo awaits modelList() first.
   let known: ModelInfo[] = [];
@@ -496,6 +514,14 @@ export function createDaemon(opts: {
       models = undefined;
       throw e;
     });
+  /** The Claude login or account changed: models, plan usage and live CLIs are read again. */
+  const claudeLoginChanged = () => {
+    models = undefined;
+    known = [];
+    for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
+    void plan.reset();
+    broadcast({ type: "config.changed", kind: "models", cwd: "" });
+  };
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
   /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
@@ -670,14 +696,14 @@ export function createDaemon(opts: {
     if (local !== localWas) (localWas = local), opts.onRunning?.(local);
     opts.keepAwake?.update(appSettings.get().power.keepAwake && (local || !!opts.sides?.anyRunning()));
   };
-  opts.keepAwake?.onStatus(() => broadcast({ type: "settings_changed", settings: appSettings.get(), jiraToken: settingsReply().jiraToken }));
+  opts.keepAwake?.onStatus(() => broadcastSettings());
   opts.sides?.onRunning(syncRunning);
   // GH-518: the last sleep found while a session ran; each new connection gets it once.
   let slept: Slept | undefined;
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -2043,9 +2069,32 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
-          const r = settingsReply();
-          broadcast({ type: "settings_changed", settings: r.settings, jiraToken: r.jiraToken });
-          return reply(r);
+          broadcastSettings();
+          return reply(settingsReply());
+        }
+        case "claude.account.add": {
+          if (typeof msg.name !== "string" || typeof msg.token !== "string") return fail("bad_settings", "name and token must be strings");
+          try {
+            secrets.addClaudeAccount(msg.name.trim(), msg.token.trim());
+          } catch (err) {
+            return fail("bad_settings", (err as Error).message);
+          }
+          broadcastSettings();
+          return reply(settingsReply());
+        }
+        case "claude.account.remove": {
+          if (typeof msg.id !== "string") return fail("bad_settings", "id must be a string");
+          try {
+            const active = appSettings.get().claude.account === msg.id;
+            secrets.removeClaudeAccount(msg.id);
+            if (active) appSettings.set({ claude: { account: "" } });
+            setClaudeToken(accountToken());
+            if (active) claudeLoginChanged();
+          } catch (err) {
+            return fail("bad_settings", (err as Error).message);
+          }
+          broadcastSettings();
+          return reply(settingsReply());
         }
         case "jira.test":
         case "jira.search": {
@@ -2059,7 +2108,11 @@ export function createDaemon(opts: {
         }
         case "settings.set": {
           try {
+            const picked = msg.patch?.claude?.account;
+            if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
+            const before = appSettings.get().claude.account;
             const settings = appSettings.set(msg.patch);
+            if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
             const urlPatched = msg.patch?.jira?.url !== undefined;
             // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of another origin is dropped (cleanup, it is never sent anyway).
@@ -2072,7 +2125,7 @@ export function createDaemon(opts: {
             perfMon.setEnabled(settings.performance.monitor);
             if (!settings.power.keepAwake) opts.keepAwake?.reset();
             syncRunning();
-            broadcast({ type: "settings_changed", settings, jiraToken: settingsReply(settings).jiraToken });
+            broadcastSettings(settings);
             return reply(settingsReply(settings));
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
@@ -2720,10 +2773,12 @@ export function createDaemon(opts: {
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
           if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
+          if (msg.login !== undefined && msg.login !== true) return fail("bad_request", "login must be true");
           const full = terminals.limit(ws);
           if (full) return fail("too_many_terminals", full);
           try {
-            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws) });
+            const login = msg.login && { file: opts.claudeBin ?? claudeBin(), args: ["auth", "login"], title: "Claude login", onExit: (code: number) => code === 0 && claudeLoginChanged() };
+            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws, login || undefined) });
           } catch (err) {
             return fail("spawn_failed", String(err));
           }

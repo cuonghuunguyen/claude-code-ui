@@ -85,13 +85,17 @@ export function eventWindows(w: UnifiedWindows | undefined, now = Date.now()): P
 export function createPlanTracker({
   onChange,
   read = async () => {},
-  oauthToken = false,
+  oauthToken: oauthSetting = false,
+  account = () => undefined,
 }: {
   onChange: (u: PlanUsage | null) => void;
   read?: () => Promise<void>;
   /** The Daemon's login is CLAUDE_CODE_OAUTH_TOKEN (presence only). */
-  oauthToken?: boolean;
+  oauthToken?: boolean | (() => boolean);
+  /** Name of the active Claude account (GH-615), absent for Default. */
+  account?: () => string | undefined;
 }) {
+  const oauthToken = () => (typeof oauthSetting === "function" ? oauthSetting() : oauthSetting);
   let usage: PlanUsage | null | undefined;
   let status: Pick<PlanUsage, "status" | "statusResetsAt" | "statusLimit"> = { status: "allowed" };
   let statusRead = 0;
@@ -104,10 +108,13 @@ export function createPlanTracker({
   let fallback = false;
   const fromEvents = (plan: string | null): PlanUsage | null => {
     const windows = eventWindows(headers);
-    if (!windows && !oauthToken) return null;
-    return { plan, windows: windows ?? [], status: "allowed", ...(oauthToken && { auth: "oauth_token" as const }) };
+    if (!windows && !oauthToken()) return null;
+    return { plan, windows: windows ?? [], status: "allowed", ...(oauthToken() && { auth: "oauth_token" as const }) };
   };
-  const current = () => (usage ? { ...usage, ...status } : usage);
+  const current = () => {
+    const name = account();
+    return usage ? { ...usage, ...status, ...(name && { account: name }) } : usage;
+  };
   /** One read at a time: a burst of callers shares it. */
   const reread = () => (pending ??= read().catch((err) => console.error("plan usage failed:", err)).finally(() => (pending = undefined)));
   // The CLI sends rate_limit_event and usage only during a turn: nothing else ends a limit while idle.
@@ -138,7 +145,7 @@ export function createPlanTracker({
       const r = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
       if (n !== request) return;
       let u = planUsage(r);
-      fallback = u === null || (u === undefined && oauthToken && (usage === undefined || fallback));
+      fallback = u === null || (u === undefined && oauthToken() && (usage === undefined || fallback));
       if (fallback) u = fromEvents(r.subscription_type);
       if (u === undefined) return;
       usage = u;
@@ -151,6 +158,23 @@ export function createPlanTracker({
   }
 
   return {
+    /** Login or account changed: drops the readings, shows an empty ring (never null: it hides the meter) and reads again. */
+    reset() {
+      const had = !!usage;
+      request++;
+      usage = undefined;
+      headers = undefined;
+      // A token account cannot read plan limits: its windows come from rate_limit_events until a read says otherwise.
+      fallback = oauthToken();
+      pending = undefined;
+      status = { status: "allowed" };
+      arm();
+      if (had) {
+        usage = fromEvents(null) ?? { plan: null, windows: [], status: "allowed" };
+        onChange(current()!);
+      }
+      return reread();
+    },
     /** Undefined until the first answer. */
     current,
     refresh,

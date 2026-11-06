@@ -30,12 +30,13 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
   let jiraToken = false;
   let jiraTokenReset = tokenReset;
+  let claudeAccounts: { id: string; name: string }[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (failGet && msg.type === "settings.get") throw new Error("daemon unreachable");
@@ -49,7 +50,9 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
     if (msg.type === "jira.test") return { user: "Ann Example" };
-    return { settings, ...(daemon && { daemon }), jiraToken, ...(jiraTokenReset && { jiraTokenReset: true }) };
+    if (msg.type === "claude.account.add") claudeAccounts = [...claudeAccounts, { id: `a${claudeAccounts.length + 1}`, name: msg.name }];
+    if (msg.type === "claude.account.remove") claudeAccounts = claudeAccounts.filter((a) => a.id !== msg.id);
+    return { settings, ...(daemon && { daemon }), claudeAccounts, jiraToken, ...(jiraTokenReset && { jiraTokenReset: true }) };
   });
   const el = document.createElement("div");
   const prompt = document.createElement("textarea");
@@ -446,7 +449,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Local history", "Git", "Jira", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "Focus", "Usage limits", "Local history", "Claude account", "Git", "Jira", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1302,4 +1305,27 @@ it("Settings › Git: the project row saves the map with the key; blank removes 
   expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageInstructions: { "/p/app": "Use Vietnamese." } } } });
   await typeText(q(`${id}-input`) as HTMLTextAreaElement, "   ");
   expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageInstructions: {} } } });
+});
+
+it("Claude account (GH-615): add clears the token field and lists the account with Token set, never a token; Remove deletes it", async () => {
+  const { q, pick, calls } = await render();
+  await pick("account");
+  const type = async (id: string, v: string) => {
+    const input = q(id) as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  expect((q("settings-account-token") as HTMLInputElement).type).toBe("password");
+  await type("settings-account-name", "Work");
+  await type("settings-account-token", "sk-ant-oat01-TESTSECRET");
+  await act(async () => q("settings-account-add")!.click());
+  expect(calls.find((c) => c.type === "claude.account.add")).toEqual({ type: "claude.account.add", name: "Work", token: "sk-ant-oat01-TESTSECRET" });
+  expect((q("settings-account-token") as HTMLInputElement).value).toBe("");
+  expect(q("settings-account-token-set")!.textContent).toBe("Token set");
+  expect(q("settings-account")!.textContent).not.toContain("TESTSECRET");
+  await act(async () => q("settings-account-remove")!.click());
+  expect(calls.find((c) => c.type === "claude.account.remove")).toEqual({ type: "claude.account.remove", id: "a1" });
+  expect(q("settings-account-token-set")).toBeNull();
 });

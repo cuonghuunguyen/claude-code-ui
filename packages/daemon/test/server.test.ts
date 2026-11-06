@@ -16,6 +16,7 @@ import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { createProjects } from "../src/projects.ts";
+import { createSecrets } from "../src/secrets.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
@@ -607,6 +608,86 @@ describe("daemon", () => {
       const c = await client((d.address() as AddressInfo).port);
       const modes = allowBypass ? ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] : ["default", "acceptEdits", "plan", "dontAsk"];
       expect(await c.request({ type: "session.list" })).toMatchObject({ result: { permissionModes: modes } });
+      d.close();
+    }
+  });
+
+  it.runIf(posix)("terminal.create login runs the CLI login; exit 0 drops the model cache and tells clients, a failed login does not", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "login-"));
+    const ok = join(dir, "ok.sh");
+    const bad = join(dir, "bad.sh");
+    writeFileSync(ok, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(bad, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const daemon = (claudeBin: string) => createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, claudeBin, history: { listSessions: (async () => []) as never } as never });
+    for (const [bin, changed] of [[ok, true], [bad, false]] as const) {
+      const d = daemon(bin);
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "models.list" });
+      const before = calls.length;
+      const t = ((await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24, login: true })) as { result: { terminal: { title: string; login?: boolean } } }).result.terminal;
+      expect(t).toMatchObject({ title: "Claude login", login: true });
+      if (changed) await c.waitFor((m) => m.type === "config.changed" && m.kind === "models");
+      else await new Promise((r) => setTimeout(r, 1500));
+      await c.request({ type: "models.list" });
+      // A login also re-reads plan usage (one more query), so only 'grew' vs 'did not grow'.
+      expect(calls.length > before).toBe(changed);
+      expect(c.inbox.some((m) => m.type === "config.changed" && m.kind === "models")).toBe(changed);
+      c.ws.close();
+      d.close();
+    }
+    const d = daemon(ok);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24, login: "x" } as never)).toMatchObject({ type: "error", code: "bad_request" });
+    c.ws.close();
+    d.close();
+  });
+
+  it("Claude accounts: a pick restarts the idle CLI with the token (CLI login: none), plan usage names the account, no token reaches any frame or settings (GH-615)", async () => {
+    const SECRET = "sk-ant-oat01-TESTSECRET";
+    const prev = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "inherited-env-token";
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, history: { listSessions: (async () => []) as never } as never, secrets: createSecrets(), appSettings: createSettings() });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const port = (d.address() as AddressInfo).port;
+    const a = await client(port);
+    const b = await client(port);
+    try {
+      const added = (await a.request({ type: "claude.account.add", name: "Work", token: SECRET })) as { result: { claudeAccounts: { id: string; name: string }[] } };
+      const id = added.result.claudeAccounts[0]!.id;
+      expect(added.result.claudeAccounts).toEqual([{ id, name: "Work" }]);
+      expect(await a.request({ type: "claude.account.add", name: "x", token: "has space" })).toMatchObject({ code: "bad_settings" });
+      expect(await a.request({ type: "settings.set", patch: { claude: { account: "nope" } } })).toMatchObject({ code: "bad_settings" });
+
+      const created = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+      const sid = created.result.session.id;
+      await a.request({ type: "session.subscribe", sessionId: sid, sinceSeq: 0 });
+      const turn = async () => {
+        const seen = a.inbox.filter((m) => m.type === "event" && m.part.type === "turn_result").length;
+        await a.request({ type: "session.prompt", sessionId: sid, text: "hi" });
+        await a.waitFor(() => a.inbox.filter((m) => m.type === "event" && m.part.type === "turn_result").length > seen);
+        return calls.filter((o) => o.canUseTool).at(-1)!.env!;
+      };
+      expect((await turn()).CLAUDE_CODE_OAUTH_TOKEN).toBe("inherited-env-token");
+      await a.request({ type: "settings.set", patch: { claude: { account: id } } });
+      expect((await turn()).CLAUDE_CODE_OAUTH_TOKEN).toBe(SECRET);
+      await b.waitFor((m) => m.type === "plan_usage" && m.usage?.account === "Work");
+      await a.request({ type: "settings.set", patch: { claude: { account: "cli" } } });
+      expect(await turn()).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+      await b.waitFor((m) => m.type === "plan_usage" && m.usage?.account === "CLI login");
+      // Removing the active account falls back to Default.
+      await a.request({ type: "settings.set", patch: { claude: { account: id } } });
+      const removed = await a.request({ type: "claude.account.remove", id });
+      expect(removed).toMatchObject({ result: { settings: { claude: { account: "" } }, claudeAccounts: [] } });
+      expect((await turn()).CLAUDE_CODE_OAUTH_TOKEN).toBe("inherited-env-token");
+      expect((await a.request({ type: "settings.get" })).type).toBe("reply");
+      for (const c of [a, b]) expect(JSON.stringify(c.inbox)).not.toContain("TESTSECRET");
+    } finally {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = prev;
+      if (prev === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      a.ws.close();
+      b.ws.close();
       d.close();
     }
   });

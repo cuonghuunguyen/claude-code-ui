@@ -8,7 +8,8 @@ import { createRequire } from "node:module";
 import { query as sdkQuery, type McpServerStatus, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInfo, SkillHandles, SkillRow, SkillsResult, SkillsSetStateResult } from "@claude-ui/protocol";
 import { redact } from "./plugins.ts";
-import { openQuery, THROWAWAY_TIMEOUT_MS, withoutApiKeys } from "./session.ts";
+import { claudeEnv } from "./claude-env.ts";
+import { openQuery, THROWAWAY_TIMEOUT_MS } from "./session.ts";
 
 /** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
 /** `timeoutMs`: default 30 s; commands that fetch from git pass more. */
@@ -67,7 +68,7 @@ export const timeoutMessage = (ms: number) => `Claude CLI timed out after ${ms >
 export const runCli: CliRunner = (args, cwd, stdin, timeoutMs = CLI_TIMEOUT_MS) =>
   new Promise((resolve, reject) => {
     // Set when the daemon itself was started from a Claude Code session: `edit-skill-overrides` then refuses ("cannot be changed from an editor started inside a Claude Code session").
-    const { CLAUDE_CODE_CHILD_SESSION: _child, ...env } = withoutApiKeys(process.env);
+    const { CLAUDE_CODE_CHILD_SESSION: _child, ...env } = claudeEnv();
     const child = execFile(claudeBin(), args, { cwd, env, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err?.killed) return reject(new ConfigError("cli_timeout", timeoutMessage(timeoutMs)));
       if (err && typeof err.code !== "number") return reject(new ConfigError("cli_failed", err.message));

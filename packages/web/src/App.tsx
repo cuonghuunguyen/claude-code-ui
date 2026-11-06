@@ -108,6 +108,7 @@ import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanu
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
 import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
+import { ClaudeLoginContext, RawPart } from "./raw-part.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -463,6 +464,10 @@ export function App() {
   /** GH-523: Keep computer awake; undefined until settings.get answers or on an older daemon. */
   /** GH-514: Claude in Chrome setting; undefined on a daemon without it. */
   const [chromeOn, setChromeOn] = useState<boolean>();
+  /** Claude account (GH-615): the setting, the saved token accounts (no tokens) and whether Default is a token of the daemon's environment. */
+  const [claudeAccount, setClaudeAccount] = useState("");
+  const [claudeAccounts, setClaudeAccounts] = useState<{ id: string; name: string }[]>([]);
+  const [claudeEnvToken, setClaudeEnvToken] = useState(false);
   const [computerAwake, setComputerAwake] = useState<{ on: boolean; supported: boolean }>();
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
@@ -1382,13 +1387,15 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
+      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
       onSlept: () => ((slept.current = true), connGen.current > 1 && recNow.current.keepAwake()),
       onConfigChanged: (m) => {
         if (m.kind === "addons") return setAddonsRev((n) => n + 1);
+        // The Claude login or account changed: the daemon dropped its model list.
+        if (m.kind === "models") return void c.request<ModelsResult>({ type: "models.list" }).then((r) => setModels(r.models), () => {});
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
@@ -1407,7 +1414,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -2180,6 +2187,8 @@ export function App() {
   const [hasShells, setHasShells] = useState<Record<string, boolean>>({});
   const [termWanted, setTermWanted] = useState<ReadonlySet<string>>(new Set());
   const [spawnFor, setSpawnFor] = useState<string>();
+  /** The Claude login terminal was asked for (RawPart's button, Settings › Claude account): the terminal panel starts it once it shows. */
+  const [loginAsk, setLoginAsk] = useState(false);
   // While a folder's shells are unknown the last known answer stays (no collapse and remount for one terminal.list round trip).
   const lastAvail = useRef(false);
   const availKnown = !!panelCwd && (hasShells[panelCwd] !== undefined || termWanted.has(panelCwd));
@@ -3065,6 +3074,16 @@ export function App() {
     requestAnimationFrame(() => focus(60));
   };
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
+  /** Log in to Claude: reveals the terminal pane and starts `claude auth login` in it (the daemon of the shown project runs it). */
+  const openLogin = () => {
+    if (!panelCwd) return setToast(tr("app.login.noProject"));
+    setLoginAsk(true);
+    if (termHome === "main") return showTerminal();
+    askTerminal();
+    if (!wide(1024)) return setPane("terminal");
+    if (shows("terminal")) setTermFocusReq((n) => n + 1);
+    reveal("terminal");
+  };
   const toggleTerminal = () => {
     if (termHome === "main") return showTerminal();
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
@@ -3327,7 +3346,7 @@ export function App() {
 
 
   // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
-  type TermProps = { shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
+  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
@@ -3340,6 +3359,8 @@ export function App() {
     terminalSection(
       panelTarget.cwd,
       {
+        login: loginAsk,
+        onLoginStarted: () => setLoginAsk(false),
         ensure: spawnFor === panelTarget.cwd,
         onEnsured: () => setSpawnFor(undefined),
         onTerminals: (n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 })),
@@ -3371,6 +3392,8 @@ export function App() {
         {
           shown: ref === activeId && (lg || pane === "session"),
           quiet: termLoud !== ref,
+          login: loginAsk && carry,
+          onLoginStarted: () => setLoginAsk(false),
           ensure: termSpawn === ref,
           onEnsured: () => setTermSpawn(undefined),
           newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
@@ -3501,6 +3524,7 @@ export function App() {
     </div>
   );
   return (
+    <ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
@@ -3580,7 +3604,7 @@ export function App() {
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
-          {plan && status !== "unauthorized" && <PlanMeter usage={plan} />}
+          {plan && status !== "unauthorized" && <PlanMeter usage={plan} switcher={{ accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
             <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
@@ -4334,7 +4358,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4431,6 +4455,7 @@ export function App() {
     </AddonStatusContext>
     </AddonApiContext>
     </AddonsContext>
+    </ClaudeLoginContext>
   );
 }
 
@@ -6244,25 +6269,6 @@ function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
           {tr("app.timeline.backgroundFailed", { message: moving.error })}
         </p>
       )}
-    </div>
-  );
-}
-
-/** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
-/** "type/subtype" of an SDK message, e.g. "system/task_updated", muted; the error text of a failed query as a warning notice. */
-function RawPart({ message }: { message: unknown }) {
-  const tr = useT();
-  const { type, subtype, error } = (message ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
-  if (typeof error === "string")
-    return (
-      <div className="flex items-start gap-1.5 text-warning text-xs" data-testid="raw-part">
-        <TriangleAlertIcon role="img" aria-label={tr("app.timeline.warning")} className="mt-px size-3.5 shrink-0" />
-        <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</span>
-      </div>
-    );
-  return (
-    <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
-      {[type, subtype].filter((v) => typeof v === "string").join("/") || tr("app.timeline.sdkMessage")}
     </div>
   );
 }

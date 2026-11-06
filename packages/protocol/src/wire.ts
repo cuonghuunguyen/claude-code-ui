@@ -127,6 +127,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.set"; patch: SettingsPatch }
   /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
   | { type: "jira.token"; token: string | null }
+  /** Saves a named Claude token (from `claude setup-token`) in secrets.json; write-only, at most 20. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. Hub only. */
+  | { type: "claude.account.add"; name: string; token: string }
+  /** Removes a token account; when it was the active one the account falls back to Default. Reply SettingsResult; broadcasts `settings_changed`. Hub only. */
+  | { type: "claude.account.remove"; id: string }
   /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
   | { type: "jira.test" }
   /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). Reply JiraSearchResult; errors as `jira.test`. */
@@ -224,7 +228,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
   | { type: "fs.watch"; paths: string[] }
   /** Starts the user's shell in a PTY in `cwd` (inside the roots). It runs until closed or its shell exits, across reconnects. */
-  | { type: "terminal.create"; cwd: string; cols: number; rows: number }
+  | { type: "terminal.create"; cwd: string; cols: number; rows: number; login?: true }
   /** The terminals running in `cwd`, oldest first. */
   | { type: "terminal.list"; cwd: string }
   /** Replies the scrollback, then streams `terminal.output` to this connection. Attaching again is a no-op for the stream. */
@@ -457,7 +461,7 @@ export type ServerMessage =
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
   /** To every connection of this daemon after `settings.set`. */
-  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean }
+  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; claudeAccounts?: ClaudeAccountInfo[] }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
   /** GH-518: the Hub's machine slept while a session ran; to every connection when found, the last one again to each new connection. */
@@ -691,7 +695,8 @@ export const CHUNK_BYTES = 1024 * 1024;
 /** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
 export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
-export type TerminalInfo = { id: string; title: string };
+/** `login`: runs the Claude CLI login (`claude auth login`), not a shell. */
+export type TerminalInfo = { id: string; title: string; login?: true };
 export type TerminalCreateResult = { terminal: TerminalInfo };
 export type TerminalListResult = { terminals: TerminalInfo[] };
 /** `buffer`: the last output (capped), to replay into a fresh view. */
@@ -873,6 +878,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   performance: { monitor: boolean };
   /** Claude in Chrome (GH-514): new non-worker sessions run the CLI with --chrome; applies when a session's query (re)starts. */
   chrome: { enabled: boolean };
+  /** Claude account (GH-615): `""` = Default (the Daemon's environment), `"cli"` = the CLI login (no CLAUDE_CODE_OAUTH_TOKEN), else the id of a token account. Hub-local. */
+  claude: { account: string };
   /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */
   history: { enabled: boolean; exclude: string[] };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
@@ -918,7 +925,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type ClaudeAccountInfo = { id: string; name: string };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
@@ -950,7 +958,7 @@ export type PerfDaemon = {
   cost: { ownMs: number; wallMs: number };
 };
 export type PerfReport = { daemon: PerfDaemon };
-export type ConfigKind = "mcp" | "plugins" | "skills" | "addons";
+export type ConfigKind = "mcp" | "plugins" | "skills" | "addons" | "models";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
 /**

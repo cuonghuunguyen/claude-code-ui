@@ -28,6 +28,10 @@ _Avoid_: timeout, keep-alive (the heartbeat that detects a dropped pipe)
 The strip at the top of the Changes tab while the repository has an unfinished merge, rebase, cherry-pick, revert or am, or unmerged files alone. It lists the conflicted files and offers Resolve with Claude, Continue (Mark resolved) and Abort; the commit box is hidden meanwhile.
 _Avoid_: merge bar, conflict panel
 
+**Claude account**:
+The Claude credential the Daemon's CLI processes use: Default (the Daemon's environment), the CLI login, or a named token from `claude setup-token`. Local to the Hub; picked in Settings or in the usage ring's popover.
+_Avoid_: profile, user
+
 **Label**:
 The name and icon a user chose for a Project or a Side, stored in the Daemon settings and shared by all browsers. It replaces the folder name or machine label in the UI only; the folder name still finds the project.
 _Avoid_: alias, nickname

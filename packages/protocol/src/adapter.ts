@@ -247,7 +247,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
       }
       case "assistant": {
         const msgId = m.message.id;
-        return m.message.content.flatMap((block): Part[] => {
+        const failed: Part[] = m.error === "authentication_failed" ? [{ type: "raw", id: `${m.uuid ?? msgId}:error`, message: { error: m.error } }] : [];
+        return [...failed, ...m.message.content.flatMap((block): Part[] => {
           const index = blocksSeen.get(msgId) ?? 0;
           blocksSeen.set(msgId, index + 1);
           const id = `${msgId}:${index}`;
@@ -268,7 +269,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             return [call, { type: "todo_update", id: `${block.id}:todos`, items: todos }];
           }
           return [{ type: "raw", id, message: block }];
-        });
+        })];
       }
       case "user": {
         const content = m.message.content;
@@ -431,6 +432,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           return partIds.length ? [notice, { type: "retract", id: `${m.uuid}:retract`, partIds }] : [notice];
         }
         if (m.type === "system" && m.subtype === "model_refusal_no_fallback") return [{ type: "notice", id: m.uuid, level: "warning", text: m.content }];
+        // Retrying a login that failed is no news: the assistant message that ends the turn carries the error (and the login button).
+        if (m.type === "system" && m.subtype === "api_retry" && (m as { error?: unknown }).error === "authentication_failed") return [];
         if (IGNORED.has(m.type) || IGNORED.has(`${m.type}:${"subtype" in m ? m.subtype : ""}`)) return [];
         return [{ type: "raw", id: ("uuid" in m && m.uuid) || crypto.randomUUID(), message: m }];
     }

@@ -39,6 +39,7 @@ import {
   type SessionInfo,
   type SessionState,
 } from "@claude-ui/protocol";
+import { claudeEnv } from "./claude-env.ts";
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 
@@ -302,6 +303,8 @@ export class Session {
   private start(timed = true) {
     this.startSpan?.end();
     this.startSpan = timed ? perf.span("session.start") : undefined;
+    // A new CLI reads the current login: an earlier login change is no reason to drop it.
+    this.staleLogin = false;
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
@@ -345,7 +348,7 @@ export class Session {
           CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
           CLAUDE_CODE_ENABLE_TASKS: "0",
           CLAUDE_CODE_ARTIFACT: "1",
-          ...withoutApiKeys(process.env),
+          ...claudeEnv(),
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
@@ -492,6 +495,9 @@ export class Session {
     this.dropQuery();
   }
 
+  /** The Claude login or account changed: the live CLI is replaced at the end of the running turn. */
+  staleLogin = false;
+
   /** Idle close (docs/spec.md "Idle close"): drops the live query when nothing runs or waits; the next prompt resumes. False when busy or no query. */
   releaseQuery() {
     if (!this.query || !this.isLive() || this.busy() || this.externalTurn || this.bashRun || this.bashShells.size || this.syncing) return false;
@@ -627,6 +633,8 @@ export class Session {
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.rewinding) throw new Error("session is rewinding");
     this.cleared = false;
+    // A login or account change that could not replace the CLI at the end of a turn (a background shell kept it): now.
+    if (this.staleLogin && this.state === "idle" && this.releaseQuery()) this.staleLogin = false;
     const uuid = randomUUID();
     this.known.add(uuid);
     this.own.add(uuid);
@@ -1320,7 +1328,8 @@ export class Session {
       this.limitHit = false;
       this.limitResetsAt = undefined;
       if (hit) this.opts.onLimitStop?.(this.id, at);
-      void this.opts.plan?.refresh(q);
+      // Not on a query the login change just dropped.
+      if (this.query === q) void this.opts.plan?.refresh(q);
       if (this.syncDeferred && !this.busy()) {
         this.syncDeferred = false;
         void this.sync();
@@ -1504,6 +1513,8 @@ export class Session {
     this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
     if (state === "idle") this.flushBashNotices();
+    // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
+    if (state === "idle" && this.staleLogin && this.releaseQuery()) this.staleLogin = false;
   }
 
   private bump() {
@@ -1631,17 +1642,13 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
 
 /** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
 export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
-  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env), settings: { disableAllHooks: true }, ...options } });
+  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: claudeEnv(), settings: { disableAllHooks: true }, ...options } });
 
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
 
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
-export function withoutApiKeys(env: NodeJS.ProcessEnv) {
-  const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
-  return rest;
-}
 
 /** The CLI's rule string of a rule value: `\`, `(` and `)` in the content are escaped with `\` (probed in the CLI 2.1.x binary). */
 const ruleString = ({ toolName, ruleContent }: { toolName: string; ruleContent?: string }) =>

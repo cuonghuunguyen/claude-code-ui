@@ -208,18 +208,21 @@ function windowsInternals(pty: IPty) {
   return { input, output, conout, worker, consoleList, kill, missing };
 }
 
+/** A program to run in the pty instead of the shell (the Claude CLI login); `onExit` gets its exit code. */
+export type TerminalCommand = { file: string; args: string[]; title: string; onExit?: (code: number) => void };
+
 /** Parameters after `root`: test seams. */
 export function createTerminals(root = nodePtyRoot(), platform = process.platform, spawnPty = spawn, chmod = chmodSync, forkChild: typeof fork = fork) {
   const terminals = new Map<string, Terminal>();
   fixSpawnHelper(root, platform, process.arch, chmod);
 
   /** `owner`: the creating connection, for MAX_TERMINALS_PER_CLIENT. */
-  function create(cwd: string, cols: number, rows: number, owner: object): TerminalInfo {
+  function create(cwd: string, cols: number, rows: number, owner: object, command?: TerminalCommand): TerminalInfo {
     const used = new Set([...terminals.values()].filter((t) => t.cwd === cwd).map((t) => t.title));
     let n = 1;
     while (used.has(`Terminal ${n}`)) n++;
     const start = () =>
-      spawnPty(shell(), [], {
+      spawnPty(command?.file ?? shell(), command?.args ?? [], {
         name: "xterm-256color",
         cols,
         rows,
@@ -246,7 +249,7 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
     let exited!: () => void;
     const t: Terminal = {
       id: randomUUID(),
-      title: `Terminal ${n}`,
+      title: command?.title ?? `Terminal ${n}`,
       cwd,
       owner,
       pty,
@@ -265,6 +268,7 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
         stop(t);
         terminals.delete(t.id);
         t.listeners.forEach((l) => l.exit(exitCode));
+        command?.onExit?.(exitCode);
         exited();
         // node-pty never closes the ConPTY input pipe, nor stops its conout worker thread when the shell exits by itself
         // (only kill() does): either keeps `t` (scrollback, pty, connections) reachable for as long as the daemon runs.
@@ -303,7 +307,7 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
     pty.onExit(({ exitCode }) => t.finish(exitCode));
     if (platform === "win32") guardWindows(t);
     terminals.set(t.id, t);
-    return { id: t.id, title: t.title };
+    return { id: t.id, title: t.title, ...(command && { login: true as const }) };
   }
 
   /**

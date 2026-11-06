@@ -287,6 +287,16 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "sonnet", permissionMode: "acceptEdits" });
   });
 
+  it("a stale-login flag set while no CLI ran is cleared by the CLI that starts: it survives its first turn (GH-615)", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    s.staleLogin = true;
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("hi");
+    await until(events, (e) => e.part.type === "turn_result");
+    expect(s.liveQuery()).toBeDefined();
+  });
+
   it("a CLI start, restartQuery and releaseQuery call onLiveChange with the session id; a drop with no CLI does not", async () => {
     const dropped: string[] = [];
     const s = new Session("/tmp", { query: fakeQuery as never, onLiveChange: (id) => dropped.push(id) });

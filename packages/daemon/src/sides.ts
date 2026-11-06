@@ -1501,7 +1501,8 @@ export function createRouter(opts: {
       settings = (r.result as SettingsResult).settings;
     }
     // Not `launcher`: those are the start options of this machine's claude-ui (a later manual start there would use them).
-    const { launcher: _launcher, ...patch } = settings;
+    // Not `claude`: the Claude account is Hub-local (a token account id is unknown to the Side, "cli" would change its login).
+    const { launcher: _launcher, claude: _claude, ...patch } = settings;
     await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
   }
 
