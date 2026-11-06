@@ -342,6 +342,9 @@ describe("sides", () => {
     for (const m of [setupMessage("node_missing", "", "X"), setupMessage("node_old", "v18", "X", true), checkMessage("node_missing", "X"), checkMessage("node_old", "X", { docker: true, detail: "v18" })]) expect(m).toContain(NODE_MIN);
     for (const s of [setupScript("/s", "k", "docker"), setupScript("C:\\p", "k", "wsl"), checkScript("k", "docker"), checkScript("k", "wsl", "C:\\p")]) expect(s).not.toMatch(/-ge 22|>= ?22/);
     expect(setupMessage("node_changed", "", "X")).toMatch(/changed while it started/);
+    // Summary on the first line, the tool output after it: the sidebar shows the summary and hides the rest behind Details.
+    expect(setupMessage("install_failed", "npm ERR! 403 Forbidden", "SSH: box", "host").split("\n")).toEqual(["Installing claude-ui in SSH: box failed. Check its network and npm, then retry.", "npm ERR! 403 Forbidden"]);
+    expect(setupMessage("install_failed", "", "SSH: box", "host")).not.toContain("\n");
   });
 
   it("setup errors in a container name the container's next step", () => {

@@ -349,6 +349,7 @@ export default {
   "side.notRunning": "Không chạy",
   "side.update": "Cập nhật",
   "side.retry": "Thử lại",
+  "side.details": "Chi tiết",
   "side.dockerDown": "Docker không chạy. Hãy khởi động Docker rồi mở lại hộp thoại này.",
   "side.dockerEmpty": "Không có container đang chạy. Hãy khởi động một container rồi mở lại hộp thoại này.",
 

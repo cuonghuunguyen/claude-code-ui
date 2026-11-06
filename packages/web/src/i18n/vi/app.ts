@@ -299,6 +299,8 @@ export default {
   "app.sidePanel.action.update": "Cập nhật",
   "app.sidePanel.action.updateRemote": "Cập nhật ở đó",
   "app.sidePanel.action.reinstall": "Cài lại",
+  "app.sidePanel.action.retryInstall": "Thử cài lại",
+  "app.sidePanel.action.retryUpdate": "Thử cập nhật lại",
   "app.sidePanel.notRunning": "{side} chưa chạy.",
   "app.sidePanel.noun.container": "container",
   "app.sidePanel.noun.host": "host",

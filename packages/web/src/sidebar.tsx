@@ -1,5 +1,5 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
-import { SideBadge, SideLabel, SideStatusLine } from "./sides.tsx";
+import { SideBadge, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 import { Fragment, memo, use, useEffect, useRef, useState, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
@@ -198,6 +198,7 @@ export function SessionList({
   useLabels();
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
+  const sideInfo = use(SideState).of;
   // Stable for the memo rows: a tab switch re-renders only the two rows whose active mark changes.
   // Relative times and day groups move on without a list refresh; a row re-renders only when its label changes.
   const now = useNow(60_000, true);
@@ -285,6 +286,13 @@ export function SessionList({
         return c.group;
       })
     : kept;
+  // One side status line per side, under its first listed project.
+  const firstCwds = new Set<string>();
+  const seenSides = new Set<string>();
+  for (const g of groups) {
+    const sid = sideInfo(g.cwd)?.id;
+    if (sid && !seenSides.has(sid)) (seenSides.add(sid), firstCwds.add(g.cwd));
+  }
   // Menu targets come from the unfiltered, unsearched groups: search and Only active never shrink what an action covers.
   let unfiltered: SessionGroup[] | undefined;
   const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers)).find((g) => g.cwd === cwd);
@@ -588,6 +596,7 @@ export function SessionList({
         )}
         {groups.map((g) => {
           const open = isOpen(g.cwd);
+          const firstOfSide = firstCwds.has(g.cwd);
           return (
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
               <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
@@ -626,7 +635,7 @@ export function SessionList({
                 </span>
               </h3>
               </RowContextMenu>
-              <SideStatusLine cwd={g.cwd} />
+              {firstOfSide && <SideStatusLine cwd={g.cwd} />}
               {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&

@@ -297,6 +297,8 @@ export default {
   "app.sidePanel.action.update": "Update",
   "app.sidePanel.action.updateRemote": "Update there",
   "app.sidePanel.action.reinstall": "Reinstall",
+  "app.sidePanel.action.retryInstall": "Retry install",
+  "app.sidePanel.action.retryUpdate": "Retry update",
   "app.sidePanel.notRunning": "{side} is not running.",
   "app.sidePanel.noun.container": "container",
   "app.sidePanel.noun.host": "host",

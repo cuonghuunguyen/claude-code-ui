@@ -347,6 +347,7 @@ export default {
   "side.notRunning": "Not running",
   "side.update": "Update",
   "side.retry": "Retry",
+  "side.details": "Details",
   "side.dockerDown": "Docker is not running. Start Docker, then reopen this dialog.",
   "side.dockerEmpty": "No running containers. Start one, then reopen this dialog.",
 
