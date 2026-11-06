@@ -1,14 +1,23 @@
 // Write-only secrets (docs/spec.md "Settings", GH-447): secrets.json in the config dir (mode 0600), same JSON-file helper as settings.json.
 // A secret is never sent in a reply, a broadcast or a log line; clients only learn whether one is set.
 // The Jira token is stored with the origin it was saved for and only returned for that origin (GH-487).
+import { randomUUID } from "node:crypto";
 import { createJsonFile } from "./json-file.ts";
+import { nameOk } from "./settings.ts";
 
 // `legacy` lives in memory only: the file held a token without its origin (saved before GH-487).
-type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokenReset?: true; legacy?: true };
+/** A named Claude token (`claude setup-token`) the user pasted (GH-615); `token` leaves this file only as the env of a CLI process. */
+type ClaudeAccount = { id: string; name: string; token: string };
+export const CLAUDE_ACCOUNTS_MAX = 20;
+type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokenReset?: true; legacy?: true; claudeAccounts?: ClaudeAccount[] };
 const parse = (raw: unknown): Stored => {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  if (typeof r.jiraToken === "string" && r.jiraToken) return typeof r.jiraOrigin === "string" ? { jiraToken: r.jiraToken, jiraOrigin: r.jiraOrigin } : { legacy: true };
-  return r.jiraTokenReset === true ? { jiraTokenReset: true } : {};
+  const accounts = (Array.isArray(r.claudeAccounts) ? r.claudeAccounts : [])
+    .filter((a): a is ClaudeAccount => !!a && typeof a.id === "string" && !!a.id && nameOk(a.name) && typeof a.token === "string" && !tokenProblem(a.token))
+    .slice(0, CLAUDE_ACCOUNTS_MAX);
+  const rest = accounts.length ? { claudeAccounts: accounts } : {};
+  if (typeof r.jiraToken === "string" && r.jiraToken) return typeof r.jiraOrigin === "string" ? { jiraToken: r.jiraToken, jiraOrigin: r.jiraOrigin, ...rest } : { legacy: true, ...rest };
+  return r.jiraTokenReset === true ? { jiraTokenReset: true, ...rest } : rest;
 };
 /** A Jira API token or personal access token: printable, no spaces, at most 2000 characters. */
 export const tokenProblem = (t: unknown): string | undefined =>
@@ -33,6 +42,24 @@ export function createSecrets({ file }: { file?: string } = {}) {
     return store.get();
   };
   return {
+    /** The saved Claude token accounts; never the tokens. */
+    claudeAccounts: (): { id: string; name: string }[] => (get().claudeAccounts ?? []).map(({ id, name }) => ({ id, name })),
+    /** Only for the env of a CLI process. */
+    claudeToken: (id: string): string | undefined => get().claudeAccounts?.find((a) => a.id === id)?.token,
+    /** Returns the new id. Throws when the name or token is invalid or the list is full. */
+    addClaudeAccount(name: string, token: string): string {
+      if (!nameOk(name)) throw new Error("The account name must be 1 to 60 characters without control characters");
+      const p = tokenProblem(token);
+      if (p) throw new Error(p);
+      const id = randomUUID();
+      store.change((d) => {
+        const list = d.claudeAccounts ?? [];
+        if (list.length >= CLAUDE_ACCOUNTS_MAX) throw new Error(`At most ${CLAUDE_ACCOUNTS_MAX} Claude accounts`);
+        d.claudeAccounts = [...list, { id, name, token }];
+      });
+      return id;
+    },
+    removeClaudeAccount: (id: string) => store.change((d) => void (d.claudeAccounts && (d.claudeAccounts = d.claudeAccounts.filter((a) => a.id !== id)))),
     /** The token, only for the origin it was saved for. */
     jiraToken: (origin: string): string | undefined => {
       const d = get();

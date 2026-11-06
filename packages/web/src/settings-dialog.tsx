@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -39,6 +39,7 @@ import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts
 import { ChevronLeftIcon, PencilIcon } from "lucide-react";
 import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
+import { ClaudeAccountSection } from "./claude-account-settings.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
@@ -716,24 +717,6 @@ function AddonsSection({ onAddons }: { onAddons: () => void }) {
   );
 }
 
-/** Settings › Claude account: the CLI login runs in a built-in terminal of the open project (the daemon never sees its credentials). */
-function ClaudeAccountSection({ onLogin }: { onLogin: () => void }) {
-  const t = useT();
-  return (
-    <Section id="account" title={t("settings.account.title")}>
-      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-        <div className="min-w-0 flex-1">
-          <span className="block text-sm">{t("settings.account.login")}</span>
-          <span id="settings-account-hint" className="block text-muted-foreground text-xs">{t("settings.account.loginHint")}</span>
-        </div>
-        <button type="button" onClick={onLogin} aria-describedby="settings-account-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-claude-login">
-          {t("settings.account.loginAction")}
-        </button>
-      </div>
-    </Section>
-  );
-}
-
 /** The Launcher shortcut switch (GH-553): creates or removes the OS entry on the Hub's machine; the state comes from settings.get. */
 function LauncherShortcutRow({ installed, request, onInstalled, onError }: { installed: boolean; request: <T>(msg: Request) => Promise<T>; onInstalled: (on: boolean) => void; onError: (m: string) => void }) {
   const t = useT();
@@ -857,6 +840,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [error, setError] = useState<string>();
   const [daemon, setDaemon] = useState<SettingsResult["daemon"]>();
   const [saving, setSaving] = useState(false);
+  const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccountInfo[]>([]);
   const [jiraToken, setJiraToken] = useState(false);
   const [jiraTokenReset, setJiraTokenReset] = useState(false);
   // The number field's text while typing; committed on Enter or blur.
@@ -869,7 +853,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     if (!open) return void setDraft({});
     let live = true;
     ask.current<SettingsResult>({ type: "settings.get" }).then(
-      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined)),
+      (r) => live && (setSettings(r.settings), setDaemon(r.daemon), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined)),
       (e: Error) => live && setError(e.message),
     );
     return () => void (live = false);
@@ -883,6 +867,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       setDaemon(r.daemon);
       setJiraToken(!!r.jiraToken);
       setJiraTokenReset(!!r.jiraTokenReset);
+      setClaudeAccounts(r.claudeAccounts ?? []);
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
@@ -1036,7 +1021,6 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     { id: "notifications", title: t("settings.group.notifications"), category: "App", body: <NotificationsSection push={push} settings={settings} daemon={daemon} saving={saving} save={save} /> },
     ...(onShortcuts ? [{ id: "keyboard", title: t("settings.group.keyboard"), category: "App" as const, body: <KeyboardSection onShortcuts={onShortcuts} /> }] : []),
     ...(onAddons ? [{ id: "addons", title: t("settings.group.addons"), category: "App" as const, body: <AddonsSection onAddons={onAddons} /> }] : []),
-    ...(onLogin ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection onLogin={onLogin} /> }] : []),
     ...(orchestration ? [{ id: "orchestration", title: sectionTitle(orchestration.id), category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(usageLimit
@@ -1055,6 +1039,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         ]
       : []),
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
+    ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira

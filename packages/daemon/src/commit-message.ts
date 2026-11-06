@@ -3,7 +3,7 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { WorktreeError } from "./git.ts";
 import type { CommitDiff } from "./git-write.ts";
-import { withoutApiKeys } from "./session.ts";
+import { claudeEnv } from "./claude-env.ts";
 import { DEFAULT_COMMIT_INSTRUCTION, type Settings } from "@claude-ui/protocol";
 
 /** One-shot, cheap and fast; the only place the model is chosen. */
@@ -43,7 +43,7 @@ export async function generateCommitMessage(o: { cwd: string; prompt: string; si
   try {
     const q = (o.query ?? sdkQuery)({
       prompt: o.prompt,
-      options: { systemPrompt: SYSTEM, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd: o.cwd, env: withoutApiKeys(process.env), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController: ctl },
+      options: { systemPrompt: SYSTEM, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd: o.cwd, env: claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController: ctl },
     });
     for await (const m of q) {
       if (m.type !== "result") continue;

@@ -39,6 +39,7 @@ import {
   type SessionInfo,
   type SessionState,
 } from "@claude-ui/protocol";
+import { claudeEnv } from "./claude-env.ts";
 import type { PlanTracker } from "./plan-usage.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 
@@ -345,7 +346,7 @@ export class Session {
           CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
           CLAUDE_CODE_ENABLE_TASKS: "0",
           CLAUDE_CODE_ARTIFACT: "1",
-          ...withoutApiKeys(process.env),
+          ...claudeEnv(),
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
@@ -1636,17 +1637,13 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
 
 /** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
 export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
-  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: withoutApiKeys(process.env), settings: { disableAllHooks: true }, ...options } });
+  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: claudeEnv(), settings: { disableAllHooks: true }, ...options } });
 
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
 
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
-export function withoutApiKeys(env: NodeJS.ProcessEnv) {
-  const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
-  return rest;
-}
 
 /** The CLI's rule string of a rule value: `\`, `(` and `)` in the content are escaped with `\` (probed in the CLI 2.1.x binary). */
 const ruleString = ({ toolName, ruleContent }: { toolName: string; ruleContent?: string }) =>

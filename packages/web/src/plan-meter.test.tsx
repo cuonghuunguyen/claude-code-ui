@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { PlanMeter, planLevel, resetText } from "./plan-meter.tsx";
+import { PlanMeter, planLevel, resetText, type PlanAccounts } from "./plan-meter.tsx";
 import { t } from "./i18n.ts";
 
 const OAUTH_UNAVAILABLE = t("app.plan.oauthUnavailable");
@@ -24,11 +24,11 @@ const usage: PlanUsage = {
 let unmount = () => {};
 afterEach(() => unmount());
 
-async function render(u: PlanUsage) {
+async function render(u: PlanUsage, switcher?: PlanAccounts) {
   const el = document.createElement("div");
   document.body.append(el);
   const root = createRoot(el);
-  await act(async () => root.render(<PlanMeter usage={u} />));
+  await act(async () => root.render(<PlanMeter usage={u} switcher={switcher} />));
   unmount = () => (root.unmount(), el.remove());
   return el;
 }
@@ -158,4 +158,46 @@ it("env token, no windows, limit reached: the name says the limit, not unavailab
 it("env token, no windows: the grey ring keeps the 44px touch width below md", async () => {
   const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
   expect(meter(el).className).toContain("max-md:min-w-11");
+});
+
+// GH-615: the account switcher of the usage ring.
+const accounts = { accounts: [{ id: "a1", name: "bad" }], active: "a1", envToken: false, onSwitch: vi.fn() };
+const open = async (el: HTMLElement) => {
+  await act(async () => meter(el).click());
+  return document.querySelector<HTMLElement>('[data-testid="plan-usage"]')!;
+};
+
+it("the popover names the active account, the ring label too", async () => {
+  const el = await render({ ...usage, account: "bad" }, accounts);
+  expect(meter(el).getAttribute("aria-label")).toMatch(/^bad: Plan usage/);
+  expect((await open(el)).querySelector('[data-testid="plan-account"]')!.textContent).toBe("Account: bad");
+});
+
+it("the switcher lists CLI login and token accounts (Default only with an env token); the active row is checked", async () => {
+  const el = await render({ ...usage, account: "bad" }, accounts);
+  const rows = [...(await open(el)).querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
+  expect(rows.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([["CLI login", "false"], ["bad", "true"]]);
+  expect(rows.every((r) => r.className.includes("max-md:h-11") && r.className.includes("pointer-coarse:h-11"))).toBe(true);
+  unmount();
+  const el2 = await render(usage, { ...accounts, envToken: true, active: "" });
+  const rows2 = [...(await open(el2)).querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
+  expect(rows2.map((r) => r.textContent)).toEqual(["Default (daemon environment)", "CLI login", "bad"]);
+  expect(rows2[0]!.getAttribute("aria-checked")).toBe("true");
+});
+
+it("clicking another row calls onSwitch with its id and keeps the popover open", async () => {
+  const onSwitch = vi.fn();
+  const el = await render(usage, { ...accounts, onSwitch });
+  const pop = await open(el);
+  await act(async () => pop.querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')[0]!.click());
+  expect(onSwitch).toHaveBeenCalledWith("cli");
+  expect(document.querySelector('[data-testid="plan-usage"]')).not.toBeNull();
+});
+
+it("no other choice, no switcher; a rejected limit points at the switcher", async () => {
+  const el = await render(usage, { ...accounts, accounts: [], active: "cli" });
+  expect((await open(el)).querySelector('[data-testid="plan-accounts"]')).toBeNull();
+  unmount();
+  const el2 = await render({ ...usage, status: "rejected" }, accounts);
+  expect((await open(el2)).querySelector('[data-testid="plan-limit"]')!.textContent).toContain("Switch account below.");
 });
