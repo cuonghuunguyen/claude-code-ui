@@ -107,6 +107,7 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       className={cn("absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 px-2 text-sm hover:bg-accent", on && "bg-secondary")}
       style={{ height: h, transform: `translateY(${start}px)` }}
       data-testid="commit-row"
+      data-hash={c.hash}
       data-local-refs={c.refs.filter((r) => r.startsWith("refs/heads/")).join("\n")}
     >
       {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
@@ -337,7 +338,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? tr("files.graph.noMatch") : tr("files.graph.noCommits")}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []} hash={() => selected}>
             <div
               ref={scroller}
               role="listbox"

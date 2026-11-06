@@ -2,7 +2,8 @@
 // Force push and Pull of the local branches there, each behind a dialog that shows the exact git command; Fetch is always last.
 import { cloneElement, useRef, useState, type ReactElement } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
+import type { GitBranchInfo, GitBranchResult, GitCommitMenu } from "@claude-ui/protocol";
+import { CommitItems, ResetDialog, type CommitActionRequest } from "./git-commit-menu.tsx";
 import type { OpReply } from "./git-remote-ops.ts";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
@@ -10,7 +11,7 @@ import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 import { t, useT } from "./i18n.ts";
 
 type Client = ReturnType<typeof connect>;
-export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true } | { type: "git.merge" | "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true };
+export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true } | { type: "git.merge" | "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true } | CommitActionRequest;
 export type Kind = "push" | "force" | "pull" | "merge" | "rebase";
 type Done = string | ((r: OpReply) => string);
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
@@ -21,7 +22,7 @@ const MAX_TARGETS = 5;
 const name = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 /** Display form of an argv: arguments with spaces quoted. */
-const command = (argv: string[]) => `git ${argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
+export const command = (argv: string[]) => `git ${argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
 /** Where the branch is checked out, as a short note (absent: in the session's worktree). */
 const note = (i: GitBranchInfo) => (i.checkedOut === "here" ? undefined : i.checkedOut ? t("sidebar.git.checkedOutIn", { name: base(i.checkedOut) }) : t("sidebar.git.notCheckedOut"));
 const ownerSentence = (i: GitBranchInfo) => (i.checkedOut === "here" ? "" : ` ${i.checkedOut ? t("sidebar.git.ownerIn", { name: base(i.checkedOut) }) : t("sidebar.git.ownerNone")}`);
@@ -32,7 +33,7 @@ const commits = (count: number) => t("sidebar.git.commits", { count });
  * `children`: the element that gets the context menu (the commit list or the details refs). The target is the chip under the
  * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
  */
-export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, fallback, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: (msg: RemoteRequest, done: Done, running: string) => void; fallback: () => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, fallback, hash, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: (msg: RemoteRequest, done: Done, running: string) => void; fallback: () => string[]; /** The keyboard's commit (the selected row); absent: no commit section without a row under the pointer. */ hash?: () => string | undefined; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
   const t = useT();
   const of = (text: string) => ofRepo(text, repoName);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -42,6 +43,11 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
   // `touchstart` + a timer (Base UI) and fires no `contextmenu` event, so the target cannot be taken from that event only.
   const pressed = useRef<string[] | undefined>(undefined);
   const loaded = useRef(false);
+  // The commit menu: the hash of the row under the press ("" = a press on no row), kept like `pressed`.
+  const [commit, setCommit] = useState<string>();
+  const [reset, setReset] = useState<GitCommitMenu>();
+  const pressedHash = useRef<string | undefined>(undefined);
+  const hashOf = (t: Element) => t.closest<HTMLElement>("[data-hash]")?.dataset.hash;
   const targetsOf = (t: Element): string[] | undefined => {
     const chip = t.closest<HTMLElement>("[data-ref]");
     const row = t.closest<HTMLElement>("[data-local-refs]");
@@ -60,20 +66,31 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
     }
   };
   // A press on no chip and no row (empty list space) is a press with no target: not the selected row.
-  const press = (e: React.SyntheticEvent) => void (pressed.current = targetsOf(e.target as Element) ?? []);
+  const press = (e: React.SyntheticEvent) => {
+    pressed.current = targetsOf(e.target as Element) ?? [];
+    pressedHash.current = hashOf(e.target as Element) ?? "";
+  };
   // The keyboard (Shift+F10, the menu key) has no pointer target: the selected row's branches.
-  const key = () => void (pressed.current = undefined);
+  const key = () => {
+    pressed.current = undefined;
+    pressedHash.current = undefined;
+  };
   // The `contextmenu` event (right click, Shift+F10) knows its target best: chip, row, else the keyboard's selection.
   const open = (e: React.MouseEvent) => {
     const refs = targetsOf(e.target as Element) ?? pressed.current ?? fallback();
     pressed.current = refs;
+    setCommit(hashOf(e.target as Element) ?? pressedHash.current ?? hash?.());
     load(refs);
   };
   const onOpenChange = (o: boolean) => {
-    if (o && !loaded.current) load(pressed.current ?? fallback());
+    if (o && !loaded.current) {
+      setCommit(pressedHash.current ?? hash?.());
+      load(pressed.current ?? fallback());
+    }
     if (!o) {
       loaded.current = false;
       pressed.current = undefined;
+      pressedHash.current = undefined;
     }
   };
   const many = entries.length > 1;
@@ -84,6 +101,12 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
         <ContextMenu.Portal>
           <ContextMenu.Positioner className="z-50">
             <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-1rem)]")} data-testid="branch-menu">
+              {commit && (
+                <>
+                  <CommitItems key={commit} client={client} cwd={cwd} exact={exact} repoName={repoName} hash={commit} busy={busy} onRun={onRun} onReset={setReset} />
+                  <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+                </>
+              )}
               {entries.map((en) => (
                 <div key={en.ref} role="group" aria-label={name(en.ref)}>
                   <div className="px-2 pt-1 text-muted-foreground text-xs" data-testid="branch-menu-head">
@@ -112,6 +135,7 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
         </ContextMenu.Portal>
       </ContextMenu.Root>
       <BranchDialog dialog={dialog} cwd={cwd} exact={exact} repoName={repoName} onRun={onRun} onClose={() => setDialog(undefined)} />
+      <ResetDialog client={client} cwd={cwd} exact={exact} repoName={repoName} target={reset} onRun={onRun} onClose={() => setReset(undefined)} />
     </>
   );
 }
