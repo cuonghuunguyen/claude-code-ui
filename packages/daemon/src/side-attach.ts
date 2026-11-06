@@ -127,8 +127,8 @@ export async function runAttach(o: { dir: string; stdin: Readable; stdout: Writa
 /** `[node, ...execArgv, cli.js]` of this process, for daemon.json `exec` (GH-619). Debugger flags are dropped: a bridge replaying `--inspect` would clash on its port. */
 export const hubExec = () => [process.execPath, ...process.execArgv.filter((a) => !/^--(inspect|debug)/.test(a)), process.argv[1]!];
 
-/** Runs the bridge of the Hub there: every word quoted, no `--start` (when that Hub is gone, the row gets `no_daemon` and the next start probes again). */
-export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" ")} side --attach`;
+/** Runs the bridge of the Hub there: every word quoted. `--start`: when that Hub died since the probe, a Hub of the same build starts (nothing is installed: the cli is there). */
+export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" ")} side --attach --start`;
 
 /** The Hub that `run` (a probe through the Side's transport) finds; any failure counts as no Hub: the install path then reports the real error. */
 export async function findHub(run: () => Promise<{ stdout: string }>): Promise<Hub | undefined> {

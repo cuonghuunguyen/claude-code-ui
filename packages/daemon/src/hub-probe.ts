@@ -2,12 +2,13 @@
 import { schemaOverlap, SIDE_SCHEMA } from "./side-frame.ts";
 
 /**
- * POSIX sh: prints `CLAUDE_UI_CHECK hub=<base64 of daemon.json>` when that file exists and its pid is alive. The pid is digits only (sed), so it is safe to pass on.
+ * POSIX sh: prints `CLAUDE_UI_CHECK hub=<base64 of daemon.json>` when that file exists, its pid is alive and its attach socket exists (a stale file of a crashed Hub whose pid was reused has no socket). The pid is digits only (sed), so it is safe to pass on.
  * The path is `configDir()` on Linux and macOS (`XDG_CONFIG_HOME` or `~/.config`). daemon.json holds no token.
  */
 export const HUB_PROBE = `f="\${XDG_CONFIG_HOME:-$HOME/.config}/claude-ui/daemon.json"
 p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$f" 2>/dev/null)
-[ -n "$p" ] && kill -0 "$p" 2>/dev/null && printf 'CLAUDE_UI_CHECK hub=%s\\n' "$(base64 < "$f" | tr -d '\\n')"`;
+a=$(sed -n 's/.*"attach":"\\([^"]*\\)".*/\\1/p' "$f" 2>/dev/null)
+[ -n "$p" ] && [ -S "$a" ] && kill -0 "$p" 2>/dev/null && printf 'CLAUDE_UI_CHECK hub=%s\\n' "$(base64 < "$f" | tr -d '\\n')"`;
 
 export type Hub = { exec: string[]; version: string };
 

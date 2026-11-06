@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { createServer, type Server } from "node:net";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { HUB_PROBE, parseHub } from "../src/hub-probe.ts";
 import { findHub, hubBridgeScript } from "../src/side-attach.ts";
 
@@ -21,10 +22,9 @@ describe("parseHub", () => {
 });
 
 describe("hubBridgeScript", () => {
-  it("quotes every word and never starts a Hub", () => {
+  it("quotes every word and may start a Hub of that build", () => {
     const s = hubBridgeScript(["/n o/node", "/it's/cli.js"]);
-    expect(s).toBe(`exec '/n o/node' '/it'\\''s/cli.js' side --attach`);
-    expect(s).not.toContain("--start");
+    expect(s).toBe(`exec '/n o/node' '/it'\\''s/cli.js' side --attach --start`);
   });
 });
 
@@ -36,22 +36,29 @@ describe("findHub", () => {
 });
 
 describe.skipIf(process.platform === "win32")("HUB_PROBE in a real sh", () => {
-  const run = (xdg: string) => spawnSync("sh", ["-c", HUB_PROBE], { env: { ...process.env, XDG_CONFIG_HOME: xdg }, encoding: "utf8" });
-  const cfg = (pid: number) => {
+  const servers: Server[] = [];
+  afterEach(() => servers.splice(0).forEach((v) => v.close()));
+  /** `socket`: a real Unix socket at `attach` (the probe tests `-S`). */
+  const cfg = async (pid: number, socket = true) => {
     const x = realpathSync(mkdtempSync(join(tmpdir(), "hub-")));
     mkdirSync(join(x, "claude-ui"));
-    const text = JSON.stringify(info({ pid })) + "\n";
+    const sock = join(x, "claude-ui", "attach.sock");
+    if (socket) await new Promise<void>((r) => servers.push(createServer().listen(sock, r)));
+    const text = JSON.stringify(info({ pid, attach: sock })) + "\n";
     writeFileSync(join(x, "claude-ui", "daemon.json"), text);
     return { x, text };
   };
-  it("prints the file of a live pid", () => {
-    const { x, text } = cfg(process.pid);
-    const out = run(x).stdout;
+  // spawnSync would block the event loop that serves the socket: the probe runs async.
+  const run = (xdg: string) => new Promise<string>((r) => execFile("sh", ["-c", HUB_PROBE], { env: { ...process.env, XDG_CONFIG_HOME: xdg } }, (_e, out) => r(out)));
+  it("prints the file of a live pid with a socket", async () => {
+    const { x, text } = await cfg(process.pid);
+    const out = await run(x);
     expect(Buffer.from(out.trim().replace("CLAUDE_UI_CHECK hub=", ""), "base64").toString()).toBe(text);
     expect(out.trim().split("\n")).toHaveLength(1);
   });
-  it("prints nothing for a dead pid or no file", () => {
-    expect(run(cfg(999999999).x).stdout).toBe("");
-    expect(run(realpathSync(mkdtempSync(join(tmpdir(), "hub-")))).stdout).toBe("");
+  it("prints nothing for a dead pid, a missing socket (stale file, reused pid) or no file", async () => {
+    expect(await run((await cfg(999999999)).x)).toBe("");
+    expect(await run((await cfg(process.pid, false)).x)).toBe("");
+    expect(await run(realpathSync(mkdtempSync(join(tmpdir(), "hub-"))))).toBe("");
   });
 });
