@@ -25,7 +25,9 @@ Feature: Changes tab adds files and diff lines to the prompt
     When I open the Changes tab of the side panel
     And I choose the "Uncommitted" diff mode
     And I open the diff of "long.txt" in the Changes tab
-    And I select the diff lines from the removed line 3 to the added line 3
+    Then the narrow diff header shows the file name and an icon-only send button
+    And I capture "narrow-header"
+    When I select the diff lines from the removed line 3 to the added line 3
     And I capture "lines-selected"
     And I click "Send selection to Claude" in the diff
     Then the prompt box has the diff lines "-3 | line 3" and "+3 | line 3 edited"

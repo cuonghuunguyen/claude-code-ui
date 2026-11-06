@@ -5644,8 +5644,10 @@ function PromptBox({
   useEffect(() => {
     if (!insert) return;
     // A quote (GH-56) is prompt text, never part of a shell command.
-    if (insert.startsWith(">")) setBash(false);
-    const r = insert.startsWith(">") || insert.includes("\n") ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
+    // A diff block from the Changes tab (GH-611) is a paragraph too.
+    const block = insert.startsWith(">") || /\n```+diff\n/.test(insert);
+    if (block) setBash(false);
+    const r = block ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
     edit(r.text, r.caret);
     onInserted?.();
     input.current?.focus();

@@ -30,3 +30,12 @@ Then("the send selection button is at least 44px high", async ({ page }) => {
   const box = await diffBox(page).getByTestId("diff-send-selection").boundingBox();
   expect(box!.height).toBeGreaterThanOrEqual(44);
 });
+
+Then("the narrow diff header shows the file name and an icon-only send button", async ({ page }) => {
+  const header = page.getByTestId("changes-panel").getByTestId("file-diff-header");
+  const name = await header.locator("span.truncate").boundingBox();
+  expect(name!.width).toBeGreaterThan(40);
+  const button = header.getByTestId("diff-send-selection");
+  await expect(button).toHaveAttribute("aria-label", "Send selection to Claude");
+  expect((await button.boundingBox())!.width).toBeLessThan(48);
+});

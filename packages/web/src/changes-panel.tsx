@@ -4,7 +4,7 @@ import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { parseDiffFromFile, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
 import { FileDiff as PierreFileDiff } from "@pierre/diffs/react";
-import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, MessageSquarePlusIcon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -1059,11 +1059,15 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     const text = (range && parsed && diffSelection(parsed, range, rel)) || (row.kind === "D" ? undefined : fileMention(path, cwd));
     if (text) onSend?.(text);
   };
-  const sendButton = onSend && !sub && !nested && !row.image && !row.error && !same && files && (
-    <Button size="sm" variant="ghost" className="max-md:h-11" title={t("files.panel.sendSelectionTitle")} onClick={send} data-testid="diff-send-selection">
-      {t("files.panel.sendSelection")}
-    </Button>
-  );
+  const canSend = !!onSend && !sub && !nested && !row.image && !row.error && !same && !!files;
+  // `compact`: the header beside the file name is icon-only until it is wide (the name keeps truncate priority).
+  const sendButton = (compact?: boolean) =>
+    canSend && (
+      <Button size={compact ? "icon-sm" : "sm"} variant="ghost" className={cn("max-md:h-11", compact && "shrink-0 @xl:w-auto @xl:px-2.5")} title={t("files.panel.sendSelectionTitle")} aria-label={t("files.panel.sendSelection")} onClick={send} data-testid="diff-send-selection">
+        <MessageSquarePlusIcon />
+        <span className={compact ? "hidden @xl:inline" : undefined}>{t("files.panel.sendSelection")}</span>
+      </Button>
+    );
   const dirtyText = row.dirty ? t("files.changes.dirtyText", { count: row.dirty }) : "";
   return (
     <div
@@ -1074,13 +1078,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       data-diff-style={style}
       onKeyDown={(e) => {
         // `code`: Option+K types "˚" on macOS.
-        if (selectable && sendButton && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyK") (e.preventDefault(), send());
+        if (selectable && canSend && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyK") (e.preventDefault(), send());
       }}
     >
       {inline ? (
-        (sendButton || (!sub && !nested && inDir(path, cwd))) && (
+        (canSend || (!sub && !nested && inDir(path, cwd))) && (
           <div className="flex justify-end gap-1 px-2 pt-1">
-            {sendButton}
+            {sendButton()}
             {!sub && !nested && inDir(path, cwd) && (
               <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
                 <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
@@ -1089,7 +1093,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           </div>
         )
       ) : (
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
+        <div className="@container flex h-10 shrink-0 items-center gap-2 border-b px-3" data-testid="file-diff-header">
           {!nested && <KindBadge kind={row.kind} untracked={row.untracked} />}
           {nested ? <RepoIcon kind="nested" /> : sub ? <ArchiveIcon className="size-4 shrink-0" aria-hidden /> : <FileIcon path={path} className="size-4 shrink-0" />}
           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={path}>
@@ -1098,11 +1102,11 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           {sub && <SubmoduleBadge />}
           {nested && <RepoBadge />}
           {row.stats && <StatsText stats={row.stats} />}
-          {sendButton}
+          {sendButton(true)}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
           {!sub && !nested && inDir(path, cwd) && (
-            <Button size="sm" variant="ghost" onClick={() => onOpen(path)} data-testid="open-in-editor">
-              <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
+            <Button size="sm" variant="ghost" className="max-@xl:size-8 max-@xl:shrink-0 max-@xl:px-0" title={t("files.panel.openInEditor")} aria-label={t("files.panel.openInEditor")} onClick={() => onOpen(path)} data-testid="open-in-editor">
+              <SquareArrowOutUpRightIcon /> <span className="hidden @xl:inline">{t("files.panel.openInEditor")}</span>
             </Button>
           )}
         </div>
