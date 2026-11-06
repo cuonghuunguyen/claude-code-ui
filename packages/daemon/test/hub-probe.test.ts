@@ -58,6 +58,8 @@ describe("findHub", () => {
   });
   it("an error the install path would hit too is thrown at once", async () => {
     await expect(find({ fatal: () => "SSH: box is not reachable" }, r({ code: 255 }))).rejects.toThrow("not reachable");
+    // A reattach (backoff retries) must not throw: the side would stay in error.
+    expect(await find({ runArgs: "side --attach", fatal: () => "x" }, r({ code: 255, stdout: "" }))).toBeUndefined();
   });
 });
 

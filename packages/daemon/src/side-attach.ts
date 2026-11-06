@@ -7,7 +7,7 @@ import { readDaemonFile } from "./ctl/daemon-file.ts";
 import { pidAlive } from "./ctl/connect.ts";
 import type { SideSetup } from "@claude-ui/protocol";
 import { parseHub, type Hub } from "./hub-probe.ts";
-import { shq } from "./sides.ts";
+import { attachArgs, shq } from "./sides.ts";
 import type { Readable, Writable } from "node:stream";
 
 /** Where a Hub accepts attaching Hubs (ADR 0009): next to its `daemon.json`, else a shorter folder when the path does not fit `sun_path`. */
@@ -134,7 +134,7 @@ export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" 
 /**
  * The Hub that `run` (a probe through the Side's transport) finds. No probe for an update, Reinstall (`force`) or a pinned start: those must reach the install
  * even when the Hub there has a broken `exec` (its cli folder swept, its Node.js removed). A probe that fails to run counts as no Hub (the install path
- * reports the real error); `fatal` names an error that the install path would hit too (ssh unreachable): thrown at once, not after a second timeout.
+ * reports the real error); `fatal` names an error that the install path would hit too (ssh unreachable): thrown at once, not after a second timeout. Not on a reattach: a throw there ends the retries, while the bridge's own failure keeps them.
  */
 export async function findHub(o: { runArgs: string; setup: SideSetup; pinned?: boolean; run: () => Promise<{ code: number | null; stdout: string; stderr: string }>; fatal?: (r: { code: number | null; stderr: string }) => string | undefined }): Promise<Hub | undefined> {
   if (o.runArgs === "update" || o.setup === "force" || o.pinned) return undefined;
@@ -144,7 +144,7 @@ export async function findHub(o: { runArgs: string; setup: SideSetup; pinned?: b
   } catch {
     return undefined;
   }
-  const msg = o.fatal?.(r);
+  const msg = o.runArgs === attachArgs(true) ? undefined : o.fatal?.(r);
   if (msg) throw new Error(msg);
   // The exit code is not read otherwise: the probe ends non-zero when no Hub runs.
   return parseHub(r.stdout);
