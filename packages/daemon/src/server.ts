@@ -18,13 +18,15 @@ import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
-import { openChecked, OPEN_READ, OPEN_WRITE, readAll, real, sameFile, writeAll } from "./fd-check.ts";
+import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
+import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
+import { gitAbort, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -580,7 +582,7 @@ export function createDaemon(opts: {
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
     const sp = perfMon.span("worktree.list");
-    const entry = { stamp, list: gitOutside(cwd).then((out) => (out ? null : listWorktrees(cwd))).finally(() => sp.end()) };
+    const entry = { stamp, list: listWorktrees(cwd, (p) => inRoots(real(p) ?? p)).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -594,7 +596,7 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitOutside(cwd).then((out) => (out ? null : gitStatus(cwd, { ignoreSubmodules: appSettings.get().git.ignoreSubmodules }))).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitStatus(cwd, { allowed: (p) => inRoots(real(p) ?? p), ignoreSubmodules: appSettings.get().git.ignoreSubmodules }).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
@@ -1537,6 +1539,8 @@ export function createDaemon(opts: {
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
+    /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
+    let generating: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
     const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
@@ -1554,6 +1558,7 @@ export function createDaemon(opts: {
       unwatchAll();
       attached.forEach((d) => d());
       searching?.abort();
+      generating?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
       focused.delete(ws);
@@ -2151,11 +2156,12 @@ export function createDaemon(opts: {
           const dir = allowed(msg.path);
           if (!dir) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
           try {
-            const entries = readdirSync(dir, { withFileTypes: true }).map(
+            const entries = readdirChecked(dir).map(
               (e): FsEntry => ({ name: e.name, path: join(dir, e.name), isDir: e.isDirectory() }),
             );
             return reply({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)) });
           } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ECHANGED") return fail("path_not_allowed", "changed during the request");
             return fail("fs_error", String(err));
           }
         }
@@ -2176,7 +2182,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])))).filter((p) => allowed(join(cwd, p))) });
+          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])), (p) => inRoots(real(p) ?? p))).filter((p) => allowed(join(cwd, p))) });
         }
         case "sessions.search": {
           // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.
@@ -2264,6 +2270,112 @@ export function createDaemon(opts: {
             return reply({ remote });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.commitFiles": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Paths, message and output are never logged. A hook may have changed files even when the commit failed.
+          try {
+            const committed = await gitCommitFiles(cwd, { paths: msg.paths, message: msg.message, amend: msg.amend, push: msg.push, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ committed });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.merge":
+        case "git.rebase": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Output is never logged. A hook may have changed files even when the run failed.
+          try {
+            const written = await gitMergeRebase(cwd, msg.type === "git.merge" ? "merge" : "rebase", { ref: msg.ref, local: msg.local, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.continue":
+        case "git.abort": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            const written = await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.commitMenu": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            return reply({ commitMenu: await gitCommitMenu(cwd, { hash: msg.hash, hard: msg.hard, allowed: (p) => inRoots(real(p) ?? p) }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.undoCommit":
+        case "git.revert":
+        case "git.cherryPick":
+        case "git.reset": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Output is never logged. A hook may have changed files even when the run failed.
+          try {
+            const action = msg.type === "git.undoCommit" ? "undo" : msg.type === "git.cherryPick" ? "cherryPick" : msg.type === "git.revert" ? "revert" : "reset";
+            const written = await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.operation": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            return reply({ operation: await gitOperationOf(cwd, (p) => inRoots(real(p) ?? p)) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.commitMessageCancel":
+          generating?.abort();
+          return reply({});
+        case "git.commitMessage": {
+          // Before any await or early return: a cancel or a close at any moment aborts this request.
+          generating?.abort();
+          const ctl = (generating = new AbortController());
+          try {
+            const cwd = allowed(msg.cwd);
+            if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+            if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+            // `project` is only a key of the settings map: never a path.
+            if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) return fail("bad_request", "project must be a project folder");
+            // Paths, diff, instruction and reply are never logged.
+            const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
+            if (!d) return fail("not_git", NOT_TOP);
+            const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
+            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query });
+            return reply({ message, ...(d.cut && { truncated: true }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          } finally {
+            if (generating === ctl) generating = undefined;
           }
         }
         case "git.branch":
@@ -2491,12 +2603,27 @@ export function createDaemon(opts: {
               watched.delete(path);
             }
           for (const path of msg.paths) {
-            const real = allowed(path);
-            if (!real || watched.has(path)) continue;
-            const listener = (curr: Stats, prev: Stats) =>
-              curr.mtimeMs !== prev.mtimeMs && send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
-            watchFile(real, { interval: WATCH_INTERVAL_MS }, listener);
-            watched.set(path, { real, listener });
+            const canon = allowed(path);
+            if (!canon || watched.has(path)) continue;
+            // Parent folder dev/ino (not the file's: an atomic rename-write changes the file's inode).
+            const dir = dirname(canon);
+            let id;
+            try {
+              id = statSync(dir, { bigint: true });
+            } catch {
+              continue;
+            }
+            // GH-323: a link or swapped folder ends the watch, nothing is sent. A deleted file (real undefined) still reports.
+            const listener = (curr: Stats, prev: Stats) => {
+              const r = real(canon);
+              const now = statSync(dir, { bigint: true, throwIfNoEntry: false });
+              if ((r !== undefined && r !== canon) || !now || now.dev !== id.dev || now.ino !== id.ino) {
+                unwatchFile(canon, listener);
+                watched.delete(path);
+              } else if (curr.mtimeMs !== prev.mtimeMs) send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
+            };
+            watchFile(canon, { interval: WATCH_INTERVAL_MS }, listener);
+            watched.set(path, { real: canon, listener });
           }
           return reply({ watching: [...watched.keys()] });
         }

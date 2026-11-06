@@ -43,7 +43,7 @@ describe("GH-298 refs stamp and repository top without sync fs", () => {
 
   it("git.status (repository top, pin, refs stamp) reads no file synchronously", async () => {
     const dir = repo();
-    const s = await during(() => gitStatus(dir));
+    const s = await during(() => gitStatus(dir, { allowed: () => true }));
     expect(s).toMatchObject({ branch: "main" });
     expect(seen.names).toEqual([]);
   });

@@ -516,6 +516,12 @@ describe("Session", () => {
       started({ query: fakeQuery as never, chrome: () => true, worker: () => true });
       expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
     });
+    it("a worker query carries a PreToolUse hook on Bash; a user session none", () => {
+      started({ query: fakeQuery as never, worker: () => true });
+      expect(calls.at(-1)!.hooks?.PreToolUse?.[0]?.matcher).toBe("Bash");
+      started({ query: fakeQuery as never });
+      expect(calls.at(-1)).not.toHaveProperty("hooks");
+    });
     it("reads the setting at each query start", () => {
       let on = false;
       const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never, chrome: () => on });

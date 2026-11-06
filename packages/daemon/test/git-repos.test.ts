@@ -212,6 +212,15 @@ describe("listRepos", () => {
     expect(r.map((x) => [x.rel, !!x.outsideRoots, x.branch])).toEqual([["ok", false, undefined], ["x", true, undefined], ["y", true, undefined]]);
   });
 
+  it("a repository whose config includes a file outside the roots is listed outsideRoots (GH-319)", async () => {
+    const d = tmp();
+    const outside = tmp();
+    const z = repo(join(d, "z"));
+    writeFileSync(join(z, ".git/config"), `[include]\n\tpath = ${join(outside, "x.conf")}\n`);
+    const r = (await list(d, { repositoryScanMaxDepth: 1 }, { allowed: (p) => p === d || p.startsWith(d + "/") })).repos;
+    expect(r.map((x) => [x.rel, !!x.outsideRoots, x.branch])).toEqual([["z", true, undefined]]);
+  });
+
   it("a bare-repo layout or an unresolvable .git is never listed", async () => {
     const d = tmp();
     mkdirSync(join(d, "bare/objects"), { recursive: true });
@@ -332,11 +341,11 @@ describe("ignoreSubmodules", () => {
     setGitRunner((o) => (calls.push(o.args), threadRunner(o)));
     const flags = () => calls.filter((a) => a.includes("--raw")).map((a) => a.find((x) => x.startsWith("--ignore-submodules")));
     await gitDiff(d, { base: "head", allowed: () => true });
-    await gitStatus(d);
+    await gitStatus(d, { allowed: () => true });
     expect(flags()).toEqual(["--ignore-submodules=dirty", "--ignore-submodules=dirty"]);
     calls.length = 0;
     await gitDiff(d, { base: "head", allowed: () => true, ignoreSubmodules: true });
-    await gitStatus(d, { ignoreSubmodules: true });
+    await gitStatus(d, { ignoreSubmodules: true, allowed: () => true });
     expect(flags()).toEqual(["--ignore-submodules", "--ignore-submodules"]);
   });
 });

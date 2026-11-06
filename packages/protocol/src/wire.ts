@@ -249,6 +249,28 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
+  /** Changes tab Commit: commits exactly `paths` (relative to the repository top, as `git.diff` names them; a rename: both sides) with their working-tree content; other index and work-tree entries stay; hooks run. `amend`: rewrites HEAD (no path: its message only). `push`: the reply also carries the push dialog data of HEAD's branch. Reply GitCommitFilesResult. */
+  | { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true }
+  /** Branch menu Merge: `git merge --no-edit <ref>` into HEAD, as `git.branch` showed it (`local`, `headRef`, `headHash` and `argv` are the shown values; a change is `stale`). A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.merge"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Branch menu Rebase: `git rebase <ref>` of HEAD, same fields as `git.merge`. Reply GitWriteResult. */
+  | { type: "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Conflict banner Continue: marks the conflicted files resolved (refused while conflict markers remain), then `<kind> --continue`; kind `conflict` only clears the unmerged entries. `kind` is the operation the banner showed (a different one now is `stale`). Reply GitWriteResult. */
+  | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
+  | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
+  | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
+  /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.undoCommit" | "git.revert" | "git.cherryPick"; cwd: string; hash: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Commit menu Reset Current Branch to Here: `mode` and `argv` as shown; `dirty` (required for `hard`): the `git.commitMenu` fingerprint of the files the reset would lose. Reply GitWriteResult. */
+  | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
+  /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
+  | { type: "git.operation"; cwd: string; exact?: true }
+  /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
+  | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
+  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
+  | { type: "git.commitMessageCancel" }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
@@ -695,12 +717,25 @@ export type GitCommitResult = { commit: GitCommitDetail };
  * `base`: the full hash of the before side; absent before the first commit (every file A, before side empty). `ref`: the branch compared (branch mode).
  * `branches`: local and remote branches for the picker (branch mode only). `truncated`: list cut at 3000 files.
  */
-export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean };
+export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean; /** The unfinished merge, rebase, cherry-pick, revert, am or unmerged state of the repository (the conflict banner). */ operation?: GitOperation };
+/** `conflict`: unmerged entries and no state file (stash pop, `checkout -m`). */
+export type GitOperationKind = "merge" | "rebase" | "cherry-pick" | "revert" | "am" | "conflict";
+/** `conflicted`: unmerged paths relative to the repository top, at most 3000. */
+export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
+/** `operation` null: nothing unfinished, or outside a work tree. */
+export type GitOperationResult = { operation: GitOperation | null };
+/** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
+export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
 /** `diff` null outside a git work tree. */
 export type GitDiffResult = { diff: GitDiff | null };
 /** A remote operation's git output (redacted, at most 8000 chars) and the refs stamp after it. */
 export type GitRemote = { output: string; refs: string | null };
 /** `remote` null outside a git work tree. */
+export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
+/** `committed` is null outside a git work tree. */
+/** `truncated`: the diff in the prompt was cut (the file list was complete). */
+export type GitCommitMessageResult = { message: string; truncated?: true };
+export type GitCommitFilesResult = { committed: GitCommitted | null };
 export type GitRemoteResult = { remote: GitRemote | null };
 /** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
 export type GitBranchInfo = {
@@ -721,10 +756,33 @@ export type GitBranchInfo = {
   push?: string[];
   forcePush?: string[];
   pull?: string[];
-  why?: { push?: string; forcePush?: string; pull?: string };
+  /** HEAD's branch (`refs/heads/x`) and commit: what Merge and Rebase were computed against. Absent when HEAD is detached or unborn. */
+  headRef?: string;
+  headHash?: string;
+  merge?: string[];
+  rebase?: string[];
+  why?: { push?: string; forcePush?: string; pull?: string; merge?: string; rebase?: string };
 };
 /** `branch` null outside a git work tree. */
 export type GitBranchResult = { branch: GitBranchInfo | null };
+/** What the commit menu shows for one commit and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
+export type GitCommitMenu = {
+  hash: string;
+  parents: number;
+  headRef?: string;
+  headHash?: string;
+  undo?: string[];
+  revert?: string[];
+  cherryPick?: string[];
+  reset?: { soft: string[]; mixed: string[]; hard: string[] };
+  /** Only with `hard`: the files a hard reset overwrites or deletes (at most 50), their count, and the fingerprint `git.reset` must send back. */
+  lose?: string[];
+  loseCount?: number;
+  dirty?: string;
+  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string };
+};
+/** `commitMenu` null outside a git work tree. */
+export type GitCommitMenuResult = { commitMenu: GitCommitMenu | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
@@ -746,6 +804,10 @@ export const LABEL_EMOJI_MAX = 16;
 export const LABEL_ICON_MAX = 32_000;
 /** Entries per map. */
 export const LABEL_ENTRIES_MAX = 200;
+/** Longest commit message instruction, global or per project (GH-559). */
+export const COMMIT_INSTRUCTION_MAX = 4000;
+/** What Claude is asked when no instruction is set (the Settings › Git placeholder shows it). */
+export const DEFAULT_COMMIT_INSTRUCTION = "Write a conventional commit message: a subject line of at most 72 characters in the imperative mood (type(scope): summary), a blank line, then a short body that explains what changed and why. Plain text.";
 /** Side of the saved square image icon, in pixels. */
 export const LABEL_ICON_PX = 64;
 /** Side of the saved square app icon, in pixels (the PWA icon size). */
@@ -780,6 +842,10 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     detectSubmodulesLimit: number;
     ignoreSubmodules: boolean;
     openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+    /** GH-559: what Claude is asked for when it writes a commit message; "" = the built-in instruction. At most COMMIT_INSTRUCTION_MAX chars. */
+    commitMessageInstruction: string;
+    /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
+    commitMessageInstructions: Record<string, string>;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

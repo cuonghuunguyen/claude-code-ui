@@ -283,3 +283,22 @@ describe("searchFiles in nested repositories and submodules", () => {
     expect(await searchFiles(join(dir, "src"), "main", 50, repos)).toEqual(["main.ts"]);
   });
 });
+
+describe("searchFiles on a repository whose config points outside the roots (GH-319)", () => {
+  it("starts no git process and lists the folder by walking it", async () => {
+    clearSearchCache();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "searchcfg-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    writeFileSync(join(dir, "main.txt"), "");
+    execFileSync("git", ["config", "include.path", join(tmpdir(), "outside-include.conf")], { cwd: dir });
+    const ran: string[][] = [];
+    setGitRunner(async (o) => (ran.push(o.args), threadRunner(o)));
+    try {
+      const inRoots = (p: string) => p === dir || p.startsWith(dir + sep);
+      expect(await searchFiles(dir, "main", 50, [], inRoots)).toEqual(["main.txt"]);
+      expect(ran).toEqual([]);
+    } finally {
+      setGitRunner(undefined);
+    }
+  });
+});

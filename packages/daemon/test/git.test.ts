@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { worktreeNameError } from "@claude-ui/protocol";
-import { createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, markWorktreeStale, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
+import { configRedirects, createWorktree, worktreeIncludeLimits, worktreeIncludeIo, gitDiff, gitBlobRef, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitShow, gitStatus, gitRefs, limiter, listWorktrees, markWorktreeStale, refsStamp, removeWorktree, worktreeStatus, classify } from "../src/git.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { wslGitRunner } from "../src/wsl-git.ts";
 import { execFile } from "node:child_process";
@@ -18,7 +18,7 @@ if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 
 describe("gitStatus", () => {
   it("is null outside a git repository", async () => {
-    expect(await gitStatus(mkdtempSync(join(tmpdir(), "nogit-")))).toBeNull();
+    expect(await gitStatus(mkdtempSync(join(tmpdir(), "nogit-")), { allowed: () => true })).toBeNull();
   });
 
   it("returns the branch and the lines added and removed against HEAD, staged and unstaged", async () => {
@@ -27,22 +27,22 @@ describe("gitStatus", () => {
     writeFileSync(join(dir, "a.txt"), "1\n2\n3\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 0, removed: 0, files: 0, refs: expect.any(String) });
+    expect(await gitStatus(dir, { allowed: () => true })).toEqual({ branch: "main", added: 0, removed: 0, files: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\nx\ny\n");
     writeFileSync(join(dir, "b.txt"), "new\n");
     run(dir, "add", "b.txt");
-    expect(await gitStatus(dir)).toEqual({ branch: "main", added: 3, removed: 2, files: 2, refs: expect.any(String) });
+    expect(await gitStatus(dir, { allowed: () => true })).toEqual({ branch: "main", added: 3, removed: 2, files: 2, refs: expect.any(String) });
   });
 
   it("works before the first commit and on a detached HEAD", async () => {
     const dir = mkdtempSync(join(tmpdir(), "git-"));
     run(dir, "init", "-q", "-b", "dev");
-    expect(await gitStatus(dir)).toEqual({ branch: "dev", added: 0, removed: 0, files: 0, refs: expect.any(String) });
+    expect(await gitStatus(dir, { allowed: () => true })).toEqual({ branch: "dev", added: 0, removed: 0, files: 0, refs: expect.any(String) });
     writeFileSync(join(dir, "a.txt"), "1\n");
     run(dir, "add", ".");
     run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
     run(dir, "checkout", "-q", "--detach");
-    expect((await gitStatus(dir))?.branch).toMatch(/^[0-9a-f]{7,}$/);
+    expect((await gitStatus(dir, { allowed: () => true }))?.branch).toMatch(/^[0-9a-f]{7,}$/);
   });
 });
 
@@ -67,15 +67,15 @@ describe("listWorktrees", () => {
       { path: join(dir, "wt-a"), branch: "a", main: false },
       { path: join(dir, "wt-b"), branch: "b", main: false },
     ];
-    expect(await listWorktrees(main)).toEqual(expected);
-    expect(await listWorktrees(join(dir, "wt-a"))).toEqual(expected);
+    expect(await listWorktrees(main, () => true)).toEqual(expected);
+    expect(await listWorktrees(join(dir, "wt-a"), () => true)).toEqual(expected);
   });
 
   it("labels a detached HEAD by its short hash and leaves out a worktree whose directory was deleted", async () => {
     const { dir, main } = repo();
     run(join(dir, "wt-a"), "checkout", "-q", "--detach");
     rmSync(join(dir, "wt-b"), { recursive: true });
-    const list = await listWorktrees(main);
+    const list = await listWorktrees(main, () => true);
     expect(list?.map((w) => w.path)).toEqual([main, join(dir, "wt-a")]);
     expect(list?.[1].branch).toMatch(/^[0-9a-f]{7}$/);
   });
@@ -84,7 +84,7 @@ describe("listWorktrees", () => {
     const { dir, main } = repo();
     const odd = join(dir, "line\nbreak");
     run(main, "worktree", "add", "-q", "-b", "odd", odd);
-    expect((await listWorktrees(main))?.find((w) => w.branch === "odd")?.path).toBe(odd);
+    expect((await listWorktrees(main, () => true))?.find((w) => w.branch === "odd")?.path).toBe(odd);
   });
 
   it.runIf(process.platform !== "win32")("falls back to the newline format on a git without worktree list -z (before 2.36)", async () => {
@@ -96,19 +96,19 @@ describe("listWorktrees", () => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {
-      expect(await listWorktrees(main)).toEqual([
+      expect(await listWorktrees(main, () => true)).toEqual([
         { path: main, branch: "main", main: true },
         { path: join(dir, "wt-a"), branch: "a", main: false },
         { path: join(dir, "wt-b"), branch: "b", main: false },
       ]);
-      expect(await listWorktrees(mkdtempSync(join(tmpdir(), "nogit-")))).toBeNull();
+      expect(await listWorktrees(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
     } finally {
       process.env.PATH = path;
     }
   });
 
   it("is null outside a git repository", async () => {
-    expect(await listWorktrees(mkdtempSync(join(tmpdir(), "nogit-")))).toBeNull();
+    expect(await listWorktrees(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
   });
 });
 
@@ -700,7 +700,7 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     const hand = join(tmp(), "wt");
     run(main, "worktree", "add", "-q", "-b", "hand", hand);
     run(main, "worktree", "lock", "--reason", "usb", hand);
-    expect((await listWorktrees(main))!.find((w) => w.path === hand)).toMatchObject({ locked: true });
+    expect((await listWorktrees(main, () => true))!.find((w) => w.path === hand)).toMatchObject({ locked: true });
     expect(await code(removeWorktree(main, hand, () => true))).toBe("not_removable");
     expect(await worktreeStatus(main, hand, () => true)).toMatchObject({ safety: "blocked", blocked: "locked" });
     expect(existsSync(hand)).toBe(true);
@@ -780,9 +780,10 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     const wt = join(tmp(), "wt");
     run(main, "worktree", "add", "-q", "-b", "far", wt);
     writeFileSync(join(wt, "u.txt"), "u");
-    const st = await worktreeStatus(main, wt, (p) => !p.startsWith(main));
+    const roots = (p: string) => !p.startsWith(wt);
+    const st = await worktreeStatus(main, wt, roots);
     expect(st).toMatchObject({ safety: "blocked", blocked: "outside_roots", uncommitted: 0 });
-    expect(await code(removeWorktree(main, wt, (p) => !p.startsWith(main)))).toBe("cwd_not_allowed");
+    expect(await code(removeWorktree(main, wt, roots))).toBe("cwd_not_allowed");
     expect(existsSync(wt)).toBe(true);
   });
 
@@ -1143,7 +1144,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
       await gitLog(r.dir, { ref: "HEAD", allowed: all });
       await gitShow(r.dir, r.c3, all);
       await gitFileAt(r.dir, r.c3, "a.txt", all, 1000);
-      await gitStatus(r.dir);
+      await gitStatus(r.dir, { allowed: () => true });
       await gitDiff(r.dir, { base: "head", allowed: all });
       await gitDiff(r.dir, { base: "branch", ref: "refs/heads/f", allowed: all });
     });
@@ -1185,7 +1186,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
     execFileSync("git", ["diff", "--numstat", "HEAD"], { cwd: r.dir, stdio: "ignore" });
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
-    await gitStatus(r.dir);
+    await gitStatus(r.dir, { allowed: () => true });
     await gitLog(r.dir, { allowed: all });
     await gitShow(r.dir, r.c5, all);
     await gitFileAt(r.dir, r.c3, "a.txt", all, 1000);
@@ -1375,7 +1376,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitShow(proj, outer.c3, inRoots)).rejects.toBeDefined();
     await expect(gitFileAt(proj, outer.c3, "a.txt", inRoots, 1000)).rejects.toBeDefined();
     await expect(gitDiff(proj, { base: "head", allowed: inRoots })).rejects.toBeDefined();
-    expect(await gitStatus(proj)).toBeNull();
+    expect(await gitStatus(proj, { allowed: () => true })).toBeNull();
   });
 
   it("gitRefs is the refs stamp without a git process, null outside a repository", async () => {
@@ -1399,11 +1400,89 @@ describe("gitLog / gitShow / gitFileAt", () => {
       }
       return envs;
     };
+    it("gitStatus and listWorktrees refuse a cwd outside the roots without starting git", async () => {
+      const r = graphRepo();
+      const envs = await seenEnv(async () => {
+        expect(await gitStatus(r.dir, { allowed: () => false })).toBeNull();
+        expect(await listWorktrees(r.dir, () => false)).toBeNull();
+      });
+      expect(envs).toEqual([]);
+    });
+    // A repository whose .git is a pointer file: swapped after the roots check, git must still get the validated dirs (GH-323).
+    const swapSetup = () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), "swap-")));
+      const roots = join(base, "roots");
+      mkdirSync(roots);
+      const commit = (d: string) => run(d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+      run(roots, "init", "-q", "-b", "main", "main");
+      const main = join(roots, "main");
+      commit(main);
+      const a = join(roots, "a");
+      const b = join(roots, "b");
+      run(main, "worktree", "add", "-q", "-b", "a", a);
+      run(main, "worktree", "add", "-q", "-b", "b", b);
+      run(base, "init", "-q", "-b", "outerbranch", "outer");
+      const outer = join(base, "outer");
+      commit(outer);
+      const outerState = () => execFileSync("git", ["-C", outer, "for-each-ref"], { encoding: "utf8" }) + execFileSync("git", ["-C", outer, "worktree", "list"], { encoding: "utf8" });
+      const inRoots = (p: string) => p === roots || p.startsWith(roots + sep);
+      /** Runs `fn` with a runner that points `a/.git` at the outer repository right before git first starts. */
+      const swapped = async (fn: () => Promise<unknown>) => {
+        const envs: NodeJS.ProcessEnv[] = [];
+        let done = false;
+        setGitRunner(async (o: GitRunOptions) => {
+          if (!done) {
+            done = true;
+            writeFileSync(join(a, ".git"), `gitdir: ${join(outer, ".git")}\n`);
+          }
+          envs.push(o.env);
+          return threadRunner(o);
+        });
+        try {
+          await fn().catch(() => undefined);
+        } finally {
+          setGitRunner(undefined);
+        }
+        return envs;
+      };
+      return { roots, main, a, b, outer, outerState, inRoots, swapped };
+    };
+    it.skipIf(process.platform === "win32")("gitStatus uses one validated env: a .git pointer swapped after the check is not followed", async () => {
+      const t = swapSetup();
+      const before = t.outerState();
+      let status: Awaited<ReturnType<typeof gitStatus>> | undefined;
+      const envs = await t.swapped(async () => (status = await gitStatus(t.a, { allowed: t.inRoots })));
+      expect(envs.length).toBeGreaterThan(0);
+      for (const e of envs) expect(e).toMatchObject({ GIT_COMMON_DIR: join(t.main, ".git") });
+      expect(status?.branch).toBe("a");
+      expect(t.outerState()).toBe(before);
+    });
+    it.skipIf(process.platform === "win32")("worktree.create / remove / status refuse a repository swapped after the roots check", async () => {
+      for (const op of ["create", "remove", "status"] as const) {
+        const t = swapSetup();
+        const before = t.outerState();
+        const envs = await t.swapped(() =>
+          op === "create" ? createWorktree(t.a, { name: "n", allowed: t.inRoots, claudeDir: t.roots }) : op === "remove" ? removeWorktree(t.a, t.b, t.inRoots) : worktreeStatus(t.a, t.b, t.inRoots),
+        );
+        for (const e of envs) expect(e, op).toMatchObject({ GIT_COMMON_DIR: join(t.main, ".git") });
+        expect(t.outerState(), op).toBe(before);
+      }
+    });
+    it("every git call of createWorktree, worktreeStatus and removeWorktree carries the pin", async () => {
+      const t = swapSetup();
+      const envs = await seenEnv(async () => {
+        await createWorktree(t.a, { name: "n", allowed: t.inRoots, claudeDir: t.roots });
+        await worktreeStatus(t.a, t.b, t.inRoots);
+        await removeWorktree(t.a, t.b, t.inRoots);
+      });
+      expect(envs.length).toBeGreaterThan(5);
+      for (const e of envs) expect(e).toMatchObject({ GIT_DIR: expect.any(String), GIT_COMMON_DIR: join(t.main, ".git"), GIT_WORK_TREE: expect.any(String) });
+    });
     it("every graph call gets GIT_DIR (real path), GIT_COMMON_DIR, GIT_WORK_TREE and a ceiling above the top", async () => {
       const r = graphRepo();
       const envs = await seenEnv(async () => {
         await gitLog(r.dir, { allowed: all });
-        await gitStatus(r.dir);
+        await gitStatus(r.dir, { allowed: () => true });
         await gitDiff(r.dir, { base: "head", allowed: all });
       });
       expect(envs.length).toBeGreaterThan(3);
@@ -1424,9 +1503,9 @@ describe("gitLog / gitShow / gitFileAt", () => {
       mkdirSync(join(wt, "sub"));
       const envs = await seenEnv(async () => {
         expect((await gitLog(wt, { allowed: all }))!.commits.length).toBeGreaterThan(0);
-        expect((await gitStatus(join(wt, "sub")))!.branch).toBe("wb");
+        expect((await gitStatus(join(wt, "sub"), { allowed: () => true }))!.branch).toBe("wb");
         expect(await gitDiff(join(wt, "sub"), { base: "head", allowed: all })).not.toBeNull();
-        expect((await listWorktrees(wt))!.map((w) => w.path)).toContain(wt);
+        expect((await listWorktrees(wt, () => true))!.map((w) => w.path)).toContain(wt);
       });
       for (const e of envs) expect(e).toMatchObject({ GIT_COMMON_DIR: join(r.dir, ".git"), GIT_WORK_TREE: wt });
     });
@@ -1533,7 +1612,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
   it("gitStatus during a graph read returns the last status without git, or waits when it has none", async () => {
     const a = graphRepo();
     const b = graphRepo();
-    const primed = (await gitStatus(a.dir))!;
+    const primed = (await gitStatus(a.dir, { allowed: () => true }))!;
     let open!: () => void;
     const gate = new Promise<void>((res) => (open = res));
     const seen: string[][] = [];
@@ -1546,12 +1625,12 @@ describe("gitLog / gitShow / gitFileAt", () => {
       const log = gitLog(a.dir, { allowed: all });
       await new Promise((res) => setTimeout(res, 20));
       seen.length = 0;
-      const during = await gitStatus(a.dir);
+      const during = await gitStatus(a.dir, { allowed: () => true });
       expect(during).toEqual({ ...primed, refs: await refsStamp(a.dir) });
       expect(seen.some((x) => x.includes("diff"))).toBe(false);
       // A folder with no earlier status waits for the graph to finish.
       let done = false;
-      const first = gitStatus(b.dir).then((s) => ((done = true), s));
+      const first = gitStatus(b.dir, { allowed: () => true }).then((s) => ((done = true), s));
       await new Promise((res) => setTimeout(res, 50));
       expect(done).toBe(false);
       open();
@@ -1808,7 +1887,7 @@ describe("WSL projects opened by their UNC path", () => {
   it("listWorktrees of a UNC WSL cwd maps the POSIX paths git prints to the same UNC form", async () => {
     const out = "worktree /home/me/repo\0HEAD abcdef1234\0branch refs/heads/main\0\0worktree /mnt/c/wt\0HEAD abcdef1234\0detached\0\0";
     setGitRunner(async () => ({ stdout: Buffer.from(out), stderr: "" }));
-    const list = await listWorktrees("\\\\wsl.localhost\\Ubuntu\\home\\me\\repo");
+    const list = await listWorktrees("\\\\wsl.localhost\\Ubuntu\\home\\me\\repo", () => true);
     expect(list).toEqual([
       { path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo", branch: "main", main: true },
       { path: "C:\\wt", branch: "abcdef1", main: false, detached: true },
@@ -1833,7 +1912,7 @@ describe("WSL projects opened by their UNC path", () => {
     setGitRunner(wslGitRunner({ local }));
     // On Linux a UNC path is relative: resolved from a cwd outside any repository, so no host repository is pinned (Windows resolves the UNC path itself).
     vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));
-    expect(await gitStatus(unc(dir))).toMatchObject({ branch: "main", added: 1, removed: 0 });
+    expect(await gitStatus(unc(dir), { allowed: () => true })).toMatchObject({ branch: "main", added: 1, removed: 0 });
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((f) => f === "wsl.exe")).toBe(true);
   });
@@ -1862,10 +1941,10 @@ describe("WSL projects opened by their UNC path", () => {
       });
     setGitRunner(wslGitRunner({ local }));
     vi.spyOn(process, "cwd").mockReturnValue(realpathSync(tmpdir()));
-    const inner = await gitStatus(unc(join(sup, "inner")));
+    const inner = await gitStatus(unc(join(sup, "inner")), { allowed: () => true });
     expect(inner).toMatchObject({ branch: "main" });
     // A submodule is detached at the superproject's gitlink: the status names its short hash.
-    const lib = await gitStatus(unc(join(sup, "libs", "lib")));
+    const lib = await gitStatus(unc(join(sup, "libs", "lib")), { allowed: () => true });
     expect(lib?.branch).toMatch(/^[0-9a-f]{7}$|^main$/);
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((f) => f === "wsl.exe")).toBe(true);
@@ -1921,7 +2000,7 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     let status: Awaited<ReturnType<typeof gitStatus>>;
     const trace = await traced(async () => {
       diff = await gitDiff(r.dir, { base: "head", allowed: all });
-      status = await gitStatus(r.dir);
+      status = await gitStatus(r.dir, { allowed: () => true });
     });
     expect(trace.length).toBeGreaterThan(0);
     expect(trace).not.toMatch(/status --porcelain/);
@@ -1944,7 +2023,7 @@ describe("submodule rows", { timeout: 90_000 }, () => {
       for (const f of ["--ignore-submodules=dirty", "--raw", "--numstat", "--no-abbrev"]) expect(diffs[0]).toContain(f);
       expect(diffs[0]).not.toContain("--name-status");
       calls.length = 0;
-      await gitStatus(r.dir);
+      await gitStatus(r.dir, { allowed: () => true });
       const st = calls.filter((a) => a.includes("diff"));
       expect(st).toHaveLength(1);
       expect(st[0]).toContain("--ignore-submodules=dirty");
@@ -1985,7 +2064,7 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     put(r.dir, "s.txt", "s\nmore\n");
     put(r.dir, "bin.dat", Buffer.from([0, 9, 9, 0]));
     sh(r.inner, "checkout", "-q", r.c2);
-    expect(await gitStatus(r.dir)).toMatchObject({ added: 1, removed: 0, files: 3 });
+    expect(await gitStatus(r.dir, { allowed: () => true })).toMatchObject({ added: 1, removed: 0, files: 3 });
   });
 
   it.skipIf(process.platform === "win32")("a tab in a file name keeps its line counts in gitStatus and gitDiff", async () => {
@@ -1995,7 +2074,7 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     sh(r.dir, "add", name);
     sh(r.dir, "commit", "-qm", "tab");
     put(r.dir, name, "1\n2\n3\n");
-    expect(await gitStatus(r.dir)).toMatchObject({ added: 2, removed: 0, files: 1 });
+    expect(await gitStatus(r.dir, { allowed: () => true })).toMatchObject({ added: 2, removed: 0, files: 1 });
     expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.files).toContainEqual({ status: "M", path: name, added: 2, removed: 0 });
   });
 
@@ -2007,5 +2086,222 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     expect(await msg(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
     expect(await code(gitFileAt(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
     expect(await code(gitBlobRef(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
+  });
+});
+
+describe("repository config redirection (GH-319)", () => {
+  const mk = () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "cfg-")));
+    const roots = join(base, "roots");
+    const outer = join(base, "outer");
+    mkdirSync(roots);
+    mkdirSync(outer);
+    const main = join(roots, "main");
+    run(roots, "init", "-q", "-b", "main", "main");
+    run(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i");
+    const inRoots = (p: string) => p === roots || p.startsWith(roots + sep);
+    return { base, roots, outer, main, inRoots };
+  };
+  const setCfg = (cwd: string, key: string, value: string) => run(cwd, "config", "--add", key, value);
+  const withPlatform = async <T,>(value: string, fn: () => Promise<T>) => {
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value });
+    try {
+      return await fn();
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+    }
+  };
+
+  describe("configRedirects", () => {
+    const fixtures: Record<string, string> = {
+      "key on the header line": "[core] hooksPath = /x\n",
+      "includeIf": '[includeIf "gitdir:/a/"]\n\tpath = /inc\n',
+      "case": "[Include]\n\tPATH = /inc\n[CORE]\n\tExcludesFile = /e\n\tattributesfile=/a\n",
+      "quoted value with a comment char": '[core]\n\thooksPath = "/a#b" # note\n',
+      "continuation": "[core]\n\texcludesFile = /a\\\nb\n",
+      "escaped backslash at line end is no continuation": "[core]\n\tworktree = x\\\\\n\thooksPath = /h\n",
+      "bare key": "[core]\n\thooksPath\n\texcludesFile = /e\n",
+      "comment lines and blank lines": "# c\n; d\n\n[core]\n\t# hooksPath = /no\n\thooksPath = /yes\n",
+      "multiple include paths": "[include]\n\tpath = /a\n\tpath = /b\n",
+      "empty value": "[core]\n\thooksPath =\n",
+      "comment ending in a backslash does not continue": "[core]\n\tfoo = bar ; note \\\n\thooksPath = /tmp/evil1\n",
+      "header comment ending in a backslash": "[core] # x \\\n\texcludesFile = /tmp/evil2\n",
+      "value comment then key": "[core]\n\thooksPath = /x ; c \\\n\tattributesFile = /x2\n",
+      "continuation inside quotes": '[core]\n\thooksPath = "/a\\\nb"\n',
+      "comment char right after a continuation": "[core]\n\tx = a\\\n# \\\n\thooksPath = /evil\n",
+      "semicolon right after a continuation": "[core]\n\tx = a\\\n; \\\n\thooksPath = /evil\n",
+      "backslash right after a continuation": "[core]\n\tx = a\\\n\\\\\n\thooksPath = /evil\n[include]\n\tpath = /i\n",
+      "quoted trailing blank": '[include]\n\tpath = "evil "\n',
+      "escaped newline in value": '[include]\n\tpath = "hooks\\n"\n',
+      "form feed at the end": "[include]\n\tpath = inc\f\n",
+      "no-break space at the end": "[core]\n\thooksPath = /x\u00a0\n",
+      "form feed alone": "[core]\n\thooksPath = \f\n",
+      "inner blanks": "[core]\n\thooksPath = /a   b\n",
+      "BOM": "\uFEFF[core]\n\thooksPath = /bom\n",
+      "other sections are ignored": '[remote "o"]\n\turl = /u\n\tpath = /p\n[core.x]\n\thooksPath = /sub\n',
+    };
+    const KEYS = ["include.path", "core.hookspath", "core.excludesfile", "core.attributesfile"];
+    const viaGit = (text: string) => {
+      const dir = mkdtempSync(join(tmpdir(), "cfgfile-"));
+      const f = join(dir, "c");
+      writeFileSync(f, text);
+      const out = execFileSync("git", ["config", "--file", f, "--no-includes", "--list", "-z"], { encoding: "utf8" });
+      return out.split("\0").filter(Boolean).flatMap((e) => {
+        const i = e.indexOf("\n");
+        const k = i < 0 ? e : e.slice(0, i);
+        return (KEYS.includes(k) || /^includeif\..*\.path$/.test(k)) && i >= 0 && e.slice(i + 1) ? [e.slice(i + 1)] : [];
+      });
+    };
+    for (const [name, text] of Object.entries(fixtures))
+      it(`reads ${name} like git`, () => {
+        expect(configRedirects(text).map((r) => r.value)).toEqual(viaGit(text));
+      });
+    it("names the key", () => {
+      expect(configRedirects("[core]\n\thooksPath = h\n\texcludesFile = e\n\tattributesFile = a\n[include]\n\tpath = i\n")).toEqual([
+        { key: "hooksPath", value: "h" },
+        { key: "excludesFile", value: "e" },
+        { key: "attributesFile", value: "a" },
+        { key: "include", value: "i" },
+      ]);
+    });
+    it("throws on a line it does not understand and on text over 1 MiB", () => {
+      expect(() => configRedirects("[core]\n\t=== nonsense\n")).toThrow();
+      expect(() => configRedirects("hooksPath = x\n")).toThrow();
+      expect(() => configRedirects("[core\n")).toThrow();
+      expect(() => configRedirects("[core]\n\thooksPath = /r/x\tevil\n")).toThrow();
+      expect(() => configRedirects("[core]\n\thooksPath = /r/x\revil\n")).toThrow();
+      expect(configRedirects('[alias]\n\tx = a\tb \\q "oops\n')).toEqual([]);
+      expect(configRedirects("[core]\n\thooksPath = /r/x\t\n")).toEqual([{ key: "hooksPath", value: "/r/x" }]);
+      expect(() => configRedirects("#".repeat(1024 * 1024 + 1))).toThrow();
+    });
+  });
+
+  it("an include.path outside the roots: gitEscapes true, gitLog and createWorktree refuse", async () => {
+    const { outer, main, roots, inRoots } = mk();
+    writeFileSync(join(outer, "x.conf"), "[user]\n\tname = x\n");
+    setCfg(main, "include.path", join(outer, "x.conf"));
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+    await expect(gitLog(main, { allowed: inRoots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+    await expect(createWorktree(main, { name: "w", allowed: inRoots, claudeDir: roots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+  });
+
+  it("an include.path to a file that does not exist outside the roots still escapes", async () => {
+    const { outer, main, inRoots } = mk();
+    setCfg(main, "include.path", join(outer, "missing.conf"));
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+  });
+
+  it("includeIf.<cond>.path outside the roots escapes whatever the condition", async () => {
+    const { outer, main, inRoots } = mk();
+    setCfg(main, "includeIf.gitdir:/never/.path", join(outer, "x.conf"));
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+  });
+
+  it("an include inside the roots does not escape; one that includes a file outside (nested) does", async () => {
+    const { outer, main, roots, inRoots } = mk();
+    writeFileSync(join(roots, "in.conf"), "[user]\n\tname = x\n");
+    setCfg(main, "include.path", join(roots, "in.conf"));
+    expect(await gitEscapes(main, inRoots)).toBe(false);
+    writeFileSync(join(roots, "in.conf"), `[include]\n\tpath = ${join(outer, "x.conf")}\n`);
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+  });
+
+  it("an include cycle inside the roots neither hangs nor escapes", async () => {
+    const { main, roots, inRoots } = mk();
+    writeFileSync(join(roots, "a.conf"), `[include]\n\tpath = ${join(roots, "b.conf")}\n`);
+    writeFileSync(join(roots, "b.conf"), `[include]\n\tpath = ${join(roots, "a.conf")}\n`);
+    setCfg(main, "include.path", join(roots, "a.conf"));
+    expect(await gitEscapes(main, inRoots)).toBe(false);
+  });
+
+  it("a relative include resolves against the including file", async () => {
+    const { main, roots, inRoots } = mk();
+    mkdirSync(join(roots, "d"));
+    writeFileSync(join(roots, "d", "a.conf"), "[include]\n\tpath = ../../../outer/x.conf\n");
+    setCfg(main, "include.path", "../../d/a.conf");
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+    writeFileSync(join(roots, "d", "a.conf"), "[include]\n\tpath = b.conf\n");
+    expect(await gitEscapes(main, inRoots)).toBe(false);
+  });
+
+  it("core.excludesFile and core.attributesFile outside the roots escape; inside they do not", async () => {
+    for (const key of ["core.excludesFile", "core.attributesFile"]) {
+      const { outer, main, roots, inRoots } = mk();
+      setCfg(main, key, join(roots, "ok"));
+      expect(await gitEscapes(main, inRoots), `${key} inside`).toBe(false);
+      run(main, "config", "--unset-all", key);
+      setCfg(main, key, join(outer, "x"));
+      expect(await gitEscapes(main, inRoots), `${key} outside`).toBe(true);
+    }
+  });
+
+  it("a relative core.excludesFile with .. fails closed", async () => {
+    const { main, inRoots } = mk();
+    setCfg(main, "core.excludesFile", "../x");
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+  });
+
+  it("core.hooksPath inside the repository (husky style) stays allowed", async () => {
+    const { main, inRoots } = mk();
+    setCfg(main, "core.hooksPath", ".husky");
+    expect(await gitEscapes(main, inRoots)).toBe(false);
+    expect(await gitLog(main, { allowed: inRoots })).not.toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")("core.hooksPath outside the roots is not run by a daemon git call; inside the roots it is", async () => {
+    const { outer, main, roots, inRoots } = mk();
+    const hook = (dir: string, marker: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "post-checkout"), `#!/bin/sh\necho ran > "${marker}"\n`);
+      chmodSync(join(dir, "post-checkout"), 0o755);
+    };
+    const mOut = join(outer, "marker");
+    hook(join(outer, "hooks"), mOut);
+    setCfg(main, "core.hooksPath", join(outer, "hooks"));
+    await expect(createWorktree(main, { name: "w", allowed: inRoots, claudeDir: roots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+    expect(existsSync(mOut)).toBe(false);
+    run(main, "config", "--unset-all", "core.hooksPath");
+    const mIn = join(roots, "marker");
+    hook(join(main, "hooks"), mIn);
+    setCfg(main, "core.hooksPath", join(main, "hooks"));
+    await createWorktree(main, { name: "w", allowed: inRoots, claudeDir: roots });
+    expect(existsSync(mIn)).toBe(true);
+  });
+
+  it("an unparseable repository config fails closed", async () => {
+    const { main, inRoots } = mk();
+    writeFileSync(join(main, ".git", "config"), "[core]\n\t=== nonsense\n");
+    expect(await gitEscapes(main, inRoots)).toBe(true);
+  });
+
+  it("the config.worktree of a linked worktree is checked too", async () => {
+    const { outer, main, roots, inRoots } = mk();
+    run(main, "worktree", "add", "-q", "-b", "w", join(roots, "w"));
+    run(main, "config", "extensions.worktreeConfig", "true");
+    const dir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: join(roots, "w"), encoding: "utf8" }).trim();
+    expect(await gitEscapes(join(roots, "w"), inRoots)).toBe(false);
+    writeFileSync(join(dir, "config.worktree"), `[core]\n\thooksPath = ${join(outer, "h")}\n`);
+    expect(await gitEscapes(join(roots, "w"), inRoots)).toBe(true);
+  });
+
+  // No skip: on Windows `junction` makes a real junction (no privilege needed); elsewhere the type is ignored and a symlink is made.
+  it("a .git junction and a project junction to a repository outside the roots escape (runs on every platform)", async () => {
+    const { outer, roots, inRoots } = mk();
+    run(outer, "init", "-q", "-b", "main");
+    mkdirSync(join(roots, "j"));
+    symlinkSync(join(outer, ".git"), join(roots, "j", ".git"), "junction");
+    expect(await gitEscapes(join(roots, "j"), inRoots)).toBe(true);
+    await expect(gitLog(join(roots, "j"), { allowed: inRoots })).rejects.toMatchObject({ code: "cwd_not_allowed" });
+    symlinkSync(outer, join(roots, "p"), "junction");
+    expect(await gitEscapes(join(roots, "p"), inRoots)).toBe(true);
+  });
+
+  it("a UNC include.path, core.excludesFile and core.attributesFile are not opened (Windows semantics)", async () => {
+    for (const [key, value] of [["include.path", "//evil-gh323/share/x"], ["core.excludesFile", "//evil-gh323/share/x"], ["core.attributesFile", "//evil-gh323/share/x"], ["core.hooksPath", "//?/C:/x"]] as const) {
+      const { main } = mk();
+      writeFileSync(join(main, ".git", "config"), readFileSync(join(main, ".git", "config"), "utf8") + `[${key.split(".")[0]}]\n\t${key.split(".")[1]} = ${value}\n`);
+      expect(await withPlatform("win32", () => gitEscapes(main, () => true)), key).toBe(true);
+    }
   });
 });
