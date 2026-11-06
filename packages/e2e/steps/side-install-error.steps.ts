@@ -78,7 +78,7 @@ Then("the sidebar has no side status under {string}", async ({ page }, project: 
   await expect(group(page, project).getByTestId("sidebar-side-status")).toHaveCount(0);
 });
 
-// The hub retries a failed side by itself (the line shows Starting… for some seconds, then the error again, Details closed): retry until the error and its open Details hold for a moment.
+// The auto start at hub start can still be running (Starting…, then the error): retry until the error and its open Details hold for a moment.
 When("I open the Details of the sidebar status", async ({ page }) => {
   await expect(async () => {
     const toggle = page.getByTestId("session-list").getByRole("button", { name: "Details" });

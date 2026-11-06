@@ -32,10 +32,11 @@ const readySideHolder = () => {
   return { make: () => ((r = readySide()), r.proc), die: () => r.die() };
 };
 /** A side that fails to start (exit code 1, no frame). */
-function failing(): SideProcess {
+function failing(setupLine?: string): SideProcess {
   const exit = new EventEmitter();
-  setTimeout(() => exit.emit("exit", 1), 0);
-  return { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
+  const stdout = new PassThrough();
+  setTimeout(() => (setupLine && stdout.write(setupLine + "\n"), exit.emit("exit", 1)), 0);
+  return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => {}, on: (e, l) => exit.on(e, l) };
 }
 
 const state = (s: ReturnType<typeof createSides>, id: string) => s.list().find((x) => x.id === id);
@@ -121,6 +122,29 @@ describe("auto start of a saved side", () => {
     await tick(120_000);
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(state(s, "wsl:A")?.state).toBe("error");
+    s.close();
+  });
+
+  it("a setup error (install_failed) waits for Retry: no auto retry (GH-640)", async () => {
+    vi.useFakeTimers();
+    const spawn = vi.fn(async () => failing("CLAUDE_UI_SETUP install_failed npm ERR! 403"));
+    const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "k" }], key: () => "k", spawn });
+    await tick(5);
+    expect(state(s, "wsl:A")?.state).toBe("error");
+    await tick(120_000);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(state(s, "wsl:A")?.state).toBe("error");
+    s.close();
+  });
+
+  it("node_changed (transient) still retries once after 30 s (GH-640)", async () => {
+    vi.useFakeTimers();
+    const spawn = vi.fn(async () => failing("CLAUDE_UI_SETUP node_changed"));
+    const s = createSides({ targets: [wslSide("A")], saved: [{ id: "wsl:A", key: "k" }], key: () => "k", spawn });
+    await tick(30_005);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    await tick(120_000);
+    expect(spawn).toHaveBeenCalledTimes(2);
     s.close();
   });
 });
