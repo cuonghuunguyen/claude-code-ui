@@ -2,6 +2,33 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.3.0 - 2026-11-06
+
+### Added
+
+- Prompt: a file copied in Explorer or Finder and pasted or dropped in the prompt box is attached ([#613](https://github.com/cuonghuunguyen/claude-code-ui/issues/613)).
+- Prompt: **Expand** turns a pasted-text chip into plain text, and Undo restores the chip. A copied token pasted back is inlined ([#620](https://github.com/cuonghuunguyen/claude-code-ui/issues/620)).
+- Changes: **Add to prompt** adds a changed file to the prompt, and **Send selection to Claude** sends the selected diff lines ([#611](https://github.com/cuonghuunguyen/claude-code-ui/issues/611)).
+- Changes: untracked files show a red **U** badge, apart from added files ([#610](https://github.com/cuonghuunguyen/claude-code-ui/issues/610)).
+- Files: the file menus open a file or folder in the file manager, an editor or the default app ([#612](https://github.com/cuonghuunguyen/claude-code-ui/issues/612)).
+- Settings: **Test** checks a Claude token account ([#627](https://github.com/cuonghuunguyen/claude-code-ui/issues/627)).
+- Settings › New sessions › **Default permission mode**: the mode of a new session when the Claude settings set none. Default: auto.
+- Git: Reset hard, Smart checkout, stash drop and Abort keep the replaced file text in the Timeline ([#606](https://github.com/cuonghuunguyen/claude-code-ui/issues/606)).
+- SSH Sides: a failed install shows one summary line in the sidebar and the npm output behind **Details**. **Open project** offers **Retry install** and **Check again** ([#617](https://github.com/cuonghuunguyen/claude-code-ui/issues/617), [#618](https://github.com/cuonghuunguyen/claude-code-ui/issues/618)).
+
+### Changed
+
+- SSH Sides: a Side attaches to a running Hub of a schema-compatible build without an install ([#619](https://github.com/cuonghuunguyen/claude-code-ui/issues/619)).
+- SSH Sides: the **Details** of a failed Side stay open across **Retry**, and a setup error is not retried automatically ([#640](https://github.com/cuonghuunguyen/claude-code-ui/issues/640)).
+- Orchestration: workers in auto mode are no longer asked for git commands ([#628](https://github.com/cuonghuunguyen/claude-code-ui/issues/628)).
+- Changes: the diff header keeps the file name on a narrow screen, and its buttons are 44px high below the `md` breakpoint.
+- Artifacts: the list column is narrower and shows a tooltip with the full title ([#614](https://github.com/cuonghuunguyen/claude-code-ui/issues/614)).
+
+### Fixed
+
+- A session with no CLI no longer drops its first new CLI after a login or an account change ([#615](https://github.com/cuonghuunguyen/claude-code-ui/issues/615)).
+- Git: the repository safety check no longer starts git's fsmonitor daemon.
+
 ## 1.2.1 - 2026-11-05
 
 ### Fixed
