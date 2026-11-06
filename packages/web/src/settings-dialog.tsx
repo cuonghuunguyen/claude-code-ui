@@ -772,6 +772,13 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "history",
+    rows: [
+      { key: "enabled", kind: "switch" },
+      { key: "exclude", kind: "list" },
+    ],
+  },
+  {
     id: "git",
     rows: [
       { key: "autoRepositoryDetection", kind: "select", options: ["true", "false", "subFolders", "openEditors"].map((value) => ({ value })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
@@ -933,6 +940,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
   const git = daemonGroup("git");
+  const localHistory = daemonGroup("history");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
   const groups: Group[] = [
     { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection app={settings?.app} request={request} /> },
@@ -982,6 +990,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           },
         ]
       : []),
+    ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
