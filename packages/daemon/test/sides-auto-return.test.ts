@@ -280,7 +280,7 @@ function hub(sides: ReturnType<typeof createSides>) {
     sides,
     send: (m) => void sent.push(m),
     local: async () => {},
-    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: { sessions: [], projects: [], recentProjects: [] } }),
+    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "settings.get" ? { settings: { orchestration: { enabled: true }, launcher: { port: 4999 } } } : { sessions: [], projects: [], recentProjects: [] } }),
     isLocalSession: async () => false,
   });
   const ask = async (msg: object) => {
@@ -419,9 +419,14 @@ describe("attach handshake (ADR 0009)", () => {
       return p.proc;
     });
     const s = createSides({ targets: [wslSide("A")], spawn });
-    void s.start("wsl:A").catch(() => {});
+    let rejected: Error | undefined;
+    void s.start("wsl:A").catch((e: Error) => (rejected = e));
     await tick(120_000);
     expect(state(s, "wsl:A")).toMatchObject({ state: "error", mismatch: { remote: "1.1.0", remoteOlder: true } });
+    // The start rejects with what the row says (both versions, the way out), never the setup code.
+    expect(rejected!.message).toBe(state(s, "wsl:A")!.message);
+    expect(rejected!.message).toContain("runs Claude UI 1.1.0");
+    expect(rejected!.message).not.toContain("hub_no_attach");
     expect(state(s, "wsl:A")!.mismatch!.remoteSchema).toBeUndefined();
     expect(spawn).toHaveBeenCalledTimes(1);
     s.close();
@@ -580,6 +585,8 @@ describe("settings sync only to a Hub an attach started", () => {
     await h.ask({ type: "side.start", side: "wsl:A" });
     await new Promise((r) => setTimeout(r, 50));
     expect(settingsFrames(p)).toHaveLength(count);
+    // The Hub's launcher options (port, LAN, roots) are for its own machine, never synced to a side.
+    for (const f of settingsFrames(p)) expect(f.m.patch).toEqual({ orchestration: { enabled: true } });
     expect(s.attachStarted("wsl:A")).toBe(!!startedBy);
     s.close();
   });

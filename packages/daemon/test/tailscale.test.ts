@@ -140,4 +140,13 @@ describe("SERVE_WATCHER", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(() => process.kill(pid, 0)).toThrow();
   });
+  it.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM", "SIGHUP"] as const)("kills the detached serve on %s (Ctrl+C reaches the watcher, not the serve's own group)", async (sig) => {
+    const w = nodeSpawn(process.execPath, ["-e", SERVE_WATCHER, process.execPath, "-e", "console.log(process.pid);setInterval(() => {}, 1000)"], { stdio: ["pipe", "pipe", "inherit"] });
+    const pid = Number(await new Promise<string>((r) => w.stdout.once("data", (d) => r(String(d)))));
+    const ended = new Promise((r) => w.on("exit", r));
+    w.kill(sig);
+    await ended;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
 });

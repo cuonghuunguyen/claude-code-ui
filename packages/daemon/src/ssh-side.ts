@@ -109,12 +109,27 @@ export function addSshHost(o: { command: string; alias?: string; config?: string
 }
 
 /**
- * `ssh` arguments that run `script` with `sh -c` on the host. No askpass, no password, host key checking as the user configured.
+ * Shell snippet that imports the environment of the user's login shell (`$SHELL -ilc`, so ~/.zprofile, ~/.zshrc, ~/.bash_profile are read; sshd
+ * itself starts a non-login, non-interactive shell). Only sh-family shells: fish, tcsh, nu or an unset SHELL keep the plain environment. The
+ * profile's stdout, stderr and stdin are discarded (it cannot pollute the protocol); the env goes through a 0600 temp file, read only when
+ * complete and only when a trial eval in a subshell succeeds (a readonly variable such as SHELLOPTS would stop the script). PWD, OLDPWD and SHLVL are not imported. A profile that runs longer than `seconds` is killed and the plain environment stays.
+ */
+export const loginEnvScript = (seconds = 10) => `case "\${SHELL##*/}" in sh|bash|zsh|ksh|mksh|dash|ash|yash)
+  cui_f=$(mktemp 2>/dev/null) && {
+    "$SHELL" -ilc 'exec sh -c "unset PWD OLDPWD SHLVL; { export -p; echo \\#cui-end; } >\\"\\$0\\"" "$0"' "$cui_f" </dev/null >/dev/null 2>&1 & cui_p=$!
+    (sleep ${seconds}; kill -9 $cui_p) </dev/null >/dev/null 2>&1 & cui_w=$!
+    { wait $cui_p; kill $cui_w; wait $cui_w; } 2>/dev/null
+    [ "$(tail -n 1 "$cui_f")" = "#cui-end" ] && (eval "$(cat "$cui_f")") >/dev/null 2>&1 && eval "$(cat "$cui_f")"
+    rm -f "$cui_f"; } ;;
+esac; unset cui_f cui_p cui_w`;
+
+/**
+ * `ssh` arguments that run `script` with `sh -c` on the host, after `loginEnvScript`. No askpass, no password, host key checking as the user configured.
  * Base64 keeps newlines and quotes away from the remote login shell (fish and tcsh break on them).
  */
 export const sshArgs = (alias: string, script: string, args: string[] = [], config?: string) => [
   "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", ...(config ? ["-F", config] : []), "--", alias,
-  `sh -c ${shq(`eval "$(echo ${Buffer.from(script).toString("base64")} | base64 -d)"`)} sh ${args.map(shq).join(" ")}`.trimEnd(),
+  `sh -c ${shq(`eval "$(echo ${Buffer.from(`${loginEnvScript()}\n${script}`).toString("base64")} | base64 -d)"`)} sh ${args.map(shq).join(" ")}`.trimEnd(),
 ];
 
 /** The message for an ssh run that failed in ssh itself (exit 255, or no answer); undefined: the remote command's own exit. */

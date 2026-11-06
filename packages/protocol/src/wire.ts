@@ -191,10 +191,32 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number; exact?: true }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
+  /** Local history of a file (docs/spec.md "Local history"; `path` must be inside the roots, else `path_not_allowed`). Reply HistoryListResult, newest first. */
+  | { type: "history.list"; path: string }
+  /** Content of one entry (`not_found` for an unknown id). Reply `{ content }`. */
+  | { type: "history.read"; path: string; id: string }
+  /** Snapshots the current content (reason `restore`), then writes the entry's content like fs.write (`conflict` when `baseMtime` differs). Reply `{ mtime }`. */
+  | { type: "history.restore"; path: string; id: string; baseMtime?: number }
+  /** `label`: 1..100 characters, no control characters. Reply `{}`. */
+  | { type: "history.rename"; path: string; id: string; label: string }
+  | { type: "history.delete"; path: string; id: string }
+  /** A named entry of the file on disk (no merge, no dedupe; `too_large` over 256 KB). Reply `{ entry }`. */
+  | { type: "history.create"; path: string; label: string }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
   | { type: "fs.create"; path: string; dir?: boolean }
-  /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
-  | { type: "fs.rename"; path: string; name: string }
+  /**
+   * New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult.
+   * GH-555: `dir` moves it into that folder (an existing folder in the roots; `into_itself` when `dir` is `path` or below it). `replace`: an existing target is replaced (a file: Local history entry `paste`; a folder: the whole folder).
+   */
+  | { type: "fs.rename"; path: string; name: string; dir?: string; replace?: boolean }
+  /** GH-555: every file, folder and link below `path` (`path` itself first, `rel` ""); links are never followed. Fails `not_found`, `path_not_allowed`, `too_many` (> TRANSFER_MAX_ENTRIES), `too_large` (> TRANSFER_MAX_BYTES). Reply FsWalkResult. */
+  | { type: "fs.walk"; path: string }
+  /** GH-555: copies one file or link to `to` (same Daemon; `to` must not exist: `exists`; a folder: `not_a_file`). Reply FsPathResult. */
+  | { type: "fs.copy"; from: string; to: string }
+  /** GH-555: `length` bytes (at most CHUNK_BYTES, else `bad_request`) of a file from `offset`. Fails `not_a_file`. Reply FsChunkResult. */
+  | { type: "fs.readChunk"; path: string; offset: number; length: number }
+  /** GH-555: `data` (base64) at `offset`. Offset 0 creates the file exclusively (`exists`); later pieces need the file to have exactly `offset` bytes (`conflict`). `mode`: permission bits. Reply `{ size }`. */
+  | { type: "fs.writeChunk"; path: string; offset: number; data: string; mode?: number }
   /** Deletes for good (no trash): a file, a link (never its target) or a folder with everything in it. `dryRun`: only counts. Fails `not_found`, `root_protected`, `in_use`. Reply FsDeleteResult. */
   | { type: "fs.delete"; path: string; dryRun?: boolean }
   /** Copy of a file next to it, named "<name> copy<.ext>", "<name> copy 2<.ext>", ... Files only (`not_a_file`), at most 512 MiB (`too_large`). Reply FsPathResult. */
@@ -223,11 +245,13 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Repository list of `cwd` (docs/spec.md "git.repos"): own repository, nested repositories and submodules found as VS Code finds them (Settings › Git), file system only (no git process). `openFiles`: absolute paths of open editor tabs (at most 50). `fresh`: skip the 10 s cache. Reply GitReposResult. */
   | { type: "git.repos"; cwd: string; openFiles?: string[]; fresh?: true }
   /** Commit graph page (docs/spec.md "Layout"): `skip` commits already loaded; `ref` a full ref name (refs/heads/… or refs/remotes/…) or `HEAD`, else all refs; `author`/`text` case-insensitive substrings; `fresh`: skip the daemon's page and branch caches (the Refresh button). Reply GitLogResult. */
-  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true }
+  | { type: "git.log"; cwd: string; skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; exact?: true; /** Timeline (GH-565): `path` relative to the top; only the commits touching that file (`HEAD --follow`, no `ref`, no `branches` in the reply). */ path?: string }
   /** Reply GitCommitResult. */
   | { type: "git.commit"; cwd: string; hash: string; exact?: true }
   /** File text at a commit (`path` relative to the repository top). Same limits and error codes as fs.read (too_large, binary, not_utf8), not_found when absent, `bad_request` "Submodule: open its repository" for a gitlink (submodule) path. Reply `{ content }`. */
   | { type: "git.fileAt"; cwd: string; hash: string; path: string; exact?: true }
+  /** Annotate (GH-564): `git blame` of the working-tree file (`path` relative to the repository top), so uncommitted lines come back `null`. Reply GitBlameResult. `too_large` (with `size`) over the editor read limit (2 MiB), `not_found`, `not_a_file`, `cwd_not_allowed`, `bad_request` bad path. */
+  | { type: "git.blame"; cwd: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
   | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
@@ -236,6 +260,44 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.branch"; cwd: string; ref: string; exact?: true }
   /** Push `ref` as `git.branch` showed it; `local`: the sha shown; `argv`: the git command shown in the dialog (the daemon runs it only when it computes the same, else `stale`); `lease`: force push with --force-with-lease=<remoteRef>:<lease>. Reply GitRemoteResult. */
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
+  /** Changes tab Commit: commits exactly `paths` (relative to the repository top, as `git.diff` names them; a rename: both sides) with their working-tree content; other index and work-tree entries stay; hooks run. `amend`: rewrites HEAD (no path: its message only). `push`: the reply also carries the push dialog data of HEAD's branch. Reply GitCommitFilesResult. */
+  | { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true }
+  /** Changes tab Rollback, step 1 (GH-558): what a rollback of `paths` (as `git.commitFiles`) would do and the token it needs. Reply GitRollbackPreviewResult. */
+  | { type: "git.rollbackPreview"; cwd: string; paths: string[]; exact?: true }
+  /** Changes tab Rollback, step 2: `paths` back to HEAD in the work tree and the index; `token` from the preview (changed since: `stale`); `deleteAdded`: also delete added (new) files, else they stay untracked. Reply GitRollbackResult. */
+  | { type: "git.rollback"; cwd: string; paths: string[]; token: string; deleteAdded?: boolean; exact?: true }
+  /** Changes tab hunk Rollback: undoes one hunk of the diff of `path` in the work tree only. `hunk.lines`: unified-diff lines (" x", "-x", "+x", "\\ No newline at end of file"); `newStart`: unified convention. The text no longer matching: `stale`. Reply GitRollbackResult. */
+  | { type: "git.rollbackHunk"; cwd: string; path: string; hunk: { newStart: number; lines: string[] }; exact?: true }
+  /** Branch menu Merge: `git merge --no-edit <ref>` into HEAD, as `git.branch` showed it (`local`, `headRef`, `headHash` and `argv` are the shown values; a change is `stale`). A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.merge"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Branch menu Rebase: `git rebase <ref>` of HEAD, same fields as `git.merge`. Reply GitWriteResult. */
+  | { type: "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Conflict banner Continue: marks the conflicted files resolved (refused while conflict markers remain), then `<kind> --continue`; kind `conflict` only clears the unmerged entries. `kind` is the operation the banner showed (a different one now is `stale`). Reply GitWriteResult. */
+  | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
+  | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
+  | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
+  | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
+  /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
+  | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
+  /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.undoCommit" | "git.revert" | "git.cherryPick"; cwd: string; hash: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Commit menu Reset Current Branch to Here: `mode` and `argv` as shown; `dirty` (required for `hard`): the `git.commitMenu` fingerprint of the files the reset would lose. Reply GitWriteResult. */
+  | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
+  /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
+  | { type: "git.operation"; cwd: string; exact?: true }
+  /** Graph tab stash list of `cwd`'s repository, newest first (at most 500). Reply GitStashListResult. */
+  | { type: "git.stashList"; cwd: string; exact?: true }
+  /** Stash the local changes (`git stash push`); `includeUntracked`: also untracked files. Nothing to save: `bad_request`. Reply GitWriteResult. */
+  | { type: "git.stashPush"; cwd: string; message?: string; includeUntracked?: boolean; exact?: true }
+  /** Apply, pop or drop `stash@{index}`; `hash`: the entry's commit as the list showed it (another one there now: `stale`). Apply/pop conflict: a success whose reply carries `operation`. Reply GitWriteResult. */
+  | { type: "git.stashApply" | "git.stashPop" | "git.stashDrop"; cwd: string; index: number; hash: string; exact?: true }
+  /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
+  | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
+  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
+  | { type: "git.commitMessageCancel" }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
@@ -323,10 +385,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** `target`: `fence:<lang>` or `tool:<name>`. Reply `{}`. */
   | { type: "addons.pickRenderer"; target: string; name: string }
   // Updates (docs/spec.md "Updates").
+  /** Asks the registry now (Settings > About, the palette); reply UpdateCheckResult. A newer version also goes out as update_available. */
+  | { type: "update.check" }
   /** Installs the available version into the daemon's versions dir; reply UpdateInstallResult. The daemon keeps running. */
   | { type: "update.install" }
   /** Restarts into the installed version once every session is idle (`now`: at once); reply UpdateRestartResult. */
   | { type: "update.restart"; now?: boolean }
+  /** Creates (on) or removes the OS launcher shortcut on the Hub's machine (docs/spec.md "Launcher shortcut"). Reply `{installed}`; errors shortcut_unavailable, shortcut_failed. */
+  | { type: "launcher.shortcut"; on: boolean }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -410,6 +476,8 @@ export type ServerMessage =
  * subagent run); "Restart now" would also end `terminals` terminals. `restarting`: the daemon exits; the browser reconnects.
  */
 export type UpdateState = { phase: "installing" | "restarting" } | { phase: "waiting"; waitingFor: number; terminals: number };
+/** `latest`: the newer version the daemon offers, none when this one is the latest. */
+export type UpdateCheckResult = { current: string; latest?: string };
 export type UpdateInstallResult = { installed: string };
 /** `waitingFor`: 0 when the daemon restarts at once. */
 export type UpdateRestartResult = { waitingFor: number };
@@ -610,6 +678,16 @@ export type MediaReadResult = { data: string; size: number; mtime: number; mime:
 export type FsWriteResult = { mtime: number };
 /** The path an fs.create / fs.rename / fs.duplicate made (parent as fs.list gives it, plus the name). */
 export type FsPathResult = { path: string };
+/** `rel`: path below the walked path with `/` ("" = the path itself); folders come before their content. `target`: the text of a link. */
+export type FsWalkEntry = { rel: string; kind: "file" | "dir" | "link"; size: number; mode: number; target?: string };
+export type FsWalkResult = { entries: FsWalkEntry[]; bytes: number };
+/** `data`: base64; `size`: of the whole file. */
+export type FsChunkResult = { data: string; size: number };
+/** Limits of one paste or drop (GH-555), checked before anything is written. */
+export const TRANSFER_MAX_BYTES = 512 * 1024 * 1024;
+export const TRANSFER_MAX_ENTRIES = 10_000;
+/** Largest piece of fs.readChunk / fs.writeChunk. */
+export const CHUNK_BYTES = 1024 * 1024;
 /** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
 export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
@@ -647,6 +725,12 @@ export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" 
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
+/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. `paste`: a paste replaced the file (GH-555). */
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named", "paste"] as const;
+export type HistoryReason = (typeof HISTORY_REASONS)[number];
+/** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
+export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };
+export type HistoryListResult = { entries: HistoryEntry[] };
 /** `refs`: full ref names pointing here ("HEAD" first when HEAD points here). `time`: author time, unix seconds. */
 export type GitCommit = { hash: string; parents: string[]; author: string; email: string; time: number; subject: string; refs: string[] };
 /**
@@ -656,6 +740,12 @@ export type GitCommit = { hash: string; parents: string[]; author: string; email
 export type GitLog = { commits: GitCommit[]; more: boolean; branches?: string[]; refs?: string; head?: string };
 /** `log` null outside a git work tree. */
 export type GitLogResult = { log: GitLog | null };
+/** `author` / `time` (author time, unix s) / `summary` of one blamed commit. */
+export type GitBlameCommit = { author: string; time: number; summary: string };
+/** `lines[i]`: full hash of the commit of line i+1, `null` = not committed. `untracked`: the file is not in HEAD (or no commit yet): `lines` empty, every line not committed. */
+export type GitBlame = { commits: Record<string, GitBlameCommit>; lines: (string | null)[]; untracked?: true };
+/** `blame` null outside a git work tree. */
+export type GitBlameResult = { blame: GitBlame | null };
 /** `added`/`removed` undefined for a binary file. `oldPath`: renamed from. `untracked`: not in the index (status A; git.diff only). `submodule`: a gitlink (mode 160000) row; `from`/`to`: full commit recorded on the before/after side (absent: not a gitlink there, or unknown: the working-tree side). Such rows have no `added`/`removed`. */
 export type GitFileChange = { status: "A" | "D" | "M" | "R"; path: string; oldPath?: string; added?: number; removed?: number; untracked?: boolean; submodule?: { from?: string; to?: string } };
 /** `message`: full message. `refs`: always `[]` from `git.commit` (no decoration: slow with thousands of refs); the client shows the refs of the commit from `git.log`. `truncated`: more than 3000 files changed, list cut. */
@@ -666,12 +756,36 @@ export type GitCommitResult = { commit: GitCommitDetail };
  * `base`: the full hash of the before side; absent before the first commit (every file A, before side empty). `ref`: the branch compared (branch mode).
  * `branches`: local and remote branches for the picker (branch mode only). `truncated`: list cut at 3000 files.
  */
-export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean };
+export type GitDiff = { prefix: string; base?: string; ref?: string; files: GitFileChange[]; branches?: string[]; truncated?: boolean; /** The unfinished merge, rebase, cherry-pick, revert, am or unmerged state of the repository (the conflict banner). */ operation?: GitOperation };
+/** `conflict`: unmerged entries and no state file (stash pop, `checkout -m`). */
+export type GitOperationKind = "merge" | "rebase" | "cherry-pick" | "revert" | "am" | "conflict";
+/** `conflicted`: unmerged paths relative to the repository top, at most 3000. */
+export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
+/** `operation` null: nothing unfinished, or outside a work tree. */
+export type GitOperationResult = { operation: GitOperation | null };
+/** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
+export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
+/** One stash entry: `message` is the reflog subject ("On main: wip"), `time` seconds like \`GitCommit.time\`. */
+export type GitStash = { index: number; hash: string; message: string; time: number };
+/** `stashes` null outside a git work tree. */
+export type GitStashListResult = { stashes: GitStash[] | null };
 /** `diff` null outside a git work tree. */
 export type GitDiffResult = { diff: GitDiff | null };
 /** A remote operation's git output (redacted, at most 8000 chars) and the refs stamp after it. */
 export type GitRemote = { output: string; refs: string | null };
 /** `remote` null outside a git work tree. */
+export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
+/** `committed` is null outside a git work tree. */
+/** `truncated`: the diff in the prompt was cut (the file list was complete). */
+export type GitCommitMessageResult = { message: string; truncated?: true };
+export type GitCommitFilesResult = { committed: GitCommitted | null };
+/** A file a rollback acts on: `A` added or untracked, `D` deleted, `R` renamed (`path` the new name), `M` the rest. */
+export type GitRollbackFile = { path: string; kind: "M" | "D" | "R" | "A"; oldPath?: string };
+export type GitRollbackPreview = { files: GitRollbackFile[]; token: string };
+/** `preview` is null outside a git work tree. */
+export type GitRollbackPreviewResult = { preview: GitRollbackPreview | null };
+/** `rolledBack` is null outside a git work tree. */
+export type GitRollbackResult = { rolledBack: { output: string } | null };
 export type GitRemoteResult = { remote: GitRemote | null };
 /** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
 export type GitBranchInfo = {
@@ -692,10 +806,33 @@ export type GitBranchInfo = {
   push?: string[];
   forcePush?: string[];
   pull?: string[];
-  why?: { push?: string; forcePush?: string; pull?: string };
+  /** HEAD's branch (`refs/heads/x`) and commit: what Merge and Rebase were computed against. Absent when HEAD is detached or unborn. */
+  headRef?: string;
+  headHash?: string;
+  merge?: string[];
+  rebase?: string[];
+  why?: { push?: string; forcePush?: string; pull?: string; merge?: string; rebase?: string };
 };
 /** `branch` null outside a git work tree. */
 export type GitBranchResult = { branch: GitBranchInfo | null };
+/** What the commit menu shows for one commit and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
+export type GitCommitMenu = {
+  hash: string;
+  parents: number;
+  headRef?: string;
+  headHash?: string;
+  undo?: string[];
+  revert?: string[];
+  cherryPick?: string[];
+  reset?: { soft: string[]; mixed: string[]; hard: string[] };
+  /** Only with `hard`: the files a hard reset overwrites or deletes (at most 50), their count, and the fingerprint `git.reset` must send back. */
+  lose?: string[];
+  loseCount?: number;
+  dirty?: string;
+  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string };
+};
+/** `commitMenu` null outside a git work tree. */
+export type GitCommitMenuResult = { commitMenu: GitCommitMenu | null };
 export const GIT_LOG_MAX_LIMIT = 500;
 
 /** Where an MCP server (or plugin setting) is saved; Claude Code's term. local: this project, private; user: all projects; project: `.mcp.json`. */
@@ -717,8 +854,18 @@ export const LABEL_EMOJI_MAX = 16;
 export const LABEL_ICON_MAX = 32_000;
 /** Entries per map. */
 export const LABEL_ENTRIES_MAX = 200;
+/** Longest commit message instruction, global or per project (GH-559). */
+export const COMMIT_INSTRUCTION_MAX = 4000;
+/** What Claude is asked when no instruction is set (the Settings › Git placeholder shows it). */
+export const DEFAULT_COMMIT_INSTRUCTION = "Write a conventional commit message: a subject line of at most 72 characters in the imperative mood (type(scope): summary), a blank line, then a short body that explains what changed and why. Plain text.";
 /** Side of the saved square image icon, in pixels. */
 export const LABEL_ICON_PX = 64;
+/** Side of the saved square app icon, in pixels (the PWA icon size). */
+export const APP_ICON_PX = 512;
+/** Data URL characters of the app icon. */
+export const APP_ICON_MAX = 300_000;
+/** The app name when `Settings.app.name` is "". */
+export const APP_NAME_DEFAULT = "Claude UI";
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
@@ -726,6 +873,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   performance: { monitor: boolean };
   /** Claude in Chrome (GH-514): new non-worker sessions run the CLI with --chrome; applies when a session's query (re)starts. */
   chrome: { enabled: boolean };
+  /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */
+  history: { enabled: boolean; exclude: string[] };
   /** Ticket tab of the Create worktree modal (GH-447): one Jira connection; `email` for Cloud only; the token is in secrets.json, never here. */
   jira: { url: string; email: string; template: string; /** Ticket filter: the JQL of the Ticket tab's list and text search; "" = my open tickets. */ jql: string };
   /** Settings › Git (VS Code's git extension settings, same names and values; openRepositoryInParentFolders defaults to always and prompt behaves as always). */
@@ -743,13 +892,33 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     detectSubmodulesLimit: number;
     ignoreSubmodules: boolean;
     openRepositoryInParentFolders: (typeof PARENT_FOLDER_MODES)[number];
+    /** GH-559: what Claude is asked for when it writes a commit message; "" = the built-in instruction. At most COMMIT_INSTRUCTION_MAX chars. */
+    commitMessageInstruction: string;
+    /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
+    commitMessageInstructions: Record<string, string>;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };
+  /** Settings › Launcher (GH-553): start options of claude-ui on the Hub's machine; apply on the next start, a flag or env var wins. */
+  launcher: {
+    /** Web UI port. */
+    port: number;
+    /** [] = home directory. */
+    roots: string[];
+    tailscale: boolean;
+    lan: boolean;
+    allowBypass: boolean;
+    updateCheck: boolean;
+    osNotify: boolean;
+    /** Open the browser at start. */
+    open: boolean;
+  };
+  /** The app icon and name shared by every browser (tab and installed app); served at /app-icon and in /manifest.webmanifest. */
+  app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */

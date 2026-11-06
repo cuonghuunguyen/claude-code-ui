@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GitDiff, GitStatus, Part } from "@claude-ui/protocol";
+import type { GitDiff, GitOperation, GitStatus, Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,12 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 const diff = vi.hoisted(() => ({ options: undefined as undefined | { theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
+  // The hunk Rollback annotations are drawn by the caller's `renderAnnotation`; the stub places them under the diff.
+  FileDiff: (p: { options: typeof diff.options; fileDiff: { deletionLines: string[]; additionLines: string[] }; lineAnnotations?: unknown[]; renderAnnotation?: (a: never) => React.ReactNode }) => (
+    (diff.options = p.options),
+    diff.onFiles?.({ oldFile: { contents: p.fileDiff.deletionLines.join("") }, newFile: { contents: p.fileDiff.additionLines.join("") } } as never),
+    (<div data-testid="pierre-diff">{p.lineAnnotations?.map((a, i) => <div key={i}>{p.renderAnnotation?.(a as never)}</div>)}</div>)
+  ),
 }));
 
 // Counts whole-file diffs, so a test can see that streaming does not re-parse them.
@@ -65,7 +71,7 @@ afterEach(() => {
 });
 
 /** `git`: git.status (default: not a repository), git.diff (a reply or an error), git.fileAt by "hash:path". */
-type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; diffs?: Record<string, GitDiff | Error>; statuses?: Record<string, GitStatus | null>; statusDefer?: (cwd: string) => Promise<void> | undefined; defer?: (cwd: string) => Promise<void> | undefined; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
+type FakeGit = { operation?: GitOperation; status?: GitStatus | null; diff?: GitDiff | Error; diffs?: Record<string, GitDiff | Error>; statuses?: Record<string, GitStatus | null>; statusDefer?: (cwd: string) => Promise<void> | undefined; defer?: (cwd: string) => Promise<void> | undefined; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
 function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
   const request = vi.fn(async (m: { type: string; path: string; hash?: string; cwd?: string }) => {
     if (m.type === "fs.media") {
@@ -77,6 +83,11 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
       await git.statusDefer?.(m.cwd!);
       return { status: (git.statuses && m.cwd! in git.statuses ? git.statuses[m.cwd!] : git.status) ?? null };
     }
+    if (m.type === "git.rollbackPreview") return { preview: { files: (m as unknown as { paths: string[] }).paths.map((path) => ({ path, kind: "M" })), token: "tok" } };
+    if (m.type === "git.rollback" || m.type === "git.rollbackHunk") return { rolledBack: { output: "" } };
+    if (m.type === "git.operation") return { operation: git.operation ?? null };
+    if (m.type === "git.continue" || m.type === "git.abort") return { written: { output: "", refs: "s3" } };
+    if (m.type === "git.commitFiles") return { committed: { hash: "abcdef1234567", output: "", refs: "s2" } };
     if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
     if (m.type === "git.diff") {
       await git.defer?.(m.cwd!);
@@ -211,6 +222,26 @@ it("wide: a folder tree like OpenCode's review sidebar (folders first, file-type
   await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=changed-folder]")!.click());
   expect(tree()).toEqual(["padding-left: 8px;|src", "padding-left: 8px;|README.md"]);
   expect(el.querySelector("[data-testid=changed-folder]")!.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("wide: single-child folders compact into one row; the list view shows files by path, kept per browser", async () => {
+  const client = fakeClient({ "/p/a/b/c/x.ts": "x = 2\n", "/p/a/b/c/y.ts": "y = 2\n", "/p/z.md": "z = 2\n" });
+  const parts = [edit("e1", "/p/z.md", "z = 1", "z = 2"), edit("e2", "/p/a/b/c/y.ts", "y = 1", "y = 2"), edit("e3", "/p/a/b/c/x.ts", "x = 1", "x = 2")];
+  const panel = () => <ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />;
+  await act(async () => root.render(panel()));
+  await flush();
+  const rows = () => [...el.querySelectorAll("ul[aria-label='Changed files'] button")].map((b) => `${b.getAttribute("style")}|${b.textContent}`);
+  expect(rows()).toEqual(["padding-left: 8px;|a/b/c", "padding-left: 24px;|x.ts", "padding-left: 24px;|y.ts", "padding-left: 8px;|z.md"]);
+  const toggle = () => el.querySelector<HTMLButtonElement>("[data-testid=changes-list-view]")!;
+  expect(toggle().getAttribute("aria-label")).toBe("View as list");
+  await act(async () => toggle().click());
+  expect(rows()).toEqual(["padding-left: 8px;|a/b/c/x.ts", "padding-left: 8px;|a/b/c/y.ts", "padding-left: 8px;|z.md"]);
+  expect(localStorage.getItem("claude-ui.changesListView")).toBe("list");
+  await act(async () => root.render(null));
+  await act(async () => root.render(panel()));
+  await flush();
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(rows()).toHaveLength(3);
 });
 
 it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
@@ -660,6 +691,30 @@ it("an added file reads no before side, a deleted one no after side, a rename re
   expect(reads).toContain("/p/a.ts");
   expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("o.ts → n.ts");
   expect(el.textContent).toContain("Renamed without changes");
+});
+
+it("Uncommitted: each file has a checkbox, a commit sends only the checked ones (a rename: both sides), then the list reads again", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:o.ts`]: "same\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/n.ts": "same\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const boxes = () => [...el.querySelectorAll<HTMLInputElement>("[data-testid=commit-check]")];
+  expect(boxes()).toHaveLength(3);
+  expect(boxes().every((b) => !b.checked)).toBe(true);
+  expect((el.querySelector("[data-testid=commit-button]") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => boxes().find((b) => b.dataset.path === "/p/n.ts")!.click());
+  const ta = el.querySelector<HTMLTextAreaElement>("[data-testid=commit-message]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(ta, "rename it");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=commit-button]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.commitFiles")).toEqual([{ type: "git.commitFiles", cwd: "/p", paths: ["n.ts", "o.ts"], message: "rename it" }]);
+  expect(gitCalls(client, "git.diff").length).toBeGreaterThanOrEqual(2);
+  expect(boxes().every((b) => !b.checked)).toBe(true);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Committed abcdef1");
 });
 
 it("Against branch asks git.diff with base branch, shows the ref, and a picked branch re-requests with it", async () => {
@@ -1478,4 +1533,102 @@ it("third pick of the same non-default mode offers it as default; Turn on saves 
   setRecommendationHost(undefined);
   localStorage.clear();
   resetPageForTests();
+});
+
+it("Rollback of the checked files: preview, dialog with the files, confirm sends the token and reloads the list", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const button = () => el.querySelector<HTMLButtonElement>("[data-testid=rollback-button]")!;
+  expect(button().disabled).toBe(true);
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  await act(async () => button().click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["c.ts"] }]);
+  expect([...document.querySelectorAll("[data-testid=rollback-file]")].map((x) => x.textContent)).toEqual(["Mc.ts"]);
+  expect(document.querySelector("[data-testid=rollback-delete-added]")).toBeNull();
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=rollback-confirm]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.rollback")).toEqual([{ type: "git.rollback", cwd: "/p", paths: ["c.ts"], token: "tok" }]);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back 1 file");
+  expect(el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.checked).toBe(false);
+});
+
+it("a row menu offers Rollback… for that row's paths (a rename: both sides)", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:o.ts`]: "same\n" } };
+  const client = fakeClient({ "/p/n.ts": "same\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const row = el.querySelector<HTMLElement>("[data-testid=changed-file]")!.parentElement!;
+  await act(async () => void row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await flush();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=row-rollback]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["n.ts", "o.ts"] }]);
+});
+
+it("a hunk's Rollback sends the hunk at once, no dialog; none for an added file or outside Uncommitted", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 1 }]), at: { [`${BASE}:a.ts`]: "a\nb\nc\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\nX\nc\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const b = el.querySelector<HTMLButtonElement>("[data-testid=hunk-rollback]")!;
+  expect(b.getAttribute("aria-label")).toBe("Roll back this change, lines 2–2");
+  await act(async () => b.click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackHunk")).toEqual([{ type: "git.rollbackHunk", cwd: "/p", path: "a.ts", hunk: { newStart: 1, lines: [" a", "-b", "+X", " c"] } }]);
+  expect(document.querySelector("[data-testid=rollback-dialog]")).toBeNull();
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back a change in a.ts");
+});
+
+// ---- Conflict banner (GH-560) ----
+const banner = () => el.querySelector("[data-testid=conflict-banner]");
+const MERGE: GitOperation = { kind: "merge", conflicted: ["a.ts", "b.ts"] };
+
+it("Uncommitted: a merge in progress shows the banner instead of the commit box", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.ts": "x\n" }, { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }], { operation: MERGE }), at: { [`${BASE}:a.ts`]: "a\n" } });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(banner()!.textContent).toContain("Merge in progress");
+  expect(banner()!.textContent).toContain("a.ts");
+  expect(el.querySelector("[data-testid=commit-box]")).toBeNull();
+  expect(gitCalls(client, "git.operation")).toEqual([]);
+});
+
+it("Session changes asks git.operation and shows the banner there too; a clean repository shows none", async () => {
+  const client = fakeClient({}, { status: REPO, operation: MERGE });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.operation")).toEqual([{ type: "git.operation", cwd: "/p" }]);
+  expect(banner()!.getAttribute("data-kind")).toBe("merge");
+  await act(async () => root.render(null));
+  const clean = fakeClient({}, { status: REPO });
+  await act(async () => root.render(panel(clean)));
+  await flush();
+  expect(gitCalls(clean, "git.operation")).toHaveLength(1);
+  expect(banner()).toBeNull();
+});
+
+it("Session changes outside a repository never asks git.operation", async () => {
+  const client = fakeClient({});
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.operation")).toEqual([]);
+});
+
+it("Continue sends git.continue with the banner's kind, then the list reads again", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, { status: REPO, diff: D([], { operation: MERGE }) });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=conflict-continue]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.continue")).toEqual([{ type: "git.continue", cwd: "/p", kind: "merge" }]);
+  expect(gitCalls(client, "git.diff").length).toBeGreaterThanOrEqual(2);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Continued the merge");
 });

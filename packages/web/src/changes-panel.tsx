@@ -1,9 +1,10 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
-import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
-import { MultiFileDiff } from "@pierre/diffs/react";
-import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, Maximize2Icon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
+import { parseDiffFromFile, type DiffLineAnnotation } from "@pierre/diffs";
+import { FileDiff as PierreFileDiff, MultiFileDiff } from "@pierre/diffs/react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -20,12 +21,19 @@ import { repoDir } from "./repos.ts";
 import { t, useT } from "./i18n.ts";
 import { DIFF_MODES, loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
 import { offer, streak } from "./recommendations.ts";
-import { eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
+import { commitable, commitPaths, eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
-import { selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
+import { CommitBox } from "./commit-box.tsx";
+import { ConflictBanner } from "./conflict-banner.tsx";
+import { GitOpResult } from "./git-op-result.tsx";
+import { ofRepo } from "./git-branch-menu.tsx";
+import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
+import { hunkAnchor, wireHunk } from "./hunk.ts";
+import { RollbackDialog, RollbackMenu } from "./rollback-dialog.tsx";
+import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 type Client = ReturnType<typeof connect>;
 export type DiffStyle = "unified" | "split";
@@ -33,7 +41,7 @@ export type DiffStyle = "unified" | "split";
 type Disk = { content?: string; deleted?: boolean; error?: string; notice?: boolean };
 /** `kind`: OpenCode's file badge, A(dded) / D(eleted) / M(odified). */
 /** `change`: the session's calls on the file (session mode only). `oldPath` (relative to the repository top) and `oldShown` (as the list names it): a renamed file's before side (git modes). */
-type Row = { path: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
+type Row = { path: string; /** Relative to the repository top, as git names it (git modes). */ rel?: string; kind: Kind; before?: string; after?: string; error?: string; notice?: boolean; stats?: Stats; change?: FileChange; oldPath?: string; oldShown?: string;
   /** A gitlink row (git modes): no file to read or diff. */
   submodule?: { from?: string; to?: string };
   /** A submodule with uncommitted changes in tracked files (`git.status` of it): the files; `dirtyOnly`: its gitlink did not move, so the row exists for this. */
@@ -47,6 +55,8 @@ type Row = { path: string; kind: Kind; before?: string; after?: string; error?: 
   image?: { before?: ImagePane; after?: ImagePane };
 };
 export type Kind = "A" | "D" | "M" | "R";
+type HunkMeta = { index: number; first: number; last: number };
+const OP_RESULT_IDS = { testId: "changes-op-result", errorId: "changes-op-error" };
 const SUB_PROBES = 10;
 const SUB_PARALLEL = 4;
 const KIND_KEY = { A: "files.changes.added", D: "files.changes.deleted", M: "files.changes.modified", R: "files.changes.renamed" } as const;
@@ -66,6 +76,24 @@ export function loadStyle(): DiffStyle {
 export function saveStyle(s: DiffStyle) {
   try {
     localStorage.setItem(STYLE_KEY, s);
+  } catch {
+    // Storage blocked: the choice lasts while the panel is open.
+  }
+}
+
+// Wide file sidebar as a folder tree (default) or a flat list by path, per browser.
+const LIST_VIEW_KEY = "claude-ui.changesListView";
+type ListView = "tree" | "list";
+function loadListView(): ListView {
+  try {
+    return localStorage.getItem(LIST_VIEW_KEY) === "list" ? "list" : "tree";
+  } catch {
+    return "tree";
+  }
+}
+function saveListView(v: ListView) {
+  try {
+    localStorage.setItem(LIST_VIEW_KEY, v);
   } catch {
     // Storage blocked: the choice lasts while the panel is open.
   }
@@ -153,7 +181,13 @@ function fileTree(rows: Row[], cwd: string): Folder {
     f.files.sort((a, b) => a.path.localeCompare(b.path));
   };
   sort(root);
-  return root;
+  // Compact folders (VS Code): a folder holding only one folder shows as one row "a/b", keyed by the inner path.
+  const compact = (f: Folder): Folder => {
+    let d = f;
+    while (d.folders.length === 1 && !d.files.length) d = { ...d.folders[0]!, name: `${d.name}/${d.folders[0]!.name}` };
+    return { ...d, folders: d.folders.map(compact) };
+  };
+  return { ...root, folders: root.folders.map(compact) };
 }
 /**
  * Rows per file by its last call: the disk reads come back one by one, and a session tab switch remounts the panel, so without it every
@@ -213,6 +247,9 @@ export function ChangesPanel({
   repos,
   ignoreSubmodules,
   onReload,
+  onGitWrite,
+  onResolve,
+  project,
 }: {
   client: Client;
   view: SessionView;
@@ -239,6 +276,12 @@ export function ChangesPanel({
   ignoreSubmodules?: boolean;
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
+  /** After a commit: files changed on disk's git state (the file tree marks). */
+  onGitWrite?: () => void;
+  /** "Resolve with Claude": gets the prompt to put into the session's prompt box (never sent). Absent: no button. */
+  onResolve?: (prompt: string) => void;
+  /** The project folder (key of the per-project commit message instruction). */
+  project?: string;
 }) {
   useT();
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
@@ -330,8 +373,20 @@ export function ChangesPanel({
     );
     return () => void (live = false);
   }, [client, gitCwd, known, effective, refChoice, reload, view.state, key, hidden]);
+  // Session mode has no git.diff: the unfinished operation (the banner) is asked alone, skipped outside a repository.
+  const [sessionOp, setSessionOp] = useState<{ repo: string; op?: GitOperation }>();
+  useEffect(() => {
+    if (gitMode || hidden || !git) return;
+    let live = true;
+    client.request<GitOperationResult>({ type: "git.operation", cwd: gitCwd, ...ex }).then(
+      (r) => live && setSessionOp({ repo: gitCwd, op: r.operation ?? undefined }),
+      () => live && setSessionOp(undefined),
+    );
+    return () => void (live = false);
+  }, [client, gitCwd, gitMode, git, reload, view.state, key, hidden]);
   const gdNow = gd.mode === effective && gd.repo === gitCwd;
   const gitDiff = gdNow ? gd.diff : undefined;
+  const operation = gitMode ? gitDiff?.operation : sessionOp?.repo === gitCwd ? sessionOp.op : undefined;
   const gitError = gitMode && gdNow ? gd.error : undefined;
   const gitLoading = gitMode && !gdNow;
   // Submodules of the selected repository with uncommitted changes in tracked files: `git.status` of each (git.diff of the superproject does not list them).
@@ -410,6 +465,7 @@ export function ChangesPanel({
       const ok = s && s.base === gitDiff?.base;
       return {
         path: r.path,
+        rel: r.rel,
         kind: r.kind,
         ...(r.oldPath !== undefined && { oldPath: r.oldPath, oldShown: relPath(joinPath(root, r.oldPath), cwd) }),
         ...(r.submodule && { submodule: r.submodule }),
@@ -425,6 +481,30 @@ export function ChangesPanel({
   const rows = gitMode ? gitFull : sessionShown;
   const outside = gitMode ? 0 : sessionRows.length - sessionShown.length;
   const total = rows.reduce((t, r) => ({ added: t.added + (r.stats?.added ?? 0), removed: t.removed + (r.stats?.removed ?? 0) }), { added: 0, removed: 0 });
+  // Commit checkboxes (Uncommitted mode): rows by `path`; rows that left the list drop out, another repository starts empty.
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
+  const commitMode = effective === "uncommitted" && !!gitDiff;
+  const commitRows = useMemo(() => (commitMode ? rows.filter(commitable) : []), [commitMode, rows]);
+  useEffect(() => setChecked((c) => (c.size && [...c].some((p) => !commitRows.some((r) => r.path === p)) ? new Set([...c].filter((p) => commitRows.some((r) => r.path === p))) : c)), [commitRows]);
+  useEffect(() => setChecked(new Set()), [gitCwd]);
+  const toggle = (path: string) => setChecked((c) => (c.has(path) ? new Set([...c].filter((p) => p !== path)) : new Set(c).add(path)));
+  // A commit, push or fetch of this repository ended: the list reads again.
+  const { settled, running } = useRemoteOp(gitCwd);
+  // Rollback (GH-558): the dialog of the checked rows or of one row's paths.
+  const [rollbackPaths, setRollbackPaths] = useState<string[]>();
+  const opRunning = running !== undefined;
+  const lastSettled = useRef(settled);
+  useEffect(() => {
+    if (settled === lastSettled.current) return;
+    lastSettled.current = settled;
+    setReload((n) => n + 1);
+  }, [settled]);
+  const rowCheck = (r: Row, className?: string) =>
+    commitMode && commitable(r) ? (
+      <label className={cn("flex size-11 shrink-0 cursor-pointer items-center justify-center md:size-7", className)}>
+        <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={checked.has(r.path)} onChange={() => toggle(r.path)} aria-label={t("files.changes.checkFile", { path: relPath(r.path, cwd) })} data-testid="commit-check" data-path={r.path} />
+      </label>
+    ) : null;
   const [filter, setFilter] = useState("");
   const [listWidth, setListWidth] = useState(loadListWidth);
   useEffect(() => saveListWidth(listWidth), [listWidth]);
@@ -432,8 +512,10 @@ export function ChangesPanel({
   const q = narrow ? "" : filter.trim().toLowerCase();
   const matched = q ? rows.filter((r) => relPath(r.path, cwd).toLowerCase().includes(q)) : rows;
   const tree = useMemo(() => fileTree(matched, cwd), [rows, q, cwd]);
-  // The order on screen: the tree's on wide screens, by path in the narrow accordion (OpenCode's mobile review).
-  const shown = narrow ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
+  const [listView, setListView] = useState(loadListView);
+  const flat = narrow || listView === "list";
+  // The order on screen: the tree's, or by path in the list view and the narrow accordion (OpenCode's mobile review).
+  const shown = flat ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Show changes (file tree menu): Uncommitted mode, no filter hiding the file, its folders open, the file selected and scrolled to.
@@ -552,10 +634,12 @@ export function ChangesPanel({
         </li>
       ))}
       {f.files.map((r) => (
-        <li key={r.path}>
+        <Fragment key={r.path}>{rowMenu(r, (
+        <li className={commitMode ? "flex items-center" : undefined} style={commitMode ? { paddingLeft: `${depth * 16}px` } : undefined}>
+          {rowCheck(r, "-mr-1")}
           <button
             className={cn(treeRow, r === active && "bg-secondary text-foreground")}
-            style={pad(depth)}
+            style={commitMode ? undefined : pad(depth)}
             aria-current={r === active}
             title={r.path}
             aria-label={label(r)}
@@ -564,13 +648,17 @@ export function ChangesPanel({
             data-path={r.path}
           >
             {rowIcon(r)}
-            <span className="min-w-0 flex-1 truncate">{filePath(r.path, cwd).name}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {flat && filePath(r.path, cwd).dir && <span className="text-faint">{filePath(r.path, cwd).dir.replace(/\/$/, "")}/</span>}
+              {filePath(r.path, cwd).name}
+            </span>
             {r.submodule && <SubmoduleBadge />}
             {r.nested && <RepoBadge />}
             {/* OpenCode's v2 tree marks added and deleted files; M shows in the diff header only. */}
             {r.kind !== "M" && !r.nested && <KindBadge kind={r.kind} />}
           </button>
         </li>
+        ))}</Fragment>
       ))}
     </>
   );
@@ -623,6 +711,16 @@ export function ChangesPanel({
   );
   const selectorShown = gitMode && !!repos?.list && selectorVisible(repos.list);
   const repoSelect = selectorShown && repos?.list && <RepoSelector list={repos.list} truncated={repos.truncated} selected={selectedRepo} onSelect={chooseRepo} />;
+  // A hunk rolls back at once, no dialog.
+  const repoName = selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined;
+  const rollbackHunk = (row: Row, hunk: { newStart: number; lines: string[] }) =>
+    void runRemoteOp(client, { type: "git.rollbackHunk", cwd: gitCwd, ...(repo && { exact: true as const }), path: row.rel!, hunk }, ofRepo(t("files.changes.rolledBackHunk", { name: filePath(row.path, cwd).name }), repoName), ofRepo(t("files.changes.rollingBack"), repoName), onGitWrite);
+  const hunkProps = (r: Row) => (commitMode && (r.kind === "M" || r.kind === "R") && !r.submodule && !r.nested && r.rel !== undefined ? { onHunk: (h: { newStart: number; lines: string[] }) => rollbackHunk(r, h), hunkDisabled: opRunning } : {});
+  const rowMenu = (r: Row, node: ReactElement) => (
+    <RollbackMenu enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))}>
+      {node}
+    </RollbackMenu>
+  );
   const branchList = gitRef && !branches.includes(gitRef) ? [gitRef, ...branches] : branches;
   const branchSelect = effective === "branch" && (
     <Select value={gitRef ?? null} onValueChange={(v) => v && pick("branch", v)} disabled={!branchList.length}>
@@ -758,6 +856,15 @@ export function ChangesPanel({
         </div>
       )}
       {notGit}
+      {operation && <ConflictBanner client={client} cwd={gitCwd} exact={!!repo} operation={operation} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} onOpen={onOpen} onResolve={onResolve} />}
+      {commitMode && !operation && (
+        <>
+          <CommitBox client={client} cwd={gitCwd} project={project} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} onRollback={setRollbackPaths} />
+          <RollbackDialog client={client} cwd={gitCwd} exact={!!repo} repoName={repoName} paths={rollbackPaths} onClose={() => setRollbackPaths(undefined)} onDone={(p) => (setChecked((c) => new Set([...c].filter((x) => !p.includes(commitRows.find((r) => r.path === x)?.rel ?? "")))), onGitWrite?.())} />
+        </>
+      )}
+      {/* The result of a Continue or Abort stays after the banner is gone, in every mode. */}
+      {git !== false && <GitOpResult cwd={gitCwd} {...OP_RESULT_IDS} />}
       {message ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           {message}
@@ -774,6 +881,9 @@ export function ChangesPanel({
               const open = !!expanded[path];
               return (
                 <li key={path} className="border-b last:border-b-0">
+                  {rowMenu(r, (
+                  <div className="flex items-center">
+                  {rowCheck(r, "ml-1")}
                   <button
                     className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                     aria-expanded={open}
@@ -794,7 +904,9 @@ export function ChangesPanel({
                     {r.stats && <StatsText stats={r.stats} />}
                     {open ? <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                   </button>
-                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
+                  </div>
+                  ))}
+                  {open && <FileDiff row={r} cwd={cwd} style={style} onOpen={onOpen} inline git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(r)} />}
                 </li>
               );
             })}
@@ -816,6 +928,22 @@ export function ChangesPanel({
                 className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
                 data-testid="changes-filter"
               />
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="ml-1 shrink-0"
+                aria-pressed={listView === "list"}
+                title={listView === "list" ? t("files.changes.viewTree") : t("files.changes.viewList")}
+                aria-label={listView === "list" ? t("files.changes.viewTree") : t("files.changes.viewList")}
+                onClick={() => {
+                  const v = listView === "list" ? "tree" : "list";
+                  setListView(v);
+                  saveListView(v);
+                }}
+                data-testid="changes-list-view"
+              >
+                {listView === "list" ? <ListTreeIcon /> : <ListIcon />}
+              </Button>
             </label>
             {scopeGroup && (
               <div className="flex items-center gap-2 px-2 pb-1">
@@ -825,12 +953,12 @@ export function ChangesPanel({
             )}
             {!shown.length && <p className="px-3 py-2 text-muted-foreground">{t("files.changes.noMatch")}</p>}
             <ul className="flex min-h-0 flex-col gap-0.5 overflow-auto p-1" aria-label={t("files.changes.changedFiles")}>
-              {branch(tree, 0)}
+              {branch(flat ? { name: "", path: "", folders: [], files: shown } : tree, 0)}
             </ul>
             {gitDiff?.truncated && <p className="border-t p-2 text-muted-foreground text-xs">{t("files.changes.listCut")}</p>}
           </div>
           <ListResizer list={listRef} width={listWidth} onResize={setListWidth} />
-          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} />}
+          {active && <FileDiff key={active.path} row={active} cwd={cwd} style={style} onOpen={onOpen} git={gitMode} branchMode={effective === "branch"} onShowRepo={chooseRepo} {...hunkProps(active)} />}
         </div>
       )}
     </div>
@@ -874,7 +1002,7 @@ export function KindBadge({ kind }: { kind: Kind }) {
 }
 
 /** `git`: a git mode's file (sides from a commit and the disk, not from the session's calls). `inline`: under its accordion row, which already names the file: only Open in editor above the diff, and no own scroll. */
-function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo }: { row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
+function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo, onHunk, hunkDisabled }: { onHunk?: (hunk: { newStart: number; lines: string[] }) => void; hunkDisabled?: boolean; row: Row; cwd: string; style: DiffStyle; onOpen: (path: string) => void; inline?: boolean; git?: boolean; branchMode?: boolean; onShowRepo?: (rel: string) => void }) {
   useT();
   const { path } = row;
   const dark = useDark();
@@ -891,6 +1019,17 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     [path, row.oldPath, row.before, row.after],
   );
   const same = files !== undefined && row.before === row.after;
+  // Hunk Rollback (GH-558): the library's own parse of the two sides, one button after the last change of each hunk.
+  const parsed = useMemo(() => (files && onHunk !== undefined && !same ? parseDiffFromFile(files.old, files.new) : undefined), [files, onHunk !== undefined, same]);
+  // The annotation carries no data (the options type is not generic): the hunk is found again by its line.
+  const anchors = useMemo(() => {
+    const at = new Map<string, HunkMeta>();
+    parsed?.hunks.forEach((_, i) => {
+      const a = hunkAnchor(parsed, i);
+      if (a) at.set(`${a.side}:${a.lineNumber}`, { index: i, first: a.first, last: a.last });
+    });
+    return parsed && { at, lines: [...at.keys()].map((k): DiffLineAnnotation => ({ side: k.startsWith("a") ? "additions" : "deletions", lineNumber: Number(k.split(":")[1]) })) };
+  }, [parsed]);
   const sub = row.submodule;
   const nested = row.nested;
   const dirtyText = row.dirty ? t("files.changes.dirtyText", { count: row.dirty }) : "";
@@ -966,7 +1105,33 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
         ) : same ? (
           <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? t("files.changes.renamedOnly") : t("files.changes.noContent")) : t("files.changes.noAgainstBefore")}</p>
         ) : files ? (
-          <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
+          parsed && anchors ? (
+            <PierreFileDiff
+              fileDiff={parsed}
+              options={options}
+              lineAnnotations={anchors.lines}
+              renderAnnotation={(a) => {
+                const m = anchors.at.get(`${a.side}:${a.lineNumber}`);
+                return m && (
+                <div className="flex justify-end px-2 py-0.5">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 max-md:h-11"
+                    disabled={hunkDisabled}
+                    aria-label={t("files.changes.rollbackHunkLabel", { from: m.first, to: m.last })}
+                    onClick={() => onHunk?.(wireHunk(parsed, m.index))}
+                    data-testid="hunk-rollback"
+                  >
+                    <RotateCcwIcon /> {t("files.changes.rollbackHunk")}
+                  </Button>
+                </div>
+                );
+              }}
+            />
+          ) : (
+            <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
+          )
         ) : (
           !row.error &&
           row.after !== undefined && (

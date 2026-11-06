@@ -36,6 +36,7 @@ import type {
   ArtifactsResult,
   TodoItem,
   UploadResult,
+  GitRepo,
   GitStatus,
   GitStatusResult,
   TerminalListResult,
@@ -44,7 +45,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
-import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult } from "@claude-ui/protocol";
+import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -71,7 +72,7 @@ import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
 import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
-import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
+import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
 import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
@@ -132,7 +133,8 @@ import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
 import { FINISHED_MAX_AGE_MS, nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
-import { announcement, faviconHref, setFavicon } from "./attention.ts";
+import { setApp, useAppIcon, useAppName } from "./app-icon.ts";
+import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { baseName, inDir, joinPath, relPath } from "./paths.ts";
@@ -141,7 +143,8 @@ import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { isDirty } from "./files.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
-import { repoProjectKey, type RepoList } from "./repo-choice.ts";
+import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
+import { focusCommit } from "./graph-focus.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -399,6 +402,8 @@ export function App() {
   const guideStep = useRef<string>(undefined);
   const [guideRun, setGuideRun] = useState<{ n: number; ids: string[]; chapters: ChapterId[]; start?: string; from?: "settings" | "palette" }>();
   const [update, setUpdate] = useState<UpdateInfo>();
+  // Bumped by a manual check that finds a version: remounts the notice, so one "Not yet" hid shows again.
+  const [updateShown, setUpdateShown] = useState(0);
   // The daemon's "runs older code" note; a dismissed note stays hidden until the page reloads.
   const [stale, setStale] = useState<string>();
   const staleDismissed = useRef<string | undefined>(undefined);
@@ -1377,7 +1382,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
+      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1402,7 +1407,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1535,12 +1540,16 @@ export function App() {
   useEffect(() => void (needKey && setBottomMax(false)), [needKey]);
   useEffect(() => void (openFile && setBottomMax(false)), [openFile]);
   useEffect(() => void (activeId === FOCUS_TAB && setBottomMax(false)), [activeId]);
+  const appIcon = useAppIcon();
+  const appName = useAppName();
   const everWaiting = useRef(false);
   if (waitingN > 0) everWaiting.current = true;
   useEffect(() => {
-    document.title = tabTitle(waitingN);
-    setFavicon(faviconHref(waitingN));
-  }, [waitingN]);
+    document.title = tabTitle(waitingN, appName);
+    setAppleTitle(appName);
+    setFavicon(faviconHref(waitingN, appIcon));
+  }, [waitingN, appIcon, appName]);
+  useEffect(() => setAppleTouchIcon(appIcon), [appIcon]);
 
   // Settings › Notifications owns the switch; its error shows under the row (not in the sidebar).
   // In-app notification cards: live events of sessions this page does not show (docs/spec.md "In-app notifications").
@@ -1745,6 +1754,17 @@ export function App() {
   }
   /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
   const openSettingsGroup = (id: string) => (saveSettingsGroup(id), setSettingsOpen(true));
+  // Settings > About and the palette (docs/spec.md "Updates"): a version found now shows the notice again, even one "Not yet" hid.
+  const checkUpdate = async () => {
+    const r = await client.current!.request<UpdateCheckResult>({ type: "update.check" });
+    const latest = r.latest;
+    if (latest) {
+      undismissUpdate();
+      setUpdate((u) => (u?.version === latest ? u : { version: latest, current: r.current }));
+      setUpdateShown((n) => n + 1);
+    }
+    return r;
+  };
   /** Create worktree modal done: a new-session tab in the new worktree. */
   async function openInWorktree(project: string, path: string) {
     setCreatingWt(undefined);
@@ -2315,6 +2335,12 @@ export function App() {
     if (a === "side") setBottomMax(false);
     openArea(a);
   };
+  /** Annotate: the Graph shows one commit of `repo` (the selector set to it first). */
+  const openCommit = (repo: GitRepo, hash: string) => {
+    if (repoList?.projectKey) setRepoChoice(repoList.projectKey, repo.rel);
+    focusCommit(repo.path, hash);
+    reveal("graph");
+  };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
@@ -2848,6 +2874,8 @@ export function App() {
             client={client.current!}
             status={status}
             cwd={cwd}
+            side={sideOf.sideOf(cwd)}
+            sideLabel={sideOf.label(cwd)}
             onSend={(mention) => (open(ownerOf(ref)), setInsert(mention))}
             onCopy={copyText}
             onViewer={(path) => popFile(path)}
@@ -2870,6 +2898,7 @@ export function App() {
             gitStamp={treeStamp}
             repos={cwd === panelCwd ? repoList : undefined}
             onShowGraph={() => reveal("graph")}
+            onOpenCommit={openCommit}
             visible={here && (lg || pane === "session")}
           />
         ) : (
@@ -3167,6 +3196,7 @@ export function App() {
     toggleComputerAwake: computerAwake?.supported ? () => void setComputer(!computerAwake.on) : undefined,
     toggleChrome: chromeOn === undefined ? undefined : () => void client.current!.request({ type: "settings.set", patch: { chrome: { enabled: !chromeOn } } }).catch((e) => setError((e as Error).message)),
     openSettings: () => setSettingsOpen(true),
+    checkUpdate: () => void checkUpdate().then((r) => !r.latest && setToast(tr("app.update.upToDate", { version: r.current })), (e) => setToast(checkError(e))),
     startGuide: () => startGuide("palette"),
     resetKeyTips: () => (resetAllKeyTips(), setToast(tr("app.main.tipsReset"))),
     openMcp: project ? () => openMcp() : undefined,
@@ -3992,6 +4022,8 @@ export function App() {
                         client={client.current!}
                         status={status}
                         cwd={panelTarget.cwd}
+                        side={sideOf.sideOf(panelTarget.cwd)}
+                        sideLabel={sideOf.label(panelTarget.cwd)}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
                         onCopy={copyText}
                         onViewer={(path) => popFile(path)}
@@ -4013,6 +4045,7 @@ export function App() {
                         gitStamp={treeStamp}
                         repos={repoList}
                         onShowGraph={() => reveal("graph")}
+                        onOpenCommit={openCommit}
                         visible={inSight("files")}
                         sync={false}
                       />
@@ -4037,6 +4070,9 @@ export function App() {
                           repos={repoList}
                           ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
+                          onGitWrite={editors.nudge}
+                          onResolve={(prompt) => (addonImpl.current.insert(panelTarget.sessionId!, prompt), setPane("session"))}
+                          project={projectOf(panelTarget.cwd, worktrees)}
                         />
                       )
                     ) : (
@@ -4054,6 +4090,9 @@ export function App() {
                         repos={repoList}
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
+                        onGitWrite={editors.nudge}
+                        onResolve={(prompt) => (newSession(panelTarget.cwd), setInsert(prompt))}
+                        project={projectOf(panelTarget.cwd, worktrees)}
                         emptyText={tr("app.changes.empty")}
                       />
                     ),
@@ -4237,6 +4276,7 @@ export function App() {
         }}
         onStartSide={(side, setup) => client.current!.request({ type: "side.start", side, ...(setup && { setup }) })}
         onCheckSide={(side) => client.current!.request<SideCheck>({ type: "side.check", side })}
+        onUpdateRemote={(side) => client.current!.request({ type: "side.updateRemote", side })}
         sideOf={sideOf.sideOf}
         // Focus goes to the new-session prompt, not back to the button that opened the dialog.
         finalFocus={newPrompt}
@@ -4294,7 +4334,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4305,6 +4345,7 @@ export function App() {
           sessionId={viewer?.sessionId}
           repos={(viewer?.cwd ?? shown!.cwd) === panelCwd ? repoList : undefined}
           ignoreSubmodules={ignoreSubmodules}
+          project={projectOf(viewer?.cwd ?? shown!.cwd, worktrees)}
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
           onOpenInTab={(p) => (setViewer(undefined), openFileTab(p, viewer?.sessionId))}
@@ -4317,11 +4358,14 @@ export function App() {
           client={client.current}
           status={status}
           cwd={fileDialog?.owner?.cwd ?? panelTarget!.cwd}
+          side={sideOf.sideOf(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
+          sideLabel={sideOf.label(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
           store={editors}
           // GH-503: opened from a docked session, the panels (Files, Changes, graph) are the shown session's: those actions are hidden, and Send goes to the docked prompt box.
           gitStamp={fileDialog?.owner ? undefined : treeStamp}
           repos={fileDialog?.owner && fileDialog.owner.cwd !== panelCwd ? undefined : repoList}
           onShowGraph={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("graph"))}
+          onOpenCommit={fileDialog?.owner ? undefined : (repo, hash) => (setFileDialog(undefined), openCommit(repo, hash))}
           onClose={() => setFileDialog(undefined)}
           onSend={(m) => (setFileDialog(undefined), fileDialog?.owner ? dockCtl(fileDialog.owner.id).quote(m) : (setInsert(m), setPane("session")))}
           onCopy={copyText}
@@ -4349,7 +4393,7 @@ export function App() {
         )}
       </div>
       <ToastRegion>
-        {update && <UpdateToast update={update} request={(m) => client.current!.request(m)} />}
+        {update && <UpdateToast key={updateShown} update={update} request={(m) => client.current!.request(m)} />}
         {stale && !update && (
           <StaleToast
             note={stale}

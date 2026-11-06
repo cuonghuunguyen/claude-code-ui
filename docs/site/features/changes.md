@@ -32,5 +32,6 @@ A project folder can hold several repositories: nested ones, or submodules. In t
 - Switch between **Split diff** and **Unified diff**. Narrow screens always use unified.
 - Drag the edge of the file list to resize it, or focus it and press <kbd>←</kbd> / <kbd>→</kbd>. Double click the edge to restore the width. It is kept per browser.
 - **Filter files** narrows the list by name.
+- A folder with a single child folder shows as one row (`src/components`). **View as list** shows the files flat, each by its path; **View as tree** goes back. The choice is kept per browser.
 - Pick the mode the pane opens in at [Settings › Layout › Changes](../reference/settings#changes).
 - The status bar under the prompt box shows the branch and a `+added −removed` count.

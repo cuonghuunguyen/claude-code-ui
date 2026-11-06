@@ -15,6 +15,18 @@
 - Mở menu của dự án trong thanh bên và chọn **Gỡ khỏi danh sách (giữ tệp)**.
 - Thao tác này chỉ ẩn dự án. Tệp và lịch sử phiên vẫn còn.
 
+## Tên và biểu tượng riêng {#custom-names-and-icons}
+
+Một dự án có thể có tên và biểu tượng riêng của bạn.
+
+1. Mở menu của dự án trong thanh bên và chọn **Đổi tên và biểu tượng…**.
+2. Gõ tên (tối đa 60 ký tự), rồi chọn một emoji hoặc một ảnh. Ảnh được cắt thành hình vuông: kéo ảnh để di chuyển.
+3. Lưu. **Đặt lại** xóa cả hai.
+
+Tên thay cho tên thư mục ở mọi nơi dự án được nhắc đến: thanh bên, chip nhóm tab, bảng lệnh, trang Focus và các hộp thoại. Biểu tượng thay cho chữ cái của avatar dự án và hiện trên chip nhóm tab. Tên thư mục vẫn tìm ra dự án trong bộ lọc thanh bên và vẫn đứng đầu trình duyệt thư mục của Mở dự án. Dòng worktree giữ tên nhánh hoặc tên thư mục.
+
+Một máy (máy này, distro WSL, container hoặc máy chủ SSH) cũng có thể có tên và biểu tượng: **Cài đặt › Môi trường**, nút bút chì ở dòng của nó. Tên hiện trong huy hiệu môi trường, trong chữ chỉ nơi của tab và trong các danh sách của Mở dự án. Chúng được lưu trong daemon và áp dụng cho mọi trình duyệt.
+
 ## Worktree {#worktrees}
 
 **Worktree** là một bản checkout git bổ sung của cùng kho mã, trên nhánh riêng. Dùng nó để Claude làm việc trên một nhánh mà không động đến bản checkout chính của bạn.
@@ -56,4 +68,4 @@ Menu của dòng dự án và của dòng worktree có **Sao chép đường d�
 - Thư mục chỉ có phiên từ CLI `claude` hiện là **dự án gần đây** cho đến khi bạn mở chúng.
 - Worktree dưới `.claude/worktrees/` có thể được gỡ từ đây, và mọi worktree liên kết nằm trong roots cũng vậy (trừ worktree bị khóa hoặc là symlink), kể cả worktree tạo thủ công. Trước khi gỡ, ứng dụng cho bạn biết sẽ mất bao nhiêu thay đổi chưa commit và bao nhiêu commit.
 - Gỡ worktree sẽ xóa nhánh mà claude-code-ui đã tạo cho nó (từ **Ticket**, **Tên**, tên tự tạo hoặc một worker). Nhánh bạn checkout bằng **Nhánh**, hoặc tự tạo, vẫn còn; [Dọn dẹp](/vi/features/clean-up) đề nghị xóa nó khi đã được merge.
-- Với WSL hoặc Docker, **Mở dự án** cũng cho phép bạn chọn một môi trường. Xem [WSL & Docker](/vi/features/wsl-docker).
+- Với WSL, Docker hoặc máy chủ SSH, **Mở dự án** cũng cho phép bạn chọn một môi trường. Xem [WSL, Docker & SSH](/vi/features/wsl-docker).

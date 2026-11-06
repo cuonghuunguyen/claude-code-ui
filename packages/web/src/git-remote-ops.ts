@@ -1,6 +1,6 @@
 // Remote operations of the Graph (docs/spec.md "Layout", Graph tab), per repository path: they outlive a GraphPanel remount (repository switch).
 import { useSyncExternalStore } from "react";
-import type { GitRemoteResult } from "@claude-ui/protocol";
+import type { GitCommitFilesResult, GitOperationKind, GitRemoteResult, GitRollbackResult, GitWriteResult } from "@claude-ui/protocol";
 import type { connect, RequestError } from "./client.ts";
 import type { RemoteRequest } from "./git-branch-menu.tsx";
 import { t } from "./i18n.ts";
@@ -21,18 +21,31 @@ const set = (path: string, next: RemoteOpState) => {
   for (const s of [...subs]) s();
 };
 
-/** Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes. */
-export function runRemoteOp(client: Client, msg: RemoteRequest, done: string, running: string): boolean {
+export type CommitRequest = { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true };
+export type RollbackRequest =
+  | { type: "git.rollback"; cwd: string; paths: string[]; token: string; deleteAdded?: boolean; exact?: true }
+  | { type: "git.rollbackHunk"; cwd: string; path: string; hunk: { newStart: number; lines: string[] }; exact?: true };
+/** Conflict banner: Continue and Abort of the operation `kind` the banner showed. */
+export type OperationRequest = { type: "git.continue" | "git.abort"; cwd: string; kind: GitOperationKind; exact?: true };
+/** Graph tab stash section: push, and apply, pop or drop of the entry the list showed (`hash`). */
+export type StashRequest = { type: "git.stashPush"; cwd: string; message?: string; includeUntracked?: boolean; exact?: true } | { type: "git.stashApply" | "git.stashPop" | "git.stashDrop"; cwd: string; index: number; hash: string; exact?: true };
+export type OpReply = GitRemoteResult & Partial<GitCommitFilesResult> & Partial<GitWriteResult> & Partial<GitRollbackResult>;
+/**
+ * Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes.
+ * `done`: the result line, or a function of the reply; `onDone`: runs after a success; `onFail`: true = the caller handles that failure (no result line).
+ */
+export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest | RollbackRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void, onFail?: (e: RequestError) => boolean): boolean {
   const at = msg.cwd;
   if (get(at).running !== undefined) return false;
   set(at, { ...get(at), running, result: undefined });
-  const end = (result: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
-  client.request<GitRemoteResult>(msg).then(
+  const end = (result?: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
+  client.request<OpReply>(msg).then(
     (r) => {
-      noteRefs(at, r.remote?.refs ?? undefined);
-      end({ ok: true, text: done, output: r.remote?.output || undefined });
+      noteRefs(at, r.remote?.refs ?? r.committed?.refs ?? r.written?.refs ?? undefined);
+      end({ ok: true, text: typeof done === "string" ? done : done(r), output: (r.remote ?? r.committed ?? r.written ?? r.rolledBack)?.output || undefined });
+      onDone?.(r);
     },
-    (e: RequestError) => end({ ok: false, text: e.message || t("files.gitFailed") }),
+    (e: RequestError) => end(onFail?.(e) ? undefined : { ok: false, text: e.message || t("files.gitFailed") }),
   );
   return true;
 }

@@ -1,6 +1,7 @@
 // Popup viewer: a modal dialog showing a file, a diff, a plan or the Changes view opened from the timeline or the palette
 // (docs/spec.md "Session view UX"). Esc or Close closes it; focus is trapped and returns to the control that opened it.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MultiFileDiff } from "@pierre/diffs/react";
 import { Dialog } from "@base-ui/react/dialog";
 import type { EditorView } from "@codemirror/view";
 import type { FsMediaResult, FsReadResult } from "@claude-ui/protocol";
@@ -21,8 +22,10 @@ import { t, useT } from "./i18n.ts";
 import { MediaView } from "./media-view.tsx";
 import { inDir, relPath } from "./paths.ts";
 import type { SessionView } from "./store.ts";
-import { CwdContext, InputDiff } from "./tool-card.tsx";
-import { callPath, type ViewerTarget } from "./viewer.ts";
+import { CwdContext, DIFF_OPTIONS, InputDiff } from "./tool-card.tsx";
+import { diffThemes } from "./code-palette.ts";
+import { useColorTheme, useDark } from "./theme.ts";
+import { callPath, type CompareSide, type ViewerTarget } from "./viewer.ts";
 
 /** What this dialog shows: a file opens in the file dialog (file-dialog.tsx). */
 type PopupTarget = Exclude<ViewerTarget, { kind: "file" }>;
@@ -30,7 +33,7 @@ type PopupTarget = Exclude<ViewerTarget, { kind: "file" }>;
 type Client = ReturnType<typeof connect>;
 const noop = () => {};
 
-const title = (target: PopupTarget, cwd: string) => (target.kind === "diff" ? relPath(callPath(target.call), cwd) : target.kind === "plan" ? t("files.viewer.plan") : t("files.viewer.changes"));
+const title = (target: PopupTarget, cwd: string) => (target.kind === "diff" ? relPath(callPath(target.call), cwd) : target.kind === "compare" ? relPath(target.path, cwd) : target.kind === "plan" ? t("files.viewer.plan") : t("files.viewer.changes"));
 
 /** `opener`: the element focused when the popup opened; focus returns to it on close, else to the prompt box. */
 export function ViewerDialog({
@@ -42,6 +45,7 @@ export function ViewerDialog({
   sessionId,
   repos,
   ignoreSubmodules,
+  project,
   onClose,
   onOpenInEditor,
   onOpenInTab,
@@ -55,6 +59,8 @@ export function ViewerDialog({
   /** `git.repos` of the pane's cwd (App); see ChangesPanel. */
   repos?: RepoList;
   ignoreSubmodules?: boolean;
+  /** The project folder (key of the per-project commit message instruction). */
+  project?: string;
   onClose: () => void;
   /** Opens `path` in the Files tab (at `line`) and closes the viewer. */
   onOpenInEditor: (path: string, line?: number) => void;
@@ -91,7 +97,7 @@ export function ViewerDialog({
         >
           {shown && (
             <CwdContext value={cwd}>
-              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />
+              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} project={project} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />
             </CwdContext>
           )}
         </Dialog.Popup>
@@ -124,12 +130,19 @@ export function DialogClose() {
   );
 }
 
-function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
+function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, project, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; project?: string; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
   const t = useT();
   const text = title(target, cwd);
   switch (target.kind) {
     case "diff":
       return <DiffBody client={client} cwd={cwd} call={target.call} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} header={(extra) => <Header text={text}>{extra}</Header>} />;
+    case "compare":
+      return (
+        <>
+          <Header text={text} />
+          <CompareBody path={target.path} old={target.old} new={target.new} />
+        </>
+      );
     case "plan":
       return (
         <>
@@ -145,7 +158,7 @@ function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules
           <Header text={text} />
           {view ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
+              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} project={project} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
             </div>
           ) : (
             <p className="p-4 text-muted-foreground text-sm">{t("files.viewer.noSession")}</p>
@@ -153,6 +166,39 @@ function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules
         </>
       );
   }
+}
+
+/** Two versions of a file (Timeline "Compare with ..."): the diff view of the commit file diff, with the version names above. */
+function CompareBody({ path, old, new: next }: { path: string; old: CompareSide; new: CompareSide }) {
+  const t = useT();
+  const colorTheme = useColorTheme();
+  const dark = useDark();
+  const narrow = useNarrow();
+  const [drawn, setDrawn] = useState(false);
+  // Stable file objects: @pierre/diffs re-parses and re-highlights the whole file on a new object.
+  const files = useMemo(() => ({ old: { name: path, contents: old.content }, new: { name: path, contents: next.content } }), [path, old.content, next.content]);
+  const options = useMemo(
+    () => ({ ...DIFF_OPTIONS, theme: diffThemes(colorTheme), diffStyle: narrow ? ("unified" as const) : loadStyle(), themeType: dark ? ("dark" as const) : ("light" as const), disableFileHeader: true, onPostRender: () => setDrawn(true) }),
+    [narrow, dark, colorTheme],
+  );
+  const same = old.content === next.content;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="compare-diff">
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1 text-muted-foreground text-xs">
+        <span className="min-w-0 flex-1 truncate" title={old.label}>{old.label}</span>
+        <span aria-hidden="true">↔</span>
+        <span className="min-w-0 flex-1 truncate text-right" title={next.label}>{next.label}</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto text-xs">
+        {same ? <p className="p-2 text-muted-foreground">{t("files.timeline.noDifference")}</p> : (
+          <>
+            {!drawn && <p className="p-2 text-muted-foreground">{t("files.changes.loadingDiff")}</p>}
+            <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 type Loaded = { kind: "text"; doc: string } | { kind: "media"; media: FsMediaResult } | { kind: "error"; text: string; notice: boolean };

@@ -1,9 +1,10 @@
 // Update notice (docs/spec.md "Updates"), OpenCode's persistent "Update available" toast with "Install and restart" / "Not yet":
-// available -> installing -> waiting for busy sessions -> restarting; the client then reconnects to the new daemon.
+// available -> installing -> waiting for busy sessions -> restarting; the client then reconnects to the new daemon. "Not yet" hides a
+// version; Settings > About and the palette's "Check for updates" (`update.check`) still show it and bring the notice back.
 import { useState } from "react";
 import { DownloadIcon } from "lucide-react";
 import type { ServerMessage, UpdateState } from "@claude-ui/protocol";
-import type { Request } from "./client.ts";
+import type { Request, RequestError } from "./client.ts";
 import { t, useT } from "./i18n.ts";
 import { TOAST_CARD } from "./toast.tsx";
 
@@ -25,6 +26,18 @@ function dismissed() {
     return null;
   }
 }
+/** A manual check that finds a version shows the notice again, even after "Not yet" (App also remounts the toast). */
+export function undismissUpdate() {
+  try {
+    localStorage.removeItem(DISMISSED_KEY);
+  } catch {}
+}
+
+/** Installs the available version, then restarts once idle: the notice's and Settings > About's "Update and restart". */
+export const installUpdate = (request: (m: Request) => Promise<unknown>) => request({ type: "update.install" }).then(() => request({ type: "update.restart" }));
+
+/** A failed `update.check` in words: updates off here (update_unavailable), else the daemon's reason. */
+export const checkError = (e: RequestError) => (e.code === "update_unavailable" ? t("app.update.off") : t("app.update.checkFailed", { reason: e.message }));
 
 /** What the notice says in each phase. */
 export function updateText(u: UpdateInfo, error?: string): { title: string; description?: string } {
@@ -58,9 +71,7 @@ export function UpdateToast({ update, request }: { update: UpdateInfo; request: 
   const fail = (e: Error) => e.message !== "disconnected" && setError(e.message);
   const install = () => {
     setError(undefined);
-    request({ type: "update.install" })
-      .then(() => request({ type: "update.restart" }))
-      .catch(fail);
+    installUpdate(request).catch(fail);
   };
   const notYet = () => {
     try {

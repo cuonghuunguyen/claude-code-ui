@@ -1,6 +1,6 @@
 // Titlebar tabs (OpenCode titlebar-tab-strip): avatar + title + close; middle click closes, drag reorders, overflow scrolls.
 // Reorder without drag (WCAG 2.5.7): Alt+Shift+Arrow or Ctrl+Shift+PageUp/PageDown on a focused tab, or the tab context menu.
-// Tabs form groups by project or by worktree (Settings > Layout > Tabs) behind a chip (name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
+// Tabs form groups by project or by worktree (Settings > Layout > Tabs) behind a chip (project icon in place of the chevron when set, name, count; click collapses; Alt+Shift+Left/Right on the chip moves the group); None or a single group: no chip. Compact tabs: every group is its chip (also one) and the chip opens a menu of its tabs.
 // Below md the strip collapses into a switcher (a Select showing the active tab).
 // Pinned tabs (GH-359): icon only, first in their group. Tab context menu: Close others / to the right / all, Reopen closed tab, Copy session ID / cwd path, Reveal in sidebar (GH-359), Clean up tabs submenu (GH-378); Shift+F10 or the ContextMenu key opens it.
 // Clean up tabs by rule (GH-378): tab menu submenu, group chip "Clean up group", long press (or right click) on the phone close button.
@@ -997,6 +997,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   const tr = useT();
   const first = info(ids[0]!);
   const c = avatarColor(first.groupColor ?? cwd, use(AvatarColors));
+  const icon = useLabels().projects[first.groupColor ?? cwd]?.icon;
   const states = hiddenIds.map((id) => status(id, info(id)));
   const urgent = states.includes("needs_input") ? "needs_input" : states.includes("running") ? "running" : states.includes("unread") ? "unread" : undefined;
   const name = first.groupLabel ?? projectName(cwd);
@@ -1042,7 +1043,7 @@ function GroupChip({ cwd, ids, hiddenIds, info, collapsed, onToggle, onMoveTo, o
   };
   const body = (
     <>
-      <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform", shown && "-rotate-90")} aria-hidden />
+      {icon ? <span className="contents" data-icon="project"><LabelIcon icon={icon} className="size-4 text-[12px]" /></span> : <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform", shown && "-rotate-90")} aria-hidden />}
       <span className="min-w-0 truncate">{name}</span>
       <span className="tabular-nums" aria-hidden>{ids.length}</span>
       {shown && urgent === "running" && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" data-icon="running" aria-hidden />}

@@ -33,6 +33,8 @@ describe("unread", () => {
   it("the tab title carries the unread count", () => {
     expect(tabTitle(0)).toBe("Claude UI");
     expect(tabTitle(3)).toBe("(3) Claude UI");
+    expect(tabTitle(0, "Work")).toBe("Work");
+    expect(tabTitle(3, "Work")).toBe("(3) Work");
   });
 
   it("GH-378 a session not loaded in this daemon run is unread when its list lastActivity is after the one this browser last showed; unknown without a record", () => {

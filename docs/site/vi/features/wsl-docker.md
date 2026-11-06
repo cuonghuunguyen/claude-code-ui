@@ -1,6 +1,6 @@
-# WSL & Docker
+# WSL, Docker & SSH
 
-claude-code-ui cũng có thể chạy phiên bên trong các bản phân phối WSL của bạn (trên Windows) và bên trong các container Docker đang chạy. Mỗi nơi như vậy là một **môi trường**: có bản cài Claude riêng, `~/.claude` riêng và tệp riêng.
+claude-code-ui cũng có thể chạy phiên bên trong các bản phân phối WSL của bạn (trên Windows) bên trong các container Docker đang chạy và trên các máy bạn truy cập qua SSH. Mỗi nơi như vậy là một **môi trường**: có bản cài Claude riêng, `~/.claude` riêng và tệp riêng.
 
 ::: warning Lỗi đã biết ở bản 0.5.0
 Môi trường WSL và Docker dừng sau khoảng 15 giây kể từ khi khởi động, với thông báo "stopped (exit code 1)". Đây là lỗi, được theo dõi tại [#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263).
@@ -42,9 +42,42 @@ Bundle cần máy của bạn truy cập nodejs.org và npm registry một lần
 
 Môi trường đã chạy một lần sẽ khởi động lại cùng Claude UI, và tự khởi động lại nếu dừng (sau 2 giây, 10 giây và 60 giây; lần dừng thứ tư trong vòng mười phút hiện lỗi kèm **Thử lại**). Container chạy lại sẽ khởi động trong khoảng 30 giây. Sau bản build Claude UI mới, môi trường cập nhật từ bundle đã tải; nếu distro hoặc container của nó cần npm, môi trường vẫn tắt và thanh bên hiện **Cần cập nhật** kèm **Cập nhật**. Khi môi trường đang khởi động, các dự án của nó vẫn nằm trong thanh bên. Trong **Cài đặt › Môi trường**, **Khởi động cùng Claude UI** tắt hành vi này cho một môi trường (các dự án của nó rời khỏi thanh bên) và **Tự động cập nhật** dừng việc cập nhật tự động.
 
+## Máy chủ SSH {#ssh-hosts}
+
+Mỗi mục `Host` trong ssh config của bạn (`~/.ssh/config` và các file nó `Include`) là một môi trường tên `SSH: <alias>`. Cần có `ssh` trên máy của bạn. Máy chủ Linux và macOS dùng được. Máy chủ Windows chưa hỗ trợ.
+
+### Cách mở dự án trên máy chủ SSH {#how-to-open-a-project-on-an-ssh-host}
+
+1. Bấm **Mở dự án**.
+2. Trong **Nơi mở dự án**, chọn **SSH host**, rồi chọn một host. Host chưa có trong danh sách: bấm **Thêm SSH host…**, gõ lệnh ssh của nó và xem host đã phân tích trong phần xem trước. **Thêm host** ghi một mục `Host` vào ssh config của bạn. Muốn đổi tên hoặc xóa, sửa file đó.
+3. Lần đầu, bấm **Cài đặt**. claude-code-ui tự sao chép vào `~/.local/share/claude-ui/side` trên host qua ssh, từ máy của bạn: host không cần internet. Host mà bundle không phù hợp (musl, CPU khác, macOS, BSD) cài bằng npm và cần Node.js 22+ và npm ở đó. Hộp thoại cho biết thiếu gì.
+4. Chọn một thư mục và mở nó.
+
+ssh chạy không hỏi gì (`BatchMode`): không mật khẩu, không hỏi passphrase. Dùng khóa, agent hoặc `ProxyJump` trong ssh config. Nếu host key chưa biết hoặc đăng nhập bị từ chối, chạy `ssh <alias>` một lần trong terminal rồi thử lại. Host giữ đăng nhập Claude riêng của nó.
+
+### Một Hub cho mỗi máy {#one-hub-per-machine}
+
+Một môi trường là Hub của máy đó. Nếu host đã chạy một Claude UI, Claude UI của bạn gắn vào nó và không khởi động cái thứ hai. Nếu chưa có, Claude UI của bạn khởi động một cái ở đó (chỉ trên `127.0.0.1`) rồi gắn vào. Hub do chính bạn khởi động trên host không bao giờ bị dừng, khởi động lại hay đổi cấu hình. Cài đặt của nó (thư mục gốc được phép, bypass, chế độ mặc định) giới hạn các phiên được gắn vào.
+
+Nhiều Claude UI có thể gắn vào cùng một host, giống nhiều trình duyệt cùng kết nối một Hub.
+
+### Khi kết nối bị đứt {#when-the-connection-drops}
+
+- Kết nối ssh bị đứt không làm dừng lượt chạy, terminal hay prompt trên host. Môi trường hiện **Đang kết nối lại…** và tự gắn lại.
+- Sau khi bạn khởi động lại Claude UI, nó gắn lại vào các host đã gắn trước đó. Lượt chạy và terminal vẫn như cũ.
+- Hub mà Claude UI của bạn đã khởi động trên host sẽ kết thúc khi không có Claude UI nào gắn vào, không có trình duyệt nào kết nối và không có lượt chạy nào trong thời gian chờ (**Grace period**). Đặt theo từng môi trường trong **Cài đặt › Môi trường** (**Giữ chạy khi không có Claude UI (phút)**, mặc định 30).
+- Nếu việc gắn thất bại hẳn, dòng hiện lý do và **Thử lại**.
+
+### Phiên bản {#versions}
+
+Khi Claude UI trên host và Claude UI của bạn không dùng chung được, dòng hiện cả hai phiên bản: "Claude UI 1.1.0 ở đó, 1.2.0 ở đây: hai bên không dùng chung được." Nếu bản ở đó cũ hơn, **Cập nhật** (trong bảng Mở dự án và trong Cài đặt › Môi trường) chạy `claude-ui update` ở đó. Claude UI của bạn tự gắn lại sau khi khởi động lại. Nếu bản ở đó mới hơn, hãy cập nhật Claude UI này.
+
+**Khởi động cùng Claude UI** mặc định tắt với máy chủ SSH. Bật trong Cài đặt › Môi trường để kết nối ở mỗi lần khởi động.
+
 ## Cần biết {#good-to-know}
 
-- Dự án và phiên của mọi môi trường dùng chung một thanh bên. Huy hiệu cho biết môi trường (ví dụ `WSL` hoặc `Docker`).
+- Dự án và phiên của mọi môi trường dùng chung một thanh bên. Huy hiệu cho biết môi trường (ví dụ `WSL`, `Docker` hoặc `SSH: demo-host`).
+- Dự án và môi trường có thể có tên và biểu tượng riêng của bạn. Xem [Tên và biểu tượng riêng](/vi/features/projects#custom-names-and-icons).
 - Phiên trên một môi trường chạy Claude của môi trường đó, mở terminal của môi trường đó và dùng cấu hình của môi trường đó.
 - Đường dẫn gõ vào quyết định môi trường: `C:\...` là Windows, `/home/...` là WSL, `\\wsl.localhost\<distro>\...` là distro đó.
 - Các distro WSL riêng của Docker và Rancher Desktop bị bỏ qua.

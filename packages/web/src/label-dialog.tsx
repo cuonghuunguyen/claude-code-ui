@@ -26,6 +26,10 @@ type Props = {
   /** `undefined` = Reset. Rejects with the daemon's message, shown in the dialog. */
   onSave: (label: Label | undefined) => Promise<void>;
   onClose: () => void;
+  /** Side of the saved square image, default LABEL_ICON_PX. */
+  iconPx?: number;
+  /** Data URL characters the saved image may take, default LABEL_ICON_MAX. */
+  iconMax?: number;
 };
 
 export function LabelDialog(p: Props) {
@@ -36,7 +40,7 @@ export function LabelDialog(p: Props) {
   );
 }
 
-function Body({ title, fallbackName, label, onSave, onClose }: Props) {
+function Body({ title, fallbackName, label, onSave, onClose, iconPx = LABEL_ICON_PX, iconMax = LABEL_ICON_MAX }: Props) {
   const t = useT();
   const kept = iconSrc(label?.icon);
   const [name, setName] = useState(label?.name ?? "");
@@ -82,11 +86,11 @@ function Body({ title, fallbackName, label, onSave, onClose }: Props) {
     if (mode !== "image") return undefined;
     if (!pic) return kept;
     const c = document.createElement("canvas");
-    c.width = c.height = LABEL_ICON_PX;
+    c.width = c.height = iconPx;
     const { sx, sy, size } = sourceRect(pic.w, pic.h, VIEW, pic.zoom, pic.ox, pic.oy);
-    c.getContext("2d")!.drawImage(pic.img, sx, sy, size, size, 0, 0, LABEL_ICON_PX, LABEL_ICON_PX);
+    c.getContext("2d")!.drawImage(pic.img, sx, sy, size, size, 0, 0, iconPx, iconPx);
     // A browser without WebP encoding answers PNG, which the daemon accepts too.
-    const url = [0.85, 0.6].map((q) => c.toDataURL("image/webp", q)).find((u) => u.length <= LABEL_ICON_MAX);
+    const url = (iconPx > LABEL_ICON_PX ? [0.85, 0.6, 0.4] : [0.85, 0.6]).map((q) => c.toDataURL("image/webp", q)).find((u) => u.length <= iconMax);
     if (!url) throw new Error(t("label.errBig"));
     return url;
   }

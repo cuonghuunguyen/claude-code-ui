@@ -1,6 +1,6 @@
-# WSL & Docker
+# WSL, Docker & SSH
 
-One claude-code-ui can also run sessions inside your WSL distros (on Windows) and inside running Docker containers. Each of these is a **side**: its own Claude install, its own `~/.claude`, its own files.
+One claude-code-ui can also run sessions inside your WSL distros (on Windows), inside running Docker containers and on machines you reach over SSH. Each of these is a **side**: its own Claude install, its own `~/.claude`, its own files.
 
 ::: warning Known issue in 0.5.0
 WSL and Docker sides stop about 15 seconds after they start, with "stopped (exit code 1)". This is a bug, tracked in [#263](https://github.com/cuonghuunguyen/claude-code-ui/issues/263).
@@ -42,9 +42,44 @@ The bundle needs your computer to reach nodejs.org and the npm registry once per
 
 A side that has run once starts again with Claude UI, and again by itself if it stops (after 2 s, 10 s and 60 s; the fourth stop within ten minutes shows an error with **Retry**). A container that runs again starts within about 30 seconds. After a new Claude UI build, the side updates from the downloaded bundle; if its distro or container needs npm, it stays off and the sidebar shows **Needs an update** with **Update**. While a side starts, its projects stay in the sidebar. In **Settings › Sides**, **Start with Claude UI** turns this off for a side (its projects leave the sidebar) and **Update automatically** stops the automatic update.
 
+## SSH hosts
+
+Every `Host` entry of your ssh config (`~/.ssh/config`, and the files it `Include`s) is a side named `SSH: <alias>`. It needs `ssh` on your computer. Linux and macOS hosts work. Windows hosts do not yet.
+
+Sessions and terminals get the environment of your login shell on the host (`~/.zprofile`, `~/.zshrc`, `~/.bash_profile` ...), so tools from Homebrew, nvm or sdkman are found. After you edit those files, restart the host's Hub (stop the side, then start it). fish and tcsh: plain environment.
+
+### How to open a project on an SSH host
+
+1. Click **Open project**.
+2. In **Where to open projects**, pick **SSH host**, then a host. A host that is not in the list: click **Add SSH host…**, type its ssh command and check the parsed host in the preview. **Add host** writes a `Host` entry into your ssh config. To rename or remove it, edit that file.
+3. The first time, click **Install**. claude-code-ui copies itself to `~/.local/share/claude-ui/side` on the host over ssh, from your computer: the host needs no internet. A host the bundle does not fit (musl, other CPUs, macOS, BSD) installs with npm and needs Node.js 22+ and npm there. The dialog names what is missing.
+4. Pick a folder and open it.
+
+ssh runs without prompts (`BatchMode`): no password, no passphrase question. Use a key, an agent or a `ProxyJump` in your ssh config. If the host key is unknown or the login is refused, run `ssh <alias>` once in a terminal, then try again. The host keeps its own Claude login.
+
+### One Hub per machine
+
+A side is the Hub of that machine. If the host already runs a Claude UI, yours attaches to it and does not start a second one. If none runs, yours starts one there (on `127.0.0.1` only) and attaches. A Hub you started yourself on the host is never stopped, restarted or reconfigured. Its settings (allowed roots, bypass, default mode) limit the attached sessions.
+
+Several Claude UIs can attach to one host at once, like several browsers to one Hub.
+
+### When the connection drops
+
+- A dropped ssh connection does not stop the host's turns, terminals or prompts. The side shows **Reconnecting…** and attaches again by itself.
+- After you restart your Claude UI, it attaches again to the hosts it had attached. Turns and terminals are as they were.
+- A Hub that your Claude UI started on the host ends when no Claude UI is attached, no browser is connected and no turn runs for the **Grace period**. Set it per side in **Settings › Sides** (**Keep running without Claude UI (minutes)**, default 30).
+- If attaching fails for good, the row shows the reason and **Retry**.
+
+### Versions
+
+When the Claude UI on the host and yours cannot work together, the row names both versions: "Claude UI 1.1.0 there, 1.2.0 here: they cannot work together." If the one there is older, **Update** (in the Open project panel and in Settings › Sides) runs `claude-ui update` there. Your Claude UI attaches again by itself after the restart. If the one there is newer, update this Claude UI.
+
+**Start with Claude UI** is off by default for an SSH host. Turn it on in Settings › Sides to connect at every start.
+
 ## Good to know
 
-- Projects and sessions of all sides share one sidebar. A badge shows the side (for example `WSL` or `Docker`).
+- Projects and sessions of all sides share one sidebar. A badge shows the side (for example `WSL`, `Docker` or `SSH: demo-host`).
+- A project and a side can have your own name and icon. See [Custom names and icons](projects#custom-names-and-icons).
 - A session on a side runs that side's Claude, opens that side's terminal and uses that side's config.
 - A typed path picks its side: `C:\...` is Windows, `/home/...` is WSL, `\\wsl.localhost\<distro>\...` is that distro.
 - Docker and Rancher Desktop's own WSL distros are skipped.

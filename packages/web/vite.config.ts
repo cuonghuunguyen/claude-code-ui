@@ -36,5 +36,5 @@ export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(appVersion) },
   plugins: [react(), tailwindcss(), thirdPartyLicenses(), precompress()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  server: { host: "127.0.0.1", proxy: { "/media": { target: `http://127.0.0.1:${process.env.PORT ?? 4280}` }, "/ws": { target: `ws://127.0.0.1:${process.env.PORT ?? 4280}`, ws: true } } },
+  server: { host: "127.0.0.1", proxy: { "/media": { target: `http://127.0.0.1:${process.env.PORT ?? 4280}` }, "/app-icon": { target: `http://127.0.0.1:${process.env.PORT ?? 4280}` }, "/ws": { target: `ws://127.0.0.1:${process.env.PORT ?? 4280}`, ws: true } } },
 });

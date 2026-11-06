@@ -63,7 +63,7 @@ describe("gitBranch", () => {
     expect(i.push).toEqual([...PUSH, "origin", "refs/heads/main:refs/heads/main"]);
     expect(i.forcePush).toEqual([...PUSH, `--force-with-lease=refs/heads/main:${tracking}`, "origin", "refs/heads/main:refs/heads/main"]);
     expect(i.pull).toEqual([...HARD, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", "origin", "refs/heads/main"]);
-    expect(i.why).toBeUndefined();
+    expect(i.why).toEqual({ merge: "This is the current branch", rebase: "This is the current branch" });
   });
 
   it("a branch without upstream pushes with --set-upstream to origin; no pull, no force push", async () => {

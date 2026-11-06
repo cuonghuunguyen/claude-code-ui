@@ -1068,7 +1068,8 @@ export function createSides(opts: {
           s.gits.delete(gid);
         }
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
-        if (!wasReady) reject(new Error(message));
+        // A mismatch rejects with what the row says (both versions, the way out), not the setup code.
+        if (!wasReady) reject(new Error(mismatched && !updating ? mismatchText : message));
         routers.forEach((r) => r.detach(s.id));
         changed();
       });
@@ -1492,14 +1493,16 @@ export function createRouter(opts: {
   sides.addRouter(router);
   sides.ready().forEach((id) => router.attach(id));
 
-  /** The hub's app settings on a Hub it started: a coordinator there gets the same orchestration settings. */
+  /** The hub's app settings (but its launcher options) on a Hub it started: a coordinator there gets the same orchestration settings. */
   async function syncSettings(id: string, settings?: Settings) {
     if (!settings) {
       const r = await opts.localCall({ type: "settings.get", reqId: "" } as ClientMessage);
       if (r.type !== "reply") return;
       settings = (r.result as SettingsResult).settings;
     }
-    await sideCall(id, { type: "settings.set", patch: settings, reqId: "" } as ClientMessage);
+    // Not `launcher`: those are the start options of this machine's claude-ui (a later manual start there would use them).
+    const { launcher: _launcher, ...patch } = settings;
+    await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
   }
 
   /**

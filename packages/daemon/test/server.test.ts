@@ -12,7 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
-import { openChecked } from "../src/fd-check.ts";
+import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { createProjects } from "../src/projects.ts";
@@ -33,7 +33,7 @@ vi.mock("../src/git.ts", async (importOriginal) => {
 // The seam between allowed() and the open: a test runs code there (a swap) through mockImplementationOnce; behaviour unchanged.
 vi.mock("../src/fd-check.ts", async (importOriginal) => {
   const fd = await importOriginal<typeof import("../src/fd-check.ts")>();
-  return { ...fd, openChecked: vi.fn(fd.openChecked) };
+  return { ...fd, openChecked: vi.fn(fd.openChecked), readdirChecked: vi.fn(fd.readdirChecked) };
 });
 
 const added = (...cwds: string[]) => {
@@ -1114,6 +1114,127 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
   });
 
+  it("answers git.commitFiles for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const m = { type: "git.commitFiles", paths: ["a.txt"], message: "m" };
+    expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: { committed: null } });
+    expect(await c.request({ ...m, cwd: webRoot, message: " " })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+  });
+
+  it("answers git.rollbackPreview, git.rollback and git.rollbackHunk for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const hunk = { newStart: 1, lines: ["-a", "+b"] };
+    const ms = [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { type: "git.rollback", paths: ["a.txt"], token: "t" }, { type: "git.rollbackHunk", path: "a.txt", hunk }];
+    const nulls = [{ preview: null }, { rolledBack: null }, { rolledBack: null }];
+    for (const [i, m] of ms.entries()) {
+      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: nulls[i] });
+    }
+    expect(await c.request({ ...ms[0]!, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...ms[1]!, cwd: webRoot, token: 5 })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ ...ms[2]!, cwd: webRoot, hunk: { newStart: 1, lines: [] } })).toMatchObject({ code: "bad_request" });
+  });
+
+  it("answers git.merge, git.rebase, git.continue, git.abort and git.operation for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    const hash = "a".repeat(40);
+    const write = { ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] };
+    const msgs = [{ type: "git.merge", ...write }, { type: "git.rebase", ...write }, { type: "git.continue", kind: "merge" }, { type: "git.abort", kind: "merge" }, { type: "git.operation" }];
+    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write })).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.continue", cwd: webRoot, kind: "merge" })).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.operation", cwd: webRoot })).toMatchObject({ result: { operation: null } });
+    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write, local: "nope" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
+  });
+
+  it("answers git.stashList, git.stashPush, git.stashApply, git.stashPop and git.stashDrop for a cwd inside the roots only, with checked arguments", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    const hash = "a".repeat(40);
+    const msgs = [{ type: "git.stashList" }, { type: "git.stashPush" }, { type: "git.stashApply", index: 0, hash }, { type: "git.stashPop", index: 0, hash }, { type: "git.stashDrop", index: 0, hash }];
+    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.stashList", cwd: webRoot })).toMatchObject({ result: { stashes: null } });
+    for (const m of msgs.slice(1)) expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
+    expect(await c.request({ type: "git.stashDrop", cwd: webRoot, index: -1, hash })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.stashPush", cwd: webRoot, message: 5 })).toMatchObject({ code: "bad_request" });
+  });
+
+  it("git.commitMessage: checked arguments, the reply, and a cancel that stops only this connection's generation", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "cm-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "a.txt"), "hello\n");
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    let prompt = "";
+    const query = ((a: { prompt: unknown; options: { abortController?: AbortController } }) => {
+      if (typeof a.prompt !== "string") return (fakeQuery as never as (x: unknown) => unknown)(a);
+      const text = (prompt = a.prompt);
+      return (async function* () {
+        if (text.includes("WAIT")) {
+          started();
+          await new Promise<void>((r) => a.options.abortController!.signal.addEventListener("abort", () => r(), { once: true }));
+        } else yield { type: "result", subtype: "success", is_error: false, result: "feat: hello" };
+      })();
+    }) as never;
+    const appSettings = createSettings();
+    appSettings.set({ git: { commitMessageInstructions: { "/proj": "WAIT for it" }, commitMessageInstruction: "global" } });
+    const d = createDaemon({ webRoot, token, roots: [repo], query, appSettings });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const p = (d.address() as AddressInfo).port;
+      const c = await client(p);
+      const other = await client(p);
+      const m = { type: "git.commitMessage", cwd: repo, paths: ["a.txt"] };
+      expect(await c.request({ ...m, cwd: join(repo, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, paths: [] })).toMatchObject({ code: "bad_request" });
+      expect(await c.request({ ...m, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
+      expect(await c.request({ ...m, project: 5 })).toMatchObject({ code: "bad_request" });
+      expect(await c.request(m)).toMatchObject({ result: { message: "feat: hello" } });
+      expect(prompt).toContain("global");
+      expect(prompt).toContain("+hello");
+      const waiting = c.request({ ...m, project: "/proj" });
+      await running;
+      await other.request({ type: "git.commitMessageCancel" });
+      expect(await Promise.race([waiting, new Promise((r) => setTimeout(() => r("pending"), 200))])).toBe("pending");
+      await c.request({ type: "git.commitMessageCancel" });
+      expect(await waiting).toMatchObject({ type: "error", code: "cancelled" });
+      // A cancel right behind the request, before the repository check finished, still stops it.
+      const early = c.request(m);
+      await c.request({ type: "git.commitMessageCancel" });
+      expect(await early).toMatchObject({ type: "error", code: "cancelled" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("answers git.branchCreate and git.checkout for a cwd inside the roots only, with checked arguments and the local_changes code", async () => {
+    const c = await client();
+    const outside = join(webRoot, "..");
+    for (const m of [{ type: "git.branchCreate", name: "x" }, { type: "git.checkout", ref: "refs/heads/x" }]) {
+      expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
+      expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
+    }
+    expect(await c.request({ type: "git.checkout", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
+    expect(await c.request({ type: "git.branchCreate", cwd: webRoot, name: "-x" })).toMatchObject({ code: "bad_request" });
+    const repo = join(webRoot, "coproj");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "t.txt"), "1\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "first");
+    git("checkout", "-q", "-b", "other");
+    writeFileSync(join(repo, "t.txt"), "2\n");
+    git("commit", "-q", "-am", "second");
+    git("checkout", "-q", "main");
+    writeFileSync(join(repo, "t.txt"), "mine\n");
+    expect(await c.request({ type: "git.checkout", cwd: repo, ref: "refs/heads/other" })).toMatchObject({ code: "local_changes" });
+  });
+
   it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
     const c = await client();
     const ref = "refs/heads/main";
@@ -1154,6 +1275,13 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "bin" })).toMatchObject({ code: "binary" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "../x" })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
+    // git.blame (GH-564): the working tree, so an edited line is not committed.
+    writeFileSync(join(repo, "t.txt"), "hi\nmore\n");
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "t.txt" })).toMatchObject({ result: { blame: { lines: [hash, null], commits: { [hash]: { author: "T", summary: "first" } } } } });
+    expect(await c.request({ type: "git.blame", cwd: join(webRoot, ".."), path: "t.txt" })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "../x" })).toMatchObject({ code: "bad_request" });
+    writeFileSync(join(repo, "big.txt"), "x".repeat(2 * 1024 * 1024 + 1));
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "big.txt" })).toMatchObject({ code: "too_large", size: 2 * 1024 * 1024 + 1 });
   });
 
   describe("submodule folders and gitlink paths (GH-388)", () => {
@@ -1185,6 +1313,20 @@ describe("daemon", () => {
         { type: "git.commit", hash },
         { type: "git.fileAt", hash, path: "t.txt" },
         { type: "git.fetch" },
+        { type: "git.commitFiles", paths: ["t.txt"], message: "m" },
+        { type: "git.rollbackPreview", paths: ["t.txt"] },
+        { type: "git.rollback", paths: ["t.txt"], token: "t" },
+        { type: "git.rollbackHunk", path: "t.txt", hunk: { newStart: 1, lines: ["+x"] } },
+        { type: "git.merge", ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] },
+        { type: "git.rebase", ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] },
+        { type: "git.continue", kind: "merge" },
+        { type: "git.abort", kind: "merge" },
+        { type: "git.operation" },
+        { type: "git.stashList" },
+        { type: "git.stashPush" },
+        { type: "git.stashApply", index: 0, hash },
+        { type: "git.stashPop", index: 0, hash },
+        { type: "git.stashDrop", index: 0, hash },
         { type: "git.branch", ref: "refs/heads/main" },
         { type: "git.push", ref: "refs/heads/main", local: hash, argv: ["push"] },
         { type: "git.pull", ref: "refs/heads/main", local: hash, argv: ["pull"] },
@@ -1629,6 +1771,41 @@ describe("daemon", () => {
       expect(JSON.stringify(reply), type).not.toContain("outside secret");
       expect(readFileSync(outside, "utf8"), type).toBe("outside secret");
     }
+  });
+
+  it.skipIf(!posix)("fs.list refuses a folder swapped for a symlink between the root check and the read (GH-323)", async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    writeFileSync(join(outsideDir, "outside-secret.txt"), "x");
+    const dir = join(webRoot, "swap-list");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "f.txt"), "inside");
+    const real = vi.mocked(readdirChecked).getMockImplementation()!;
+    vi.mocked(readdirChecked).mockImplementationOnce((path) => {
+      rmSync(dir, { recursive: true });
+      symlinkSync(outsideDir, dir);
+      return real(path);
+    });
+    const c = await client();
+    const reply = await c.request({ type: "fs.list", path: dir });
+    expect(reply).toMatchObject({ code: "path_not_allowed" });
+    expect(JSON.stringify(reply)).not.toContain("outside-secret");
+  });
+
+  it.skipIf(!posix)("fs.watch sends nothing for a watched file whose folder became a link (GH-323)", { timeout: 10_000 }, async () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "outside-"));
+    writeFileSync(join(outsideDir, "f.txt"), "outside");
+    const dir = join(webRoot, "swap-watch");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "f.txt");
+    writeFileSync(file, "inside");
+    const c = await client();
+    await c.request({ type: "fs.watch", paths: [file] });
+    rmSync(dir, { recursive: true });
+    symlinkSync(outsideDir, dir);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(outsideDir, "f.txt"), "outside changed");
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(c.inbox.some((m) => m.type === "fs.changed" && m.path === file)).toBe(false);
   });
 
   it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
@@ -4452,6 +4629,8 @@ describe("updates", () => {
       await new Promise((r) => setTimeout(r, 20));
       const a = await client(p);
       expect(await a.waitFor((m) => m.type === "update_available")).toEqual({ type: "update_available", version: "0.2.1", current: "0.2.0" });
+      // A manual check (Settings > About) answers with the same version.
+      expect(await a.request({ type: "update.check" })).toMatchObject({ result: { current: "0.2.0", latest: "0.2.1" } });
       const { result } = (await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
       const sessionId = result.session.id;
       await a.request({ type: "session.subscribe", sessionId, sinceSeq: 0 });
@@ -4471,6 +4650,7 @@ describe("updates", () => {
     }
     const c = await client();
     expect(await c.request({ type: "update.install" })).toMatchObject({ type: "error", code: "update_unavailable" });
+    expect(await c.request({ type: "update.check" })).toMatchObject({ type: "error", code: "update_unavailable" });
     expect(c.inbox.some((m) => m.type === "update_available")).toBe(false);
     c.ws.close();
   });

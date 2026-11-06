@@ -11,6 +11,12 @@ claude-code-ui checks npm for a new version when it starts and once a day, and c
 
 **Not yet** hides the notice until the next version.
 
+## Check for updates yourself
+
+Open **Settings › About** (Help & about). The **Updates** row shows the version you can install, even after **Not yet**. Click **Check for updates** to ask npm now, then **Update and restart**.
+
+From the command palette, run **Check for updates**. A new version brings the notice back. Otherwise a message says you have the latest version.
+
 ## How to update from a terminal
 
 ```sh

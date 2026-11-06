@@ -249,13 +249,13 @@ it("GH-360 right click opens the menu of the row under it: file, folder, empty s
   const t = setup();
   await t.render();
   await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).toEqual(["open", "viewer", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
   await closeMenu();
   await ctxMenu(t.row("/p/src"));
-  expect(menuIds()).toEqual(["newFile", "newFolder", "copyPath", "copyRel", "rename", "delete", "collapse"]);
+  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
   await closeMenu();
   await ctxMenu(t.el.querySelector('[data-testid="tree-empty-space"]')!);
-  expect(menuIds()).toEqual(["newFile", "newFolder", "refresh"]);
+  expect(menuIds()).toEqual(["newFile", "newFolder", "paste", "refresh"]);
   await closeMenu();
   t.unmount();
 });
@@ -326,7 +326,7 @@ it("GH-360 long press: touchstart on a row, 500 ms later the menu of that row op
     await t.render();
     await act(async () => void t.row("/p/src").dispatchEvent(Object.assign(new Event("touchstart", { bubbles: true, cancelable: true }), { touches: [{ clientX: 10, clientY: 10 }] })));
     await act(async () => void vi.advanceTimersByTime(600));
-    expect(menuIds()).toEqual(["newFile", "newFolder", "copyPath", "copyRel", "rename", "delete", "collapse"]);
+    expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
     t.unmount();
   } finally {
     vi.useRealTimers();
@@ -588,12 +588,12 @@ it("GH-360 file menu has Rename F2, Duplicate and Delete with the shortcut hints
   const t = setup();
   await t.render();
   await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).toEqual(["open", "viewer", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
   expect(menuItem("rename").getAttribute("aria-keyshortcuts")).toBe("F2");
   expect(menuItem("delete").className).toContain("text-destructive");
   await closeMenu();
   await ctxMenu(t.row("/p/src"));
-  expect(menuIds()).toEqual(["newFile", "newFolder", "copyPath", "copyRel", "rename", "delete", "collapse"]);
+  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
   await closeMenu();
   t.unmount();
 });
@@ -636,7 +636,7 @@ it("GH-394 the file dialog's own tree (no onViewer) has no Open in file dialog i
   const t = setup();
   await t.render({ onViewer: undefined });
   await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).toEqual(["open", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  expect(menuIds()).toEqual(["open", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
   await closeMenu();
   t.unmount();
 });
@@ -920,5 +920,181 @@ it("GH-525 the focused folder row keeps a selected background (not the hover one
   expect(t.row("/p/README.md").className).toContain("bg-secondary");
   await t.key(t.row("/p/README.md"), "ArrowDown");
   expect(t.row("/p/README.md").className).not.toContain("bg-secondary");
+  t.unmount();
+});
+
+// GH-555: copy, cut, paste, drag and drop.
+const DRAG_TYPE = "application/x-claude-ui-entry";
+const pasteEv = (target: Element, files: File[] = []) =>
+  act(async () => {
+    const e = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+    e.clipboardData = { files, items: files.map((f) => ({ kind: "file", getAsFile: () => f, webkitGetAsEntry: () => null })), getData: () => "" };
+    target.dispatchEvent(e);
+  });
+const dropEv = (target: Element, data: Record<string, string>, files: File[] = []) =>
+  act(async () => {
+    const e = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+    e.dataTransfer = { types: [...Object.keys(data), ...(files.length ? ["Files"] : [])], getData: (k: string) => data[k] ?? "", files, items: files.map((f) => ({ kind: "file", getAsFile: () => f, webkitGetAsEntry: () => null })) };
+    target.dispatchEvent(e);
+  });
+const walkOne = { entries: [{ rel: "", kind: "file", size: 1, mode: 420 }], bytes: 1 };
+const copyReplies = { "fs.walk": walkOne, "fs.copy": (m: { to: string }) => ({ path: m.to }), "fs.rename": (m: { name: string; dir?: string }) => ({ path: `${m.dir ?? "/p/src"}/${m.name}` }) };
+const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+
+it("GH-555 Ctrl+C on a file, Ctrl+V on a folder: fs.walk, fs.copy to a staging name, one rename; every request carries the side", async () => {
+  const t = setup({ side: "wsl:x" }, copyReplies);
+  await t.render();
+  await t.key(t.row("/p/README.md"), "c", { ctrlKey: true });
+  await pasteEv(t.row("/p/src"));
+  await flush();
+  expect(sent(t, "fs.walk")).toMatchObject([{ path: "/p/README.md", side: "wsl:x" }]);
+  const copy = sent(t, "fs.copy")[0]! as unknown as { from: string; to: string };
+  expect(copy).toMatchObject({ from: "/p/README.md", side: "wsl:x" });
+  expect(copy.to).toMatch(/^\/p\/src\/\.README\.md\.partial-[0-9a-f]{6}$/);
+  expect(sent(t, "fs.rename")).toMatchObject([{ path: copy.to, name: "README.md", side: "wsl:x" }]);
+  t.unmount();
+});
+
+it("GH-555 Cut then Paste on a folder sends fs.rename with dir and calls onMoved; the cut row is dimmed until then", async () => {
+  const onMoved = vi.fn();
+  const t = setup({ onMoved }, copyReplies);
+  await t.render();
+  await t.key(t.row("/p/README.md"), "x", { ctrlKey: true });
+  expect(t.row("/p/README.md").className).toContain("opacity-60");
+  await pasteEv(t.row("/p/src"));
+  await flush();
+  expect(sent(t, "fs.rename")).toMatchObject([{ path: "/p/README.md", name: "README.md", dir: "/p/src", side: "local" }]);
+  expect(onMoved).toHaveBeenCalledWith("/p/README.md", "/p/src/README.md");
+  expect(t.row("/p/README.md").className).not.toContain("opacity-60");
+  t.unmount();
+});
+
+it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until something is copied", async () => {
+  const t = setup({}, copyReplies);
+  await t.render();
+  await ctxMenu(t.row("/p/src"));
+  expect(menuIds()).toContain("cut");
+  expect(menuItem("paste").hasAttribute("data-disabled") || menuItem("paste").getAttribute("aria-disabled") === "true").toBe(true);
+  expect(menuItem("copy").getAttribute("aria-keyshortcuts")).toBe("Control+C");
+  await closeMenu();
+  await ctxMenu(t.row("/p/README.md"));
+  await act(async () => menuItem("copy").click());
+  await flush();
+  await ctxMenu(t.row("/p/src"));
+  expect(menuItem("paste").getAttribute("aria-disabled")).not.toBe("true");
+  await act(async () => menuItem("paste").click());
+  await flush();
+  expect(sent(t, "fs.walk")).toHaveLength(1);
+  t.unmount();
+});
+
+it("GH-555 a paste event that carries files writes them with fs.writeChunk to the folder, with the side", async () => {
+  const t = setup({ side: "wsl:x" }, { "fs.writeChunk": { size: 2 }, "fs.rename": (m: { name: string }) => ({ path: `/p/src/${m.name}` }) });
+  await t.render();
+  await pasteEv(t.row("/p/src"), [new File(["hi"], "h.txt")]);
+  await flush();
+  const w = sent(t, "fs.writeChunk")[0]!;
+  expect(w).toMatchObject({ offset: 0, data: btoa("hi"), side: "wsl:x" });
+  expect(String(w.path)).toMatch(/^\/p\/src\/\.h\.txt\.partial-/);
+  expect(sent(t, "fs.rename")).toMatchObject([{ name: "h.txt" }]);
+  t.unmount();
+});
+
+it("GH-555 a pasted folder (a File the browser cannot read) is refused with a message; nothing is written", async () => {
+  const t = setup({});
+  await t.render();
+  const folder = new File([""], "somedir");
+  folder.slice = () => ({ arrayBuffer: () => Promise.reject(new Error("NotReadableError")) }) as never;
+  await pasteEv(t.row("/p/src"), [folder]);
+  await flush();
+  expect(t.el.querySelector("[data-testid=tree-op-error]")!.textContent).toContain("Folders cannot be pasted from the system clipboard");
+  expect(sent(t, "fs.writeChunk")).toHaveLength(0);
+  t.unmount();
+});
+
+it("GH-555 a clash asks: focus on Keep both, Tab reaches the others, Escape skips", async () => {
+  const saved = listings["/p/src"];
+  listings["/p/src"] = [...saved!, ent("/p/src/new.ts")];
+  const t = setup({}, copyReplies);
+  await t.render();
+  await t.key(t.row("/p/new.ts"), "c", { ctrlKey: true });
+  await pasteEv(t.row("/p/src"));
+  await flush();
+  const dialog = document.querySelector<HTMLElement>("[data-testid=paste-clash-dialog]")!;
+  expect(dialog.textContent).toContain("“new.ts” already exists in src");
+  expect(document.activeElement?.getAttribute("data-testid")).toBe("paste-clash-keep");
+  expect(["paste-clash-skip", "paste-clash-replace", "paste-clash-keep"].every((id) => dialog.querySelector(`[data-testid=${id}]`))).toBe(true);
+  await act(async () => void dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await flush();
+  expect(sent(t, "fs.copy")).toHaveLength(0);
+  expect(sent(t, "fs.rename")).toHaveLength(0);
+  listings["/p/src"] = saved!;
+  t.unmount();
+});
+
+it("GH-555 Keep both from the clash dialog finishes with the copy name", async () => {
+  const saved = listings["/p/src"];
+  listings["/p/src"] = [...saved!, ent("/p/src/new.ts")];
+  const t = setup({}, copyReplies);
+  await t.render();
+  await t.key(t.row("/p/new.ts"), "c", { ctrlKey: true });
+  await pasteEv(t.row("/p/src"));
+  await flush();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=paste-clash-keep]")!.click());
+  await flush();
+  expect(sent(t, "fs.rename")).toMatchObject([{ name: "new copy.ts" }]);
+  listings["/p/src"] = saved!;
+  t.unmount();
+});
+
+it("GH-555 a failed paste shows the refusal in a role=alert line and removes nothing", async () => {
+  const t = setup({}, { "fs.walk": () => Promise.reject(Object.assign(new Error("boom"), { code: "too_many" })) });
+  await t.render();
+  await t.key(t.row("/p/README.md"), "c", { ctrlKey: true });
+  await pasteEv(t.row("/p/src"));
+  await flush();
+  const alert = t.el.querySelector("[data-testid=tree-op-error]")!;
+  expect(alert.getAttribute("role")).toBe("alert");
+  expect(alert.textContent).toContain("10,000");
+  t.unmount();
+});
+
+it("GH-555 dropping a tree row on a folder asks first, then moves; a drop onto its own folder does nothing", async () => {
+  const t = setup({}, copyReplies);
+  await t.render();
+  const payload = JSON.stringify({ path: "/p/README.md", name: "README.md", isDir: false, side: "local" });
+  await dropEv(t.row("/p/src"), { [DRAG_TYPE]: payload });
+  const dlg = document.querySelector<HTMLElement>("[data-testid=tree-drop-dialog]")!;
+  expect(dlg.textContent).toContain("Move “README.md” into “src”?");
+  expect(sent(t, "fs.rename")).toHaveLength(0);
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=tree-drop-confirm]")!.click());
+  await flush();
+  expect(sent(t, "fs.rename")).toMatchObject([{ path: "/p/README.md", dir: "/p/src" }]);
+  await dropEv(t.row("/p/package.json"), { [DRAG_TYPE]: payload });
+  expect(document.querySelector("[data-testid=tree-drop-dialog]")).toBeNull();
+  t.unmount();
+});
+
+it("GH-555 OS files dropped on a folder row upload without a question", async () => {
+  const t = setup({}, { "fs.writeChunk": { size: 1 }, "fs.rename": (m: { name: string }) => ({ path: `/p/src/${m.name}` }) });
+  await t.render();
+  await dropEv(t.row("/p/src"), {}, [new File(["a"], "a.txt"), new File(["b"], "b.txt")]);
+  await flush();
+  expect(sent(t, "fs.rename").map((m) => m.name)).toEqual(["a.txt", "b.txt"]);
+  expect(document.querySelector("[data-testid=tree-drop-dialog]")).toBeNull();
+  t.unmount();
+});
+
+it("GH-555 rows are draggable and dragstart carries the entry type and the path", async () => {
+  const t = setup({ side: "wsl:x" });
+  await t.render();
+  const row = t.row("/p/README.md");
+  expect(row.getAttribute("draggable")).toBe("true");
+  const data: Record<string, string> = {};
+  const e = new Event("dragstart", { bubbles: true }) as Event & { dataTransfer: unknown };
+  e.dataTransfer = { setData: (k: string, v: string) => (data[k] = v), effectAllowed: "" };
+  await act(async () => void row.dispatchEvent(e));
+  expect(JSON.parse(data[DRAG_TYPE]!)).toEqual({ path: "/p/README.md", name: "README.md", isDir: false, side: "wsl:x" });
+  expect(data["text/plain"]).toBe("/p/README.md");
   t.unmount();
 });

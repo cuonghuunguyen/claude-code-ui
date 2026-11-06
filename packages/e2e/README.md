@@ -18,7 +18,7 @@ npm run e2e -- permission.feature -g "Deny"                  # one scenario
 npm run e2e:steps                                            # list the steps (bddgen export)
 ```
 
-Everything after `--` goes to `playwright test`. Environment:
+Everything after `--` goes to `playwright test`. A scenario tagged `@headed` runs in the `chromium-headed` project with a visible window, because headless Chromium does not read the OS clipboard; `--project=chromium` skips them. Environment:
 
 | Variable | Effect |
 |---|---|

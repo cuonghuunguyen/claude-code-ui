@@ -15,6 +15,18 @@ A **project** is a folder you work in. New sessions start in a project.
 - Open the project's menu in the sidebar and choose **Remove from list (files stay)**.
 - This only hides it. Files and session history stay.
 
+## Custom names and icons
+
+A project can have your own name and icon.
+
+1. Open the project's menu in the sidebar and choose **Change name and icon…**.
+2. Type a name (up to 60 characters), and pick an emoji or an image. An image is cropped to a square: drag it to move it.
+3. Save. **Reset** removes both.
+
+The name replaces the folder name everywhere the project is named: sidebar, tab group chip, command palette, Focus page and dialogs. The icon replaces the letter of the project avatar and shows on the tab group chip. The folder name still finds the project in the sidebar filter and still heads the folder browser of Open project. Worktree rows keep their branch or folder name.
+
+A machine (this computer, a WSL distro, a container or an SSH host) can have a name and icon too: **Settings › Sides**, pencil button of its row. The name shows in the Side badge, in the tab place text and in the lists of Open project. They are saved in the daemon and apply to every browser.
+
 ## Worktrees
 
 A **worktree** is an extra git checkout of the same repository, on its own branch. Use one to let Claude work on a branch without touching your main checkout.
@@ -56,4 +68,4 @@ The menu of a project row and of a worktree row has **Copy path**.
 - Folders that only have sessions from the `claude` CLI show as **recent projects** until you open them.
 - Worktrees under `.claude/worktrees/` can be removed from here, and so can any linked worktree inside the roots (not a locked or symlinked one), also one made by hand. Before it removes one, it tells you how many uncommitted changes and commits you would lose.
 - Removing a worktree deletes the branch claude-code-ui created for it (from **Ticket**, **Name**, a generated name or a worker). A branch you checked out with **Branch**, or made yourself, stays; [Clean up](clean-up) offers to delete it when it is merged.
-- With WSL or Docker, **Open project** also lets you pick a side. See [WSL & Docker](wsl-docker).
+- With WSL, Docker or an SSH host, **Open project** also lets you pick a side. See [WSL, Docker & SSH](wsl-docker).

@@ -1,13 +1,14 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, createServer as netServer, type AddressInfo } from "node:net";
-import { homedir, networkInterfaces, release } from "node:os";
+import { homedir, networkInterfaces, release, userInfo } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
-import { HELP, PHONE_HINT, USAGE_HINT, autoOpen, parseCli } from "./cli.ts";
+import { HELP, PHONE_HINT, USAGE_HINT, autoOpen, isDaemonRun, parseCli } from "./cli.ts";
 import { createSettings } from "./settings.ts";
+import { createShortcut } from "./shortcut.ts";
 import { createSecrets } from "./secrets.ts";
 import { createProjects } from "./projects.ts";
 import { createPush, type Push } from "./push.ts";
@@ -37,10 +38,13 @@ import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
 
-const cli = parseCli(process.argv.slice(2), process.env, homedir());
 // Set by the bridge of another Hub's attach (ADR 0009); not inherited by the children of this Hub.
 const startedBy = process.env.CLAUDE_UI_STARTED_BY === "attach" ? ("attach" as const) : undefined;
 delete process.env.CLAUDE_UI_STARTED_BY;
+const appSettings = createSettings({ file: join(configDir(), "settings.json") });
+const argv = process.argv.slice(2);
+// Saved Settings › Launcher options: a daemon start of the user only (not a client command, not a Hub another computer's attach started).
+const cli = parseCli(argv, process.env, homedir(), isDaemonRun(argv) && !startedBy ? appSettings.get().launcher : undefined);
 // The exit line is for a daemon's log; a client command, update, help or a usage error prints only its own output.
 logExit(process, (line) => cli.kind === "run" && console.error(line));
 let cleanup = () => {};
@@ -105,7 +109,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
+const state = { uploadDir: defaultUploadsDir(), historyDir: join(configDir(), "history"), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings, secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
 
 // A Hub another computer's attach started here retires first (ADR 0009): a start of the user takes over, attached Hubs follow it. Ctrl-C while waiting
 // ends this start only; the retire request stays (that Hub still exits once no turn runs).
@@ -220,7 +224,8 @@ const keepAwake = createKeepAwake({ inhibitor: inhibitorFor(process.platform, pr
 // Signals end in process.exit; SIGKILL is covered by caffeinate -w / the stdin pipe.
 process.on("exit", keepAwake.close);
 let attachRunning: (on: boolean) => void = () => {};
-const server = createDaemon({ addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+const shortcut = startedBy ? undefined : createShortcut({ platform: process.platform, env: process.env, home: homedir(), configDir: configDir(), webRoot, shell: userInfo().shell ?? undefined });
+const server = createDaemon({ shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
 // The attach server (ADR 0009): every POSIX Hub accepts attaching Hubs on a Unix socket (mode 0600, same user). A Hub started by an attach also
 // records its install folder in `.live` (the install sweep keeps it) and ends after its Grace period.
 const attachSock = process.platform === "win32" ? undefined : attachSocketPath(process.env, configDir());

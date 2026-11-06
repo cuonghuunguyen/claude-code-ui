@@ -11,6 +11,12 @@ claude-code-ui kiểm tra npm để tìm phiên bản mới khi khởi động v
 
 **Chưa** ẩn thông báo đến phiên bản kế tiếp.
 
+## Tự kiểm tra cập nhật {#check-for-updates-yourself}
+
+Mở **Cài đặt › Giới thiệu** (Trợ giúp & giới thiệu). Dòng **Cập nhật** hiện phiên bản bạn có thể cài, kể cả sau khi bấm **Chưa**. Bấm **Kiểm tra cập nhật** để hỏi npm ngay, rồi **Cập nhật và khởi động lại**.
+
+Từ bảng lệnh, chạy **Kiểm tra cập nhật**. Nếu có phiên bản mới, thông báo hiện lại. Nếu không, một thông báo cho biết bạn đang dùng bản mới nhất.
+
 ## Cách cập nhật từ terminal {#how-to-update-from-a-terminal}
 
 ```sh

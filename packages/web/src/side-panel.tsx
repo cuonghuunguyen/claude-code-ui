@@ -123,17 +123,22 @@ export function SidePanel({
   state,
   onRun,
   onCheck,
+  onUpdateRemote,
 }: {
   side: SideInfo;
   state: PanelState;
   onRun: (mode: RunMode) => void;
   onCheck: () => void;
+  /** `side.updateRemote`: the Hub there is older and cannot work with this one (ADR 0009). */
+  onUpdateRemote?: () => void;
 }) {
   const t = useT();
   const { label } = side;
   const retry = useRef<HTMLButtonElement>(null);
   const region = useRef<HTMLDivElement>(null);
-  const error = state.error ?? (side.state === "error" ? (side.message ?? t("app.sidePanel.notRunning", { side: label })) : side.state === "off" ? side.message : undefined);
+  // The Hub there cannot work with this one: its row says both versions and the way out; Reinstall here cannot fix it.
+  const mismatch = side.state === "error" ? side.mismatch : undefined;
+  const error = mismatch ? (side.message ?? state.error) : state.error ?? (side.state === "error" ? (side.message ?? t("app.sidePanel.notRunning", { side: label })) : side.state === "off" ? side.message : undefined);
   // Retry sends the mode that failed. An error the dialog did not cause (a stopped container) only starts what is installed.
   const failed = state.failed;
   const inProgress = !!state.busy || side.state === "starting";
@@ -144,7 +149,8 @@ export function SidePanel({
   const noun = t(`app.sidePanel.noun.${kindNoun}`);
   // Installing from the bundle only unpacks; npm (WSL, or a Docker fallback) can take minutes.
   // An install first looks at the container or distro (which install, which parts): no phase yet.
-  const progressText = !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase, kindNoun === "host");
+  // An update of the Hub there: the daemon's own text (it updates when nothing runs there).
+  const progressText = side.state === "starting" && side.message ? side.message : !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase, kindNoun === "host");
   // A failed run puts the focus on Retry.
   useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.
@@ -159,7 +165,8 @@ export function SidePanel({
   }, [state.legacy]);
   const btn = "max-md:h-11 max-md:w-full";
   const check = state.check;
-  const action = check ? actionOf(check, failed !== undefined) : undefined;
+  const action = check && !mismatch ? actionOf(check, failed !== undefined) : undefined;
+  const updateThere = mismatch?.remoteOlder && onUpdateRemote;
   const fix = check && check.verdict !== "running" ? fixText(check, label) : undefined;
   return (
     <div
@@ -174,9 +181,16 @@ export function SidePanel({
           <p className="max-h-[min(12rem,40dvh)] w-full max-w-md shrink-0 select-text overflow-y-auto whitespace-pre-wrap text-destructive [overflow-wrap:anywhere]" role="alert" data-testid="side-error">
             {error}
           </p>
-          <Button size="sm" onClick={() => onRun(failed ?? "never")} className={`shrink-0 ${btn}`} ref={retry} data-testid="side-retry">
-            {t("app.sidePanel.retry")}
-          </Button>
+          <div className="flex w-full max-w-md shrink-0 flex-wrap justify-center gap-2 max-md:flex-col">
+            {updateThere && (
+              <Button size="sm" onClick={updateThere} className={btn} ref={retry} data-testid="side-update-remote">
+                {t("app.sidePanel.action.updateRemote")}
+              </Button>
+            )}
+            <Button size="sm" variant={updateThere ? "outline" : "default"} onClick={() => onRun(mismatch ? "never" : (failed ?? "never"))} className={btn} ref={updateThere ? undefined : retry} data-testid="side-retry">
+              {t("app.sidePanel.retry")}
+            </Button>
+          </div>
         </>
       )}
       {state.checkError && !inProgress && (

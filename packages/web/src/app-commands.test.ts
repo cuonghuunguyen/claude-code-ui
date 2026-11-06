@@ -594,3 +594,10 @@ it("in Vietnamese the Background shells command and the session rows are differe
     setLocalePref("system");
   }
 });
+
+it("lists Check for updates when the App can check", () => {
+  expect(appCommands(ctx()).find((i) => i.id === "update.check")).toBeUndefined();
+  const checkUpdate = vi.fn();
+  expect(run(ctx({ checkUpdate }), "update.check")).toMatchObject({ title: "Check for updates" });
+  expect(checkUpdate).toHaveBeenCalled();
+});

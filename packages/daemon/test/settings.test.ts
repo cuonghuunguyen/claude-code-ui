@@ -1,14 +1,14 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
-import { checkPatch, createSettings, DEFAULTS } from "../src/settings.ts";
+import { checkPatch, createSettings, DEFAULTS, parseSettings } from "../src/settings.ts";
 
-const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always" };
+const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, labels: { projects: {}, sides: {} } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -200,7 +200,7 @@ it("git arrays: default not stored, a changed array stored and read back, the de
   const f = file();
   const s = createSettings({ file: f });
   s.set({ git: { repositoryScanIgnoredFolders: ["node_modules"] } });
-  expect(JSON.parse(readFileSync(f, "utf8")).git).toBeUndefined();
+  expect(JSON.parse(readFileSync(f, "utf8")).git ?? {}).toEqual({});
   s.set({ git: { repositoryScanIgnoredFolders: ["node_modules", "dist"] } });
   expect(JSON.parse(readFileSync(f, "utf8")).git.repositoryScanIgnoredFolders).toEqual(["node_modules", "dist"]);
   expect(createSettings({ file: f }).get().git.repositoryScanIgnoredFolders).toEqual(["node_modules", "dist"]);
@@ -331,4 +331,59 @@ it("stallMinutes defaults to 20 and accepts 0 to 240 only", () => {
   expect(s.get().orchestration.stallMinutes).toBe(20);
   for (const stallMinutes of [-1, 241, 1.5]) expect(() => s.set({ orchestration: { stallMinutes } as never })).toThrow("Stall alert after (minutes) must be a whole number from 0 to 240");
   for (const stallMinutes of [0, 240]) expect(s.set({ orchestration: { stallMinutes } }).orchestration.stallMinutes).toBe(stallMinutes);
+});
+
+it("app icon: accepts the built-in icon, an emoji and a small raster data URL; stored and reset", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().app).toEqual({ icon: "", name: "" });
+  for (const icon of ["🚀", "data:image/webp;base64,UklGRg==", PNG]) expect(s.set({ app: { icon } }).app.icon).toBe(icon);
+  expect(createSettings({ file: f }).get().app.icon).toBe(PNG);
+  s.set({ app: { icon: "" } });
+  expect(JSON.parse(readFileSync(f, "utf8")).app?.icon).toBeUndefined();
+});
+
+it("app icon: refuses a too big image, another mime, a whitespace or long emoji and a non-string", () => {
+  const s = createSettings({ file: file() });
+  const bad = ["data:image/png;base64," + "A".repeat(300_000), "data:image/svg+xml;base64,PHN2Zz4=", "data:image/gif;base64,R0lGOD==", " ", "a b", "x".repeat(17), 5];
+  for (const icon of bad) expect(() => s.set({ app: { icon: icon as never } })).toThrow(/App icon must be/);
+});
+
+it("app name: accepts the default and a label name; stored and reset", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  for (const name of ["Work", "x".repeat(60), " Spaced ", ""]) expect(s.set({ app: { name } }).app.name).toBe(name);
+  s.set({ app: { name: "Home" } });
+  expect(createSettings({ file: f }).get().app).toEqual({ icon: "", name: "Home" });
+});
+
+it("app name: refuses only whitespace, a control character, a too long name and a non-string", () => {
+  const s = createSettings({ file: file() });
+  for (const name of [" ", "a\tb", "a\nb", "x".repeat(61), 5]) expect(() => s.set({ app: { name: name as never } })).toThrow(/App name must be/);
+});
+
+it("launcher defaults and validation", () => {
+  expect(parseSettings({}).launcher).toEqual(DEFAULTS.launcher);
+  for (const port of [0, 70000]) expect(checkPatch({ launcher: { port } })).toBe("Port must be a whole number from 1 to 65535");
+  expect(checkPatch({ launcher: { roots: ["rel/dir"] } })).toMatch(/^Roots must be/);
+  expect(checkPatch({ launcher: { roots: [resolve("x")] } })).toBeUndefined();
+});
+
+it("commit message instructions: saved, read back, the default is not stored; bad values are refused", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.set({ git: { commitMessageInstruction: "Short.", commitMessageInstructions: { "/p": "Mine" } } }).git).toMatchObject({ commitMessageInstruction: "Short.", commitMessageInstructions: { "/p": "Mine" } });
+  expect(createSettings({ file: f }).get().git.commitMessageInstructions).toEqual({ "/p": "Mine" });
+  s.set({ git: { commitMessageInstruction: "", commitMessageInstructions: {} } });
+  expect(JSON.parse(readFileSync(f, "utf8")).git ?? {}).toEqual({});
+  expect(s.set({ git: { commitMessageInstruction: "x".repeat(4000) } }).git.commitMessageInstruction).toHaveLength(4000);
+  for (const v of ["x".repeat(4001), "a\0b", 5]) expect(() => s.set({ git: { commitMessageInstruction: v as never } })).toThrow(/Commit message instruction must be/);
+  const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`/p${i}`, "x"]));
+  for (const m of [many, { "/p": "" }, { "/p": "x".repeat(4001) }, { "": "x" }, { "/p": "a\0" }, [] as never]) expect(() => s.set({ git: { commitMessageInstructions: m } })).toThrow(/Commit message instructions per project must be/);
+});
+
+it("history: enabled is a boolean, exclude a list of globs", () => {
+  expect(checkPatch({ history: { enabled: false, exclude: ["**/dist/**"] } })).toBeUndefined();
+  expect(checkPatch({ history: { enabled: "yes" } })).toMatch(/Local history must be/);
+  expect(checkPatch({ history: { exclude: [""] } })).toMatch(/excluded paths must be/);
 });

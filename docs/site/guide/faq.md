@@ -37,7 +37,7 @@ No. It uses your Claude subscription login from `claude login`, not an API key.
 
 ### Which operating systems does it support?
 
-Windows, macOS and Linux. On Windows, one install can also run sessions inside WSL distros, and on any system inside running Docker containers. See [WSL & Docker](../features/wsl-docker).
+Windows, macOS and Linux. On Windows, one install can also run sessions inside WSL distros, and on any system inside running Docker containers and on machines you reach over SSH. See [WSL, Docker & SSH](../features/wsl-docker).
 
 ### Does it work with sessions I started in the `claude` CLI or VS Code?
 

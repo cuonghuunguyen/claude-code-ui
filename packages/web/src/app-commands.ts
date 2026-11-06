@@ -122,6 +122,8 @@ export type CommandContext = {
   toggleChrome?: () => void;
   /** Opens the Settings dialog. */
   openSettings: () => void;
+  /** Asks the daemon for a newer version now; it shows the update notice again, or a toast that this is the latest. */
+  checkUpdate?: () => void;
   /** Restarts the guided tour from its first step. */
   startGuide: () => void;
   /** Clears the key promoter's counters and turns tips on (GH-234). */
@@ -189,6 +191,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.nextWaiting && cmd("focus.next", t("app.cmd.focusNext"), c.nextWaiting),
     c.focusNotifications && cmd("notifications.focus", t("app.cmd.notificationsFocus"), c.focusNotifications),
     cmd("settings.open", t("app.cmd.settingsOpen"), c.openSettings),
+    c.checkUpdate && cmd("update.check", t("app.cmd.checkUpdate"), c.checkUpdate),
     cmd("guide.start", t("app.cmd.guideStart"), c.startGuide),
     cmd("tips.reset", t("app.cmd.tipsReset"), c.resetKeyTips),
     cmd("sidebar.toggle", t("app.cmd.sidebarToggle"), c.toggleSidebar),

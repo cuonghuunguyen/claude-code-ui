@@ -2,6 +2,40 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.2.1 - 2026-11-05
+
+### Fixed
+
+- Tailscale: Ctrl+C on `claude-ui --tailscale`, a closed terminal or a SIGTERM no longer leaves `tailscale serve` running. The next start then refused with "served by a foreground tailscale serve/funnel command".
+
+## 1.2.0 - 2026-11-05
+
+### Added
+
+- SSH Sides: **Open project** lists the hosts of your ssh config (`Include` files too) as `SSH: <alias>`. The first time, **Install** copies claude-code-ui to the host over ssh, or installs it with npm on a machine the bundle does not fit. **Add SSH host** takes an ssh command and shows the parsed host before it is saved ([#546](https://github.com/cuonghuunguyen/claude-code-ui/issues/546), [#547](https://github.com/cuonghuunguyen/claude-code-ui/issues/547)).
+- SSH Sides survive a dropped connection: the Side keeps its turns, terminals and prompts, shows **Reconnecting** and comes back when the Hub attaches again. After a Hub restart the Hub attaches again to the hosts it had attached. A newer Hub updates an older Side once no turn runs and no terminal is open ([#548](https://github.com/cuonghuunguyen/claude-code-ui/issues/548), [#549](https://github.com/cuonghuunguyen/claude-code-ui/issues/549)).
+- Custom name and icon: a project (**Change name and icon…** in its row menu) and a machine (Settings › Sides) can have your own name and an icon (an emoji or an image). The name shows everywhere the project or machine is named, also in the Open project host and container lists and on the tab group chip ([#515](https://github.com/cuonghuunguyen/claude-code-ui/issues/515), [#554](https://github.com/cuonghuunguyen/claude-code-ui/issues/554)).
+- App name and icon: Settings › Appearance › **App name and icon** lets you set your own name and icon (an emoji or an image) for every browser of this Claude UI. They show in the browser tab and in the installed app.
+- Updates: Settings › About has an **Updates** row with **Check for updates** and **Update and restart**; the palette has "Check for updates". A version hidden with "Not yet" stays reachable there.
+- Changes: folders with a single child compact into one row, and a list view toggle shows the files flat by path, kept per browser.
+- Chat: a bare file name in a reply opens the matching project file, or a filtered file picker when several match, or says File not found.
+- Orchestration: a coordinator is told when a worker stalls (ended without a result, did not start, or silent for **Stall alert after** minutes) ([#418](https://github.com/cuonghuunguyen/claude-code-ui/issues/418)).
+- Orchestration: **Close finished workers** (on by default) closes a worker's Claude process when its turn ends; the session stays and `worker_send` resumes it ([#574](https://github.com/cuonghuunguyen/claude-code-ui/issues/574)).
+- Orchestration: a coordinator can read a worker's whole final reply with `worker_read` ([#576](https://github.com/cuonghuunguyen/claude-code-ui/issues/576)).
+
+### Changed
+
+- One Hub per machine: when the machine of a Side already runs a Claude UI, the Hub attaches to it instead of starting a second one. A version mismatch in Open project names both versions and offers **Update there** ([#578](https://github.com/cuonghuunguyen/claude-code-ui/issues/578)).
+- Orchestration: shorter worker tool descriptions and server instructions (9100 to 3680 characters), so workers spend less context on them ([#577](https://github.com/cuonghuunguyen/claude-code-ui/issues/577)).
+- Sidebar: the Side badge uses the OpenCode tag look, and a long Side name no longer squeezes the project name.
+
+### Fixed
+
+- Tailscale: `tailscale serve` ends when the daemon dies, also on SIGKILL.
+- Orchestration: a coordinator is woken for queued worker events and when a worker below it exits by itself, instead of staying idle. Closing or stopping a coordinator no longer restarts it for unread events.
+- Files: a revealed file row is no longer hidden under the filter box.
+- Git graph: a big file in a commit's diff is no longer highlighted again on every render.
+
 ## 1.1.0 - 2026-11-03
 
 ### Added

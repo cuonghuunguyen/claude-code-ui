@@ -4,11 +4,12 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
 import { saveLabel, useLabels } from "./labels.ts";
+import { saveApp, useAppIcon, useAppName } from "./app-icon.ts";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
@@ -23,6 +24,7 @@ import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
+import type { UpdateInfo } from "./update.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
 import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
@@ -35,6 +37,7 @@ import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts";
 import { ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
@@ -192,8 +195,41 @@ function LanguageRow() {
   );
 }
 
+/** The app icon (daemon setting, every browser; docs/spec.md "Settings" › App icon): the browser tab at once, an installed app via its manifest. */
+function AppIconRow({ request }: { request: <T>(msg: Request) => Promise<T> }) {
+  const t = useT();
+  const icon = useAppIcon();
+  const name = useAppName();
+  // The default name is no custom name: the dialog shows it as the placeholder.
+  const custom = name === APP_NAME_DEFAULT ? "" : name;
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11" data-testid="settings-app-icon">
+      {icon ? <LabelIcon icon={icon} className="size-8 text-2xl" /> : <img alt="" src="/icon.svg" className="size-8 shrink-0 rounded-sm" />}
+      <div className="min-w-0 flex-1">
+        <span id="settings-app-icon-label" className="block text-sm">{t("settings.appIcon.label")}</span>
+        <span className="block truncate font-medium text-sm" data-testid="settings-app-name">{name}</span>
+        <span id="settings-app-icon-hint" className="block text-muted-foreground text-xs">{t("settings.appIcon.hint")}</span>
+      </div>
+      <button type="button" onClick={() => setEditing(true)} aria-describedby="settings-app-icon-hint" className="h-8 shrink-0 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-app-icon-change">
+        {t("settings.appIcon.change")}
+      </button>
+      <LabelDialog
+        open={editing}
+        iconPx={APP_ICON_PX}
+        iconMax={APP_ICON_MAX}
+        title={t("settings.appIcon.label")}
+        fallbackName={APP_NAME_DEFAULT}
+        label={icon || custom ? { ...(custom && { name: custom }), ...(icon && { icon }) } : undefined}
+        onSave={(l) => saveApp(request, { icon: l?.icon ?? "", name: l?.name?.trim() ?? "" })}
+        onClose={() => setEditing(false)}
+      />
+    </div>
+  );
+}
+
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
-function AppearanceSection() {
+function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <T>(msg: Request) => Promise<T> }) {
   const t = useT();
   const stored = useColorTheme();
   const dark = useDark();
@@ -234,6 +270,7 @@ function AppearanceSection() {
         </Select>
       </div>
       <LanguageRow />
+      {app && <AppIconRow request={request} />}
       {id === "dracula" && !dark && (
         <div data-testid="settings-theme-dracula-warning" className="flex flex-col pb-2">
           <Banner kind="warning">{t("settings.theme.draculaWarning")}</Banner>
@@ -679,12 +716,46 @@ function AddonsSection({ onAddons }: { onAddons: () => void }) {
   );
 }
 
-type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
+/** The Launcher shortcut switch (GH-553): creates or removes the OS entry on the Hub's machine; the state comes from settings.get. */
+function LauncherShortcutRow({ installed, request, onInstalled, onError }: { installed: boolean; request: <T>(msg: Request) => Promise<T>; onInstalled: (on: boolean) => void; onError: (m: string) => void }) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const toggle = (on: boolean) => {
+    setBusy(true);
+    request<{ installed: boolean }>({ type: "launcher.shortcut", on })
+      .then((r) => (onInstalled(r.installed), onError("")), (e: Error) => onError(e.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex shrink-0 items-center gap-3 border-t py-2 max-md:min-h-11">
+      <div className="min-w-0 flex-1">
+        <span className="block text-sm">{t("settings.launcher.shortcut.label")}</span>
+        <span id="settings-launcher-shortcut-hint" className="block text-muted-foreground text-xs">{t("settings.launcher.shortcut.hint")}</span>
+      </div>
+      <Switch on={installed} label={t("settings.launcher.shortcut.label")} held={busy} onToggle={toggle} title={t("settings.launcher.shortcut.label")} describedBy="settings-launcher-shortcut-hint" testId="settings-launcher-shortcut" />
+    </div>
+  );
+}
+
+type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
 /** The group and section title of a daemon section. */
 const sectionTitle = (id: string) => t(`settings.section.${id}` as Key);
 const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
+  {
+    id: "launcher",
+    rows: [
+      { key: "port", kind: "number", min: 1, max: 65535 },
+      { key: "roots", kind: "list" },
+      { key: "open", kind: "switch" },
+      { key: "tailscale", kind: "switch" },
+      { key: "lan", kind: "switch" },
+      { key: "allowBypass", kind: "switch" },
+      { key: "updateCheck", kind: "switch" },
+      { key: "osNotify", kind: "switch" },
+    ],
+  },
   {
     id: "orchestration",
     rows: [
@@ -735,6 +806,13 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "history",
+    rows: [
+      { key: "enabled", kind: "switch" },
+      { key: "exclude", kind: "list" },
+    ],
+  },
+  {
     id: "git",
     rows: [
       { key: "autoRepositoryDetection", kind: "select", options: ["true", "false", "subFolders", "openEditors"].map((value) => ({ value })), parse: (v) => (v === "true" ? true : v === "false" ? false : v) },
@@ -746,6 +824,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "detectSubmodulesLimit", kind: "number", min: 0, max: 100 },
       { key: "ignoreSubmodules", kind: "switch" },
       { key: "openRepositoryInParentFolders", kind: "select", options: ["always", "never", "prompt"].map((value) => ({ value })) },
+      { key: "commitMessageInstruction", kind: "text" },
     ],
   },
 ];
@@ -754,7 +833,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker }: { sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -818,12 +897,18 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           {t("settings.git.intro")}
         </p>
       )}
+      {sec.id === "launcher" && (
+        <p className="pb-1 text-muted-foreground text-xs" data-testid="settings-launcher-intro">
+          {t("settings.launcher.intro")}
+        </p>
+      )}
       {sec.rows.map((row) => {
         const id = `settings-${sec.id}-${row.key}`;
         const label = rk(sec.id, row.key, "label");
         const hint = rk(sec.id, row.key, "hint");
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        if (row.kind === "text") return <InstructionSetting key={row.key} id={id} label={label} hint={hint} value={value as string} placeholder={DEFAULT_COMMIT_INSTRUCTION} onSave={(next) => void save(patch(next))} />;
         if (row.kind === "list") return <ListSetting key={row.key} id={id} label={label} hint={hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
           <div key={row.key} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
@@ -866,6 +951,24 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           </div>
         );
       })}
+      {sec.id === "launcher" && (
+        <p className="border-t pt-2 text-muted-foreground text-xs" data-testid="settings-launcher-url">
+          {t("settings.launcher.url", { port: String(settings.launcher.port) })}
+        </p>
+      )}
+      {sec.id === "git" && project && (
+        <InstructionSetting
+          id="settings-git-projectInstruction"
+          label={t("settings.git.projectInstruction.label", { project: project.name })}
+          hint={t("settings.git.projectInstruction.hint")}
+          value={settings.git.commitMessageInstructions[project.cwd] ?? ""}
+          placeholder={settings.git.commitMessageInstruction || DEFAULT_COMMIT_INSTRUCTION}
+          onSave={(next) => {
+            const { [project.cwd]: _, ...rest } = settings.git.commitMessageInstructions;
+            void save({ git: { commitMessageInstructions: next ? { ...rest, [project.cwd]: next } : rest } });
+          }}
+        />
+      )}
     </section>
       )}
     </>
@@ -881,9 +984,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
   const git = daemonGroup("git");
+  const launcher = daemonGroup("launcher");
+  const localHistory = daemonGroup("history");
   // One entry per group, in list order; `category` puts it under a heading. A group holds one or more sections.
   const groups: Group[] = [
-    { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection /> },
+    { id: "appearance", title: t("settings.group.appearance"), category: "App", body: <AppearanceSection app={settings?.app} request={request} /> },
     {
       id: "general",
       title: t("settings.group.general"),
@@ -930,12 +1035,28 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
           },
         ]
       : []),
+    ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
+    ...(launcher
+      ? [
+          {
+            id: "launcher",
+            title: sectionTitle(launcher.id),
+            category: "System" as const,
+            body: (
+              <>
+                {daemon?.shortcut && <LauncherShortcutRow installed={daemon.shortcut.installed} request={request} onInstalled={(installed) => setDaemon((d) => d && { ...d, shortcut: { installed } })} onError={(m) => setError(m || undefined)} />}
+                {daemonSection(launcher)}
+              </>
+            ),
+          },
+        ]
+      : []),
     { id: "sides", title: t("settings.group.sides"), category: "System" as const, body: <SidesSection sides={sides?.length ? sides : [{ id: LOCAL_SIDE, label: t("settings.sides.local"), state: "ready" }]} request={request} onError={setError} /> },
     ...(performance
       ? [
@@ -959,7 +1080,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       body: (
         <>
           {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
-          <AboutSection daemonVersion={daemon?.version} />
+          <AboutSection daemonVersion={daemon?.version} update={update} onCheckUpdate={onCheckUpdate} request={request} />
         </>
       ),
     },

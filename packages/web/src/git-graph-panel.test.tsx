@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GitBranchInfo, GitCommit, GitCommitDetail } from "@claude-ui/protocol";
+import type { GitBranchInfo, GitCommit, GitCommitDetail, GitCommitMenu } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { GraphPane, GraphPanel } from "./git-graph-panel.tsx";
 import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { GitRepo } from "@claude-ui/protocol";
 import { forgetRemoteOps } from "./git-remote-ops.ts";
+import { focusCommit } from "./graph-focus.ts";
 import { noteRefs, refsOf } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
 
@@ -74,9 +75,16 @@ let fetchReply: () => Promise<unknown> = async () => ({ remote: { output: "", re
 const MAIN_ARGV = "refs/heads/main:refs/heads/main";
 const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
   ref: "refs/heads/main", local: hash(3), checkedOut: "here", remote: "origin", remoteRef: "refs/heads/main", tracking: "refs/remotes/origin/main", trackingHash: hash(2), upstreamHash: hash(2), upstream: "origin/main", ahead: 1, behind: 1,
-  push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"], ...o,
+  push: ["push", "origin", MAIN_ARGV], forcePush: ["push", `--force-with-lease=refs/heads/main:${hash(2)}`, "origin", MAIN_ARGV], pull: ["pull", "--no-rebase", "--ff-only", "origin", "refs/heads/main"],
+  headRef: "refs/heads/dev", headHash: hash(1), merge: ["merge", "--no-edit", "main"], rebase: ["rebase", "refs/heads/main"], ...o,
 });
 let branchInfo: (ref: string) => GitBranchInfo = () => infoMain();
+/** The commit menu of the fake: HEAD is the tip (hash(3) in `withRefs`), everything is available. */
+const commitMenu = (h: string, hard?: boolean): GitCommitMenu => ({
+  hash: h, parents: 1, headRef: "refs/heads/main", headHash: hash(3), undo: ["reset", "--soft", "HEAD~1"], revert: ["revert", "--no-edit", h], cherryPick: ["cherry-pick", h],
+  reset: { soft: ["reset", "--soft", h], mixed: ["reset", "--mixed", h], hard: ["reset", "--hard", "--no-recurse-submodules", h] },
+  ...(hard && { lose: ["a.txt", "b.txt"], loseCount: 3, dirty: "fp1" }),
+});
 let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
@@ -89,7 +97,8 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     }
     if (m.type === "git.fetch") return fetchReply();
     if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
-    if (m.type === "git.push" || m.type === "git.pull") return writeReply();
+    if (m.type === "git.push" || m.type === "git.pull" || m.type === "git.merge" || m.type === "git.rebase" || m.type === "git.revert" || m.type === "git.undoCommit" || m.type === "git.cherryPick" || m.type === "git.checkout" || m.type === "git.branchCreate" || m.type === "git.reset") return writeReply();
+    if (m.type === "git.commitMenu") return { commitMenu: commitMenu(m.hash!, (m as { hard?: boolean }).hard) };
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
     if (m.type === "git.commit") return { commit: detail(all.find((c) => c.hash === m.hash)!, files) };
@@ -371,7 +380,7 @@ it("a detached HEAD chip offers no Push or Pull, only Fetch", async () => {
   await mount(c);
   await menuAt([...el.querySelectorAll("[data-testid=commit-ref]")].find((x) => x.textContent === "HEAD")!);
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["No local branch here", "New branch from 0000000…", "Fetch all remotes"]);
 });
 
 it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
@@ -778,7 +787,8 @@ const menuAt = async (target: Element) => {
   await flush();
 };
 const items = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
-const itemTexts = () => items().map((i) => i.textContent);
+/** The branch menu items; the commit section on top has its own tests. */
+const itemTexts = () => items().filter((i) => !i.dataset.testid?.startsWith("commit-")).map((i) => i.textContent);
 const byId = (id: string) => document.querySelector<HTMLElement>(`[data-testid=${id}]`)!;
 const withRefs = (): GitCommit[] => {
   const h = history(3);
@@ -799,14 +809,14 @@ it("right click on a local branch chip offers Push, Force push and Pull; a remot
   await menuAt(chip("refs/heads/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
   expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
-  expect(items().every((i) => !i.hasAttribute("data-disabled"))).toBe(true);
+  expect(items().filter((i) => i.dataset.testid !== "branch-checkout").every((i) => !i.hasAttribute("data-disabled"))).toBe(true);
   await closeMenu();
   c.sent.length = 0;
   await menuAt(chip("refs/remotes/origin/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
   expect(byId("branch-push")).toBeNull();
-  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
-  expect(byId("branch-none").hasAttribute("data-disabled")).toBe(true);
+  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from 0000000…", "Fetch all remotes"]);
+  expect(byId("branch-none")).toBeNull();
 });
 
 /** A touch held on `target`: pointerdown and touchstart, then the 500 ms long press timer of the menu; no `contextmenu` event (emulated and some real long presses fire none). */
@@ -839,7 +849,7 @@ it("a long press on a row with touch targets the row's local branches; on a remo
   c.sent.length = 0;
   await longPress(chip("refs/remotes/origin/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from 0000000…", "Fetch all remotes"]);
 });
 
 it("the group header keeps the branch name and the ownership note on separate lines", async () => {
@@ -872,11 +882,11 @@ it("a right click or long press on empty list space does not target the selected
   await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
   await menuAt(list());
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["No local branch here", "New branch from HEAD…", "Fetch all remotes"]);
   await closeMenu();
   await longPress(list());
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["No local branch here", "New branch from HEAD…", "Fetch all remotes"]);
 });
 
 it("Force push asks first: the dialog shows the exact command; Cancel runs nothing; Confirm sends git.push with the lease and reloads fresh", async () => {
@@ -916,6 +926,39 @@ it("Push and Pull confirm with the exact command too; Pull sends git.pull", asyn
   await flush();
   expect(c.sent.filter((m) => m.type === "git.pull")).toEqual([{ type: "git.pull", cwd: "/p", ref: "refs/heads/main", local: hash(3), argv: infoMain().pull, tracking: hash(2) }]);
   expect(c.sent.filter((m) => m.type === "git.push")).toEqual([]);
+});
+
+it("Merge and Rebase name HEAD's branch, show the exact command and send the hashes the menu showed; a stop on conflicts says so", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  expect(byId("branch-merge").textContent).toBe("Merge into dev…");
+  expect(byId("branch-rebase").textContent).toBe("Rebase dev onto main…");
+  await act(async () => byId("branch-merge").click());
+  expect(byId("git-merge-dialog").textContent).toContain("Merge main into dev?");
+  expect(byId("git-command").textContent).toBe("git merge --no-edit main");
+  writeReply = async () => ({ written: { output: "CONFLICT", refs: "s2", operation: { kind: "merge", conflicted: ["a.txt"] } } });
+  await act(async () => byId("git-merge-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.merge")).toEqual([{ type: "git.merge", cwd: "/p", ref: "refs/heads/main", local: hash(3), headRef: "refs/heads/dev", headHash: hash(1), argv: infoMain().merge }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Merge of main stopped on conflicts");
+  writeReply = async () => ({ written: { output: "", refs: "s3" } });
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-rebase").click());
+  expect(byId("git-command").textContent).toBe("git rebase refs/heads/main");
+  await act(async () => byId("git-rebase-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.rebase")).toHaveLength(1);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Rebased onto main");
+});
+
+it("Merge and Rebase are disabled with the reason git gave", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ merge: undefined, rebase: undefined, why: { merge: "This is the current branch", rebase: "This is the current branch" } });
+  await menuAt(chip("refs/heads/main"));
+  expect(byId("branch-merge").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("branch-merge").textContent).toContain("This is the current branch");
 });
 
 it("a branch not checked out here says so in the menu and the dialog; one in another worktree disables Pull with the reason", async () => {
@@ -1024,4 +1067,163 @@ it("without exact no request carries it", async () => {
   const c = fake(history(3));
   await mount(c);
   expect(c.sent.some((m) => "exact" in m)).toBe(false);
+});
+
+it("the Stashes toggle shows the stash section and loads the list", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  expect(el.querySelector("[data-testid=stash-section]")).toBeNull();
+  expect(c.sent.some((m) => m.type === "git.stashList")).toBe(false);
+  const btn = el.querySelector<HTMLButtonElement>("[data-testid=graph-stashes]")!;
+  await act(async () => btn.click());
+  await flush();
+  expect(btn.getAttribute("aria-pressed")).toBe("true");
+  expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
+  expect(c.sent.filter((m) => m.type === "git.stashList")).toHaveLength(1);
+});
+
+const localChanges = () => Promise.reject(Object.assign(new Error("error: Your local changes to the following files would be overwritten by checkout:\n\ta.txt"), { code: "local_changes" }));
+
+it("Checkout sends git.checkout and says so; the current branch's item is disabled with the reason", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(chip("refs/heads/main"));
+  expect(byId("branch-checkout").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("branch-checkout").textContent).toContain("This is the current branch");
+  await closeMenu();
+  branchInfo = () => infoMain({ checkedOut: undefined });
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-checkout").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.checkout")).toEqual([{ type: "git.checkout", cwd: "/p", ref: "refs/heads/main" }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Checked out main");
+});
+
+it("a local_changes refusal opens the Smart checkout dialog with git's text; Confirm resends with smart and a pop conflict says so", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  branchInfo = () => infoMain({ checkedOut: undefined });
+  writeReply = localChanges;
+  await menuAt(chip("refs/heads/main"));
+  await act(async () => byId("branch-checkout").click());
+  await flush();
+  expect(byId("git-smart-checkout-dialog").textContent).toContain("Local changes would be overwritten");
+  expect(byId("git-smart-message").textContent).toContain("a.txt");
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")).toBeNull();
+  writeReply = async () => ({ written: { output: "CONFLICT", refs: "s2", operation: { kind: "conflict", conflicted: ["a.txt"] } } });
+  await act(async () => byId("git-smart-checkout-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.checkout")).toEqual([{ type: "git.checkout", cwd: "/p", ref: "refs/heads/main" }, { type: "git.checkout", cwd: "/p", ref: "refs/heads/main", smart: true }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("applying your changes stopped on conflicts");
+});
+
+it("a remote chip offers only Checkout as new local branch, with no git.branch request", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  c.sent.length = 0;
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(chip("refs/remotes/origin/main"));
+  expect(itemTexts().slice(0, 1)).toEqual(["Checkout as new local branch"]);
+  expect(c.sent.some((m) => m.type === "git.branch")).toBe(false);
+  await act(async () => byId("branch-checkout-remote").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.checkout")).toEqual([{ type: "git.checkout", cwd: "/p", ref: "refs/remotes/origin/main" }]);
+});
+
+it("New branch from a row sends git.branchCreate with the row's hash and checkout on; the name is required", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  const row = rowEls()[1]!;
+  await menuAt(row);
+  expect(byId("branch-new").textContent).toBe(`New branch from ${hash(2).slice(0, 7)}…`);
+  await act(async () => byId("branch-new").click());
+  expect(byId("git-new-branch-confirm").hasAttribute("disabled")).toBe(true);
+  const input = byId("git-new-branch-name") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "topic");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => byId("git-new-branch-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.branchCreate")).toEqual([{ type: "git.branchCreate", cwd: "/p", name: "topic", at: hash(2), checkout: true }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created and checked out topic");
+});
+
+it("New branch from a chip in the commit details uses the shown commit", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await select(1);
+  const inDetails = [...el.querySelectorAll("[data-testid=commit-details] [data-ref]")][0]!;
+  await menuAt(inDetails);
+  expect(byId("branch-new").textContent).toBe(`New branch from ${hash(2).slice(0, 7)}…`);
+});
+
+const rowOf = (h: string) => el.querySelector(`[data-hash="${h}"]`)!;
+
+it("right click on a row offers the commit actions; Undo only on HEAD's commit; Revert sends the shown argv", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  expect(byId("commit-menu-head").textContent).toBe(`Commit ${hash(2).slice(0, 7)}`);
+  expect(byId("commit-undo")).toBeNull();
+  expect(byId("commit-cherry-pick").textContent).toBe("Cherry-Pick");
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("commit-revert").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.revert")).toEqual([{ type: "git.revert", cwd: "/p", hash: hash(2), headRef: "refs/heads/main", headHash: hash(3), argv: ["revert", "--no-edit", hash(2)] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Reverted");
+  await menuAt(rowOf(hash(3)));
+  expect(byId("commit-undo")).not.toBeNull();
+});
+
+it("a disabled commit action shows the reason", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  const base = commitMenu(hash(2));
+  (c.request as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (m: Req) => (m.type === "git.commitMenu" ? { commitMenu: { ...base, revert: undefined, why: { revert: "Merge commit: revert it in a terminal" } } } : {}));
+  await menuAt(rowOf(hash(2)));
+  expect(byId("commit-revert").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("commit-revert").textContent).toContain("Merge commit: revert it in a terminal");
+});
+
+it("Reset Current Branch to Here: Hard lists the files it loses and sends mode and dirty", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-reset").click());
+  await flush();
+  expect(byId("git-command").textContent).toBe(`git reset --mixed ${hash(2)}`);
+  await act(async () => byId("git-reset-hard").click());
+  await flush();
+  expect(c.sent.some((m) => m.type === "git.commitMenu" && (m as { hard?: boolean }).hard === true)).toBe(true);
+  expect(byId("git-command").textContent).toBe(`git reset --hard --no-recurse-submodules ${hash(2)}`);
+  expect(byId("git-reset-lose").textContent).toContain("a.txt");
+  expect(byId("git-reset-lose").textContent).toContain("+1 more");
+  expect(byId("git-reset-confirm").textContent).toBe("Reset hard");
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-reset-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.reset")).toEqual([{ type: "git.reset", cwd: "/p", hash: hash(2), mode: "hard", headRef: "refs/heads/main", headHash: hash(3), argv: ["reset", "--hard", "--no-recurse-submodules", hash(2)], dirty: "fp1" }]);
+});
+
+// ---- Annotate (GH-564): focusCommit ----
+it("focusCommit before the pane shows: the filter gets the hash, git.log asks for it, the commit is selected; a nested repository's pane reads at GitRepo.path", async () => {
+  const c = fake(history(10));
+  // The Files tab sets the selector, then asks; the pane mounts hidden and has not read yet.
+  setRepoChoice("/p", lib.rel);
+  focusCommit(lib.path, hash(5));
+  await mountPane(c, [own, lib], true);
+  expect(c.sent.filter((m) => m.type === "git.log")).toEqual([]);
+  await act(async () => root.render(<GraphPane client={c} cwd="/p" hidden={false} repos={{ list: [own, lib], projectKey: "/p" }} />));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 450))));
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.log").at(-1)).toMatchObject({ cwd: lib.path, text: hash(5), exact: true });
+  expect((el.querySelector("[data-testid=graph-filter-text]") as HTMLInputElement).value).toBe(hash(5));
+  expect(el.querySelector("[data-testid=commit-list]")!.getAttribute("aria-activedescendant")).toBe(`commit-${hash(5)}`);
+  // Taken once: a remount does not apply it again.
+  await act(async () => root.render(null));
+  await mountPane(c, [own, lib]);
+  expect((el.querySelector("[data-testid=graph-filter-text]") as HTMLInputElement).value).toBe("");
 });
