@@ -5,7 +5,7 @@ import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cacheHome, configHome, daemonConfigDir, localAppData, projectsRoot, shortcutDir, sshDir } from "./paths.ts";
+import { cacheHome, configHome, daemonConfigDir, localAppData, openLog, projectsRoot, shortcutDir, sshDir } from "./paths.ts";
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 export const DEFAULT_PORT = 4280;
@@ -149,6 +149,8 @@ export function daemonEnv(base: NodeJS.ProcessEnv, run: string, port: number, pl
     // The SSH Sides come from this file only (the scenarios that need hosts write it), never from the owner's ~/.ssh/config.
     CLAUDE_UI_SSH_CONFIG: join(sshDir(run), "config"),
     CLAUDE_UI_SHORTCUT_DIR: shortcutDir(run),
+    // Open in an app (GH-612) is recorded, never started.
+    CLAUDE_UI_OPEN_LOG: openLog(run),
     ANTHROPIC_MODEL: "haiku",
   };
 }

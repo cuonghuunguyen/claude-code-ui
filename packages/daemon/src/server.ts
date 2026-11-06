@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -45,6 +45,7 @@ import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } fro
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
+import { EDITORS, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -137,6 +138,14 @@ type History = {
 const ARCHIVED_TAG = "archived";
 
 const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
+/** A connection whose browser runs on this machine: a local Host name and a loopback peer (a Tailscale or LAN Host, and a side's virtual connection, are not). */
+const sameMachine = (req: IncomingMessage | undefined) => {
+  try {
+    return !!req && [...LOCAL_HOSTNAMES, "[::1]"].includes(new URL("http://" + req.headers.host).hostname) && /^(127\.|::1$|::ffff:127\.)/.test(req.socket.remoteAddress ?? "");
+  } catch {
+    return false;
+  }
+};
 
 /** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
 const TAIL_BYTES = 256 * 1024;
@@ -337,6 +346,8 @@ export function createDaemon(opts: {
   sides?: Sides;
   /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
   keepAwake?: KeepAwake;
+  /** GH-612: fs.openExternal. `run` starts the OS command, `editors` lists the installed editors; none (a side, tests without it): the request and the editor list are absent. */
+  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher> };
   /** GH-518: sleep detection (Hub only; a Side runs on the Hub's machine). `everyMs` and `now` are test seams. */
   watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
@@ -719,7 +730,7 @@ export function createDaemon(opts: {
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...opts.openExternal.editors().keys()].map((id) => ({ id, label: EDITORS[id].label })) }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -1543,7 +1554,8 @@ export function createDaemon(opts: {
   }, opts.pingMs ?? PING_MS).unref();
   http.on("close", () => clearInterval(pinger));
 
-  wss.on("connection", (ws: Conn) => {
+  wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
+    const sameHost = sameMachine(req);
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
@@ -2691,6 +2703,25 @@ export function createDaemon(opts: {
             return reply({ url: `/media/${nonce}/${encodeURIComponent(basename(file))}?v=${st.mtimeMs}`, mime, size: st.size, mtime: st.mtimeMs });
           } catch (err) {
             return fail("fs_error", String(err));
+          }
+        }
+        case "fs.openExternal": {
+          if (!opts.openExternal) return fail("unknown_type", "fs.openExternal is not available here");
+          if (!sameHost) return fail("not_local", "Open in an app only works from a browser on the daemon machine");
+          if (!isOpenWith(msg.with)) return fail("bad_request", `unknown with: ${String(msg.with)}`);
+          const root = allowed(msg.cwd);
+          if (!root) return fail("cwd_not_allowed", `outside the allowlisted roots: ${String(msg.cwd)}`);
+          const target = allowed(msg.path);
+          if (!target) return missingInRoots(msg.path) ? fail("not_found", `no such file: ${msg.path}`) : fail("path_not_allowed", `outside the allowlisted roots: ${String(msg.path)}`);
+          try {
+            const isDir = statSync(target).isDirectory();
+            if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
+            const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
+            if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
+            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher));
+            return reply({});
+          } catch (err) {
+            return fail("open_failed", (err as Error).message);
           }
         }
         case "fs.write": {

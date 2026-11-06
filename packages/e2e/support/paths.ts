@@ -16,6 +16,8 @@ export function runDir(env: NodeJS.ProcessEnv = process.env, now = new Date(), p
   return dir;
 }
 
+/** The daemon's CLAUDE_UI_OPEN_LOG: fs.openExternal appends the command it would start here instead of launching an app. */
+export const openLog = (run: string) => join(run, "open.log");
 export const configHome = (run: string) => join(run, "ui-config");
 /** The daemon's XDG_CACHE_HOME: its side part cache lives here, not in the owner's ~/.cache. */
 export const cacheHome = (run: string) => join(run, "cache");

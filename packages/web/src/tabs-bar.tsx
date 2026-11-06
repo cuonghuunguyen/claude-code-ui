@@ -21,6 +21,7 @@ import { SideLabel } from "./sides.tsx";
 import { ROW_SWIPE, enterFrom, mirror, opacityFor, swipe, type SwipeConfig, type SwipeState } from "./swipe.ts";
 import type { CleanupMenu, CleanupRule } from "./tab-cleanup.ts";
 import { openContextMenuFromKey, tabMenuSections, type TabCommand } from "./tab-menu.ts";
+import { externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { kindLabel, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { t as tt, useT } from "./i18n.ts";
@@ -1201,6 +1202,7 @@ function Tab({
   onDragTab?: (id?: string) => void;
 }) {
   const tr = useT();
+  const openExt = useOpenExternal();
   const s = status(id, t);
   const session = id !== NEW_TAB && !t.kind;
   const dragOver = (e: DragEvent) => {
@@ -1304,7 +1306,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: kindLabel(t.kind), item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" } })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: kindLabel(t.kind), item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" }, external: openExt && t.kind === "file" && t.cwd && openExt.isLocal(t.cwd) ? externalEntries({ isDir: false, editors: openExt.editors }) : undefined })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

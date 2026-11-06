@@ -46,7 +46,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -180,6 +180,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
+import { OpenExternalContext, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -469,6 +470,8 @@ export function App() {
   const [claudeAccount, setClaudeAccount] = useState("");
   const [claudeAccounts, setClaudeAccounts] = useState<{ id: string; name: string }[]>([]);
   const [claudeEnvToken, setClaudeEnvToken] = useState(false);
+  /** GH-612: the hub's editors from settings.get. */
+  const [appEditors, setAppEditors] = useState<EditorInfo[] | undefined>();
   const [computerAwake, setComputerAwake] = useState<{ on: boolean; supported: boolean }>();
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
@@ -1322,6 +1325,7 @@ export function App() {
     else if (c === "revealInFiles") revealInFiles(id);
     else if (c === "copyPath") copyText(pathOf(id), "path");
     else if (c === "copyRel") copyText(pathOf(id) && relPath(pathOf(id)!, cwdOfOwner(ownerOf(id)) ?? ""), "relative path");
+    else if (isExternalId(c)) openExternal?.run(pathOf(id) ?? "", externalHow(c), cwdOfOwner(ownerOf(id)) ?? "");
     else if (c === "goToSession") (open(ownerOf(id)), focusShownPrompt(ownerOf(id)));
   }
 
@@ -1332,6 +1336,11 @@ export function App() {
     setTabs(r.tabs);
     setPinnedState(r.pinned);
   }
+
+  /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
+  const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
+    ? { editors: appEditors, isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
+    : undefined;
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */
   function copyText(text: string | undefined, what: string) {
@@ -1415,7 +1424,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -3525,6 +3534,7 @@ export function App() {
     </div>
   );
   return (
+    <OpenExternalContext value={openExternal}>
     <ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
     <AddonApiContext value={addonApi}>
@@ -4084,6 +4094,7 @@ export function App() {
                         <ChangesPanel
                           key={panelTarget.sessionId}
                           hidden={!shows("changes")}
+                          onCopy={copyText}
                           onCount={(n) => setListedChanges({ id: panelTarget.key, n })}
                           client={client.current!}
                           view={views[panelTarget.sessionId]!}
@@ -4104,6 +4115,7 @@ export function App() {
                     ) : (
                       // The new-session tab: no session yet, so nothing was edited; git modes work for the draft's project.
                       <ChangesPanel
+                        onCopy={copyText}
                         key={NEW_TAB}
                         hidden={!shows("changes")}
                         onCount={(n) => setListedChanges({ id: NEW_TAB, n })}
@@ -4459,6 +4471,7 @@ export function App() {
     </AddonApiContext>
     </AddonsContext>
     </ClaudeLoginContext>
+    </OpenExternalContext>
   );
 }
 
@@ -4625,9 +4638,6 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
  * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt
  * or runs the first bash mode command. Rejects when it was not taken; `created` then keeps the session for the retry.
  */
-/** The browser runs on the daemon machine (a LAN or Tailscale address of it counts as remote). */
-const onDaemonMachine = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
-
 export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },

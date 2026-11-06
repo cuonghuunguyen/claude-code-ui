@@ -85,11 +85,15 @@ export function RollbackDialog({ client, cwd, exact, repoName, paths, onClose, o
   );
 }
 
-/** Right click, long press or Shift+F10 on `children` (one row) offers Add to prompt (`onMention`) and Rollback… (`enabled`) for its paths; `children` becomes the trigger element. */
-export function RollbackMenu({ children, enabled, onRollback, onMention, className }: { children: ReactElement; enabled: boolean; onRollback: () => void; onMention?: () => void; className?: string }) {
+/** One item of a row menu section. */
+export type RowMenuItem = { label: string; testId: string; disabled?: boolean; run: () => void };
+
+/** Right click, long press or Shift+F10 on `children` (one row) offers Add to prompt (`onMention`), its `sections` (GH-612: open, copy path, open in app) and, when `enabled`, Rollback… for its paths; `children` becomes the trigger element. */
+export function RollbackMenu({ children, enabled, onRollback, onMention, className, sections = [] }: { children: ReactElement; enabled: boolean; onRollback: () => void; onMention?: () => void; className?: string; sections?: RowMenuItem[][] }) {
   const t = useT();
   const key = useKeyContextMenu();
-  if (!enabled && !onMention) return children;
+  const groups = sections.filter((x) => x.length);
+  if (!enabled && !onMention && !groups.length) return children;
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger render={children} {...key} />
@@ -101,6 +105,17 @@ export function RollbackMenu({ children, enabled, onRollback, onMention, classNa
                 {t("files.menu.mention")}
               </ContextMenu.Item>
             )}
+            {groups.map((g, i) => (
+              <div key={i} role="none">
+                {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
+                {g.map((x) => (
+                  <ContextMenu.Item key={x.testId} className={ITEM} disabled={x.disabled} onClick={x.run} data-testid={x.testId}>
+                    {x.label}
+                  </ContextMenu.Item>
+                ))}
+              </div>
+            ))}
+            {enabled && groups.length > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
             {enabled && (
               <ContextMenu.Item className={ITEM} onClick={onRollback} data-testid="row-rollback">
                 {t("files.changes.rollbackMenu")}

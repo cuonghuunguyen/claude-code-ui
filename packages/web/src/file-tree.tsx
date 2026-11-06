@@ -7,7 +7,8 @@ import { tipMiddleClick } from "./recommendations.ts";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
-import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeTarget } from "./file-tree-menu.ts";
+import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeMenuEntry, type TreeTarget } from "./file-tree-menu.ts";
+import { externalEntries, externalHow, isExternalId, useOpenExternal } from "./open-external-menu.ts";
 import { createLimiter, gitRows } from "./git-changes.ts";
 import { PasteClashDialog, type ClashAsk } from "./paste-clash-dialog.tsx";
 import { treeClipboard } from "./tree-clipboard.ts";
@@ -278,6 +279,9 @@ export function FileTree({
   const delPath = useRef<string>(undefined);
   const delConfirmed = useRef(false);
   const windows = isWinPath(cwd);
+  /** GH-612: open in an app; a side's files are not on this machine. */
+  const openExt = useOpenExternal();
+  const external = side === LOCAL_SIDE ? openExt : undefined;
   // Copy, cut, paste, drag and drop (GH-555).
   const [clip, setClip] = useState(treeClipboard.get());
   const [clash, setClash] = useState<ClashAsk>();
@@ -697,8 +701,9 @@ export function FileTree({
     if (path !== undefined) setFocused(path);
   };
   const choose = (rel: string) => repos && setRepoChoice(repos.projectKey, rel);
-  function run(id: TreeCommand, t: TreeTarget) {
+  function run(id: TreeMenuEntry["id"], t: TreeTarget) {
     const path = t.kind === "root" ? cwd : t.entry.path;
+    if (isExternalId(id)) return external?.run(path, externalHow(id), cwd);
     if (MOVES_FOCUS.has(id)) movedFocus.current = true;
     const entry = t.kind === "root" ? undefined : t.entry;
     switch (id) {
@@ -987,7 +992,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab, !!clip).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab, !!clip, external ? externalEntries({ isDir: menuTarget.kind !== "file", editors: external.editors }) : []).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (

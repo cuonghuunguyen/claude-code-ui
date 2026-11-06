@@ -6,7 +6,8 @@ import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
-import type { FsMediaResult, GitBlameResult, GitRepo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type FsMediaResult, type GitBlameResult, type GitRepo } from "@claude-ui/protocol";
+import { externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { tipMiddleClick } from "./recommendations.ts";
@@ -145,6 +146,8 @@ export function FilesPanel({
   sync?: boolean;
 }) {
   const tr = useT();
+  const openExt = useOpenExternal();
+  const external = !side || side === LOCAL_SIDE ? openExt : undefined;
   const [own] = useState(() => (editors ? undefined : createEditorStore(() => client)));
   const store = (editors ?? own)!;
   const { tabs, activePath, recent, gitNudge, error, loading } = useEditorStore(store);
@@ -461,6 +464,12 @@ export function FilesPanel({
                           </ContextMenu.Item>
                         </>
                       )}
+                      {external &&
+                        externalEntries({ isDir: false, editors: external.editors }).map((x) => (
+                          <ContextMenu.Item key={x.id} className={ITEM} data-testid={`editor-tab-menu-${x.testId}`} onClick={() => external.run(p, x.how, cwd)}>
+                            {x.label}
+                          </ContextMenu.Item>
+                        ))}
                     </ContextMenu.Popup>
                   </ContextMenu.Positioner>
                 </ContextMenu.Portal>

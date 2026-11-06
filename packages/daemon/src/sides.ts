@@ -1700,6 +1700,12 @@ export function createRouter(opts: {
         const { side: _side, ...rest } = msg;
         return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
       }
+      case "fs.openExternal": {
+        const id = await target(msg);
+        if (id === null) return send(sideConflict(msg.reqId));
+        if (id === LOCAL_SIDE) return opts.local(msg);
+        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Opening in an app is not available for files in ${kindName(id)}` });
+      }
       case "artifact.preview": {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
