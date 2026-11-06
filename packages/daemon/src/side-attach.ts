@@ -5,6 +5,9 @@ import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { readDaemonFile } from "./ctl/daemon-file.ts";
 import { pidAlive } from "./ctl/connect.ts";
+import type { SideSetup } from "@claude-ui/protocol";
+import { parseHub, type Hub } from "./hub-probe.ts";
+import { attachArgs, shq } from "./sides.ts";
 import type { Readable, Writable } from "node:stream";
 
 /** Where a Hub accepts attaching Hubs (ADR 0009): next to its `daemon.json`, else a shorter folder when the path does not fit `sun_path`. */
@@ -120,4 +123,29 @@ export async function runAttach(o: { dir: string; stdin: Readable; stdout: Writa
     o.stdin.on("end", () => sock.end());
     o.stdin.on("error", () => sock.destroy());
   });
+}
+
+/** `[node, ...execArgv, cli.js]` of this process, for daemon.json `exec` (GH-619). Debugger flags are dropped: a bridge replaying `--inspect` would clash on its port. */
+export const hubExec = () => [process.execPath, ...process.execArgv.filter((a) => !/^--(inspect|debug)/.test(a)), process.argv[1]!];
+
+/** Runs the bridge of the Hub there: every word quoted. `--start`: when that Hub died since the probe, a Hub of the same build starts (nothing is installed: the cli is there). */
+export const hubBridgeScript = (exec: string[]) => `exec ${exec.map(shq).join(" ")} side --attach --start`;
+
+/**
+ * The Hub that `run` (a probe through the Side's transport) finds. No probe for an update, Reinstall (`force`) or a pinned start: those must reach the install
+ * even when the Hub there has a broken `exec` (its cli folder swept, its Node.js removed). A probe that fails to run counts as no Hub (the install path
+ * reports the real error); `fatal` names an error that the install path would hit too (ssh unreachable): thrown at once, not after a second timeout. Not on a reattach: a throw there ends the retries, while the bridge's own failure keeps them.
+ */
+export async function findHub(o: { runArgs: string; setup: SideSetup; pinned?: boolean; run: () => Promise<{ code: number | null; stdout: string; stderr: string }>; fatal?: (r: { code: number | null; stderr: string }) => string | undefined }): Promise<Hub | undefined> {
+  if (o.runArgs === "update" || o.setup === "force" || o.pinned) return undefined;
+  let r;
+  try {
+    r = await o.run();
+  } catch {
+    return undefined;
+  }
+  const msg = o.runArgs === attachArgs(true) ? undefined : o.fatal?.(r);
+  if (msg) throw new Error(msg);
+  // The exit code is not read otherwise: the probe ends non-zero when no Hub runs.
+  return parseHub(r.stdout);
 }

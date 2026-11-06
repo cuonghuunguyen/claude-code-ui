@@ -104,3 +104,44 @@ Feature: One Hub per machine
     And the Hub of the SSH host was started by "the user"
     And the user's claude-ui in the SSH host printed no waiting line
     And I capture "user-start-retired-attach-hub"
+
+  # GH-619: the attach does not need this build in the host: a live Hub whose frame schema overlaps is bridged through its own cli.
+  Scenario: An SSH host with a schema-compatible Hub of another build is attached without installing this build
+    Given a throwaway SSH host
+    When I end every Hub of the SSH host
+    And I choose the SSH host "e2e-ok" in Open project
+    And I open the remote project folder
+    And I stop the app, move this build out of the SSH host and start the Hub the user started from there and start the app
+    And I open the app and Settings › Sides
+    Then the Settings row of the SSH host "e2e-ok" says "Running"
+    And one Hub runs in the SSH host
+    And the Hub of the SSH host was started by "the user"
+    And the claude-ui folder of this build does not exist in the SSH host
+    And I capture "compatible-hub-no-install"
+    When I watch the Settings row of the SSH host "e2e-ok"
+    And I kill the Hub's ssh process of the SSH host "e2e-ok" until the row shows Reconnecting
+    Then the Settings row of the SSH host "e2e-ok" went from Reconnecting to Running by itself
+    And one Hub runs in the SSH host
+    And the Hub of the SSH host was started by "the user"
+    And the claude-ui folder of this build does not exist in the SSH host
+    And I capture "compatible-hub-reattached"
+
+  Scenario: Open project on an SSH host with a schema-compatible Hub of another build offers no Install
+    Given a throwaway SSH host
+    When I end every Hub of the SSH host
+    And I choose the SSH host "e2e-ok" in Open project
+    And I open the remote project folder
+    And I stop the app, move this build out of the SSH host and start the Hub the user started from there and start the app
+    And I watch for the Install and Update buttons
+    And I open the app and Settings › Sides
+    And I close Settings
+    And I open Open project on the last chosen host
+    Then the folder browser of Open project shows
+    And the side panel never showed an Install or Update button
+    And the claude-ui folder of this build does not exist in the SSH host
+    And the page has no horizontal scroll
+    And I capture "compatible-hub-check-desktop"
+    When the viewport becomes 390x844
+    Then the page has no horizontal scroll
+    And the side panel never showed an Install or Update button
+    And I capture "compatible-hub-check-phone"

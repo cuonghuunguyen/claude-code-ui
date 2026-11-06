@@ -8,7 +8,7 @@ import { openApp } from "../support/flow.ts";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { runDir, sshDir } from "../support/paths.ts";
 import { openSettings } from "../support/ui.ts";
-import { endHubs, hubFile, hubPids, inHost, sleep, startHub } from "../support/ssh-hub.ts";
+import { USER_HUB_PORT, endHubs, hubFile, hubPids, inHost, run, sleep, startHub } from "../support/ssh-hub.ts";
 import { After, Then, When } from "./fixtures.ts";
 
 const row = (page: Page, alias: string) => page.getByTestId(`settings-side-ssh:${alias}`);
@@ -157,6 +157,18 @@ Then("the Settings row of the SSH host {string} went from Reconnecting to Runnin
   await expect.poll(seen, { timeout: 120_000, message: "row states seen" }).toMatch(/Reconnecting > Running$/);
 });
 
+// The kill of the Hub's ssh process may come before the daemon's bridge ssh exists (the row says Running a moment early) or hit an ssh that is no longer the Side's pipe:
+// kill again until the row shows Reconnecting, so the reattach that follows is really observed.
+When("I kill the Hub's ssh process of the SSH host {string} until the row shows Reconnecting", async ({ page }, alias: string) => {
+  const reconnecting = () => page.evaluate(() => (window as unknown as { __rowStates: string[] }).__rowStates.includes("Reconnecting"));
+  const killAll = () => {
+    for (const p of run("pgrep", ["-f", `ssh .*-F ${join(sshDir(runDir()), "config")} -- ${alias}`]).split(/\s+/).filter(Boolean)) process.kill(Number(p), "SIGKILL");
+  };
+  await expect
+    .poll(async () => (killAll(), await sleep(1_000), reconnecting()), { timeout: 60_000, intervals: [0], message: "the row never showed Reconnecting after the ssh kill" })
+    .toBe(true);
+});
+
 // No turn runs in this scenario (the host has no Claude login): the user's start prints no waiting line and does not fail.
 Then("the user's claude-ui in the SSH host printed no waiting line", async ({ sshHost }) => {
   const log = inHost((await sshHost.get()).name, "cat /tmp/e2e-user-hub.log");
@@ -172,11 +184,59 @@ Then("no Hub runs in the SSH host within {int} seconds", async ({ sshHost }, sec
   expect(hubPids(name), "Hubs in the host").toEqual([]);
 });
 
+// GH-619: a Hub another install folder started (a different build) is the only claude-ui running in the host; this build's folder is not there.
+const ROOT = "~/.local/share/claude-ui";
+let movedHost: string | undefined;
+When("I stop the app, move this build out of the SSH host and start the Hub the user started from there and start the app", async ({ daemon, sshHost }) => {
+  const name = (await sshHost.get()).name;
+  usedHost = movedHost = name;
+  await daemon.stop();
+  await endHubs(name);
+  // npm fails: an install attempt would show an error (the bundle install does not need it, the folder assertion catches that one).
+  inHost(name, `printf '#!/bin/sh\\necho npm shim: install not allowed >&2\\nexit 1\\n' > /usr/local/bin/npm && chmod +x /usr/local/bin/npm; mkdir -p ${ROOT}/other && for d in ${ROOT}/side/*/; do mv "\${d%/}" ${ROOT}/other/; done`);
+  expect(inHost(name, `ls ${ROOT}/side | wc -l`).trim(), "this build's folder is gone").toBe("0");
+  inHost(name, `dir=$(ls -d ${ROOT}/other/*/ | head -n 1); dir=\${dir%/}; cli="$dir/node_modules/claude-code-ui/dist/cli.js"; n=node; [ -x "$dir/node/bin/node" ] && n="$dir/node/bin/node"; nohup "$n" "$cli" --no-open --no-update-check --port ${USER_HUB_PORT} </dev/null >/tmp/e2e-user-hub.log 2>&1 & echo $! > /tmp/e2e-user-hub.pid`);
+  await expect.poll(() => hubFile(name)?.attach, { timeout: 60_000, message: inHost(name, "tail -20 /tmp/e2e-user-hub.log") }).toBeTruthy();
+  await daemon.restart();
+});
+
+Then("the claude-ui folder of this build does not exist in the SSH host", async ({ sshHost }) => {
+  const name = (await sshHost.get()).name;
+  expect(inHost(name, `ls ${ROOT}/side | wc -l`).trim(), `this build's folder in ${ROOT}/side`).toBe("0");
+  expect(inHost(name, "which npm; cat /usr/local/bin/npm | head -c 20").trim(), "npm shim stays in place").toContain("#!/bin/sh");
+});
+
+// Records every Install, Update and Retry button the side panel (or its check) ever shows, from the first page load on.
+When("I watch for the Install and Update buttons", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __buttons: string[] };
+    w.__buttons = [];
+    const read = () => {
+      for (const id of ["side-install", "side-update-remote"]) if (document.querySelector(`[data-testid="${id}"]`) && !w.__buttons.includes(id)) w.__buttons.push(id);
+    };
+    new MutationObserver(read).observe(document, { subtree: true, childList: true, attributes: true });
+  });
+});
+
+Then("the side panel never showed an Install or Update button", async ({ page }) => {
+  expect(await page.evaluate(() => (window as unknown as { __buttons: string[] }).__buttons), "buttons seen").toEqual([]);
+});
+
 After(async () => {
+  if (movedHost) {
+    // Put this build back: the next scenarios start from an installed host.
+    await endHubs(movedHost);
+    inHost(movedHost, `rm -f /usr/local/bin/npm; for d in ${ROOT}/other/*/; do mv "\${d%/}" ${ROOT}/side/; done`);
+    movedHost = undefined;
+  }
   await page2?.close().catch(() => {});
   await hub2?.stop();
   page2 = hub2 = undefined;
   // A Hub the user (or a test) started stays out of the next scenario: the next one starts from an installed host without a Hub unless it says so.
   if (usedHost) await endHubs(usedHost);
   usedHost = undefined;
+});
+
+Then("the folder browser of Open project shows", async ({ page }) => {
+  await expect(page.getByTestId("folder-input")).toBeVisible({ timeout: 240_000 });
 });

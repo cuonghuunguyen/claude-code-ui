@@ -2,8 +2,11 @@
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** `attach`: this Hub's attach socket (POSIX); `schema`: the side frame schema range it speaks; `startedBy: "attach"`: another Hub's attach started it (ADR 0009). */
-export type DaemonInfo = { port: number; pid: number; version: string; startedAt: string; attach?: string; schema?: [number, number]; startedBy?: "attach" };
+/**
+ * `attach`: this Hub's attach socket (POSIX); `schema`: the side frame schema range it speaks; `startedBy: "attach"`: another Hub's attach started it (ADR 0009);
+ * `exec`: how to run this Hub's own cli (`[node, ...execArgv, cli.js]`); an attaching Hub bridges through it (GH-619).
+ */
+export type DaemonInfo = { port: number; pid: number; version: string; startedAt: string; attach?: string; schema?: [number, number]; startedBy?: "attach"; exec?: string[] };
 
 export const daemonFile = (dir: string) => join(dir, "daemon.json");
 

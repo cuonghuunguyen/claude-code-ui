@@ -89,6 +89,15 @@ describe("side panel, Docker", () => {
     expect([...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent)[1]).toBe("ContainermacOS, arm64: bundle");
   });
 
+  it("a running compatible Hub: ok row, its text and no Install button", async () => {
+    const hub: SideCheck = { verdict: "installed", key: "k", facts: { reachable: true, running: true, installed: "none", buildTools: { make: false, python3: false, cxx: false }, hub: { version: "1.2.1" } } };
+    await mount(<SidePanel side={side()} state={{ check: hub }} onRun={() => {}} onCheck={() => {}} />);
+    expect([...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent)).toEqual(["ReachableYes, running", "claude-ui for this buildClaude UI 1.2.1 is running"]);
+    expect(document.body.textContent).toContain("Claude UI 1.2.1 runs here. It is used as it is.");
+    expect(document.querySelector('[data-testid="side-install"]')).toBeNull();
+    root!.unmount();
+  });
+
   it("bundle check: no Node.js or build tools rows; the guide shows; WSL has no guide", async () => {
     await mount(<SidePanel side={side()} state={{ check: bundleCheck }} onRun={() => {}} onCheck={() => {}} />);
     const r = [...document.querySelectorAll('[data-testid="side-check-row"]')].map((x) => x.textContent);

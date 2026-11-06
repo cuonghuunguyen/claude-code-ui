@@ -260,6 +260,11 @@ describe("checkSshSide", () => {
     await checkSshSide({ alias: "box", config: "/s/cfg", pkgDir: dir("pkg-"), key: "k", exec: async (_c, a) => ((args = a), { code: 255, stdout: "", stderr: "x" }) });
     expect(args.slice(args.indexOf("-F"), args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
   });
+  it("a running compatible Hub is installed: nothing to install", async () => {
+    const hub = Buffer.from(JSON.stringify({ port: 1, pid: 2, version: "1.2.1", startedAt: "x", attach: "/s", schema: [1, 1], exec: ["/n", "/c.js"] })).toString("base64");
+    const c = await check({ code: 0, stdout: `CLAUDE_UI_CHECK installed=none\nCLAUDE_UI_CHECK os=Linux\nCLAUDE_UI_CHECK hub=${hub}\n` });
+    expect(c).toMatchObject({ verdict: "installed", facts: { hub: { version: "1.2.1" } } });
+  });
   it("an answer that is no check output is check_failed", async () => {
     expect(await check({ code: 0, stdout: "hello" })).toMatchObject({ verdict: "blocked", reason: "check_failed" });
   });

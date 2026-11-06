@@ -632,7 +632,7 @@ export type SidePhase = "downloading" | "packing" | "copying" | "installing" | "
 export type DockerState = "ok" | "down" | "empty";
 /** `side.start` setup mode: run only what is installed, install when needed (default), install again. */
 export type SideSetup = "never" | "needed" | "force";
-/** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
+/** `running`/`starting`: the side is up (nothing was run); `installed`: this build is installed, or a schema-compatible Hub runs there (can start); `install`/`update`: setup is needed; `blocked`: see `reason`. */
 export type SideCheckVerdict = "running" | "starting" | "installed" | "install" | "update" | "blocked";
 /** Why a check is blocked. */
 export type SideCheckReason = "gone" | "not_running" | "unreachable" | "no_build" | "package_unreadable" | "node_missing" | "node_old" | "build_tools_missing" | "unpack_tools_missing" | "no_writable_path" | "npm_missing" | "windows_host" | "check_failed";
@@ -658,6 +658,8 @@ export type SideCheckFacts = {
   network?: boolean;
   /** Docker or WSL: the installed build carries its own Node.js (a bundle install). */
   bundled?: boolean;
+  /** A live Hub there whose frame schema overlaps ours (GH-619): a start bridges through it, nothing is installed. */
+  hub?: { version: string };
 };
 /** Reply of `ssh.add`: the new SSH Side (`ssh:<alias>`), already in the list. */
 export type SshAddResult = { side: string };

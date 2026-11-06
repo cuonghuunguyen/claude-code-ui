@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage, SideCheck } from "@claude-ui/protocol";
 import { NODE_OK_JS } from "../src/side-bundle.ts";
+import { HUB_PROBE } from "../src/hub-probe.ts";
 import { blockedCheck, checkMessage, checkScript, createRouter, createSides, parseCheck, setupScript, verdictOf, wslSide, dockerSide, type SideProcess } from "../src/sides.ts";
 
 const dir = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -19,10 +20,10 @@ const base = { make: true, python3: true, cxx: true, installed: "none" as "curre
 const verdict = (checked: Partial<Parameters<typeof verdictOf>[0]["checked"]>, o: Partial<Parameters<typeof verdictOf>[0]> = {}) => verdictOf({ key: KEY, label: "WSL: Ubuntu", kind: "wsl", build: true, checked: { ...base, ...checked }, ...o });
 
 describe("checkScript", () => {
-  for (const kind of ["wsl", "docker"] as const) {
+  for (const kind of ["wsl", "docker", "ssh"] as const) {
     it(`${kind}: only reads: no install, copy, write, redirect into a file, key names or file contents`, () => {
       // The JS the candidate node runs holds `>=` and `<`: not shell redirects.
-      const s = checkScript(KEY, kind, "C:\\pkg").replace(NODE_OK_JS, "");
+      const s = checkScript(KEY, kind, "C:\\pkg").replace(NODE_OK_JS, "").replace(HUB_PROBE, "");
       for (const bad of [/\bnpm\s+\w/, /\brm\b/, /\bmv\b/, /\bmkdir\b/, /\bcp\b/, /\bcat\b/, /\btee\b/, /\btouch\b/, /\bchmod\b/, /\bpack\b/, /ANTHROPIC|OAUTH|TOKEN|API_KEY/, /\benv\b|\bprintenv\b/, /node "?\$cli|--side|exec node/]) expect(s).not.toMatch(bad);
       // Redirects only into /dev/null or other file descriptors.
       for (const m of s.matchAll(/\d?>>?\s*([^\s;&|)]+)/g)) expect(m[1]).toMatch(/^(\/dev\/null|&\d)$/);
@@ -30,6 +31,11 @@ describe("checkScript", () => {
       expect(s).toContain("CLAUDE_UI_CHECK");
     });
   }
+
+  it("daemon.json is the one file it reads: HUB_PROBE, once, names no other file", () => {
+    for (const kind of ["wsl", "docker", "ssh"] as const) expect(checkScript(KEY, kind, "/p").split(HUB_PROBE)).toHaveLength(2);
+    expect([...HUB_PROBE.matchAll(/[\w.-]+\.\w+/g)].map((m) => m[0]).filter((w) => /\.(json|sock|log|pid|txt)$/.test(w))).toEqual(["daemon.json"]);
+  });
 
   it("the script never prints the value of an environment variable (HOME is reported as the text $HOME)", () => {
     const d = checkScript(KEY, "docker");
@@ -51,7 +57,7 @@ describe("checkScript", () => {
   });
 
   it("is plain sh", () => {
-    if (hasSh) for (const kind of ["wsl", "docker"] as const) expect(spawnSync("sh", ["-n", "-c", checkScript(KEY, kind, "/p")]).status).toBe(0);
+    if (hasSh) for (const kind of ["wsl", "docker", "ssh"] as const) expect(spawnSync("sh", ["-n", "-c", checkScript(KEY, kind, "/p")]).status).toBe(0);
   });
 });
 
@@ -73,6 +79,26 @@ describe("parseCheck", () => {
     expect(parseCheck(out(["node=22.4.0", "make=1"]))).toBeUndefined();
     expect(parseCheck("bash: wsl: command not found")).toBeUndefined();
     expect(parseCheck(out(["installed=maybe"]))).toBeUndefined();
+  });
+});
+
+describe("a live Hub there (GH-619)", () => {
+  const hubLine = (schema: [number, number]) => `CLAUDE_UI_CHECK hub=${Buffer.from(JSON.stringify({ port: 1, pid: 2, version: "1.2.1", startedAt: "x", attach: "/s", schema, exec: ["/n", "/c.js"] })).toString("base64")}`;
+  const base0 = ["installed=none"].map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
+  it("parseCheck picks a compatible Hub, not an incompatible one", () => {
+    expect(parseCheck(`${base0}\n${hubLine([1, 1])}`)!.hub).toEqual({ version: "1.2.1" });
+    expect(parseCheck(`${base0}\n${hubLine([0, 0])}`)!.hub).toBeUndefined();
+  });
+  it("verdictOf: installed, even without this build, node or tools; no message", () => {
+    const hub = { version: "1.2.1" };
+    for (const c of [{ hub }, { hub, node: undefined, foundNode: false, make: false }]) {
+      const r = verdict(c, { build: false });
+      expect(r).toMatchObject({ verdict: "installed", facts: { hub } });
+      expect(r.message).toBeUndefined();
+    }
+  });
+  it("verdictOf: no Hub keeps install", () => {
+    expect(verdict({}).verdict).toBe("install");
   });
 });
 

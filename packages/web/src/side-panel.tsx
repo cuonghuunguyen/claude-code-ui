@@ -28,7 +28,7 @@ export type PanelState = {
 
 const phaseText = (p: SidePhase, host = false) => t(host && p === "copying" ? "app.sidePanel.phase.copyingHost" : `app.sidePanel.phase.${p}`);
 
-const verdictText = (v: SideCheck["verdict"], label: string): string => t(`app.sidePanel.verdict.${v}`, { side: label });
+const verdictText = (v: SideCheck["verdict"], label: string, hub?: { version: string }): string => (hub ? t("app.sidePanel.verdict.hub", { version: hub.version }) : t(`app.sidePanel.verdict.${v}`, { side: label }));
 
 /** The fix per reason, used when the daemon sent no message. */
 function fixText(check: SideCheck, label: string): string | undefined {
@@ -77,6 +77,8 @@ function rowsOf(c: SideCheck, noun: "container" | "distro" | "host" = "container
   const tools = missingTools(f.buildTools);
   const build: Row = f.installed === "current" ? { name: forBuild, value: t("app.sidePanel.row.installed"), status: "ok" } : f.installed === "other" ? { name: forBuild, value: t("app.sidePanel.row.olderInstalled"), status: "missing" } : { name: forBuild, value: t("app.sidePanel.row.notInstalled"), status: "missing" };
   const up: Row = { name: reachable, value: t(f.running ? "app.sidePanel.row.yesRunning" : "app.sidePanel.row.yes"), status: "ok" };
+  // A Hub runs there: it is used as it is, so Node.js, build tools and the install of this build do not matter.
+  if (f.hub) return [up, { name: forBuild, value: t("app.sidePanel.row.hubRunning", { version: f.hub.version }), status: "ok" }];
   // Docker with the bundle (or a build that runs on its own Node.js): the container's Node.js and build tools do not matter.
   if ((f.install?.method === "bundle" && f.installed !== "current") || (f.installed === "current" && f.bundled)) {
     const tg = f.target;
@@ -247,7 +249,7 @@ export function SidePanel({
                 ))}
               </ul>
               <div role="status" aria-live="polite" className="flex flex-col gap-2">
-                <p className="font-medium">{verdictText(check.verdict, label)}</p>
+                <p className="font-medium">{verdictText(check.verdict, label, check.facts.hub)}</p>
                 {fix && <p className="select-text text-muted-foreground [overflow-wrap:anywhere]">{fix}</p>}
                 {check.facts.install?.method === "npm" && check.verdict !== "installed" && check.verdict !== "running" && !fix?.includes("installs with npm") && (
                   <p className="select-text text-muted-foreground [overflow-wrap:anywhere]" data-testid="side-check-npm">
