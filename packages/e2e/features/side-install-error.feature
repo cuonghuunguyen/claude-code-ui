@@ -20,6 +20,26 @@ Feature: A failed side install shows one error and one way out
       | 1440  | 900    |
       | 390   | 844    |
 
+  Scenario Outline: A failed side keeps its status and open Details until Retry, and Details stay open after Retry
+    Given the viewport is <width>x<height>
+    And a fake Docker container "fail-box" whose install fails, with the cached projects "alpha-proj" and "beta-proj"
+    When I open the app
+    And I press Update in the sidebar status of "alpha-proj"
+    Then the sidebar shows one install failed summary with one Retry under "alpha-proj"
+    When I open the Details of the sidebar status
+    And I wait 36 seconds without a click
+    Then the sidebar status never showed Starting and the Details are open
+    And I capture "sidebar-after-wait"
+    When I press Retry in the sidebar status
+    Then the error is back with the Details open after the Retry
+    And the page has no horizontal scroll
+    And I capture "sidebar-after-retry"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |
+
   Scenario Outline: A failed install in Open project offers one Retry install and Check again, none while it checks
     Given the viewport is <width>x<height>
     And a fake Docker container "fail-dev" whose install fails and whose check is slow

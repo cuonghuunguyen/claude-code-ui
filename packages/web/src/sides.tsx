@@ -1,5 +1,5 @@
 // Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro, a Docker container or an SSH host.
-import { createContext, use } from "react";
+import { createContext, use, useState } from "react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -74,10 +74,10 @@ export function sideStatus(side: SideInfo | undefined): SideStatus | undefined {
 export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefined; act: (side: string, setup?: "needed" | "updateRemote") => void }>({ of: () => undefined, act: () => {} });
 
 /** The details of a side message behind a toggle (`Details`), below the row it belongs to. */
-export function MessageDetails({ details, testId }: { details: string; testId?: string }) {
+export function MessageDetails({ details, testId, open, onOpenChange }: { details: string; testId?: string; open?: boolean; onOpenChange?: (open: boolean) => void }) {
   const tr = useT();
   return (
-    <Collapsible className="min-w-0">
+    <Collapsible className="min-w-0" open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger className="h-6 rounded-md border px-2 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11">
         {tr("side.details")}
       </CollapsibleTrigger>
@@ -92,6 +92,8 @@ export function MessageDetails({ details, testId }: { details: string; testId?: 
 export function SideStatusLine({ cwd }: { cwd: string }) {
   const tr = useT();
   const { of, act } = use(SideState);
+  // Kept here: Starting… (a Retry) has no details, so MessageDetails unmounts; the error that returns opens as the user left it.
+  const [open, setOpen] = useState(false);
   const side = of(cwd);
   const st = sideStatus(side);
   if (!side || !st) return null;
@@ -105,7 +107,7 @@ export function SideStatusLine({ cwd }: { cwd: string }) {
           </button>
         )}
       </p>
-      {st.details && <MessageDetails details={st.details} testId="sidebar-side-details" />}
+      {st.details && <MessageDetails details={st.details} testId="sidebar-side-details" open={open} onOpenChange={setOpen} />}
     </div>
   );
 }

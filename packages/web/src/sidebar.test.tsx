@@ -6,7 +6,7 @@ import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protoco
 import { SessionList } from "./sidebar.tsx";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { setLocalePref } from "./i18n.ts";
-import { SideLabel, SideState } from "./sides.tsx";
+import { SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One actions menu per rendered row: counts the rows' renders by title.
@@ -1341,6 +1341,21 @@ describe("status of a project's side (GH-458)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await reactAct(async () => toggle.click());
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector('[data-testid="sidebar-side-details"]')?.textContent).toBe("npm ERR! 403 Forbidden");
+  });
+
+  it("an opened Details stays open when a Retry shows Starting… and the error returns (GH-640)", async () => {
+    const err = { id: "ssh:box", label: "SSH: box", state: "error", message: "Installing claude-ui in SSH: box failed. Check its network and npm, then retry.\nnpm ERR! 403 Forbidden" };
+    const el = document.createElement("div");
+    document.body.append(el);
+    root = createRoot(el);
+    const show = (side: object) => reactAct(async () => root!.render(<SideState value={{ of: () => side as never, act: () => {} }}><SideStatusLine cwd="/home/u/web" /></SideState>));
+    await show(err);
+    await reactAct(async () => [...el.querySelectorAll("button")].find((b) => b.textContent === "Details")!.click());
+    await show({ ...err, state: "starting", message: undefined });
+    expect(el.querySelector('[data-testid="sidebar-side-status"]')?.textContent).toBe("Starting…");
+    await show(err);
+    expect([...el.querySelectorAll("button")].find((b) => b.textContent === "Details")!.getAttribute("aria-expanded")).toBe("true");
     expect(el.querySelector('[data-testid="sidebar-side-details"]')?.textContent).toBe("npm ERR! 403 Forbidden");
   });
 

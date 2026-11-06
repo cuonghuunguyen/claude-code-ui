@@ -698,7 +698,7 @@ export function createSides(opts: {
   const exits = new Map<string, number[]>();
   /**
    * Starts a saved side the way the hub run left it: the build it last ran (or no automatic update): only what is installed;
-   * another build: installed from the bundle only (no npm: the side then stays off and offers Update). A failure is retried once after `retryMs`.
+   * another build: installed from the bundle only (no npm: the side then stays off and offers Update). A failure is retried once after `retryMs`, except a setup error the side reports (it waits for Retry).
    */
   const startSaved = (id: string, retried = false) => {
     const e = saved.get(id);
@@ -712,7 +712,9 @@ export function createSides(opts: {
     // "Start with Claude UI" on is the owner's opt-in: the Side is connected and a Hub is started there when none runs (launch, not attach-only).
     start(id, same ? "never" : "needed", undefined, !same, undefined).catch((err) => {
       console.error(`starting ${id} failed:`, (err as Error).message);
-      if (!retried && !closing && sides.get(id)?.state === "error") later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
+      // A setup error is a fault the user fixes ("... then retry"): it waits for Retry. node_changed is transient: it keeps the one retry.
+      const setup = (err as { setup?: string }).setup;
+      if (!retried && !closing && sides.get(id)?.state === "error" && (!setup || setup === "node_changed")) later(id, opts.retryMs ?? 30_000, () => startSaved(id, true));
     });
   };
   const autoStart = (id: string) => {
@@ -1079,7 +1081,7 @@ export function createSides(opts: {
         }
         for (const reqId of [...(requestsOf.get(s.id) ?? [])]) forgetRequest(reqId);
         // A mismatch rejects with what the row says (both versions, the way out), not the setup code.
-        if (!wasReady) reject(new Error(mismatched && !updating ? mismatchText : message));
+        if (!wasReady) reject(Object.assign(new Error(mismatched && !updating ? mismatchText : message), setupCode && { setup: setupCode }));
         routers.forEach((r) => r.detach(s.id));
         changed();
       });
