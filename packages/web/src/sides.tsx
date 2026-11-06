@@ -1,5 +1,5 @@
 // Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro, a Docker container or an SSH host.
-import { createContext, use, useId } from "react";
+import { createContext, use } from "react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -76,13 +76,12 @@ export const SideState = createContext<{ of: (cwd: string) => SideInfo | undefin
 /** The details of a side message behind a toggle (`Details`), below the row it belongs to. */
 export function MessageDetails({ details, testId }: { details: string; testId?: string }) {
   const tr = useT();
-  const id = useId();
   return (
     <Collapsible className="min-w-0">
-      <CollapsibleTrigger className="h-6 rounded-md border px-2 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" aria-controls={id}>
+      <CollapsibleTrigger className="h-6 rounded-md border px-2 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11">
         {tr("side.details")}
       </CollapsibleTrigger>
-      <CollapsibleContent id={id}>
+      <CollapsibleContent>
         <pre className="mt-1 max-h-48 text-left select-text overflow-y-auto whitespace-pre-wrap font-mono text-xs [overflow-wrap:anywhere]" data-testid={testId}>{details}</pre>
       </CollapsibleContent>
     </Collapsible>

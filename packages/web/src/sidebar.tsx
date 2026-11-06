@@ -286,6 +286,13 @@ export function SessionList({
         return c.group;
       })
     : kept;
+  // One side status line per side, under its first listed project.
+  const firstCwds = new Set<string>();
+  const seenSides = new Set<string>();
+  for (const g of groups) {
+    const sid = sideInfo(g.cwd)?.id;
+    if (sid && !seenSides.has(sid)) (seenSides.add(sid), firstCwds.add(g.cwd));
+  }
   // Menu targets come from the unfiltered, unsearched groups: search and Only active never shrink what an action covers.
   let unfiltered: SessionGroup[] | undefined;
   const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers)).find((g) => g.cwd === cwd);
@@ -589,9 +596,7 @@ export function SessionList({
         )}
         {groups.map((g) => {
           const open = isOpen(g.cwd);
-          // One status line per side, under its first listed project (N projects of a failed host would repeat it N times).
-          const sid = sideInfo(g.cwd)?.id;
-          const firstOfSide = !!sid && groups.find((x) => sideInfo(x.cwd)?.id === sid) === g;
+          const firstOfSide = firstCwds.has(g.cwd);
           return (
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
               <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
