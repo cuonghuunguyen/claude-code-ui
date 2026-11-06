@@ -164,7 +164,9 @@ export function createPlanTracker({
       request++;
       usage = undefined;
       headers = undefined;
-      fallback = false;
+      // A token account cannot read plan limits: its windows come from rate_limit_events until a read says otherwise.
+      fallback = oauthToken();
+      pending = undefined;
       status = { status: "allowed" };
       arm();
       if (had) {

@@ -138,7 +138,7 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
             <p className="mb-1 text-muted-foreground text-xs">{t("app.plan.switchAccount")}</p>
             <div role="radiogroup" aria-label={t("app.plan.accountsLabel")} className="flex flex-col">
               {choices.map((c) => {
-                const on = c.id === switcher!.active;
+                const on = c.id === switcher!.active || (!switcher!.envToken && switcher!.active === "" && c.id === "cli");
                 return (
                   <button key={c.id || "default"} type="button" role="radio" aria-checked={on} data-testid="plan-account-option" onClick={() => !on && switcher!.onSwitch(c.id)} className="flex h-8 items-center gap-2 rounded-md px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11">
                     <span className="min-w-0 flex-1 truncate">{c.name}</span>

@@ -631,6 +631,8 @@ export class Session {
     if (this.bashRun) throw new Error("a shell command is running: stop it first");
     if (this.rewinding) throw new Error("session is rewinding");
     this.cleared = false;
+    // A login or account change that could not replace the CLI at the end of a turn (a background shell kept it): now.
+    if (this.staleLogin && this.state === "idle" && this.releaseQuery()) this.staleLogin = false;
     const uuid = randomUUID();
     this.known.add(uuid);
     this.own.add(uuid);
@@ -1324,7 +1326,8 @@ export class Session {
       this.limitHit = false;
       this.limitResetsAt = undefined;
       if (hit) this.opts.onLimitStop?.(this.id, at);
-      void this.opts.plan?.refresh(q);
+      // Not on a query the login change just dropped.
+      if (this.query === q) void this.opts.plan?.refresh(q);
       if (this.syncDeferred && !this.busy()) {
         this.syncDeferred = false;
         void this.sync();

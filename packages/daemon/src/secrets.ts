@@ -3,6 +3,7 @@
 // The Jira token is stored with the origin it was saved for and only returned for that origin (GH-487).
 import { randomUUID } from "node:crypto";
 import { createJsonFile } from "./json-file.ts";
+import { LABEL_NAME_MAX } from "@claude-ui/protocol";
 import { nameOk } from "./settings.ts";
 
 // `legacy` lives in memory only: the file held a token without its origin (saved before GH-487).
@@ -48,7 +49,7 @@ export function createSecrets({ file }: { file?: string } = {}) {
     claudeToken: (id: string): string | undefined => get().claudeAccounts?.find((a) => a.id === id)?.token,
     /** Returns the new id. Throws when the name or token is invalid or the list is full. */
     addClaudeAccount(name: string, token: string): string {
-      if (!nameOk(name)) throw new Error("The account name must be 1 to 60 characters without control characters");
+      if (!nameOk(name)) throw new Error(`The account name must be 1 to ${LABEL_NAME_MAX} characters without control characters`);
       const p = tokenProblem(token);
       if (p) throw new Error(p);
       const id = randomUUID();

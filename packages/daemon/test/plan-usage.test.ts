@@ -37,6 +37,14 @@ describe("plan usage", () => {
     expect(t.current()).toMatchObject({ plan: "max" });
   });
 
+  it("reset() during a running read starts a new read, so the ring does not stay empty", async () => {
+    let n = 0;
+    const t = createPlanTracker({ onChange: () => {}, read: async () => void n++ });
+    void t.reread();
+    await t.reset();
+    expect(n).toBe(2);
+  });
+
   it("reset() before any reading broadcasts nothing (a cloud provider keeps its hidden ring)", async () => {
     const seen: unknown[] = [];
     const t = createPlanTracker({ onChange: (u) => seen.push(u) });
