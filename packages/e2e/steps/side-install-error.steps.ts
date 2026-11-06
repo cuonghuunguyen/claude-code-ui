@@ -89,6 +89,40 @@ When("I open the Details of the sidebar status", async ({ page }) => {
   }).toPass({ timeout: 60_000 });
 });
 
+When("I wait {int} seconds without a click", async ({ page }, n: number) => {
+  // Records every text the status line shows from now on.
+  await page.evaluate(() => {
+    const w = window as unknown as { __seen: string[] };
+    w.__seen = [];
+    const t0 = Date.now();
+    const rec = () => w.__seen.push(`${Math.round((Date.now() - t0) / 1000)}s ` + (document.querySelector('[data-testid="sidebar-side-status"]')?.textContent ?? ""));
+    new MutationObserver(rec).observe(document.body, { subtree: true, childList: true, characterData: true });
+    rec();
+  });
+  await page.waitForTimeout(n * 1000);
+});
+
+Then("the sidebar status never showed Starting and the Details are open", async ({ page }) => {
+  const seen = await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen);
+  expect(seen.filter((t) => /Starting/.test(t)), JSON.stringify(seen)).toEqual([]);
+  await expect(page.getByTestId("sidebar-side-details")).toBeVisible();
+});
+
+When("I press Retry in the sidebar status", async ({ page }) => {
+  await page.evaluate(() => ((window as unknown as { __seen: string[] }).__seen = []));
+  await page.getByTestId("sidebar-side-action").click();
+});
+
+Then("the error is back with the Details open after the Retry", async ({ page }) => {
+  await expect(page.getByTestId("sidebar-side-details")).toContainText("403 Forbidden", { timeout: 60_000 });
+  await expect(page.getByTestId("sidebar-side-status")).toContainText("Installing claude-ui in");
+  const seen = await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen);
+  // The fake fails at once, so Starting… may be too short to see: the hold on the open Details is the check.
+  await page.waitForTimeout(1_000);
+  await expect(page.getByTestId("sidebar-side-details")).toBeVisible();
+  console.log("retry seen: " + JSON.stringify(seen));
+});
+
 Then("the Details show the npm text", async ({ page }) => {
   await expect(page.getByTestId("sidebar-side-details")).toContainText("403 Forbidden");
   await expect(page.getByTestId("sidebar-side-status")).toHaveCount(1);
