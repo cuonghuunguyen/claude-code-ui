@@ -204,3 +204,20 @@ Then("the token appears in no websocket frame, daemon log or web bundle", async 
   walk(join(REPO_ROOT, "packages", "web", "dist"));
   expect(hits).toEqual([]);
 });
+
+When("I add the Claude token account {string} with the token {string} in Settings and keep the default", async ({ page }, name: string, token: string) => {
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-account").click();
+  await page.getByTestId("settings-account-name").fill(name);
+  await page.getByTestId("settings-account-token").fill(token);
+  await page.getByTestId("settings-account-add").click();
+  await expect(page.getByTestId("settings-account-token-set")).toBeVisible();
+});
+
+Then("Settings checks {string} and not {string}", async ({ page }, on: string, off: string) => {
+  const rows = page.getByTestId("settings-account-option");
+  await expect(rows.filter({ hasText: on })).toHaveAttribute("aria-checked", "true");
+  await expect(rows.filter({ hasText: off })).toHaveAttribute("aria-checked", "false");
+});

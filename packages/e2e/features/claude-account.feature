@@ -83,3 +83,15 @@ Feature: Claude account: log in through the CLI, switch account from the usage r
     Then the account list is not offering "leak"
     And I capture "after-remove-active"
     And the token appears in no websocket frame, daemon log or web bundle
+
+  Scenario: Without an environment token the default login shows as CLI login in the ring and Settings
+    Given a Haiku session with one finished reply
+    When I add the Claude token account "spare" with the token "invalid-token" in Settings and keep the default
+    Then Settings checks "CLI login" and not "spare"
+    And I capture "settings-default-is-cli"
+    When I close Settings
+    And I open the usage ring
+    Then the account list checks "CLI login" and offers "spare"
+    And I capture "ring-default-is-cli"
+    When I remove the Claude token accounts
+
