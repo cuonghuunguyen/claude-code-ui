@@ -144,6 +144,8 @@ export default {
   "files.changes.commitAndPush": "Commit và Push",
   "files.changes.amend": "Sửa commit trước",
   "files.changes.commitMessage": "Nội dung commit",
+  "files.changes.generate": "Tạo nội dung commit",
+  "files.changes.generateStop": "Dừng tạo",
   "files.changes.checkAll": "Chọn tất cả tệp",
   "files.changes.checkFile": "Đưa {path} vào commit",
   "files.changes.checkedCount": "{n} / {m}",
