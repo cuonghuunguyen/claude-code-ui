@@ -262,6 +262,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; /** The remote-tracking hash the dialog showed (`trackingHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /** Changes tab Commit: commits exactly `paths` (relative to the repository top, as `git.diff` names them; a rename: both sides) with their working-tree content; other index and work-tree entries stay; hooks run. `amend`: rewrites HEAD (no path: its message only). `push`: the reply also carries the push dialog data of HEAD's branch. Reply GitCommitFilesResult. */
   | { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true }
+  /** Changes tab Rollback, step 1 (GH-558): what a rollback of `paths` (as `git.commitFiles`) would do and the token it needs. Reply GitRollbackPreviewResult. */
+  | { type: "git.rollbackPreview"; cwd: string; paths: string[]; exact?: true }
+  /** Changes tab Rollback, step 2: `paths` back to HEAD in the work tree and the index; `token` from the preview (changed since: `stale`); `deleteAdded`: also delete added (new) files, else they stay untracked. Reply GitRollbackResult. */
+  | { type: "git.rollback"; cwd: string; paths: string[]; token: string; deleteAdded?: boolean; exact?: true }
+  /** Changes tab hunk Rollback: undoes one hunk of the diff of `path` in the work tree only. `hunk.lines`: unified-diff lines (" x", "-x", "+x", "\\ No newline at end of file"); `newStart`: unified convention. The text no longer matching: `stale`. Reply GitRollbackResult. */
+  | { type: "git.rollbackHunk"; cwd: string; path: string; hunk: { newStart: number; lines: string[] }; exact?: true }
   /** Branch menu Merge: `git merge --no-edit <ref>` into HEAD, as `git.branch` showed it (`local`, `headRef`, `headHash` and `argv` are the shown values; a change is `stale`). A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
   | { type: "git.merge"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true }
   /** Branch menu Rebase: `git rebase <ref>` of HEAD, same fields as `git.merge`. Reply GitWriteResult. */
@@ -773,6 +779,13 @@ export type GitCommitted = { hash: string; output: string; refs: string | null; 
 /** `truncated`: the diff in the prompt was cut (the file list was complete). */
 export type GitCommitMessageResult = { message: string; truncated?: true };
 export type GitCommitFilesResult = { committed: GitCommitted | null };
+/** A file a rollback acts on: `A` added or untracked, `D` deleted, `R` renamed (`path` the new name), `M` the rest. */
+export type GitRollbackFile = { path: string; kind: "M" | "D" | "R" | "A"; oldPath?: string };
+export type GitRollbackPreview = { files: GitRollbackFile[]; token: string };
+/** `preview` is null outside a git work tree. */
+export type GitRollbackPreviewResult = { preview: GitRollbackPreview | null };
+/** `rolledBack` is null outside a git work tree. */
+export type GitRollbackResult = { rolledBack: { output: string } | null };
 export type GitRemoteResult = { remote: GitRemote | null };
 /** What the branch menu shows for a local branch and the exact git argv (without "git") of each action; an absent argv is unavailable and `why` says why. */
 export type GitBranchInfo = {

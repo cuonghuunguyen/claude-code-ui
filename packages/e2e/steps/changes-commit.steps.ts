@@ -26,7 +26,7 @@ When("I type the commit message {string}", async ({ page }, text: string) => {
 });
 
 When("I click {string} in the commit box", async ({ page }, name: string) => {
-  await page.getByTestId(name === "Commit and Push" ? "commit-and-push" : "commit-button").click();
+  await page.getByTestId(name === "Rollback" ? "rollback-button" : name === "Commit and Push" ? "commit-and-push" : "commit-button").click();
 });
 
 Then("the Changes result line says {string}", async ({ page }, text: string) => {

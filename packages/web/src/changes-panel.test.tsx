@@ -15,6 +15,12 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 const diff = vi.hoisted(() => ({ options: undefined as undefined | { theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
+  // The hunk Rollback annotations are drawn by the caller's `renderAnnotation`; the stub places them under the diff.
+  FileDiff: (p: { options: typeof diff.options; fileDiff: { deletionLines: string[]; additionLines: string[] }; lineAnnotations?: unknown[]; renderAnnotation?: (a: never) => React.ReactNode }) => (
+    (diff.options = p.options),
+    diff.onFiles?.({ oldFile: { contents: p.fileDiff.deletionLines.join("") }, newFile: { contents: p.fileDiff.additionLines.join("") } } as never),
+    (<div data-testid="pierre-diff">{p.lineAnnotations?.map((a, i) => <div key={i}>{p.renderAnnotation?.(a as never)}</div>)}</div>)
+  ),
 }));
 
 // Counts whole-file diffs, so a test can see that streaming does not re-parse them.
@@ -77,6 +83,8 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
       await git.statusDefer?.(m.cwd!);
       return { status: (git.statuses && m.cwd! in git.statuses ? git.statuses[m.cwd!] : git.status) ?? null };
     }
+    if (m.type === "git.rollbackPreview") return { preview: { files: (m as unknown as { paths: string[] }).paths.map((path) => ({ path, kind: "M" })), token: "tok" } };
+    if (m.type === "git.rollback" || m.type === "git.rollbackHunk") return { rolledBack: { output: "" } };
     if (m.type === "git.operation") return { operation: git.operation ?? null };
     if (m.type === "git.continue" || m.type === "git.abort") return { written: { output: "", refs: "s3" } };
     if (m.type === "git.commitFiles") return { committed: { hash: "abcdef1234567", output: "", refs: "s2" } };
@@ -1525,6 +1533,56 @@ it("third pick of the same non-default mode offers it as default; Turn on saves 
   setRecommendationHost(undefined);
   localStorage.clear();
   resetPageForTests();
+});
+
+it("Rollback of the checked files: preview, dialog with the files, confirm sends the token and reloads the list", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const button = () => el.querySelector<HTMLButtonElement>("[data-testid=rollback-button]")!;
+  expect(button().disabled).toBe(true);
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  await act(async () => button().click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["c.ts"] }]);
+  expect([...document.querySelectorAll("[data-testid=rollback-file]")].map((x) => x.textContent)).toEqual(["Mc.ts"]);
+  expect(document.querySelector("[data-testid=rollback-delete-added]")).toBeNull();
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=rollback-confirm]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.rollback")).toEqual([{ type: "git.rollback", cwd: "/p", paths: ["c.ts"], token: "tok" }]);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back 1 file");
+  expect(el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.checked).toBe(false);
+});
+
+it("a row menu offers Rollback… for that row's paths (a rename: both sides)", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:o.ts`]: "same\n" } };
+  const client = fakeClient({ "/p/n.ts": "same\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const row = el.querySelector<HTMLElement>("[data-testid=changed-file]")!.parentElement!;
+  await act(async () => void row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+  await flush();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=row-rollback]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["n.ts", "o.ts"] }]);
+});
+
+it("a hunk's Rollback sends the hunk at once, no dialog; none for an added file or outside Uncommitted", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 1 }]), at: { [`${BASE}:a.ts`]: "a\nb\nc\n" } };
+  const client = fakeClient({ "/p/a.ts": "a\nX\nc\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const b = el.querySelector<HTMLButtonElement>("[data-testid=hunk-rollback]")!;
+  expect(b.getAttribute("aria-label")).toBe("Roll back this change, lines 2–2");
+  await act(async () => b.click());
+  await flush();
+  expect(gitCalls(client, "git.rollbackHunk")).toEqual([{ type: "git.rollbackHunk", cwd: "/p", path: "a.ts", hunk: { newStart: 1, lines: [" a", "-b", "+X", " c"] } }]);
+  expect(document.querySelector("[data-testid=rollback-dialog]")).toBeNull();
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back a change in a.ts");
 });
 
 // ---- Conflict banner (GH-560) ----
