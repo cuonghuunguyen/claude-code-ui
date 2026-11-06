@@ -224,7 +224,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Replaces this connection's watched files; each change on disk sends `fs.changed`. */
   | { type: "fs.watch"; paths: string[] }
   /** Starts the user's shell in a PTY in `cwd` (inside the roots). It runs until closed or its shell exits, across reconnects. */
-  | { type: "terminal.create"; cwd: string; cols: number; rows: number }
+  | { type: "terminal.create"; cwd: string; cols: number; rows: number; login?: true }
   /** The terminals running in `cwd`, oldest first. */
   | { type: "terminal.list"; cwd: string }
   /** Replies the scrollback, then streams `terminal.output` to this connection. Attaching again is a no-op for the stream. */
@@ -691,7 +691,8 @@ export const CHUNK_BYTES = 1024 * 1024;
 /** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
 export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
-export type TerminalInfo = { id: string; title: string };
+/** `login`: runs the Claude CLI login (`claude auth login`), not a shell. */
+export type TerminalInfo = { id: string; title: string; login?: true };
 export type TerminalCreateResult = { terminal: TerminalInfo };
 export type TerminalListResult = { terminals: TerminalInfo[] };
 /** `buffer`: the last output (capped), to replay into a fresh view. */
@@ -950,7 +951,7 @@ export type PerfDaemon = {
   cost: { ownMs: number; wallMs: number };
 };
 export type PerfReport = { daemon: PerfDaemon };
-export type ConfigKind = "mcp" | "plugins" | "skills" | "addons";
+export type ConfigKind = "mcp" | "plugins" | "skills" | "addons" | "models";
 /** `McpServerStatus.status` of the SDK. */
 export type McpStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
 /**

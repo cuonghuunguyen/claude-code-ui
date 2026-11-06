@@ -23,6 +23,27 @@ describe("plan usage", () => {
     });
   });
 
+  it("reset() clears windows and status, broadcasts an empty usage (not null), and the next read fills it again", async () => {
+    const seen: (PlanUsage | null)[] = [];
+    let reply: unknown = fakePlanUsage;
+    const t = createPlanTracker({ onChange: (u) => seen.push(u), read: () => t.refresh(usageQ(reply) as never) });
+    await t.reread();
+    expect(t.current()!.windows).not.toHaveLength(0);
+    seen.length = 0;
+    reply = { ...fakePlanUsage, subscription_type: "max" };
+    await t.reset();
+    expect(seen[0]).toEqual({ plan: null, windows: [], status: "allowed" });
+    expect(seen.every((u) => u !== null)).toBe(true);
+    expect(t.current()).toMatchObject({ plan: "max" });
+  });
+
+  it("reset() before any reading broadcasts nothing (a cloud provider keeps its hidden ring)", async () => {
+    const seen: unknown[] = [];
+    const t = createPlanTracker({ onChange: (u) => seen.push(u) });
+    await t.reset();
+    expect(seen).toEqual([]);
+  });
+
   it("falls back to the typed windows when the response has no rows", () => {
     const u = planUsage({ ...fakePlanUsage, rate_limits: { ...fakePlanUsage.rate_limits, limits: null, seven_day_opus: { utilization: 7, resets_at: null } } } as never);
     expect(u!.windows.map((w) => [w.label, w.percent])).toEqual([

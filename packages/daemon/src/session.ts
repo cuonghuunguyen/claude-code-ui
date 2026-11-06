@@ -492,6 +492,9 @@ export class Session {
     this.dropQuery();
   }
 
+  /** The Claude login or account changed: the live CLI is replaced at the end of the running turn. */
+  staleLogin = false;
+
   /** Idle close (docs/spec.md "Idle close"): drops the live query when nothing runs or waits; the next prompt resumes. False when busy or no query. */
   releaseQuery() {
     if (!this.query || !this.isLive() || this.busy() || this.externalTurn || this.bashRun || this.bashShells.size || this.syncing) return false;
@@ -1504,6 +1507,8 @@ export class Session {
     this.armStale();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
     if (state === "idle") this.flushBashNotices();
+    // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
+    if (state === "idle" && this.staleLogin && this.releaseQuery()) this.staleLogin = false;
   }
 
   private bump() {

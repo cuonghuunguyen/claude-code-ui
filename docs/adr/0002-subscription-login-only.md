@@ -1,3 +1,5 @@
 # Subscription login only, no API key
 
 The daemon authenticates with the owner's Claude subscription login (the credentials of `claude login`), not an API key. The SDK overview says "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products". We read this as targeting products offered to other users; claude-ui is a personal, single-user tool running on the owner's machine with the owner's subscription. This is a judgement, not a confirmed permission; revisit if Anthropic clarifies personal use or if the tool is ever shared.
+
+claude-ui implements no OAuth flow and never shows or handles the login URL, code or tokens. Logging in (GH-615) runs the official CLI, `claude auth login` of the SDK's bundled binary, in a terminal: the user answers the CLI's own prompts, and the daemon only notices the exit code. This keeps the product from offering claude.ai login itself; the judgement above still covers using the subscription credentials through the SDK.

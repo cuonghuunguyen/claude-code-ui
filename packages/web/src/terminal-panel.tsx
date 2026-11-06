@@ -60,6 +60,8 @@ export function TerminalPanel({
   ensure = false,
   onEnsured,
   onTerminals,
+  login = false,
+  onLoginStarted,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -76,6 +78,9 @@ export function TerminalPanel({
   ensure?: boolean;
   onEnsured?: () => void;
   onTerminals?: (n: number) => void;
+  /** A level: start the Claude CLI login terminal once the list loaded (a request made before this mounted is not lost). */
+  login?: boolean;
+  onLoginStarted?: () => void;
 }) {
   const tr = useT();
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -95,12 +100,12 @@ export function TerminalPanel({
   // Bumped by a click on the tab already selected: its shell takes the focus again.
   const [focusTick, setFocusTick] = useState(0);
 
-  const create = async (focus = true) => {
+  const create = async (focus = true, asLogin?: true) => {
     setError(undefined);
     focusShell.current = focus;
     try {
       // The size is fixed by the view's fit right after it attaches.
-      const { terminal } = await client.request<TerminalCreateResult>({ type: "terminal.create", cwd, cols: 80, rows: 24 });
+      const { terminal } = await client.request<TerminalCreateResult>({ type: "terminal.create", cwd, cols: 80, rows: 24, ...(asLogin && { login: true }) });
       setTerminals((ts) => [...ts, terminal]);
       setActiveId(terminal.id);
     } catch (e) {
@@ -171,6 +176,11 @@ export function TerminalPanel({
     if (!terminals.length) void create(focusShell.current);
     onEnsured?.();
   }, [ensure, loaded]);
+  useEffect(() => {
+    if (!login || !loaded) return;
+    void create(true, true);
+    onLoginStarted?.();
+  }, [login, loaded]);
   useEffect(() => void (loaded && onTerminals?.(terminals.length)), [loaded, terminals.length]);
 
   // Only an id of the shown folder's list: after a folder switch `activeId` is still the old folder's until the new list loads.

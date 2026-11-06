@@ -105,6 +105,18 @@ describe("node-pty spawn-helper (GH-84)", () => {
     throw new Error("posix_spawnp failed.");
   };
 
+  it("create with a command spawns that file and args, titles the terminal and reports the exit code", () => {
+    let exit: (e: { exitCode: number }) => void = () => {};
+    const spawn = vi.fn(() => ({ ...fakePty, onExit: (cb: typeof exit) => (exit = cb) }));
+    const terms = createTerminals(nodePtyRoot(), "linux", spawn as never);
+    const onExit = vi.fn();
+    const info = terms.create(tmpdir(), 80, 24, {}, { file: "/bin/claude", args: ["auth", "login"], title: "Claude login", onExit });
+    expect(info).toEqual({ id: expect.any(String), title: "Claude login", login: true });
+    expect(spawn.mock.calls[0].slice(0, 2)).toEqual(["/bin/claude", ["auth", "login"]]);
+    exit({ exitCode: 3 });
+    expect(onExit).toHaveBeenCalledWith(3);
+  });
+
   it.runIf(posix)("a spawn error names the chmod command when a helper stays broken", () => {
     const { root, helper } = pkg("build/Release");
     const terms = createTerminals(root, "darwin", spawnFails as never, eperm);

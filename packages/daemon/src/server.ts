@@ -31,6 +31,7 @@ import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
+import { claudeBin } from "./claude-bin.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
@@ -314,6 +315,8 @@ export function createDaemon(opts: {
   pingMs?: number;
   /** The Claude login is CLAUDE_CODE_OAUTH_TOKEN (plan-usage.ts fallback); default: whether the env var is set. Never its value. */
   oauthToken?: boolean;
+  /** Test seam: the program `terminal.create {login}` runs (default: the SDK's bundled Claude CLI, called with `auth login`). */
+  claudeBin?: string;
   hostnames?: string[];
   /** Name shown for this computer in Settings (default: the OS host name); `desktopForcedOff`: started with --no-os-notify. */
   host?: string;
@@ -487,7 +490,7 @@ export function createDaemon(opts: {
   });
   const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
   const root = resolve(opts.webRoot);
-  // ponytail: model list cached for the daemon lifetime; a login/plan change needs a daemon restart.
+  // Model list cached until the Claude login or account changes (claudeLoginChanged).
   let models: ReturnType<typeof listModels> | undefined;
   // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo awaits modelList() first.
   let known: ModelInfo[] = [];
@@ -496,6 +499,14 @@ export function createDaemon(opts: {
       models = undefined;
       throw e;
     });
+  /** The Claude login or account changed: models, plan usage and live CLIs are read again. */
+  const claudeLoginChanged = () => {
+    models = undefined;
+    known = [];
+    for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
+    void plan.reset();
+    broadcast({ type: "config.changed", kind: "models", cwd: "" });
+  };
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
   /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
@@ -2720,10 +2731,12 @@ export function createDaemon(opts: {
           if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
           if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
+          if (msg.login !== undefined && msg.login !== true) return fail("bad_request", "login must be true");
           const full = terminals.limit(ws);
           if (full) return fail("too_many_terminals", full);
           try {
-            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws) });
+            const login = msg.login && { file: opts.claudeBin ?? claudeBin(), args: ["auth", "login"], title: "Claude login", onExit: (code: number) => code === 0 && claudeLoginChanged() };
+            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws, login || undefined) });
           } catch (err) {
             return fail("spawn_failed", String(err));
           }

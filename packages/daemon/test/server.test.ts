@@ -611,6 +611,38 @@ describe("daemon", () => {
     }
   });
 
+  it.runIf(posix)("terminal.create login runs the CLI login; exit 0 drops the model cache and tells clients, a failed login does not", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "login-"));
+    const ok = join(dir, "ok.sh");
+    const bad = join(dir, "bad.sh");
+    writeFileSync(ok, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(bad, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const daemon = (claudeBin: string) => createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, claudeBin, history: { listSessions: (async () => []) as never } as never });
+    for (const [bin, changed] of [[ok, true], [bad, false]] as const) {
+      const d = daemon(bin);
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "models.list" });
+      const before = calls.length;
+      const t = ((await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24, login: true })) as { result: { terminal: { title: string; login?: boolean } } }).result.terminal;
+      expect(t).toMatchObject({ title: "Claude login", login: true });
+      if (changed) await c.waitFor((m) => m.type === "config.changed" && m.kind === "models");
+      else await new Promise((r) => setTimeout(r, 1500));
+      await c.request({ type: "models.list" });
+      // A login also re-reads plan usage (one more query), so only 'grew' vs 'did not grow'.
+      expect(calls.length > before).toBe(changed);
+      expect(c.inbox.some((m) => m.type === "config.changed" && m.kind === "models")).toBe(changed);
+      c.ws.close();
+      d.close();
+    }
+    const d = daemon(ok);
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    expect(await c.request({ type: "terminal.create", cwd: webRoot, cols: 80, rows: 24, login: "x" } as never)).toMatchObject({ type: "error", code: "bad_request" });
+    c.ws.close();
+    d.close();
+  });
+
   it("lists models from supportedModels() and caches them", async () => {
     // Own daemon: session.create of other tests loads the list of the shared one.
     const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, history: { listSessions: (async () => []) as never } as never });

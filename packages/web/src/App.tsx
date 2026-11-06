@@ -108,6 +108,7 @@ import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanu
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { PairingForm } from "./pairing-form.tsx";
 import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
+import { ClaudeLoginContext, RawPart } from "./raw-part.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
@@ -1389,6 +1390,8 @@ export function App() {
       onSlept: () => ((slept.current = true), connGen.current > 1 && recNow.current.keepAwake()),
       onConfigChanged: (m) => {
         if (m.kind === "addons") return setAddonsRev((n) => n + 1);
+        // The Claude login or account changed: the daemon dropped its model list.
+        if (m.kind === "models") return void c.request<ModelsResult>({ type: "models.list" }).then((r) => setModels(r.models), () => {});
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
@@ -2180,6 +2183,8 @@ export function App() {
   const [hasShells, setHasShells] = useState<Record<string, boolean>>({});
   const [termWanted, setTermWanted] = useState<ReadonlySet<string>>(new Set());
   const [spawnFor, setSpawnFor] = useState<string>();
+  /** The Claude login terminal was asked for (RawPart's button, Settings › Claude account): the terminal panel starts it once it shows. */
+  const [loginAsk, setLoginAsk] = useState(false);
   // While a folder's shells are unknown the last known answer stays (no collapse and remount for one terminal.list round trip).
   const lastAvail = useRef(false);
   const availKnown = !!panelCwd && (hasShells[panelCwd] !== undefined || termWanted.has(panelCwd));
@@ -3065,6 +3070,16 @@ export function App() {
     requestAnimationFrame(() => focus(60));
   };
   // Wide: the terminal pane wherever it lives (VS Code: Ctrl+` reveals the view); it shows -> its area hides. Narrow: the terminal pane.
+  /** Log in to Claude: reveals the terminal pane and starts `claude auth login` in it (the daemon of the shown project runs it). */
+  const openLogin = () => {
+    if (!panelCwd) return setToast(tr("app.login.noProject"));
+    setLoginAsk(true);
+    if (termHome === "main") return showTerminal();
+    askTerminal();
+    if (!wide(1024)) return setPane("terminal");
+    if (shows("terminal")) setTermFocusReq((n) => n + 1);
+    reveal("terminal");
+  };
   const toggleTerminal = () => {
     if (termHome === "main") return showTerminal();
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
@@ -3327,7 +3342,7 @@ export function App() {
 
 
   // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
-  type TermProps = { shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
+  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
@@ -3340,6 +3355,8 @@ export function App() {
     terminalSection(
       panelTarget.cwd,
       {
+        login: loginAsk,
+        onLoginStarted: () => setLoginAsk(false),
         ensure: spawnFor === panelTarget.cwd,
         onEnsured: () => setSpawnFor(undefined),
         onTerminals: (n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 })),
@@ -3371,6 +3388,8 @@ export function App() {
         {
           shown: ref === activeId && (lg || pane === "session"),
           quiet: termLoud !== ref,
+          login: loginAsk && carry,
+          onLoginStarted: () => setLoginAsk(false),
           ensure: termSpawn === ref,
           onEnsured: () => setTermSpawn(undefined),
           newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
@@ -3501,6 +3520,7 @@ export function App() {
     </div>
   );
   return (
+    <ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
@@ -4334,7 +4354,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4431,6 +4451,7 @@ export function App() {
     </AddonStatusContext>
     </AddonApiContext>
     </AddonsContext>
+    </ClaudeLoginContext>
   );
 }
 
@@ -6244,25 +6265,6 @@ function BashCard({ part }: { part: Extract<Part, { type: "bash" }> }) {
           {tr("app.timeline.backgroundFailed", { message: moving.error })}
         </p>
       )}
-    </div>
-  );
-}
-
-/** An SDK message the adapter does not know yet, or the error of a failed query: one muted line, never its JSON. */
-/** "type/subtype" of an SDK message, e.g. "system/task_updated", muted; the error text of a failed query as a warning notice. */
-function RawPart({ message }: { message: unknown }) {
-  const tr = useT();
-  const { type, subtype, error } = (message ?? {}) as { type?: unknown; subtype?: unknown; error?: unknown };
-  if (typeof error === "string")
-    return (
-      <div className="flex items-start gap-1.5 text-warning text-xs" data-testid="raw-part">
-        <TriangleAlertIcon role="img" aria-label={tr("app.timeline.warning")} className="mt-px size-3.5 shrink-0" />
-        <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</span>
-      </div>
-    );
-  return (
-    <div className="text-muted-foreground text-xs [overflow-wrap:anywhere]" data-testid="raw-part">
-      {[type, subtype].filter((v) => typeof v === "string").join("/") || tr("app.timeline.sdkMessage")}
     </div>
   );
 }

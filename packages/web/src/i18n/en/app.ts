@@ -655,6 +655,8 @@ export default {
   "app.timeline.file": "File",
   "app.timeline.interrupted": "Interrupted by user",
   "app.timeline.warning": "Warning",
+  "app.login.action": "Log in to Claude",
+  "app.login.noProject": "Open a project first: the login runs in its terminal.",
   "app.timeline.backgroundFailed": "Could not run in background: {message}",
   "app.timeline.sdkMessage": "SDK message",
   "app.timeline.compacted": "Conversation compacted",

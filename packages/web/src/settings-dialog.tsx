@@ -716,6 +716,24 @@ function AddonsSection({ onAddons }: { onAddons: () => void }) {
   );
 }
 
+/** Settings › Claude account: the CLI login runs in a built-in terminal of the open project (the daemon never sees its credentials). */
+function ClaudeAccountSection({ onLogin }: { onLogin: () => void }) {
+  const t = useT();
+  return (
+    <Section id="account" title={t("settings.account.title")}>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm">{t("settings.account.login")}</span>
+          <span id="settings-account-hint" className="block text-muted-foreground text-xs">{t("settings.account.loginHint")}</span>
+        </div>
+        <button type="button" onClick={onLogin} aria-describedby="settings-account-hint" className="h-8 rounded-md border px-3 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-claude-login">
+          {t("settings.account.loginAction")}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 /** The Launcher shortcut switch (GH-553): creates or removes the OS entry on the Hub's machine; the state comes from settings.get. */
 function LauncherShortcutRow({ installed, request, onInstalled, onError }: { installed: boolean; request: <T>(msg: Request) => Promise<T>; onInstalled: (on: boolean) => void; onError: (m: string) => void }) {
   const t = useT();
@@ -833,7 +851,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -1018,6 +1036,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     { id: "notifications", title: t("settings.group.notifications"), category: "App", body: <NotificationsSection push={push} settings={settings} daemon={daemon} saving={saving} save={save} /> },
     ...(onShortcuts ? [{ id: "keyboard", title: t("settings.group.keyboard"), category: "App" as const, body: <KeyboardSection onShortcuts={onShortcuts} /> }] : []),
     ...(onAddons ? [{ id: "addons", title: t("settings.group.addons"), category: "App" as const, body: <AddonsSection onAddons={onAddons} /> }] : []),
+    ...(onLogin ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection onLogin={onLogin} /> }] : []),
     ...(orchestration ? [{ id: "orchestration", title: sectionTitle(orchestration.id), category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(usageLimit

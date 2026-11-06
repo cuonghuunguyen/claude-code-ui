@@ -151,6 +151,21 @@ export function createPlanTracker({
   }
 
   return {
+    /** Login or account changed: drops the readings, shows an empty ring (never null: it hides the meter) and reads again. */
+    reset() {
+      const had = !!usage;
+      request++;
+      usage = undefined;
+      headers = undefined;
+      fallback = false;
+      status = { status: "allowed" };
+      arm();
+      if (had) {
+        usage = fromEvents(null) ?? { plan: null, windows: [], status: "allowed" };
+        onChange(current()!);
+      }
+      return reread();
+    },
     /** Undefined until the first answer. */
     current,
     refresh,

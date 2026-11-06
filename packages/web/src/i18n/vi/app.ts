@@ -657,6 +657,8 @@ export default {
   "app.timeline.file": "Tệp",
   "app.timeline.interrupted": "Bị người dùng ngắt",
   "app.timeline.warning": "Cảnh báo",
+  "app.login.action": "Đăng nhập Claude",
+  "app.login.noProject": "Hãy mở một dự án trước: lệnh đăng nhập chạy trong terminal của dự án.",
   "app.timeline.backgroundFailed": "Không chạy nền được: {message}",
   "app.timeline.sdkMessage": "Tin nhắn SDK",
   "app.timeline.compacted": "Cuộc trò chuyện đã được nén",
