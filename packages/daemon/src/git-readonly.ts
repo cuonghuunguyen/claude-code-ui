@@ -142,8 +142,10 @@ const gitOpts = (cwd: string) => ({
 });
 const CONFIG_ARGS = ["config", "--list", "-z", "--show-scope", "--show-origin"];
 /** Index and HEAD tree in one process (a staged deletion still lists its path). An unborn HEAD fails this call: LS_ARGS_NO_HEAD. */
-const LS_ARGS = ["ls-files", "-z", "--with-tree=HEAD", "--format=%(objectmode) %(path)"];
-const LS_ARGS_NO_HEAD = ["ls-files", "-z", "--format=%(objectmode) %(path)"];
+// No fsmonitor: with core.fsmonitor=true git would start its daemon in the user's repository for this read.
+const NO_FSM = ["-c", "core.fsmonitor=false"];
+const LS_ARGS = [...NO_FSM, "ls-files", "-z", "--with-tree=HEAD", "--format=%(objectmode) %(path)"];
+const LS_ARGS_NO_HEAD = [...NO_FSM, "ls-files", "-z", "--format=%(objectmode) %(path)"];
 const HEAD_ARGS = ["rev-parse", "--verify", "-q", "HEAD"];
 const gitSync = (cwd: string, args: string[]) => perf.syncChild("git", args, () => execFileSync("git", args, { ...gitOpts(cwd), stdio: ["ignore", "pipe", "ignore"] }));
 /**

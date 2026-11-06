@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { gitReadOnly, gitThreadConfig, repoSafety, repoSafetyAsync } from "../src/git-readonly.ts";
 import { tier, tierAsync } from "../src/risk-tier.ts";
 
@@ -17,6 +17,8 @@ for (const d of ["src", ".claude/skills/x"]) mkdirSync(join(cwd, d), { recursive
 repo(cwd);
 mkdirSync(bare);
 for (const f of ["src/a.ts", ".env", "CLAUDE.md", ".claude/settings.json", ".claude/skills/x/SKILL.md"]) writeFileSync(join(cwd, f), "x");
+
+afterAll(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
 
 const low = [
   "git status",
