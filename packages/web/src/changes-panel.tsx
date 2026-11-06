@@ -1063,7 +1063,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   // `compact`: the header beside the file name is icon-only until it is wide (the name keeps truncate priority).
   const sendButton = (compact?: boolean) =>
     canSend && (
-      <Button size={compact ? "icon-sm" : "sm"} variant="ghost" className={cn("max-md:h-11", compact && "shrink-0 @xl:w-auto @xl:px-2.5")} title={t("files.panel.sendSelectionTitle")} aria-label={t("files.panel.sendSelection")} onClick={send} data-testid="diff-send-selection">
+      <Button size={compact ? "icon-sm" : "sm"} variant="ghost" className={cn("max-md:h-11", compact && "shrink-0 max-md:w-11 @xl:w-auto @xl:px-2.5")} title={t("files.panel.sendSelectionTitle")} aria-label={t("files.panel.sendSelection")} onClick={send} data-testid="diff-send-selection">
         <MessageSquarePlusIcon />
         <span className={compact ? "hidden @xl:inline" : undefined}>{t("files.panel.sendSelection")}</span>
       </Button>
@@ -1105,7 +1105,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           {sendButton(true)}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
           {!sub && !nested && inDir(path, cwd) && (
-            <Button size="sm" variant="ghost" className="max-@xl:size-8 max-@xl:shrink-0 max-@xl:px-0" title={t("files.panel.openInEditor")} aria-label={t("files.panel.openInEditor")} onClick={() => onOpen(path)} data-testid="open-in-editor">
+            <Button size="sm" variant="ghost" className="@max-xl:size-8 @max-xl:shrink-0 @max-xl:px-0 max-md:size-11!" title={t("files.panel.openInEditor")} aria-label={t("files.panel.openInEditor")} onClick={() => onOpen(path)} data-testid="open-in-editor">
               <SquareArrowOutUpRightIcon /> <span className="hidden @xl:inline">{t("files.panel.openInEditor")}</span>
             </Button>
           )}
