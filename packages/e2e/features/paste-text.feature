@@ -141,3 +141,63 @@ Feature: Pasted text blocks
     Then the prompt box is not in bash mode
     And the prompt box starts with "!" and holds the token text
     And I capture "bang-with-token"
+
+  Scenario Outline: Expanding a chip puts its text in the prompt box at <width>x<height>
+    Given the viewport is <width>x<height>
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I paste 200 lines into the prompt box
+    And I paste 300 lines into the prompt box
+    Then the prompt box shows 2 pasted-text chips
+    When I expand the pasted-text chip #1
+    Then the prompt box shows 1 pasted-text chip
+    And the prompt box holds lines 1 to 200 as plain text
+    And I capture "expanded"
+    When I type " Reply with exactly: OK" after the paste
+    And I send the prompt box
+    Then the user message shows 1 pasted block
+    And the user message text contains "line-1"
+    And I see a reply from Claude
+    And the turn has finished
+    And the page has no horizontal scroll
+    And I capture "expanded-sent"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |
+
+  Scenario Outline: Undo after expanding a chip brings the token and chip back at <width>x<height>
+    Given the viewport is <width>x<height>
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I paste 200 lines into the prompt box
+    And I expand the pasted-text chip #1
+    Then the prompt box shows 0 pasted-text chips
+    When I undo in the prompt box
+    Then the prompt box shows 1 pasted-text chip
+    And the prompt box holds the token text
+    And I capture "undo-expand"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |
+
+  Scenario Outline: A copy of the token pasted next to it is plain text at <width>x<height>
+    Given the viewport is <width>x<height>
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I paste 200 lines into the prompt box
+    And I paste a copy of the token into the prompt box
+    Then the prompt box shows 1 pasted-text chip
+    And the prompt box holds the token text once
+    And I capture "copy-inlined"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |

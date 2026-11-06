@@ -60,7 +60,7 @@ import { QueueChips } from "./queue-chips.tsx";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
-import { backspaceToken, cleanTitle, collapsePasted, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
+import { backspaceToken, cleanTitle, collapsePasted, dedupePasteTokens, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
 import { OverflowTabs } from "./overflow-tabs.tsx";
 import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, ArtifactUrlContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { ArtifactTab } from "./artifact-tab.tsx";
@@ -5895,6 +5895,18 @@ function PromptBox({
         if (r) edit(text.slice(0, r.index) + text.slice(r.index + r.match.length), r.index);
         input.current?.focus();
       }}
+      onExpand={(id) => {
+        const r = pasteRefs(text).find((x) => x.id === id);
+        const el = input.current;
+        if (!r || !el) return;
+        // The entry stays in pastes: Undo brings the token back and the chip with it. One native edit = one undo step.
+        el.focus();
+        el.setSelectionRange(r.index, r.index + r.match.length);
+        if (!(typeof document.execCommand === "function" && document.execCommand("insertText", false, pastes[id]))) {
+          el.setRangeText(pastes[id], r.index, r.index + r.match.length, "end");
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }}
     />
     {pickerOpen && !matches?.length && (
       <ul
@@ -5983,6 +5995,9 @@ function PromptBox({
           // A soft keyboard deletes one character (no usable Backspace key): a token it cut into goes whole.
           const healed = bash || composing.current ? undefined : healDeletion(text, v, e.target.selectionStart);
           if (healed) return edit(healed.text, healed.caret);
+          // A copied token pasted back: the copy is plain text, the first one stays the token.
+          const deduped = bash || composing.current ? undefined : dedupePasteTokens(v, pastes, e.target.selectionStart);
+          if (deduped) return edit(deduped.text, deduped.caret);
           typed(v, e.target.selectionStart);
         }}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}

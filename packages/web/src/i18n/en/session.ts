@@ -41,6 +41,7 @@ export default {
   "session.pasted.view": "View pasted text #{id}",
   "session.pasted.close": "Close pasted text",
   "session.pasted.remove": "Remove pasted text #{id}",
+  "session.pasted.expand": "Expand pasted text #{id} into the prompt",
   // quote-button.tsx
   "session.quote.button": "Quote",
   "session.quote.label": "Quote in prompt",

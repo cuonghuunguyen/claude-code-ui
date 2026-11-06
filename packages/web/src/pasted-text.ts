@@ -184,6 +184,30 @@ export function healDeletion(old: string, next: string, caret: number): Edit | u
   return from === caret && to === caret + n ? undefined : { text: old.slice(0, from) + old.slice(to), caret: from };
 }
 
+/** Later copies of a token that has an entry become its plain text (the first copy stays the token); undefined when none. */
+export function dedupePasteTokens(text: string, pastes: Pastes, caret: number): Edit | undefined {
+  const seen = new Set<number>();
+  let out = "";
+  let at = 0;
+  let shift = 0;
+  let inside: number | undefined;
+  for (const r of pasteRefs(text)) {
+    const body = pastes[r.id];
+    if (body === undefined) continue;
+    if (!seen.has(r.id)) {
+      seen.add(r.id);
+      continue;
+    }
+    const end = r.index + r.match.length;
+    out += text.slice(at, r.index) + body;
+    at = end;
+    // A caret after the copy follows it; inside the copy it goes to the end of the inserted text.
+    if (end <= caret) shift += body.length - r.match.length;
+    else if (r.index < caret) inside = out.length;
+  }
+  return out || at ? { text: out + text.slice(at), caret: inside ?? caret + shift } : undefined;
+}
+
 /** A search snippet (a fragment of the raw transcript text, cut at both ends) without pasted_content tags, also a tag cut by the snippet window. */
 export function cleanSnippet(snippet: string): string {
   const tail = /^\/?(?:pasted_content(?: (?:i(?:d(?:=(?:"[0-9a-f]{0,4}"?)?)?)?)?)?|p(?:a(?:s(?:t(?:e(?:d(?:_(?:c(?:o(?:n(?:t(?:e(?:nt?)?)?)?)?)?)?)?)?)?)?)?)?)$/;

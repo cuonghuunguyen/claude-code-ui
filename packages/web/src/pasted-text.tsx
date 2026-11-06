@@ -1,6 +1,6 @@
 // Pasted text: prompt-box chips, a full-text viewer and the collapsed block in a user message (GH-441).
 import { Dialog } from "@base-ui/react/dialog";
-import { ChevronRightIcon, EyeIcon, FileTextIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, EyeIcon, FileTextIcon, UnfoldVerticalIcon, XIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { trapTab } from "./focus-trap.ts";
 import { t as tr, useT } from "./i18n.ts";
@@ -46,7 +46,7 @@ function PasteViewer({ id, body }: { id: number; body: string }) {
 }
 
 /** One chip per token present in `text`, in text order. */
-export function PasteChips({ text, pastes, onRemove }: { text: string; pastes: Pastes; onRemove: (id: number) => void }) {
+export function PasteChips({ text, pastes, onRemove, onExpand }: { text: string; pastes: Pastes; onRemove: (id: number) => void; onExpand: (id: number) => void }) {
   const t = useT();
   const ids = pasteRefs(text)
     .map((r) => r.id)
@@ -59,6 +59,9 @@ export function PasteChips({ text, pastes, onRemove }: { text: string; pastes: P
           <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">{`${t("session.pasted.title", { id })}${lines(pastes[id])}`}</span>
           <PasteViewer id={id} body={pastes[id]} />
+          <button type="button" aria-label={t("session.pasted.expand", { id })} className={BTN} onClick={() => onExpand(id)}>
+            <UnfoldVerticalIcon />
+          </button>
           <button type="button" aria-label={t("session.pasted.remove", { id })} className={BTN} onClick={() => onRemove(id)}>
             <XIcon />
           </button>

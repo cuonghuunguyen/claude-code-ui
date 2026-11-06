@@ -107,6 +107,8 @@ Then("the transcript shows a prompt, a bash card, a prompt in that order after t
 // GH-441: pasted text. A ClipboardEvent paste with text/plain on the prompt box (headless has no clipboard permission).
 const pasteInto = async (page: Page, text: string) => {
   await promptBox(page).click();
+  // A click at a narrow width can land inside a token: paste at the end.
+  await caretTo(page, "end");
   pasteHandled.set(page, await promptBox(page).evaluate((el, t) => {
     const data = new DataTransfer();
     data.setData("text/plain", t);
@@ -114,6 +116,9 @@ const pasteInto = async (page: Page, text: string) => {
     return !el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
   }, text));
 };
+// Platform-neutral: Control+Home/End do not move the caret on macOS.
+const caretTo = (page: Page, where: "start" | "end") =>
+  promptBox(page).evaluate((el: HTMLTextAreaElement, w) => el.setSelectionRange(w === "end" ? el.value.length : 0, w === "end" ? el.value.length : 0), where);
 const pasteHandled = new WeakMap<Page, boolean>();
 const lineText = (n: number) => Array.from({ length: n }, (_, i) => `line-${i + 1}`).join("\n");
 
@@ -165,7 +170,7 @@ When("I remove the pasted-text chip", async ({ page }) => {
 
 When("I type {string} after the paste", async ({ page }, text: string) => {
   await promptBox(page).click();
-  await page.keyboard.press("Control+End");
+  await caretTo(page, "end");
   await page.keyboard.type(text);
 });
 
@@ -223,7 +228,7 @@ const selectToken = async (page: Page) => {
 
 When("I cut the token out of the prompt box", async ({ page }) => {
   await selectToken(page);
-  await page.keyboard.press("Control+x");
+  await page.keyboard.press("ControlOrMeta+x");
   await expect(promptBox(page)).not.toHaveValue(TOKEN_RE);
 });
 
@@ -231,7 +236,7 @@ When("I paste the cut token text back into the prompt box", async ({ page }) => 
   await pasteInto(page, tokenOfBox.get(page)!);
   // Short text: the app leaves it to the browser, whose default insertion is stood in for by insertText.
   expect(pasteHandled.get(page)).toBe(false);
-  await page.keyboard.press("Control+Home");
+  await caretTo(page, "start");
   await page.keyboard.insertText(tokenOfBox.get(page)!);
   await expect(promptBox(page)).toHaveValue(TOKEN_RE);
 });
@@ -244,12 +249,12 @@ When("I delete the token with the Delete key", async ({ page }) => {
 
 When("I undo in the prompt box", async ({ page }) => {
   await promptBox(page).focus();
-  await page.keyboard.press("Control+z");
+  await page.keyboard.press("ControlOrMeta+z");
 });
 
 When("I redo in the prompt box", async ({ page }) => {
   await promptBox(page).focus();
-  await page.keyboard.press("Control+Shift+z");
+  await page.keyboard.press("ControlOrMeta+Shift+z");
 });
 
 Then("the prompt box holds the token text", async ({ page }) => {
@@ -268,7 +273,7 @@ Then("the user message shows no literal pasted-text token", async ({ page }) => 
 
 When("I type {string} at the start of the prompt box", async ({ page }, text: string) => {
   await promptBox(page).click();
-  await page.keyboard.press("Control+Home");
+  await caretTo(page, "start");
   await page.keyboard.type(text);
 });
 
@@ -278,4 +283,37 @@ Then("the prompt box is not in bash mode", async ({ page }) => {
 
 Then("the prompt box starts with {string} and holds the token text", async ({ page }, text: string) => {
   await expect(promptBox(page)).toHaveValue(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*\\[Pasted text #\\d+`));
+});
+
+// GH-620: Expand a chip into plain text; a copied token pasted back is inlined.
+When("I expand the pasted-text chip #{int}", async ({ page }, id: number) => {
+  await page.getByRole("button", { name: `Expand pasted text #${id} into the prompt` }).click();
+});
+
+Then("the prompt box holds lines {int} to {int} as plain text", async ({ page }, from: number, to: number) => {
+  const lines = Array.from({ length: to - from + 1 }, (_, i) => `line-${from + i}`).join("\n");
+  await expect(promptBox(page)).toHaveValue(new RegExp(`^${lines}`));
+});
+
+When("I paste a copy of the token into the prompt box", async ({ page }) => {
+  const token = (await tokenRange(page)).token;
+  await pasteInto(page, token);
+  expect(pasteHandled.get(page)).toBe(false);
+  await caretTo(page, "end");
+  await page.keyboard.insertText(token);
+});
+
+Then("the prompt box holds the token text once", async ({ page }) => {
+  const v = await promptBox(page).inputValue();
+  expect(v.match(/\[Pasted text #\d+[^\]]*\]/g)).toHaveLength(1);
+  expect(v).toContain(lineText(200));
+});
+
+Then("the user message shows {int} pasted block(s)", async ({ page }, n: number) => {
+  await expect(page.getByTestId("pasted-block").first()).toBeVisible({ timeout: TURN_MS });
+  await expect(page.getByTestId("pasted-block")).toHaveCount(n);
+});
+
+Then("the user message text contains {string}", async ({ page }, s: string) => {
+  await expect(page.getByTestId("user-message").first()).toContainText(s);
 });
