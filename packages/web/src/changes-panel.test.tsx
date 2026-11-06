@@ -673,6 +673,18 @@ it("Uncommitted lists git.diff files with kinds and +N -N; the diff is HEAD (git
   expect(el.querySelector("[data-testid=pierre-diff]")).not.toBeNull();
 });
 
+it("GH-610 an untracked addition shows U (Untracked, text-destructive), an indexed new file A (Added, text-success)", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "A", path: "tracked.ts", added: 1, removed: 0 }, { status: "A", path: "loose.ts", added: 1, removed: 0, untracked: true }]) };
+  const client = fakeClient({ "/p/tracked.ts": "x\n", "/p/loose.ts": "y\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(rows()).toEqual(["Untracked loose.ts, +1 -0", "Added tracked.ts, +1 -0"]);
+  const badge = (i: number) => el.querySelectorAll<HTMLElement>("[data-testid=change-badge]")[i]!;
+  expect([badge(0).textContent, badge(0).title, badge(0).className.includes("text-destructive")]).toEqual(["U", "Untracked", true]);
+  expect([badge(1).textContent, badge(1).title, badge(1).className.includes("text-success")]).toEqual(["A", "Added", true]);
+});
+
 it("an added file reads no before side, a deleted one no after side, a rename reads the old path and shows old to new", async () => {
   saveDiffMode("uncommitted");
   const git = { status: REPO, diff: D([{ status: "A", path: "a.ts" }, { status: "D", path: "b.ts" }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }]), at: { [`${BASE}:b.ts`]: "b\n", [`${BASE}:o.ts`]: "same\n" } };
@@ -1417,7 +1429,7 @@ describe("submodule and nested repository rows", () => {
     const client = fakeClient({ "/p/n.ts": "x\n" }, { diff: D([{ status: "A", path: "inner/", untracked: true }, { status: "A", path: "n.ts", untracked: true, added: 1, removed: 0 }]) });
     await act(async () => root.render(panel(client, { repos: R([own("/p"), nested("/p", "inner", "/p")]) })));
     await flush();
-    expect(rows()).toEqual(["Repository inner", "Added n.ts, +1 -0"]);
+    expect(rows()).toEqual(["Repository inner", "Untracked n.ts, +1 -0"]);
     expect(el.textContent).toContain("2 Changed files");
     const row = el.querySelectorAll("[data-testid=changed-file]")[0]!;
     expect(row.querySelector("[data-testid=repo-badge]")!.textContent).toBe("repository");

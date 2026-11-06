@@ -165,6 +165,7 @@ export default {
   "files.changes.deleted": "Deleted",
   "files.changes.modified": "Modified",
   "files.changes.renamed": "Renamed",
+  "files.changes.untracked": "Untracked",
   "files.changes.commit": "Commit",
   "files.changes.commitAndPush": "Commit and Push",
   "files.changes.amend": "Amend",

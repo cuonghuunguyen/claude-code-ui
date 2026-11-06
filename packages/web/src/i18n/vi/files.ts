@@ -167,6 +167,7 @@ export default {
   "files.changes.deleted": "Đã xóa",
   "files.changes.modified": "Đã sửa",
   "files.changes.renamed": "Đã đổi tên",
+  "files.changes.untracked": "Chưa theo dõi",
   "files.changes.commit": "Commit",
   "files.changes.commitAndPush": "Commit và Push",
   "files.changes.amend": "Sửa commit trước",

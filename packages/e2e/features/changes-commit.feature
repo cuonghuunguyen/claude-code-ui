@@ -20,6 +20,18 @@ Feature: Changes tab commits the checked files
     And the last commit of the project holds only "a.txt"
     And I capture "committed-subset"
 
+  Scenario: Untracked files show U, a staged new file shows A
+    Given the file "b.txt" of the scratch project is staged
+    And the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
+    Then the Changes badge of "a.txt" is "U"
+    And the Changes badge of "b.txt" is "A"
+    And I capture "untracked-badge"
+
   Scenario: Commit and Push goes through the push dialog
     Given the viewport is 1440x900
     And the app is open

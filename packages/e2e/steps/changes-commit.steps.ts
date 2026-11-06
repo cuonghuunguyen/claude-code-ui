@@ -11,6 +11,10 @@ Given("the scratch project has the new files {string}", async ({ project }, name
   for (const f of names.split(", ")) writeFileSync(join(project.path, f), `${f}\n`);
 });
 
+Given("the file {string} of the scratch project is staged", async ({ project }, name: string) => {
+  git(project.path, "add", name);
+});
+
 Given("the scratch project has a pre-commit hook that prints {string} and fails", async ({ project }, text: string) => {
   const hook = join(project.path, ".git", "hooks", "pre-commit");
   writeFileSync(hook, `#!/bin/sh\necho "${text}"\nexit 1\n`);
@@ -39,6 +43,10 @@ Then("the Changes error shows {string}", async ({ page }, text: string) => {
 
 Then("the Changes list still has the file {string}", async ({ page }, name: string) => {
   await expect(panel(page).locator(`[data-testid="commit-check"][data-path$="${name}"]`)).toBeVisible({ timeout: 30_000 });
+});
+
+Then("the Changes badge of {string} is {string}", async ({ page }, name: string, badge: string) => {
+  await expect(panel(page).getByTestId("changed-file").filter({ hasText: name }).getByTestId("change-badge")).toHaveText(badge, { timeout: 30_000 });
 });
 
 Then("the Changes list no longer has the file {string}", async ({ page }, name: string) => {
