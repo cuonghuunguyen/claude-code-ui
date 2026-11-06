@@ -168,6 +168,24 @@ Feature: Pasted text blocks
       | 1440  | 900    |
       | 390   | 844    |
 
+  Scenario Outline: Undo after expanding a chip brings the token and chip back at <width>x<height>
+    Given the viewport is <width>x<height>
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I paste 200 lines into the prompt box
+    And I expand the pasted-text chip #1
+    Then the prompt box shows 0 pasted-text chips
+    When I undo in the prompt box
+    Then the prompt box shows 1 pasted-text chip
+    And the prompt box holds the token text
+    And I capture "undo-expand"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |
+
   Scenario Outline: A copy of the token pasted next to it is plain text at <width>x<height>
     Given the viewport is <width>x<height>
     And the app is open
