@@ -2103,6 +2103,8 @@ describe("repository config redirection (GH-319)", () => {
     return { base, roots, outer, main, inRoots };
   };
   const setCfg = (cwd: string, key: string, value: string) => run(cwd, "config", "--add", key, value);
+  // For hand-written config text: an unquoted backslash is an escape in git config, so a raw Windows path is unparseable.
+  const cfgPath = (p: string) => p.replace(/\\/g, "/");
   const withPlatform = async <T,>(value: string, fn: () => Promise<T>) => {
     const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value });
@@ -2203,14 +2205,14 @@ describe("repository config redirection (GH-319)", () => {
     writeFileSync(join(roots, "in.conf"), "[user]\n\tname = x\n");
     setCfg(main, "include.path", join(roots, "in.conf"));
     expect(await gitEscapes(main, inRoots)).toBe(false);
-    writeFileSync(join(roots, "in.conf"), `[include]\n\tpath = ${join(outer, "x.conf")}\n`);
+    writeFileSync(join(roots, "in.conf"), `[include]\n\tpath = ${cfgPath(join(outer, "x.conf"))}\n`);
     expect(await gitEscapes(main, inRoots)).toBe(true);
   });
 
   it("an include cycle inside the roots neither hangs nor escapes", async () => {
     const { main, roots, inRoots } = mk();
-    writeFileSync(join(roots, "a.conf"), `[include]\n\tpath = ${join(roots, "b.conf")}\n`);
-    writeFileSync(join(roots, "b.conf"), `[include]\n\tpath = ${join(roots, "a.conf")}\n`);
+    writeFileSync(join(roots, "a.conf"), `[include]\n\tpath = ${cfgPath(join(roots, "b.conf"))}\n`);
+    writeFileSync(join(roots, "b.conf"), `[include]\n\tpath = ${cfgPath(join(roots, "a.conf"))}\n`);
     setCfg(main, "include.path", join(roots, "a.conf"));
     expect(await gitEscapes(main, inRoots)).toBe(false);
   });
@@ -2281,7 +2283,7 @@ describe("repository config redirection (GH-319)", () => {
     run(main, "config", "extensions.worktreeConfig", "true");
     const dir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: join(roots, "w"), encoding: "utf8" }).trim();
     expect(await gitEscapes(join(roots, "w"), inRoots)).toBe(false);
-    writeFileSync(join(dir, "config.worktree"), `[core]\n\thooksPath = ${join(outer, "h")}\n`);
+    writeFileSync(join(dir, "config.worktree"), `[core]\n\thooksPath = ${cfgPath(join(outer, "h"))}\n`);
     expect(await gitEscapes(join(roots, "w"), inRoots)).toBe(true);
   });
 
