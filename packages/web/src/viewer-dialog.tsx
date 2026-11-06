@@ -45,6 +45,7 @@ export function ViewerDialog({
   sessionId,
   repos,
   ignoreSubmodules,
+  project,
   onClose,
   onOpenInEditor,
   onOpenInTab,
@@ -58,6 +59,8 @@ export function ViewerDialog({
   /** `git.repos` of the pane's cwd (App); see ChangesPanel. */
   repos?: RepoList;
   ignoreSubmodules?: boolean;
+  /** The project folder (key of the per-project commit message instruction). */
+  project?: string;
   onClose: () => void;
   /** Opens `path` in the Files tab (at `line`) and closes the viewer. */
   onOpenInEditor: (path: string, line?: number) => void;
@@ -94,7 +97,7 @@ export function ViewerDialog({
         >
           {shown && (
             <CwdContext value={cwd}>
-              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />
+              <Content target={shown} client={client} cwd={cwd} view={view} sessionId={sessionId} repos={repos} ignoreSubmodules={ignoreSubmodules} project={project} onOpenInEditor={onOpenInEditor} onOpenInTab={onOpenInTab} />
             </CwdContext>
           )}
         </Dialog.Popup>
@@ -127,7 +130,7 @@ export function DialogClose() {
   );
 }
 
-function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
+function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules, project, onOpenInEditor, onOpenInTab }: { target: PopupTarget; client: Client; cwd: string; view?: SessionView; sessionId?: string; repos?: RepoList; ignoreSubmodules?: boolean; project?: string; onOpenInEditor: (path: string, line?: number) => void; onOpenInTab?: (path: string) => void }) {
   const t = useT();
   const text = title(target, cwd);
   switch (target.kind) {
@@ -155,7 +158,7 @@ function Content({ target, client, cwd, view, sessionId, repos, ignoreSubmodules
           <Header text={text} />
           {view ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
+              <ChangesPanel client={client} view={view} cwd={cwd} repos={repos} ignoreSubmodules={ignoreSubmodules} project={project} onOpen={onOpenInEditor} initialChoice={sessionId ? sessionDiffChoice.get(sessionId) : undefined} />
             </div>
           ) : (
             <p className="p-4 text-muted-foreground text-sm">{t("files.viewer.noSession")}</p>

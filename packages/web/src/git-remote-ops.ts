@@ -1,6 +1,6 @@
 // Remote operations of the Graph (docs/spec.md "Layout", Graph tab), per repository path: they outlive a GraphPanel remount (repository switch).
 import { useSyncExternalStore } from "react";
-import type { GitCommitFilesResult, GitRemoteResult, GitRollbackResult } from "@claude-ui/protocol";
+import type { GitCommitFilesResult, GitOperationKind, GitRemoteResult, GitRollbackResult, GitWriteResult } from "@claude-ui/protocol";
 import type { connect, RequestError } from "./client.ts";
 import type { RemoteRequest } from "./git-branch-menu.tsx";
 import { t } from "./i18n.ts";
@@ -25,20 +25,22 @@ export type CommitRequest = { type: "git.commitFiles"; cwd: string; paths: strin
 export type RollbackRequest =
   | { type: "git.rollback"; cwd: string; paths: string[]; token: string; deleteAdded?: boolean; exact?: true }
   | { type: "git.rollbackHunk"; cwd: string; path: string; hunk: { newStart: number; lines: string[] }; exact?: true };
-type OpReply = GitRemoteResult & Partial<GitCommitFilesResult> & Partial<GitRollbackResult>;
+/** Conflict banner: Continue and Abort of the operation `kind` the banner showed. */
+export type OperationRequest = { type: "git.continue" | "git.abort"; cwd: string; kind: GitOperationKind; exact?: true };
+export type OpReply = GitRemoteResult & Partial<GitCommitFilesResult> & Partial<GitWriteResult> & Partial<GitRollbackResult>;
 /**
  * Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes.
  * `done`: the result line, or a function of the reply; `onDone`: runs after a success.
  */
-export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | RollbackRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
+export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest | OperationRequest | RollbackRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
   const at = msg.cwd;
   if (get(at).running !== undefined) return false;
   set(at, { ...get(at), running, result: undefined });
   const end = (result: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
   client.request<OpReply>(msg).then(
     (r) => {
-      noteRefs(at, r.remote?.refs ?? r.committed?.refs ?? undefined);
-      end({ ok: true, text: typeof done === "string" ? done : done(r), output: (r.remote ?? r.committed ?? r.rolledBack)?.output || undefined });
+      noteRefs(at, r.remote?.refs ?? r.committed?.refs ?? r.written?.refs ?? undefined);
+      end({ ok: true, text: typeof done === "string" ? done : done(r), output: (r.remote ?? r.committed ?? r.written ?? r.rolledBack)?.output || undefined });
       onDone?.(r);
     },
     (e: RequestError) => end({ ok: false, text: e.message || t("files.gitFailed") }),

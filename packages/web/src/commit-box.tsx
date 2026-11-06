@@ -1,6 +1,7 @@
 // Commit box of the Changes tab, Uncommitted mode (docs/spec.md "Layout"): the message, Amend, Commit and Commit and Push of the checked files.
 import { useEffect, useRef, useState } from "react";
-import type { GitBranchInfo, GitCommitResult } from "@claude-ui/protocol";
+import { SparklesIcon, SquareIcon } from "lucide-react";
+import type { GitBranchInfo, GitCommitMessageResult, GitCommitResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import type { connect } from "./client.ts";
 import { commitPaths } from "./git-changes.ts";
@@ -12,12 +13,14 @@ import { cn } from "@/lib/utils";
 type Client = ReturnType<typeof connect>;
 type Row = { path: string; rel?: string; oldPath?: string; nested?: unknown; dirtyOnly?: boolean };
 
-export function CommitBox({ client, cwd, exact, repoName, rows, checked, onChecked, base, onCommitted, onRollback }: {
+export function CommitBox({ client, cwd, exact, repoName, project, rows, checked, onChecked, base, onCommitted, onRollback }: {
   client: Client;
   /** The repository the commit goes to. */
   cwd: string;
   exact?: boolean;
   repoName?: string;
+  /** The project folder: the key of the per-project commit message instruction. */
+  project?: string;
   /** Every listed row that can have a checkbox. */
   rows: Row[];
   /** Checked rows, by `path`. */
@@ -38,17 +41,53 @@ export function CommitBox({ client, cwd, exact, repoName, rows, checked, onCheck
   const typed = useRef("");
   const [push, setPush] = useState<GitBranchInfo>();
   const gen = useRef(0);
+  // Claude is writing the message: the box is read-only, so a reply never replaces text typed meanwhile.
+  const [writing, setWriting] = useState(false);
+  const [writeError, setWriteError] = useState("");
+  const write = useRef(0);
+  const writingNow = useRef(false);
   const paths = commitPaths(rows, checked);
   const busy = running !== undefined;
-  const ready = !busy && !!message.trim() && (paths.length > 0 || amend);
+  const ready = !busy && !writing && !!message.trim() && (paths.length > 0 || amend);
   const of = (x: string) => ofRepo(x, repoName);
+  /** Ignores the running generation's reply and tells the daemon to stop it. */
+  const stopWriting = () => {
+    write.current++;
+    if (!writingNow.current) return;
+    writingNow.current = false;
+    setWriting(false);
+    client.request({ type: "git.commitMessageCancel" }).catch(() => {});
+  };
   // A message belongs to one repository.
   useEffect(() => {
     setMessage("");
     setAmend(false);
     setPush(undefined);
+    setWriteError("");
     gen.current++;
+    stopWriting();
   }, [cwd]);
+  useEffect(() => () => stopWriting(), []);
+  const generate = () => {
+    const id = ++write.current;
+    writingNow.current = true;
+    setWriting(true);
+    setWriteError("");
+    client.request<GitCommitMessageResult>({ type: "git.commitMessage", cwd, ...(exact && { exact: true as const }), paths, ...(project && { project }) }).then(
+      (r) => {
+        if (id !== write.current) return;
+        writingNow.current = false;
+        setWriting(false);
+        setMessage(r.message);
+      },
+      (e: Error & { code?: string }) => {
+        if (id !== write.current) return;
+        writingNow.current = false;
+        setWriting(false);
+        if (e.code !== "cancelled") setWriteError(e.message);
+      },
+    );
+  };
 
   const toggleAmend = (on: boolean) => {
     const id = ++gen.current;
@@ -91,21 +130,42 @@ export function CommitBox({ client, cwd, exact, repoName, rows, checked, onCheck
   const box = "size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring";
   return (
     <div className="flex shrink-0 flex-col gap-2 border-b px-3 py-2" data-testid="commit-box">
-      <textarea
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            commit(false);
-          }
-        }}
-        rows={2}
-        placeholder={t("files.changes.commitMessage")}
-        aria-label={t("files.changes.commitMessage")}
-        className="max-h-40 min-h-14 w-full resize-y rounded-md bg-secondary/60 px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-        data-testid="commit-message"
-      />
+      <div className="relative">
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              commit(false);
+            }
+          }}
+          rows={2}
+          readOnly={writing}
+          aria-busy={writing}
+          placeholder={t("files.changes.commitMessage")}
+          aria-label={t("files.changes.commitMessage")}
+          className="max-h-40 min-h-14 w-full resize-y rounded-md bg-secondary/60 py-1.5 pr-12 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring md:pr-9"
+          data-testid="commit-message"
+        />
+        <Button
+          size="icon"
+          variant="ghost"
+          className="absolute top-0.5 right-0.5 size-11 md:size-7"
+          disabled={writing ? false : paths.length === 0 || busy}
+          onClick={writing ? stopWriting : generate}
+          aria-label={writing ? t("files.changes.generateStop") : t("files.changes.generate")}
+          title={writing ? t("files.changes.generateStop") : t("files.changes.generate")}
+          data-testid="commit-generate"
+        >
+          {writing ? <SquareIcon className="size-3.5 animate-pulse" /> : <SparklesIcon className="size-4" />}
+        </Button>
+      </div>
+      {writeError && (
+        <p role="alert" className="text-destructive text-xs" data-testid="commit-generate-error">
+          {writeError}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-7">
           <input
@@ -123,7 +183,7 @@ export function CommitBox({ client, cwd, exact, repoName, rows, checked, onCheck
           </span>
         </label>
         <label className={cn("flex min-h-11 items-center gap-2 text-sm md:min-h-7", !base && "opacity-50")}>
-          <input type="checkbox" className={box} checked={amend} disabled={!base || busy} onChange={(e) => toggleAmend(e.target.checked)} data-testid="commit-amend" />
+          <input type="checkbox" className={box} checked={amend} disabled={!base || busy || writing} onChange={(e) => toggleAmend(e.target.checked)} data-testid="commit-amend" />
           {t("files.changes.amend")}
         </label>
         <div className="ml-auto flex items-center gap-2">

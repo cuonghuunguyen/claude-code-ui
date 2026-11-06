@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GitDiff, GitStatus, Part } from "@claude-ui/protocol";
+import type { GitDiff, GitOperation, GitStatus, Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 /** `git`: git.status (default: not a repository), git.diff (a reply or an error), git.fileAt by "hash:path". */
-type FakeGit = { status?: GitStatus | null; diff?: GitDiff | Error; diffs?: Record<string, GitDiff | Error>; statuses?: Record<string, GitStatus | null>; statusDefer?: (cwd: string) => Promise<void> | undefined; defer?: (cwd: string) => Promise<void> | undefined; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
+type FakeGit = { operation?: GitOperation; status?: GitStatus | null; diff?: GitDiff | Error; diffs?: Record<string, GitDiff | Error>; statuses?: Record<string, GitStatus | null>; statusDefer?: (cwd: string) => Promise<void> | undefined; defer?: (cwd: string) => Promise<void> | undefined; at?: Record<string, string>; media?: (m: { path: string; hash?: string; cwd?: string }) => unknown };
 function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
   const request = vi.fn(async (m: { type: string; path: string; hash?: string; cwd?: string }) => {
     if (m.type === "fs.media") {
@@ -85,6 +85,8 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
     }
     if (m.type === "git.rollbackPreview") return { preview: { files: (m as unknown as { paths: string[] }).paths.map((path) => ({ path, kind: "M" })), token: "tok" } };
     if (m.type === "git.rollback" || m.type === "git.rollbackHunk") return { rolledBack: { output: "" } };
+    if (m.type === "git.operation") return { operation: git.operation ?? null };
+    if (m.type === "git.continue" || m.type === "git.abort") return { written: { output: "", refs: "s3" } };
     if (m.type === "git.commitFiles") return { committed: { hash: "abcdef1234567", output: "", refs: "s2" } };
     if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
     if (m.type === "git.diff") {
@@ -1581,4 +1583,52 @@ it("a hunk's Rollback sends the hunk at once, no dialog; none for an added file 
   expect(gitCalls(client, "git.rollbackHunk")).toEqual([{ type: "git.rollbackHunk", cwd: "/p", path: "a.ts", hunk: { newStart: 1, lines: [" a", "-b", "+X", " c"] } }]);
   expect(document.querySelector("[data-testid=rollback-dialog]")).toBeNull();
   expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back a change in a.ts");
+});
+
+// ---- Conflict banner (GH-560) ----
+const banner = () => el.querySelector("[data-testid=conflict-banner]");
+const MERGE: GitOperation = { kind: "merge", conflicted: ["a.ts", "b.ts"] };
+
+it("Uncommitted: a merge in progress shows the banner instead of the commit box", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({ "/p/a.ts": "x\n" }, { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }], { operation: MERGE }), at: { [`${BASE}:a.ts`]: "a\n" } });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(banner()!.textContent).toContain("Merge in progress");
+  expect(banner()!.textContent).toContain("a.ts");
+  expect(el.querySelector("[data-testid=commit-box]")).toBeNull();
+  expect(gitCalls(client, "git.operation")).toEqual([]);
+});
+
+it("Session changes asks git.operation and shows the banner there too; a clean repository shows none", async () => {
+  const client = fakeClient({}, { status: REPO, operation: MERGE });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.operation")).toEqual([{ type: "git.operation", cwd: "/p" }]);
+  expect(banner()!.getAttribute("data-kind")).toBe("merge");
+  await act(async () => root.render(null));
+  const clean = fakeClient({}, { status: REPO });
+  await act(async () => root.render(panel(clean)));
+  await flush();
+  expect(gitCalls(clean, "git.operation")).toHaveLength(1);
+  expect(banner()).toBeNull();
+});
+
+it("Session changes outside a repository never asks git.operation", async () => {
+  const client = fakeClient({});
+  await act(async () => root.render(panel(client)));
+  await flush();
+  expect(gitCalls(client, "git.operation")).toEqual([]);
+});
+
+it("Continue sends git.continue with the banner's kind, then the list reads again", async () => {
+  saveDiffMode("uncommitted");
+  const client = fakeClient({}, { status: REPO, diff: D([], { operation: MERGE }) });
+  await act(async () => root.render(panel(client)));
+  await flush();
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=conflict-continue]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.continue")).toEqual([{ type: "git.continue", cwd: "/p", kind: "merge" }]);
+  expect(gitCalls(client, "git.diff").length).toBeGreaterThanOrEqual(2);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Continued the merge");
 });

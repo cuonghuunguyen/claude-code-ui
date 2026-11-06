@@ -16,7 +16,7 @@ import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
-import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
+import { runRemoteOp, useRemoteOp, type OpReply } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -107,6 +107,7 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       className={cn("absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 px-2 text-sm hover:bg-accent", on && "bg-secondary")}
       style={{ height: h, transform: `translateY(${start}px)` }}
       data-testid="commit-row"
+      data-hash={c.hash}
       data-local-refs={c.refs.filter((r) => r.startsWith("refs/heads/")).join("\n")}
     >
       {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
@@ -181,7 +182,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
   const { running: op, settled } = useRemoteOp(cwd);
-  const runRemote = (msg: RemoteRequest, done: string, running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
+  const runRemote = (msg: RemoteRequest, done: string | ((r: OpReply) => string), running: string) => void (!notGit && runRemoteOp(client, msg, done, running));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
   useEffect(() => {
@@ -337,7 +338,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? tr("files.graph.noMatch") : tr("files.graph.noCommits")}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []} hash={() => selected}>
             <div
               ref={scroller}
               role="listbox"
