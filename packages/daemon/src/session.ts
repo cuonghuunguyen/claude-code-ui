@@ -303,6 +303,8 @@ export class Session {
   private start(timed = true) {
     this.startSpan?.end();
     this.startSpan = timed ? perf.span("session.start") : undefined;
+    // A new CLI reads the current login: an earlier login change is no reason to drop it.
+    this.staleLogin = false;
     const owner = (this.owner = { session: this as Session });
     // The level is per CLI process (SDK): a new one starts empty.
     this.backgroundLevel = new Set();
