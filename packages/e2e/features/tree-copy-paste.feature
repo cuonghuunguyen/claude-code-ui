@@ -125,6 +125,8 @@ Feature: Copy, cut, paste, drag and drop in the Files tree (GH-555)
     And the project has "src/a.ts" on disk with the text "export const a = 1;"
     And no drop confirm dialog is shown
 
+  # headless Chromium does not read the OS clipboard
+  @headed
   Scenario: Pasting a folder from the system clipboard is refused
     Given the viewport is 1440x900
     And the app is open
@@ -137,6 +139,8 @@ Feature: Copy, cut, paste, drag and drop in the Files tree (GH-555)
     And the tree lists the row "dest"
     And I capture "os-folder-refused"
 
+  # headless Chromium does not read the OS clipboard
+  @headed
   Scenario: A file copied in the OS is pasted into a folder
     Given the viewport is 1440x900
     And the app is open
