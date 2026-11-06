@@ -34,3 +34,11 @@ export function fileNameError(name: string, windows: boolean): string | undefine
   const p = fileNameProblem(name, windows);
   return p && TEXT[p].replace("{name}", name.split(".")[0]);
 }
+
+/** "a copy.ts" for n = 1, "a copy 2.ts" for n = 2; the last extension stays last, a dotfile or no extension takes the suffix at the end. */
+export function copyName(name: string, n: number): string {
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  return `${stem} copy${n > 1 ? ` ${n}` : ""}${ext}`;
+}

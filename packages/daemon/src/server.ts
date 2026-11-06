@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -17,13 +17,13 @@ import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
-import { createEntry, deleteEntry, duplicateFile, renameEntry, type FsOpsContext } from "./fs-ops.ts";
+import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
 import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview } from "./git-write.ts";
@@ -342,6 +342,8 @@ export function createDaemon(opts: {
   perf?: PerfMonitor;
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
+  /** GH-553: the OS launcher shortcut (shortcut.ts); none: launcher.shortcut fails (a side, another OS). */
+  shortcut?: { installed(): boolean; set(on: boolean): Promise<boolean> };
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
   update?: Omit<Parameters<typeof createUpdater>[0], "busy" | "broadcast">;
 }) {
@@ -675,7 +677,7 @@ export function createDaemon(opts: {
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -2235,6 +2237,7 @@ export function createDaemon(opts: {
         case "git.log":
         case "git.diff":
         case "git.commit":
+        case "git.blame":
         case "git.fileAt": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
@@ -2248,6 +2251,7 @@ export function createDaemon(opts: {
               const c = await gitShow(cwd, msg.hash, inside);
               return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");
             }
+            if (msg.type === "git.blame") return reply({ blame: await gitBlame(cwd, msg.path, inside, MAX_FILE_BYTES) });
             const buf = await gitFileAt(cwd, msg.hash, msg.path, inside, MAX_FILE_BYTES);
             const t = decodeText(buf);
             return "code" in t ? fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length) : reply({ content: t.content });
@@ -2611,13 +2615,35 @@ export function createDaemon(opts: {
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.rename": {
-          const r = await renameEntry(fsOps, msg.path, msg.name);
+          if (msg.dir !== undefined && typeof msg.dir !== "string") return fail("bad_request", "dir must be a string");
+          const r = await renameEntry(fsOps, msg.path, msg.name, msg.dir, msg.replace === true, (f) => localHistory.before(f, "paste"));
           if (!("code" in r)) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.delete": {
           const r = await deleteEntry(fsOps, msg.path, msg.dryRun === true);
           if (!("code" in r)) clearSearchCache();
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.walk": {
+          const r = await walkEntry(fsOps, msg.path);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.copy": {
+          const r = await copyEntry(fsOps, msg.from, msg.to);
+          if (!("code" in r)) clearSearchCache();
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.readChunk": {
+          if (!Number.isSafeInteger(msg.offset) || msg.offset < 0 || !Number.isSafeInteger(msg.length) || msg.length < 1 || msg.length > CHUNK_BYTES) return fail("bad_request", "offset and length must be integers, length 1..CHUNK_BYTES");
+          const r = await readFileChunk(fsOps, msg.path, msg.offset, msg.length);
+          return "code" in r ? fail(r.code, r.message) : reply(r);
+        }
+        case "fs.writeChunk": {
+          if (!Number.isSafeInteger(msg.offset) || msg.offset < 0 || typeof msg.data !== "string" || msg.data.length > Math.ceil(CHUNK_BYTES / 3) * 4 + 4) return fail("bad_request", "offset must be an integer, data a base64 string of at most CHUNK_BYTES");
+          if (msg.mode !== undefined && !Number.isSafeInteger(msg.mode)) return fail("bad_request", "mode must be an integer");
+          const r = await writeFileChunk(fsOps, msg.path, msg.offset, Buffer.from(msg.data, "base64"), msg.mode);
+          if (!("code" in r) && msg.offset === 0) clearSearchCache();
           return "code" in r ? fail(r.code, r.message) : reply(r);
         }
         case "fs.duplicate": {
@@ -2774,6 +2800,15 @@ export function createDaemon(opts: {
             return reply(msg.type === "update.install" ? { installed: await updater.install() } : { waitingFor: updater.restart(msg.now === true) });
           } catch (e) {
             return fail((e as { code?: string }).code ?? "update_failed", (e as Error).message);
+          }
+        }
+        case "launcher.shortcut": {
+          if (!opts.shortcut) return fail("shortcut_unavailable", "this daemon cannot make a launcher shortcut");
+          if (typeof msg.on !== "boolean") return fail("bad_request", "on must be true or false");
+          try {
+            return reply({ installed: await opts.shortcut.set(msg.on) });
+          } catch (e) {
+            return fail("shortcut_failed", (e as Error).message);
           }
         }
         default:
