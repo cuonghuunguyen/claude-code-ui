@@ -118,9 +118,11 @@ Feature: One Hub per machine
     And the Hub of the SSH host was started by "the user"
     And the claude-ui folder of this build does not exist in the SSH host
     And I capture "compatible-hub-no-install"
-    When I kill the Hub's ssh process of the SSH host "e2e-ok"
-    Then the Settings row of the SSH host "e2e-ok" says "Running"
+    When I watch the Settings row of the SSH host "e2e-ok"
+    And I kill the Hub's ssh process of the SSH host "e2e-ok" until the row shows Reconnecting
+    Then the Settings row of the SSH host "e2e-ok" went from Reconnecting to Running by itself
     And one Hub runs in the SSH host
+    And the Hub of the SSH host was started by "the user"
     And the claude-ui folder of this build does not exist in the SSH host
     And I capture "compatible-hub-reattached"
 

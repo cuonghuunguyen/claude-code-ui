@@ -8,7 +8,7 @@ import { openApp } from "../support/flow.ts";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { runDir, sshDir } from "../support/paths.ts";
 import { openSettings } from "../support/ui.ts";
-import { USER_HUB_PORT, endHubs, hubFile, hubPids, inHost, sleep, startHub } from "../support/ssh-hub.ts";
+import { USER_HUB_PORT, endHubs, hubFile, hubPids, inHost, run, sleep, startHub } from "../support/ssh-hub.ts";
 import { After, Then, When } from "./fixtures.ts";
 
 const row = (page: Page, alias: string) => page.getByTestId(`settings-side-ssh:${alias}`);
@@ -155,6 +155,18 @@ When("the user starts claude-ui in the SSH host", async ({ sshHost }) => {
 Then("the Settings row of the SSH host {string} went from Reconnecting to Running by itself", async ({ page }, _alias: string) => {
   const seen = () => page.evaluate(() => (window as unknown as { __rowStates: string[] }).__rowStates.join(" > "));
   await expect.poll(seen, { timeout: 120_000, message: "row states seen" }).toMatch(/Reconnecting > Running$/);
+});
+
+// The kill of the Hub's ssh process may come before the daemon's bridge ssh exists (the row says Running a moment early) or hit an ssh that is no longer the Side's pipe:
+// kill again until the row shows Reconnecting, so the reattach that follows is really observed.
+When("I kill the Hub's ssh process of the SSH host {string} until the row shows Reconnecting", async ({ page }, alias: string) => {
+  const reconnecting = () => page.evaluate(() => (window as unknown as { __rowStates: string[] }).__rowStates.includes("Reconnecting"));
+  const killAll = () => {
+    for (const p of run("pgrep", ["-f", `ssh .*-F ${join(sshDir(runDir()), "config")} -- ${alias}`]).split(/\s+/).filter(Boolean)) process.kill(Number(p), "SIGKILL");
+  };
+  await expect
+    .poll(async () => (killAll(), await sleep(1_000), reconnecting()), { timeout: 60_000, intervals: [0], message: "the row never showed Reconnecting after the ssh kill" })
+    .toBe(true);
 });
 
 // No turn runs in this scenario (the host has no Claude login): the user's start prints no waiting line and does not fail.
