@@ -20,7 +20,7 @@ export const FETCH_ARGS = [...HARDEN, "fetch", "--all", "--no-recurse-submodules
 /** Push, pull and fetch never follow submodules (their remotes are not checked against the roots) and push sends no tags the dialog does not show. */
 const PUSH = [...HARDEN, "push", "--no-recurse-submodules", "--no-follow-tags"];
 const MAX_OUTPUT = 8000;
-const MAX_ERROR = 4000;
+export const MAX_ERROR = 4000;
 const AUTH_FAILURE = /terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|Authentication failed|BatchMode/i;
 const AUTH_HINT = "The daemon cannot ask for credentials: set up a credential helper, ssh-agent or known_hosts in a terminal, then retry.";
 
@@ -42,11 +42,16 @@ export function tidy(text: string, max: number): string {
   return t.length > max ? t.slice(t.length - max) : t;
 }
 
-/** Env of every remote operation: no prompt of any kind (credentials come from the user's helpers and ssh-agent only). */
+/** Env of every git write: the repository pin, no prompt of any kind. */
+export async function writeEnv(top: string): Promise<NodeJS.ProcessEnv> {
+  return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never" };
+}
+
+/** Env of every remote operation: `writeEnv` (credentials come from the user's helpers and ssh-agent only) and a BatchMode ssh. */
 export async function remoteEnv(top: string, sshCommand: string): Promise<NodeJS.ProcessEnv> {
   // A WSL repository's git never sees the Windows ssh variables (`wslEnv`); only its own core.sshCommand counts.
   const ownSsh = (wslPathOf(top) ? "" : process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || sshCommand;
-  return { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
+  return { ...(await writeEnv(top)), ...(!ownSsh && { GIT_SSH_COMMAND: BATCH_SSH }) };
 }
 
 /**
@@ -71,11 +76,11 @@ export function localRemotePath(url: string, top: string): string | undefined {
   return isAbsolute(u) ? u : resolve(top, u);
 }
 
-/** One remote operation per repository (all its worktrees): a second one is refused, not queued. */
+/** One write operation (fetch, push, pull, commit) per repository (all its worktrees): a second one is refused, not queued. */
 const running = new Set<string>();
-async function exclusive<T>(top: string, fn: () => Promise<T>): Promise<T> {
+export async function exclusive<T>(top: string, fn: () => Promise<T>): Promise<T> {
   const key = gitDirsOf(top)?.common ?? top;
-  if (running.has(key)) throw new WorktreeError("busy", "A fetch, push or pull is already running in this repository");
+  if (running.has(key)) throw new WorktreeError("busy", "Another git operation is running in this repository");
   running.add(key);
   try {
     return await fn();

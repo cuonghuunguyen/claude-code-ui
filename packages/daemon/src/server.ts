@@ -25,6 +25,7 @@ import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
+import { gitCommitFiles } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -2262,6 +2263,20 @@ export function createDaemon(opts: {
             markRepoStale(cwd);
             return reply({ remote });
           } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.commitFiles": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Paths, message and output are never logged. A hook may have changed files even when the commit failed.
+          try {
+            const committed = await gitCommitFiles(cwd, { paths: msg.paths, message: msg.message, amend: msg.amend, push: msg.push, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ committed });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }

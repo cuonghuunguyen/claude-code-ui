@@ -10,7 +10,7 @@ import { t, useT } from "./i18n.ts";
 
 type Client = ReturnType<typeof connect>;
 export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true };
-type Kind = "push" | "force" | "pull";
+export type Kind = "push" | "force" | "pull";
 type Entry = { ref: string; info?: GitBranchInfo; error?: string };
 
 /** "<text> of <repo>" while the repository is named (the Graph shows the repository selector), else the text. */
@@ -74,31 +74,6 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
       pressed.current = undefined;
     }
   };
-  const run = () => {
-    const d = dialog;
-    setDialog(undefined);
-    if (!d) return;
-    const { info } = d;
-    const x = name(info.ref);
-    // The command the dialog showed goes with the confirm: the daemon runs it only when it computes the same.
-    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [], ...(info.upstreamHash && { tracking: info.upstreamHash }) }, t("sidebar.git.pulled", { target: of(x) }), t("sidebar.git.pulling", { target: of(x) }));
-    const force = d.kind === "force";
-    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }), ...(info.trackingHash && { tracking: info.trackingHash }) }, t(force ? "sidebar.git.pushedForced" : "sidebar.git.pushed", { target: of(x), remote: info.remote ?? "" }), t("sidebar.git.pushing", { target: of(x) }));
-  };
-  const argv = dialog && (dialog.kind === "push" ? dialog.info.push : dialog.kind === "force" ? dialog.info.forcePush : dialog.info.pull);
-  const i = dialog?.info;
-  const x = i ? name(i.ref) : "";
-  const target = i?.tracking ? i.tracking.replace(/^refs\/remotes\//, "") : i?.remote;
-  // The title names the branch and the remote; the text adds only what the title does not: hashes, counts, where the remote
-  // branch lands when its name differs, and where the branch is checked out.
-  const lands = i && target && target !== `${i.remote}/${x}` ? ` ${t("sidebar.git.lands", { target })}` : "";
-  const text = !i || !dialog ? "" : dialog.kind === "force"
-    ? `${t("sidebar.git.forceText", { remoteHash: short7(i.trackingHash), localHash: short7(i.local), commits: commits(i.behind ?? 0) })}${lands}${i.isDefault ? ` ${t("sidebar.git.defaultBranch")}` : ""}${ownerSentence(i)}`
-    : dialog.kind === "push"
-      ? t(i.ahead !== undefined ? "sidebar.git.pushTextCounts" : "sidebar.git.pushText", { localHash: short7(i.local), ahead: commits(i.ahead ?? 0), behind: i.behind ?? 0 }) + lands + ownerSentence(i)
-      : // Pull is unavailable from another worktree, so its text covers both cases left.
-        t(i.checkedOut ? "sidebar.git.pullDiverge" : "sidebar.git.pullNotCheckedOut", { upstream: i.upstream ?? "" });
-  const title = !i || !dialog ? "" : dialog.kind === "pull" ? t("sidebar.git.titlePull", { branch: x }) : t(dialog.kind === "force" ? "sidebar.git.titleForce" : "sidebar.git.titlePush", { branch: x, remote: i.remote ?? "" });
   const many = entries.length > 1;
   return (
     <>
@@ -134,14 +109,49 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
           </ContextMenu.Positioner>
         </ContextMenu.Portal>
       </ContextMenu.Root>
-      <ConfirmDialog
+      <BranchDialog dialog={dialog} cwd={cwd} exact={exact} repoName={repoName} onRun={onRun} onClose={() => setDialog(undefined)} />
+    </>
+  );
+}
+
+/** The dialog before a push, force push or pull: the exact git command; Confirm sends it with the hashes the menu showed. `dialog` undefined: closed. */
+export function BranchDialog({ dialog, cwd, exact = false, repoName, onRun, onClose }: { dialog?: { kind: Kind; info: GitBranchInfo }; cwd: string; exact?: boolean; repoName?: string; onRun: (msg: RemoteRequest, done: string, running: string) => void; onClose: () => void }) {
+  const t = useT();
+  const of = (text: string) => ofRepo(text, repoName);
+  const run = () => {
+    const d = dialog;
+    onClose();
+    if (!d) return;
+    const { info } = d;
+    const x = name(info.ref);
+    // The command the dialog showed goes with the confirm: the daemon runs it only when it computes the same.
+    if (d.kind === "pull") return onRun({ type: "git.pull", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: info.pull ?? [], ...(info.upstreamHash && { tracking: info.upstreamHash }) }, t("sidebar.git.pulled", { target: of(x) }), t("sidebar.git.pulling", { target: of(x) }));
+    const force = d.kind === "force";
+    onRun({ type: "git.push", cwd, ...(exact && { exact: true as const }), ref: info.ref, local: info.local, argv: (force ? info.forcePush : info.push) ?? [], ...(force && { lease: info.trackingHash }), ...(info.trackingHash && { tracking: info.trackingHash }) }, t(force ? "sidebar.git.pushedForced" : "sidebar.git.pushed", { target: of(x), remote: info.remote ?? "" }), t("sidebar.git.pushing", { target: of(x) }));
+  };
+  const argv = dialog && (dialog.kind === "push" ? dialog.info.push : dialog.kind === "force" ? dialog.info.forcePush : dialog.info.pull);
+  const i = dialog?.info;
+  const x = i ? name(i.ref) : "";
+  const target = i?.tracking ? i.tracking.replace(/^refs\/remotes\//, "") : i?.remote;
+  // The title names the branch and the remote; the text adds only what the title does not: hashes, counts, where the remote
+  // branch lands when its name differs, and where the branch is checked out.
+  const lands = i && target && target !== `${i.remote}/${x}` ? ` ${t("sidebar.git.lands", { target })}` : "";
+  const text = !i || !dialog ? "" : dialog.kind === "force"
+    ? `${t("sidebar.git.forceText", { remoteHash: short7(i.trackingHash), localHash: short7(i.local), commits: commits(i.behind ?? 0) })}${lands}${i.isDefault ? ` ${t("sidebar.git.defaultBranch")}` : ""}${ownerSentence(i)}`
+    : dialog.kind === "push"
+      ? t(i.ahead !== undefined ? "sidebar.git.pushTextCounts" : "sidebar.git.pushText", { localHash: short7(i.local), ahead: commits(i.ahead ?? 0), behind: i.behind ?? 0 }) + lands + ownerSentence(i)
+      : // Pull is unavailable from another worktree, so its text covers both cases left.
+        t(i.checkedOut ? "sidebar.git.pullDiverge" : "sidebar.git.pullNotCheckedOut", { upstream: i.upstream ?? "" });
+  const title = !i || !dialog ? "" : dialog.kind === "pull" ? t("sidebar.git.titlePull", { branch: x }) : t(dialog.kind === "force" ? "sidebar.git.titleForce" : "sidebar.git.titlePush", { branch: x, remote: i.remote ?? "" });
+  return (
+    <ConfirmDialog
         open={!!dialog}
         title={title}
         description={text}
         confirm={t(dialog?.kind === "force" ? "sidebar.git.forcePush" : dialog?.kind === "pull" ? "sidebar.git.pull" : "sidebar.git.push")}
         destructive={dialog?.kind === "force"}
         onConfirm={run}
-        onCancel={() => setDialog(undefined)}
+        onCancel={onClose}
         testId={dialog?.kind === "force" ? "git-force-push" : dialog?.kind === "pull" ? "git-pull" : "git-push"}
       >
         {argv && (
@@ -149,8 +159,7 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
             {command(argv)}
           </pre>
         )}
-      </ConfirmDialog>
-    </>
+    </ConfirmDialog>
   );
 }
 

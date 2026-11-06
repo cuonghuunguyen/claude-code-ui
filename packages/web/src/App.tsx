@@ -4056,6 +4056,7 @@ export function App() {
                           repos={repoList}
                           ignoreSubmodules={ignoreSubmodules}
                           onReload={reloadRepos}
+                          onGitWrite={editors.nudge}
                         />
                       )
                     ) : (
@@ -4073,6 +4074,7 @@ export function App() {
                         repos={repoList}
                         ignoreSubmodules={ignoreSubmodules}
                         onReload={reloadRepos}
+                        onGitWrite={editors.nudge}
                         emptyText={tr("app.changes.empty")}
                       />
                     ),

@@ -1,6 +1,6 @@
 // Remote operations of the Graph (docs/spec.md "Layout", Graph tab), per repository path: they outlive a GraphPanel remount (repository switch).
 import { useSyncExternalStore } from "react";
-import type { GitRemoteResult } from "@claude-ui/protocol";
+import type { GitCommitFilesResult, GitRemoteResult } from "@claude-ui/protocol";
 import type { connect, RequestError } from "./client.ts";
 import type { RemoteRequest } from "./git-branch-menu.tsx";
 import { t } from "./i18n.ts";
@@ -21,16 +21,22 @@ const set = (path: string, next: RemoteOpState) => {
   for (const s of [...subs]) s();
 };
 
-/** Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes. */
-export function runRemoteOp(client: Client, msg: RemoteRequest, done: string, running: string): boolean {
+export type CommitRequest = { type: "git.commitFiles"; cwd: string; paths: string[]; message: string; amend?: boolean; push?: boolean; exact?: true };
+type OpReply = GitRemoteResult & Partial<GitCommitFilesResult>;
+/**
+ * Starts `msg` on its repository (`msg.cwd`). False, sending nothing, while one already runs there. Success or failure, `settled` bumps: a failed `fetch --all` may still have updated some remotes.
+ * `done`: the result line, or a function of the reply; `onDone`: runs after a success.
+ */
+export function runRemoteOp(client: Client, msg: RemoteRequest | CommitRequest, done: string | ((r: OpReply) => string), running: string, onDone?: (r: OpReply) => void): boolean {
   const at = msg.cwd;
   if (get(at).running !== undefined) return false;
   set(at, { ...get(at), running, result: undefined });
   const end = (result: RemoteResultLine) => set(at, { running: undefined, result, settled: get(at).settled + 1 });
-  client.request<GitRemoteResult>(msg).then(
+  client.request<OpReply>(msg).then(
     (r) => {
-      noteRefs(at, r.remote?.refs ?? undefined);
-      end({ ok: true, text: done, output: r.remote?.output || undefined });
+      noteRefs(at, r.remote?.refs ?? r.committed?.refs ?? undefined);
+      end({ ok: true, text: typeof done === "string" ? done : done(r), output: (r.remote ?? r.committed)?.output || undefined });
+      onDone?.(r);
     },
     (e: RequestError) => end({ ok: false, text: e.message || t("files.gitFailed") }),
   );

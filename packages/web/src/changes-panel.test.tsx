@@ -77,6 +77,7 @@ function fakeClient(files: Record<string, string>, git: FakeGit = {}) {
       await git.statusDefer?.(m.cwd!);
       return { status: (git.statuses && m.cwd! in git.statuses ? git.statuses[m.cwd!] : git.status) ?? null };
     }
+    if (m.type === "git.commitFiles") return { committed: { hash: "abcdef1234567", output: "", refs: "s2" } };
     if (m.type === "git.log") return { log: { commits: [], more: false, branches: ["refs/heads/main", "refs/heads/dev"] } };
     if (m.type === "git.diff") {
       await git.defer?.(m.cwd!);
@@ -680,6 +681,30 @@ it("an added file reads no before side, a deleted one no after side, a rename re
   expect(reads).toContain("/p/a.ts");
   expect(el.querySelector("[data-testid=file-diff-header]")!.textContent).toContain("o.ts → n.ts");
   expect(el.textContent).toContain("Renamed without changes");
+});
+
+it("Uncommitted: each file has a checkbox, a commit sends only the checked ones (a rename: both sides), then the list reads again", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "R", path: "n.ts", oldPath: "o.ts", added: 0, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:o.ts`]: "same\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/n.ts": "same\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const boxes = () => [...el.querySelectorAll<HTMLInputElement>("[data-testid=commit-check]")];
+  expect(boxes()).toHaveLength(3);
+  expect(boxes().every((b) => !b.checked)).toBe(true);
+  expect((el.querySelector("[data-testid=commit-button]") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => boxes().find((b) => b.dataset.path === "/p/n.ts")!.click());
+  const ta = el.querySelector<HTMLTextAreaElement>("[data-testid=commit-message]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(ta, "rename it");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=commit-button]")!.click());
+  await flush();
+  expect(gitCalls(client, "git.commitFiles")).toEqual([{ type: "git.commitFiles", cwd: "/p", paths: ["n.ts", "o.ts"], message: "rename it" }]);
+  expect(gitCalls(client, "git.diff").length).toBeGreaterThanOrEqual(2);
+  expect(boxes().every((b) => !b.checked)).toBe(true);
+  expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Committed abcdef1");
 });
 
 it("Against branch asks git.diff with base branch, shows the ref, and a picked branch re-requests with it", async () => {

@@ -91,6 +91,8 @@ describe("wslEnv remote switches", () => {
     const { BATCH_SSH } = await import("../src/git-runner.ts");
     expect(wslEnv({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH }, "Ubuntu")).toEqual({ GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: BATCH_SSH, WSLENV: "GCM_INTERACTIVE" });
     expect(wslEnv({ GIT_SSH_COMMAND: "C:\\ssh.exe" }, "Ubuntu")).toEqual({});
+    // The temporary index of a commit: its value is already git's own (POSIX) path.
+    expect(wslEnv({ GIT_INDEX_FILE: "/repo/.git/claude-ui-commit-x.index" }, "Ubuntu")).toEqual({ GIT_INDEX_FILE: "/repo/.git/claude-ui-commit-x.index" });
   });
 
   it("GCM_INTERACTIVE reaches the Windows credential manager: WSLENV names it and is appended to the distro's own value", async () => {
