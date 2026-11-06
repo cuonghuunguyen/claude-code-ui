@@ -11,3 +11,8 @@ it("Default keeps the inherited token; the CLI login removes it; a token account
   setClaudeToken("picked");
   expect(claudeEnv(env)).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "picked" });
 });
+
+it("an explicit token overrides the active one", () => {
+  setClaudeToken(null);
+  expect(claudeEnv(env, "x")).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "x" });
+});

@@ -18,6 +18,8 @@ import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { createProjects } from "../src/projects.ts";
 import { createSecrets } from "../src/secrets.ts";
 import { createSettings } from "../src/settings.ts";
+import { ConfigError } from "../src/config.ts";
+import { TEST_ARGS } from "../src/claude-test.ts";
 import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
@@ -686,6 +688,84 @@ describe("daemon", () => {
     } finally {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = prev;
       if (prev === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      a.ws.close();
+      b.ws.close();
+      d.close();
+    }
+  });
+
+  it("claude.account.test runs one minimal CLI turn in a throwaway config and changes nothing else (GH-627)", async () => {
+    const SECRET = "sk-ant-oat01-TESTSECRET";
+    const prev = { ...process.env };
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "inherited-env-token";
+    process.env.ANTHROPIC_API_KEY = "must-not-pass";
+    let seen: { args: string[]; cwd: string; env: NodeJS.ProcessEnv; existed: boolean }[] = [];
+    let answer: () => Promise<{ code: number; stdout: string; stderr: string }> = async () => ({ code: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }), stderr: "" });
+    const cli = async (args: string[], cwd: string, _stdin?: string, _t?: number, env?: NodeJS.ProcessEnv) => {
+      seen.push({ args, cwd, env: env!, existed: existsSync(cwd) });
+      return answer();
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spyLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, cli: cli as never, history: { listSessions: (async () => []) as never } as never, secrets: createSecrets(), appSettings: createSettings() });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const port = (d.address() as AddressInfo).port;
+    const a = await client(port);
+    const b = await client(port);
+    try {
+      const id = ((await a.request({ type: "claude.account.add", name: "Work", token: SECRET })) as { result: { claudeAccounts: { id: string }[] } }).result.claudeAccounts[0]!.id;
+      const sid = ((await a.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await a.request({ type: "session.subscribe", sessionId: sid, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId: sid, text: "hi" });
+      await a.waitFor(() => a.inbox.some((m) => m.type === "event" && m.part.type === "turn_result"));
+      const queries = calls.length;
+      const settingsBefore = JSON.stringify(((await a.request({ type: "settings.get" })) as { result: unknown }).result);
+      a.inbox.length = b.inbox.length = 0;
+
+      expect(await a.request({ type: "claude.account.test", id })).toMatchObject({ type: "reply", result: {} });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.args).toEqual(TEST_ARGS);
+      expect(seen[0]!.existed).toBe(true);
+      expect(existsSync(seen[0]!.cwd)).toBe(false);
+      expect(seen[0]!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SECRET, CLAUDE_CODE_MAX_RETRIES: "0", CLAUDE_CONFIG_DIR: seen[0]!.cwd });
+      expect(seen[0]!.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+
+      // Refused token: the CLI text comes back (echoing the token masked), nothing else changes.
+      answer = async () => ({ code: 1, stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: `401 invalid ${SECRET}` }), stderr: `stderr ${SECRET}` });
+      expect(await a.request({ type: "claude.account.test", id })).toMatchObject({ type: "error", code: "claude_auth", message: "401 invalid ***" });
+      answer = async () => ({ code: 1, stdout: "", stderr: "" });
+      expect(await a.request({ type: "claude.account.test", id })).toMatchObject({ code: "claude_test_failed", message: "exit 1" });
+      answer = async () => Promise.reject(new ConfigError("cli_timeout", `Claude CLI timed out ${SECRET}`));
+      expect(await a.request({ type: "claude.account.test", id })).toMatchObject({ code: "claude_test_failed", message: "Claude CLI timed out ***" });
+
+      expect(await a.request({ type: "claude.account.test", id: "nope" })).toMatchObject({ code: "bad_settings" });
+      expect(await a.request({ type: "claude.account.test", id: 5 } as never)).toMatchObject({ code: "bad_settings" });
+      process.env.CLAUDE_CODE_USE_BEDROCK = "1";
+      expect(await a.request({ type: "claude.account.test", id })).toMatchObject({ code: "bad_settings" });
+      delete process.env.CLAUDE_CODE_USE_BEDROCK;
+
+      // One CLI per account at a time.
+      seen = [];
+      let release!: () => void;
+      answer = () => new Promise((r) => (release = () => r({ code: 0, stdout: JSON.stringify({ is_error: false }), stderr: "" })));
+      const both = Promise.all([a.request({ type: "claude.account.test", id }), b.request({ type: "claude.account.test", id })]);
+      await a.waitFor(() => seen.length > 0);
+      release();
+      expect(await both).toMatchObject([{ type: "reply" }, { type: "reply" }]);
+      expect(seen).toHaveLength(1);
+
+      // Nothing changed: settings, session CLI, broadcasts.
+      expect(JSON.stringify(((await a.request({ type: "settings.get" })) as { result: unknown }).result)).toBe(settingsBefore);
+      expect(calls.length).toBe(queries);
+      for (const c of [a, b]) {
+        expect(c.inbox.filter((m) => ["settings_changed", "config.changed", "plan_usage"].includes(m.type))).toEqual([]);
+        expect(JSON.stringify(c.inbox)).not.toContain("TESTSECRET");
+      }
+      expect(JSON.stringify([spy.mock.calls, spyLog.mock.calls])).not.toContain("TESTSECRET");
+    } finally {
+      spy.mockRestore();
+      spyLog.mockRestore();
+      for (const k of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK"]) prev[k] === undefined ? delete process.env[k] : (process.env[k] = prev[k]);
       a.ws.close();
       b.ws.close();
       d.close();
