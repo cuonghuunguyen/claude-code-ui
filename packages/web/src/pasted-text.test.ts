@@ -6,6 +6,7 @@ import {
   cleanSnippet,
   cleanTitle,
   collapsePasted,
+  dedupePasteTokens,
   deleteToken,
   expandPastes,
   isLargePaste,
@@ -230,5 +231,39 @@ describe("cleanSnippet", () => {
   it("keeps other angle-bracket text", () => {
     expect(cleanSnippet("if a <b then")).toBe("if a <b then");
     expect(cleanSnippet("a <p")).toBe("a");
+  });
+});
+
+describe("dedupePasteTokens", () => {
+  const A = "[Pasted text #1 +3 lines]";
+  const B = "[Pasted text #2 +1 lines]";
+  const pastes = { 1: "a\nb\nc\nd", 2: "x\ny" };
+  it("keeps the first token, inlines a copy in the middle and at the end", () => {
+    expect(dedupePasteTokens(`${A} mid ${A} end`, pastes, 0)?.text).toBe(`${A} mid a\nb\nc\nd end`);
+    expect(dedupePasteTokens(`${A}${A}`, pastes, 0)?.text).toBe(`${A}a\nb\nc\nd`);
+  });
+  it("handles several copies of two ids", () => {
+    expect(dedupePasteTokens(`${A}${B}${A}${B}${A}`, pastes, 0)?.text).toBe(`${A}${B}a\nb\nc\ndx\nya\nb\nc\nd`);
+  });
+  it("leaves a token without an entry literal", () => {
+    expect(dedupePasteTokens(`${A} ${A} ${B} ${B}`, { 1: "z" }, 0)?.text).toBe(`${A} z ${B} ${B}`);
+    expect(dedupePasteTokens(`${B} ${B}`, { 1: "z" }, 0)).toBeUndefined();
+  });
+  it("returns undefined without a duplicate", () => {
+    expect(dedupePasteTokens(`${A} ${B}`, pastes, 3)).toBeUndefined();
+    expect(dedupePasteTokens("plain", pastes, 0)).toBeUndefined();
+  });
+  it("moves the caret", () => {
+    const t = `${A} ${A} z`;
+    const second = A.length + 1;
+    expect(dedupePasteTokens(t, pastes, 2)?.caret).toBe(2); // before the copy
+    expect(dedupePasteTokens(t, pastes, second + A.length)?.caret).toBe(second + 7); // right after the copy
+    expect(dedupePasteTokens(t, pastes, t.length)?.caret).toBe(t.length - A.length + 7); // after
+    expect(dedupePasteTokens(t, pastes, second + 5)?.caret).toBe(second + 7); // inside the copy
+  });
+  it("a body with a token of another paste becomes a live ref", () => {
+    const r = dedupePasteTokens(`${A} ${A}`, { 1: "k", 2: "x\ny" }, 0);
+    expect(r?.text).toBe(`${A} k`);
+    expect(dedupePasteTokens(`${A} ${A}`, { 1: B, 2: "x\ny" }, 0)?.text).toBe(`${A} ${B}`);
   });
 });

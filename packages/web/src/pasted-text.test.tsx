@@ -51,12 +51,15 @@ it("PastedBlock stays expanded when its bubble remounts (pending prompt replaced
 
 it("PasteChips shows one chip per token in text order; Remove calls onRemove with its id; View opens the full text", async () => {
   const onRemove = vi.fn();
+  const onExpand = vi.fn();
   const text = "x [Pasted text #2 +199 lines] y [Pasted text #1 +3 lines] [Pasted text #9]";
-  await act(async () => root.render(<PasteChips text={text} pastes={{ 1: "a\nb\nc\nd", 2: body }} onRemove={onRemove} />));
+  await act(async () => root.render(<PasteChips text={text} pastes={{ 1: "a\nb\nc\nd", 2: body }} onRemove={onRemove} onExpand={onExpand} />));
   const chips = [...el.querySelectorAll('[data-testid="paste-chip"]')];
   expect(chips.map((c) => c.textContent)).toEqual(["Pasted text #2 · 199 lines", "Pasted text #1 · 3 lines"]);
   await act(async () => el.querySelector<HTMLButtonElement>('[aria-label="Remove pasted text #1"]')!.click());
   expect(onRemove).toHaveBeenCalledWith(1);
+  await act(async () => el.querySelector<HTMLButtonElement>('[aria-label="Expand pasted text #2 into the prompt"]')!.click());
+  expect(onExpand).toHaveBeenCalledWith(2);
   await act(async () => el.querySelector<HTMLButtonElement>('[aria-label="View pasted text #2"]')!.click());
   const viewer = document.querySelector('[data-testid="paste-viewer"]');
   expect(viewer?.textContent).toContain("line-200");

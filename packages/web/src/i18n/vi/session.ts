@@ -43,6 +43,7 @@ export default {
   "session.pasted.view": "Xem văn bản đã dán #{id}",
   "session.pasted.close": "Đóng văn bản đã dán",
   "session.pasted.remove": "Xóa văn bản đã dán #{id}",
+  "session.pasted.expand": "Mở rộng văn bản đã dán #{id} vào ô nhập",
   // quote-button.tsx
   "session.quote.button": "Trích dẫn",
   "session.quote.label": "Trích dẫn vào prompt",
