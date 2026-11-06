@@ -94,7 +94,7 @@ export function setupMessage(code: string, detail: string, side: string, kind: b
     case "unpack_tools_missing":
       return `${side} needs ${detail.trim() ? detail.trim().split(/\s+/).join(" and ") : "tar and gzip"} to unpack claude-ui. Install ${detail.trim().includes(" ") ? "them" : "it"} ${host ? "on the host" : `in the ${docker ? "container" : "distro"}`} (Debian or Ubuntu: apt-get install -y tar gzip), then retry.`;
     case "install_failed":
-      return `Installing claude-ui in ${side} failed${detail ? `: ${detail}` : ""}. Check its network and npm, then retry.`;
+      return `Installing claude-ui in ${side} failed. Check its network and npm, then retry.${detail ? `\n${detail}` : ""}`;
     default:
       return `${side} could not start (${code}${detail ? ` ${detail}` : ""}).`;
   }

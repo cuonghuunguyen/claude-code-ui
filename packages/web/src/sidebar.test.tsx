@@ -1323,6 +1323,27 @@ describe("status of a project's side (GH-458)", () => {
     expect(act).toHaveBeenLastCalledWith("wsl:U", "needed");
   });
 
+  it("projects of one failing side share one status line, under the first listed one; Details shows the tool output (GH-617)", async () => {
+    const act = vi.fn();
+    const message = "Installing claude-ui in SSH: box failed. Check its network and npm, then retry.\nnpm ERR! 403 Forbidden";
+    const ssh = { id: "ssh:box", label: "SSH: box", state: "error", message } as never;
+    const sideState = { of: (cwd: string) => (cwd === "/home/u/web" || cwd === "/home/u/api" ? ssh : undefined), act };
+    const { el, groups } = await render({ sideState });
+    const status = el.querySelectorAll('[data-testid="sidebar-side-status"]');
+    expect(status).toHaveLength(1);
+    expect(el.querySelectorAll('[data-testid="sidebar-side-action"]')).toHaveLength(1);
+    const first = groups().find((x) => x.dataset.cwd === "/home/u/web" || x.dataset.cwd === "/home/u/api")!;
+    expect(first.contains(status[0]!)).toBe(true);
+    expect(status[0]!.textContent).toContain("Installing claude-ui in SSH: box failed.");
+    expect(status[0]!.textContent).not.toContain("npm ERR!");
+    expect(el.querySelector('[data-testid="sidebar-side-details"]')).toBeNull();
+    const toggle = [...first.querySelectorAll("button")].find((b) => b.textContent === "Details")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await reactAct(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector('[data-testid="sidebar-side-details"]')?.textContent).toBe("npm ERR! 403 Forbidden");
+  });
+
   it("a ready side shows no status", async () => {
     const { groups } = await render({ sideState: state({ state: "ready" }) });
     expect(groups().find((x) => x.dataset.cwd === web)!.querySelector('[data-testid="sidebar-side-status"]')).toBeNull();

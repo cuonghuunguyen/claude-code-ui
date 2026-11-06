@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SideInfo } from "@claude-ui/protocol";
-import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName, sideNameOf, sideStatus, sideTitle } from "./sides.tsx";
+import { defaultTarget, fromMnt, fromWslUnc, kindsOf, localIsWindows, sideKind, sideLookup, sideName, sideNameOf, sideStatus, sideTitle, splitMessage } from "./sides.tsx";
 
 it("reads a WSL path written the Windows way as its distro's POSIX path", () => {
   expect(fromWslUnc("\\\\wsl.localhost\\Ubuntu\\home\\me")).toEqual({ side: "wsl:Ubuntu", path: "/home/me" });
@@ -123,4 +123,15 @@ it("a custom side name replaces label and short, the icon is returned, the Windo
   expect(sideTitle(sides[1]!, {})).toBe("WSL: Ubuntu");
   expect(sideNameOf(sides[1]!, { "wsl:Ubuntu": { name: "Dev box" } })).toBe("Dev box");
   expect(sideNameOf(sides[1]!, { "wsl:Ubuntu": { icon: "🐧" } })).toBe("Ubuntu");
+});
+
+describe("splitMessage", () => {
+  it("the first line is the summary, the rest the details", () => {
+    expect(splitMessage("One line.")).toEqual({ summary: "One line." });
+    expect(splitMessage("Failed.\nnpm ERR! 403\nmore")).toEqual({ summary: "Failed.", details: "npm ERR! 403\nmore" });
+    expect(splitMessage("Failed.\n  ")).toEqual({ summary: "Failed.", details: undefined });
+  });
+  it("sideStatus keeps the details out of the text", () => {
+    expect(sideStatus({ id: "ssh:b", label: "SSH: b", state: "error", message: "Failed.\nnpm ERR!" })).toEqual({ text: "Failed.", details: "npm ERR!", action: "retry" });
+  });
 });
