@@ -204,8 +204,19 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "history.create"; path: string; label: string }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
   | { type: "fs.create"; path: string; dir?: boolean }
-  /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
-  | { type: "fs.rename"; path: string; name: string }
+  /**
+   * New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult.
+   * GH-555: `dir` moves it into that folder (an existing folder in the roots; `into_itself` when `dir` is `path` or below it). `replace`: an existing target is replaced (a file: Local history entry `paste`; a folder: the whole folder).
+   */
+  | { type: "fs.rename"; path: string; name: string; dir?: string; replace?: boolean }
+  /** GH-555: every file, folder and link below `path` (`path` itself first, `rel` ""); links are never followed. Fails `not_found`, `path_not_allowed`, `too_many` (> TRANSFER_MAX_ENTRIES), `too_large` (> TRANSFER_MAX_BYTES). Reply FsWalkResult. */
+  | { type: "fs.walk"; path: string }
+  /** GH-555: copies one file or link to `to` (same Daemon; `to` must not exist: `exists`; a folder: `not_a_file`). Reply FsPathResult. */
+  | { type: "fs.copy"; from: string; to: string }
+  /** GH-555: `length` bytes (at most CHUNK_BYTES, else `bad_request`) of a file from `offset`. Fails `not_a_file`. Reply FsChunkResult. */
+  | { type: "fs.readChunk"; path: string; offset: number; length: number }
+  /** GH-555: `data` (base64) at `offset`. Offset 0 creates the file exclusively (`exists`); later pieces need the file to have exactly `offset` bytes (`conflict`). `mode`: permission bits. Reply `{ size }`. */
+  | { type: "fs.writeChunk"; path: string; offset: number; data: string; mode?: number }
   /** Deletes for good (no trash): a file, a link (never its target) or a folder with everything in it. `dryRun`: only counts. Fails `not_found`, `root_protected`, `in_use`. Reply FsDeleteResult. */
   | { type: "fs.delete"; path: string; dryRun?: boolean }
   /** Copy of a file next to it, named "<name> copy<.ext>", "<name> copy 2<.ext>", ... Files only (`not_a_file`), at most 512 MiB (`too_large`). Reply FsPathResult. */
@@ -259,6 +270,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.continue"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: `git reset --merge`. Reply GitWriteResult. */
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
+  /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
+  | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
+  | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
   /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
   | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
   /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
@@ -364,6 +379,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "update.install" }
   /** Restarts into the installed version once every session is idle (`now`: at once); reply UpdateRestartResult. */
   | { type: "update.restart"; now?: boolean }
+  /** Creates (on) or removes the OS launcher shortcut on the Hub's machine (docs/spec.md "Launcher shortcut"). Reply `{installed}`; errors shortcut_unavailable, shortcut_failed. */
+  | { type: "launcher.shortcut"; on: boolean }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -649,6 +666,16 @@ export type MediaReadResult = { data: string; size: number; mtime: number; mime:
 export type FsWriteResult = { mtime: number };
 /** The path an fs.create / fs.rename / fs.duplicate made (parent as fs.list gives it, plus the name). */
 export type FsPathResult = { path: string };
+/** `rel`: path below the walked path with `/` ("" = the path itself); folders come before their content. `target`: the text of a link. */
+export type FsWalkEntry = { rel: string; kind: "file" | "dir" | "link"; size: number; mode: number; target?: string };
+export type FsWalkResult = { entries: FsWalkEntry[]; bytes: number };
+/** `data`: base64; `size`: of the whole file. */
+export type FsChunkResult = { data: string; size: number };
+/** Limits of one paste or drop (GH-555), checked before anything is written. */
+export const TRANSFER_MAX_BYTES = 512 * 1024 * 1024;
+export const TRANSFER_MAX_ENTRIES = 10_000;
+/** Largest piece of fs.readChunk / fs.writeChunk. */
+export const CHUNK_BYTES = 1024 * 1024;
 /** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
 export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
@@ -686,8 +713,8 @@ export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" 
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
-/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. */
-export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named"] as const;
+/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. `paste`: a paste replaced the file (GH-555). */
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named", "paste"] as const;
 export type HistoryReason = (typeof HISTORY_REASONS)[number];
 /** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
 export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };
@@ -849,12 +876,26 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };
+  /** Settings › Launcher (GH-553): start options of claude-ui on the Hub's machine; apply on the next start, a flag or env var wins. */
+  launcher: {
+    /** Web UI port. */
+    port: number;
+    /** [] = home directory. */
+    roots: string[];
+    tailscale: boolean;
+    lan: boolean;
+    allowBypass: boolean;
+    updateCheck: boolean;
+    osNotify: boolean;
+    /** Open the browser at start. */
+    open: boolean;
+  };
   /** The app icon and name shared by every browser (tab and installed app); served at /app-icon and in /manifest.webmanifest. */
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */

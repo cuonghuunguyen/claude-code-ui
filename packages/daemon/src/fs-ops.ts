@@ -1,8 +1,11 @@
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, read, renameSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, type Stats, constants, fstatSync, lstatSync, mkdirSync, openSync, read, readlinkSync, renameSync, statSync, symlinkSync, unlinkSync, write } from "node:fs";
 import { opendir, open, rm, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { fileNameError, type FsDeleteResult, type FsPathResult } from "@claude-ui/protocol";
-import { openChecked, OPEN_READ, real } from "./fd-check.ts";
+import { randomBytes } from "node:crypto";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import { CHUNK_BYTES, copyName, fileNameError, TRANSFER_MAX_BYTES, TRANSFER_MAX_ENTRIES, type FsChunkResult, type FsDeleteResult, type FsPathResult, type FsWalkEntry, type FsWalkResult } from "@claude-ui/protocol";
+import { openChecked, OPEN_READ, OPEN_WRITE, real } from "./fd-check.ts";
+
+export { copyName };
 
 /** What the file tree operations need from the daemon (no WebSocket: tests call the operations directly). */
 export type FsOpsContext = {
@@ -22,7 +25,7 @@ export type FsOpResult<T> = T | Failure;
 
 /** Largest file fs.duplicate copies. */
 export const DUPLICATE_MAX = 512 * 1024 * 1024;
-const CHUNK = 1024 * 1024;
+const CHUNK = CHUNK_BYTES;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 const fail = (code: string, message: string): Failure => ({ code, message });
@@ -97,8 +100,8 @@ export function createEntry(ctx: FsOpsContext, path: string, dir: boolean): FsOp
   }
 }
 
-/** A new name in the same folder. */
-export async function renameEntry(ctx: FsOpsContext, path: string, name: string): Promise<FsOpResult<FsPathResult>> {
+/** A new name in the same folder, or (`dir`) in another folder; `replace` replaces an existing target. `history`: called with a file about to be replaced. */
+export async function renameEntry(ctx: FsOpsContext, path: string, name: string, dir?: string, replace = false, history?: (file: string) => void): Promise<FsOpResult<FsPathResult>> {
   if (typeof name !== "string") return fail("bad_name", "A name is required.");
   const bad = fileNameError(name, win());
   if (bad) return fail("bad_name", bad);
@@ -112,18 +115,50 @@ export async function renameEntry(ctx: FsOpsContext, path: string, name: string)
     return fsFailure(err, r.target);
   }
   if (ctx.busy(r.target)) return fail("in_use", `a session works in ${r.target}`);
-  const to = join(r.parent, name);
+  let folder = r.parent;
+  if (dir !== undefined) {
+    const d = ctx.allowed(dir);
+    if (!d) return ctx.missingInRoots(dir) ? fail("not_found", `no such folder: ${dir}`) : fail("path_not_allowed", `outside the allowlisted roots: ${dir}`);
+    try {
+      if (!statSync(d).isDirectory()) return fail("not_a_dir", `not a folder: ${d}`);
+    } catch (err) {
+      return fsFailure(err, d);
+    }
+    if (d === r.target || d.startsWith(r.target + sep)) return fail("into_itself", `a folder cannot go into itself: ${r.target}`);
+    folder = d;
+  }
+  const to = join(folder, name);
+  let old;
   try {
     const other = lstatSync(to, { bigint: true });
     // Same device and inode and the same name up to case: a case-only rename on a case-insensitive file system.
     // Another name with the same inode is a hard link: the rename would do nothing.
-    if (other.dev !== from.dev || other.ino !== from.ino || name.toLowerCase() !== r.name.toLowerCase()) return fail("exists", `already exists: ${to}`);
+    const same = other.dev === from.dev && other.ino === from.ino;
+    if (!same || folder !== r.parent || name.toLowerCase() !== r.name.toLowerCase()) {
+      if (!replace || same) return fail("exists", `already exists: ${to}`);
+      if (ctx.busy(to)) return fail("in_use", `a session works in ${to}`);
+      old = other;
+    }
   } catch {
     // free
   }
-  if (parentChanged(r.parent)) return changed(path);
+  if (parentChanged(r.parent) || parentChanged(folder)) return changed(path);
   try {
-    renameSync(r.target, to);
+    if (old && !(old.isFile() && !from.isDirectory())) {
+      // The old folder (or a kind change) goes aside first; a failed rename puts it back.
+      const aside = join(folder, `.${name}.replaced-${randomBytes(3).toString("hex")}`);
+      renameSync(to, aside);
+      try {
+        renameSync(r.target, to);
+      } catch (err) {
+        renameSync(aside, to);
+        throw err;
+      }
+      await rm(aside, { recursive: true, force: true, maxRetries: 3 });
+    } else {
+      if (old) history?.(to);
+      renameSync(r.target, to);
+    }
     return { path: to };
   } catch (err) {
     return fsFailure(err, to);
@@ -185,14 +220,6 @@ export async function deleteEntry(ctx: FsOpsContext, path: string, dryRun: boole
   }
 }
 
-/** "a copy.ts" for n = 1, "a copy 2.ts" for n = 2; the last extension stays last, a dotfile or no extension takes the suffix at the end. */
-export function copyName(name: string, n: number): string {
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  return `${stem} copy${n > 1 ? ` ${n}` : ""}${ext}`;
-}
-
 /** A copy of a file next to it. */
 export async function duplicateFile(ctx: FsOpsContext, path: string): Promise<FsOpResult<FsPathResult>> {
   const r = resolve(ctx, path);
@@ -218,13 +245,7 @@ export async function duplicateFile(ctx: FsOpsContext, path: string): Promise<Fs
       }
     }
     if (!dest || !made) return fail("exists", `no free copy name for ${r.name}`);
-    const buf = Buffer.allocUnsafe(CHUNK);
-    for (let at = 0; ; ) {
-      const n = await readChunk(src, buf, at);
-      if (n === 0) break;
-      await dest.write(buf, 0, n);
-      at += n;
-    }
+    await pump(src, dest);
     await dest.close();
     dest = undefined;
     return { path: made };
@@ -245,5 +266,153 @@ export async function duplicateFile(ctx: FsOpsContext, path: string): Promise<Fs
   }
 }
 
-const readChunk = (fd: number, buf: Buffer, position: number) =>
-  new Promise<number>((res, rej) => read(fd, buf, 0, buf.length, position, (e, n) => (e ? rej(e) : res(n))));
+const readAt = (fd: number, buf: Buffer, position: number, length = buf.length) =>
+  new Promise<number>((res, rej) => read(fd, buf, 0, length, position, (e, n) => (e ? rej(e) : res(n))));
+const writeAt = (fd: number, buf: Buffer, position: number) =>
+  new Promise<void>((res, rej) => write(fd, buf, 0, buf.length, position, (e) => (e ? rej(e) : res())));
+
+/** The whole open file `src` into `dest`. */
+async function pump(src: number, dest: Awaited<ReturnType<typeof open>>) {
+  const buf = Buffer.allocUnsafe(CHUNK);
+  for (let at = 0; ; ) {
+    const n = await readAt(src, buf, at);
+    if (n === 0) break;
+    await dest.write(buf, 0, n);
+    at += n;
+  }
+}
+
+/** Every file, folder and link below `path` (GH-555), `path` first. Links are never entered. Over the limits: `too_many` / `too_large`, before anything is read further. */
+export async function walkEntry(ctx: FsOpsContext, path: string, maxEntries = TRANSFER_MAX_ENTRIES, maxBytes = TRANSFER_MAX_BYTES): Promise<FsOpResult<FsWalkResult>> {
+  let top: string;
+  if (isRoot(ctx, path)) top = path;
+  else {
+    const r = resolve(ctx, path);
+    if (isFailure(r)) return r;
+    top = r.target;
+  }
+  const entries: FsWalkEntry[] = [];
+  let bytes = 0;
+  const add = (rel: string, st: Stats, abs: string): Failure | undefined => {
+    const kind = st.isDirectory() ? "dir" : st.isSymbolicLink() ? "link" : "file";
+    // Sockets, FIFOs and devices cannot be copied: left out.
+    if (!st.isDirectory() && !st.isSymbolicLink() && !st.isFile()) return;
+    if (entries.length >= maxEntries) return fail("too_many", `more than ${maxEntries} entries`);
+    if (kind === "file") bytes += st.size;
+    if (bytes > maxBytes) return fail("too_large", `more than ${maxBytes} bytes`);
+    entries.push({ rel, kind, size: kind === "file" ? st.size : 0, mode: st.mode & 0o777, ...(kind === "link" && { target: readlinkSync(abs) }) });
+  };
+  try {
+    const st = lstatSync(top);
+    const first = add("", st, top);
+    if (first) return first;
+    if (!st.isDirectory()) return { entries, bytes };
+    if (parentChanged(dirname(top)) && !isRoot(ctx, top)) return changed(path);
+    const queue = [""];
+    while (queue.length) {
+      const rel = queue.shift()!;
+      const abs = rel === "" ? top : join(top, ...rel.split("/"));
+      const handle = await opendir(abs);
+      for await (const e of handle) {
+        const childRel = rel === "" ? e.name : `${rel}/${e.name}`;
+        const childAbs = join(abs, e.name);
+        const cst = lstatSync(childAbs);
+        const f = add(childRel, cst, childAbs);
+        if (f) return f; // leaving the loop closes the handle
+        if (cst.isDirectory()) queue.push(childRel);
+      }
+    }
+    return { entries, bytes };
+  } catch (err) {
+    return fsFailure(err, top);
+  }
+}
+
+/** One file or link to a name that does not exist yet, in the same Daemon (GH-555). The partial file is removed on an error. */
+export async function copyEntry(ctx: FsOpsContext, from: string, to: string): Promise<FsOpResult<FsPathResult>> {
+  const a = resolve(ctx, from);
+  if (isFailure(a)) return a;
+  const b = resolve(ctx, to);
+  if (isFailure(b)) return b;
+  let src: number | undefined;
+  let dest: Awaited<ReturnType<typeof open>> | undefined;
+  let made = false;
+  try {
+    const lst = lstatSync(a.target);
+    if (exists(b.target)) return fail("exists", `already exists: ${b.target}`);
+    if (parentChanged(b.parent)) return changed(to);
+    if (lst.isSymbolicLink()) {
+      symlinkSync(readlinkSync(a.target), b.target);
+      return { path: b.target };
+    }
+    if (!lst.isFile()) return fail("not_a_file", `not a file: ${a.target}`);
+    src = openChecked(a.target, OPEN_READ);
+    const st = fstatSync(src);
+    if (!st.isFile()) return fail("not_a_file", `not a file: ${a.target}`);
+    dest = await open(b.target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, st.mode & 0o777);
+    made = true;
+    await pump(src, dest);
+    await dest.close();
+    dest = undefined;
+    return { path: b.target };
+  } catch (err) {
+    await dest?.close().catch(() => {});
+    dest = undefined;
+    if (made) {
+      try {
+        unlinkSync(b.target);
+      } catch {
+        // already gone
+      }
+    }
+    return fsFailure(err, b.target);
+  } finally {
+    if (src !== undefined) closeSync(src);
+    await dest?.close().catch(() => {});
+  }
+}
+
+/** Up to `length` bytes of a file from `offset` (GH-555). */
+export function readFileChunk(ctx: FsOpsContext, path: string, offset: number, length: number): Promise<FsOpResult<FsChunkResult>> {
+  return (async () => {
+    const r = resolve(ctx, path);
+    if (isFailure(r)) return r;
+    let fd: number | undefined;
+    try {
+      fd = openChecked(r.target, OPEN_READ);
+      const st = fstatSync(fd);
+      if (!st.isFile()) return fail("not_a_file", `not a file: ${r.target}`);
+      const buf = Buffer.allocUnsafe(length);
+      const n = await readAt(fd, buf, offset, length);
+      return { data: buf.subarray(0, n).toString("base64"), size: st.size };
+    } catch (err) {
+      return fsFailure(err, r.target);
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  })();
+}
+
+/** `data` at `offset` (GH-555): offset 0 creates the file (it must not exist), a later piece needs a file of exactly `offset` bytes. */
+export async function writeFileChunk(ctx: FsOpsContext, path: string, offset: number, data: Buffer, mode = 0o666): Promise<FsOpResult<{ size: number }>> {
+  const r = resolve(ctx, path);
+  if (isFailure(r)) return r;
+  let fd: number | undefined;
+  try {
+    if (offset === 0) {
+      if (exists(r.target)) return fail("exists", `already exists: ${r.target}`);
+      if (parentChanged(r.parent)) return changed(path);
+      fd = openSync(r.target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, mode & 0o777);
+    } else {
+      fd = openChecked(r.target, OPEN_WRITE);
+      if (!fstatSync(fd).isFile()) return fail("not_a_file", `not a file: ${r.target}`);
+      if (fstatSync(fd).size !== offset) return fail("conflict", `the file is not ${offset} bytes long: ${r.target}`);
+    }
+    await writeAt(fd, data, offset);
+    return { size: offset + data.length };
+  } catch (err) {
+    return fsFailure(err, r.target);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}

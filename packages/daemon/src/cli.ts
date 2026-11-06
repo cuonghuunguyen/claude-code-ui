@@ -1,5 +1,6 @@
 import { delimiter } from "node:path";
 import { parseArgs } from "node:util";
+import type { Settings } from "@claude-ui/protocol";
 
 export const HELP = `Usage: claude-ui [options]
        claude-ui update    install the latest version; the next start runs it
@@ -16,7 +17,7 @@ Command options: --json (machine output), --port <n> (default: daemon.json of th
   --token-file <path> (default: CLAUDE_UI_TOKEN_FILE, <config dir>/token). Exit codes: 0 ok, 1 daemon
   error, 2 usage, 3 daemon not running or no token.
 
-Options (a flag overrides its environment variable):
+Options (a flag overrides its environment variable, which overrides Settings › Launcher):
   --port <n>          port                                   (PORT, default 4280)
   --roots <paths>     allowlisted directories, separated like PATH
                                                              (CLAUDE_UI_ROOTS, default: home directory)
@@ -70,7 +71,11 @@ const VALUE_FLAGS = ["--port", "--roots", "--hostname", "--token-file", "--proje
 const NOT_A_START = [...Object.keys(CLIENT_CMDS), ...RESERVED, "update", "side"];
 const DAEMON_ONLY = ["lan", "roots", "hostname", "tailscale", "allow-bypass", "no-update-check", "no-os-notify", "no-open"];
 
-export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): Cli {
+/** `saved`: Settings › Launcher, lowest precedence (flag > env > saved > default); pass it for a daemon start only. */
+/** A default-on option is off: its --no-x flag, else its env var ("0" off, other values on), else the saved value. */
+const off = (flag: boolean | undefined, envVal: string | undefined, savedVal: boolean | undefined) => flag || (envVal !== undefined ? envVal === "0" : savedVal === false);
+
+export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string, saved?: Settings["launcher"]): Cli {
   let values;
   let positionals: string[];
   try {
@@ -117,26 +122,27 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string): 
   const clientOnly = ["json", "token-file", "print", "project", "state", "archived"].find((f) => (values as Record<string, unknown>)[f] !== undefined);
   if (clientOnly) return { kind: "error", message: `--${clientOnly} applies to a command (status, open, sessions, projects, workers)` };
   if (positionals[0] === "update") return { kind: "update" };
-  const rawPort = values.port ?? env.PORT ?? "4280";
+  const rawPort = values.port ?? env.PORT ?? String(saved?.port ?? 4280);
   const port = Number(rawPort);
   if (!/^\d+$/.test(rawPort) || port > 65535) return { kind: "error", message: `invalid port: ${rawPort}` };
   const hostname = values.hostname ?? env.CLAUDE_UI_HOSTNAME;
-  const tailscale = values.tailscale ?? env.CLAUDE_UI_TAILSCALE === "1";
-  if (tailscale && hostname) return { kind: "error", message: "--tailscale sets the hostname itself; drop --hostname / CLAUDE_UI_HOSTNAME" };
+  const explicitTailscale = values.tailscale ?? (env.CLAUDE_UI_TAILSCALE !== undefined ? env.CLAUDE_UI_TAILSCALE === "1" : undefined);
+  if (explicitTailscale && hostname) return { kind: "error", message: "--tailscale sets the hostname itself; drop --hostname / CLAUDE_UI_HOSTNAME" };
+  const tailscale = explicitTailscale ?? (!hostname && saved?.tailscale === true);
   const rawIdle = env.CLAUDE_UI_IDLE_CLOSE_MINUTES ?? "10";
   if (!/^\d+$/.test(rawIdle)) return { kind: "error", message: `invalid CLAUDE_UI_IDLE_CLOSE_MINUTES: ${rawIdle}` };
   return {
     kind: "run",
     port,
-    roots: (values.roots ?? env.CLAUDE_UI_ROOTS ?? home).split(delimiter).filter(Boolean),
+    roots: values.roots ?? env.CLAUDE_UI_ROOTS ? (values.roots ?? env.CLAUDE_UI_ROOTS)!.split(delimiter).filter(Boolean) : saved?.roots.length ? saved.roots : home.split(delimiter).filter(Boolean),
     hostname,
-    lan: values.lan ?? env.CLAUDE_UI_LAN === "1",
-    allowBypass: values["allow-bypass"] ?? env.CLAUDE_UI_ALLOW_BYPASS === "1",
+    lan: values.lan ?? (env.CLAUDE_UI_LAN !== undefined ? env.CLAUDE_UI_LAN === "1" : saved?.lan ?? false),
+    allowBypass: values["allow-bypass"] ?? (env.CLAUDE_UI_ALLOW_BYPASS !== undefined ? env.CLAUDE_UI_ALLOW_BYPASS === "1" : saved?.allowBypass ?? false),
     ...(tailscale && { tailscale: true as const }),
     idleCloseMinutes: Number(rawIdle),
-    ...((values["no-update-check"] || env.CLAUDE_UI_UPDATE_CHECK === "0") && { updateCheck: false as const }),
-    ...((values["no-os-notify"] || env.CLAUDE_UI_OS_NOTIFY === "0") && { osNotify: false as const }),
-    ...((values["no-open"] || env.CLAUDE_UI_OPEN === "0") && { open: false as const }),
+    ...(off(values["no-update-check"], env.CLAUDE_UI_UPDATE_CHECK, saved?.updateCheck) && { updateCheck: false as const }),
+    ...(off(values["no-os-notify"], env.CLAUDE_UI_OS_NOTIFY, saved?.osNotify) && { osNotify: false as const }),
+    ...(off(values["no-open"], env.CLAUDE_UI_OPEN, saved?.open) && { open: false as const }),
   };
 }
 

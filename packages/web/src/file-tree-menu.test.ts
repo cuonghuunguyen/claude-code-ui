@@ -7,7 +7,7 @@ const ids = (s: ReturnType<typeof treeMenuSections>) => s.map((x) => x.map((e) =
 
 describe("treeMenuSections (GH-360)", () => {
   it("a file: open, prompt and copy, change", () => {
-    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "openTab", "viewer"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
+    expect(ids(treeMenuSections({ kind: "file", entry: file, changed: false }, false))).toEqual([["open", "openTab", "viewer"], ["cut", "copy"], ["mention", "copyPath", "copyRel"], ["rename", "duplicate", "delete"]]);
   });
   it("the file dialog item is named so and left out where there is no dialog", () => {
     const t = { kind: "file", entry: file, changed: false } as const;
@@ -19,17 +19,38 @@ describe("treeMenuSections (GH-360)", () => {
   });
   it("a folder: new, copy, change, collapse (disabled when collapsed)", () => {
     const s = treeMenuSections({ kind: "dir", entry: dir, expanded: false }, false);
-    expect(ids(s)).toEqual([["newFile", "newFolder"], ["copyPath", "copyRel"], ["rename", "delete"], ["collapse"]]);
-    expect(s[3]![0]!.disabled).toBe(true);
-    expect(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false)[3]![0]!.disabled).toBe(false);
+    expect(ids(s)).toEqual([["newFile", "newFolder"], ["cut", "copy", "paste"], ["copyPath", "copyRel"], ["rename", "delete"], ["collapse"]]);
+    expect(s[4]![0]!.disabled).toBe(true);
+    expect(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false)[4]![0]!.disabled).toBe(false);
   });
   it("the root: new and refresh", () => {
-    expect(ids(treeMenuSections({ kind: "root" }, false))).toEqual([["newFile", "newFolder"], ["refresh"]]);
+    expect(ids(treeMenuSections({ kind: "root" }, false))).toEqual([["newFile", "newFolder"], ["paste"], ["refresh"]]);
   });
   it("shortcut labels: F2, Del; Cmd+Backspace on a Mac; Delete is destructive; test ids", () => {
-    const [, , change] = treeMenuSections({ kind: "file", entry: file, changed: false }, false);
+    const [, , , change] = treeMenuSections({ kind: "file", entry: file, changed: false }, false);
     expect(change!.map((e) => [e.shortcut, e.keys, e.destructive, e.testId])).toEqual([["F2", "F2", undefined, "tree-menu-rename"], [undefined, undefined, undefined, "tree-menu-duplicate"], ["Del", "Delete", true, "tree-menu-delete"]]);
-    expect(treeMenuSections({ kind: "file", entry: file, changed: false }, true)[2]![2]!.shortcut).toBe("⌘⌫");
+    expect(treeMenuSections({ kind: "file", entry: file, changed: false }, true)[3]![2]!.shortcut).toBe("⌘⌫");
+  });
+});
+
+describe("cut, copy, paste (GH-555)", () => {
+  const flat = (s: ReturnType<typeof treeMenuSections>) => s.flat();
+  it("shortcut labels per platform; Paste is disabled with an empty clipboard and on for a folder and the root", () => {
+    const d = { kind: "dir", entry: dir, expanded: true } as const;
+    const pick = (mac: boolean, canPaste: boolean) => Object.fromEntries(flat(treeMenuSections(d, mac, true, false, true, canPaste)).filter((e) => ["cut", "copy", "paste"].includes(e.id)).map((e) => [e.id, e]));
+    expect(pick(false, false).cut!.shortcut).toBe("Ctrl+X");
+    expect(pick(false, false).copy!.keys).toBe("Control+C");
+    expect(pick(true, true).paste!.shortcut).toBe("⌘V");
+    expect(pick(true, true).paste!.keys).toBe("Meta+V");
+    expect(pick(false, false).paste!.disabled).toBe(true);
+    expect(pick(false, true).paste!.disabled).toBe(false);
+    expect(flat(treeMenuSections({ kind: "file", entry: file, changed: false }, false)).some((e) => e.id === "paste")).toBe(false);
+    expect(flat(treeMenuSections({ kind: "root" }, false, true, false, true, true)).find((e) => e.id === "paste")!.disabled).toBeFalsy();
+  });
+  it("error texts of the new refusals", () => {
+    expect(opErrorText("too_many", "m", "a")).toContain("10,000");
+    expect(opErrorText("into_itself", "m", "a")).toContain("itself");
+    expect(opErrorText("conflict", "m", "a")).toContain("changed");
   });
 });
 

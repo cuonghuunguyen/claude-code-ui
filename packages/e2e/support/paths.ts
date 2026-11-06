@@ -24,6 +24,8 @@ export const daemonConfigDir = (run: string) => join(configHome(run), "claude-ui
 export const localAppData = (run: string) => join(run, "localappdata");
 /** The run's ssh files: `config` (the daemon's CLAUDE_UI_SSH_CONFIG, never ~/.ssh/config), keys, known_hosts. */
 export const sshDir = (run: string) => join(run, "ssh");
+/** The run's launcher shortcut folder (the daemon's CLAUDE_UI_SHORTCUT_DIR), never the real Applications / Start menu. */
+export const shortcutDir = (run: string) => join(run, "shortcuts");
 export const projectsRoot = (run: string) => join(run, "projects");
 export const evidenceDir = (run: string, env: NodeJS.ProcessEnv = process.env) => env.E2E_EVIDENCE_DIR || join(run, "evidence");
 

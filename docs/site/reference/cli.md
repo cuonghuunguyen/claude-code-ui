@@ -48,7 +48,7 @@ Not yet: `new`, `send`, `tail`, `interrupt`, `doctor`, `logs`, `stop` (names res
 | `-v`, `--version` | | | Print the version |
 | `-h`, `--help` | | | Print the help |
 
-A flag wins over its environment variable.
+A flag wins over its environment variable. Both win over the options saved in Settings › Launcher (port, roots, Tailscale, LAN, bypass, update check, desktop notification, open browser), which apply from the next start. Settings › Launcher also adds a launcher shortcut to Applications (macOS), the app menu (Linux) or the Start menu (Windows): a click opens claude-ui in the browser when it runs, else starts it in a terminal.
 
 ## Environment variables
 

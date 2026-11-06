@@ -130,3 +130,39 @@ describe("parseCli", () => {
     });
   });
 });
+
+describe("saved launcher options (Settings › Launcher)", () => {
+  const saved = { port: 4999, roots: ["/a", "/b"], tailscale: true, lan: true, allowBypass: true, updateCheck: false, osNotify: false, open: false };
+  it("saved launcher options apply with no flag or env", () => {
+    expect(parseCli([], {}, "/h", saved)).toEqual({ kind: "run", port: 4999, roots: ["/a", "/b"], hostname: undefined, lan: true, allowBypass: true, tailscale: true, idleCloseMinutes: 10, updateCheck: false, osNotify: false, open: false });
+  });
+  it("an env var wins over a saved option", () => {
+    const r = parseCli([], { PORT: "5000", CLAUDE_UI_LAN: "0", CLAUDE_UI_UPDATE_CHECK: "1", CLAUDE_UI_ROOTS: "/e" }, "/h", saved);
+    expect(r).toMatchObject({ kind: "run", port: 5000, lan: false, roots: ["/e"] });
+    expect(r).not.toHaveProperty("updateCheck");
+  });
+  it("a flag wins over env and saved", () => {
+    const r = parseCli(["--port", "6000", "--no-open", "--lan"], { CLAUDE_UI_OPEN: "1" }, "/h", { ...saved, lan: false });
+    expect(r).toMatchObject({ kind: "run", port: 6000, open: false, lan: true });
+  });
+  it("saved tailscale yields to a hostname from env; a flag tailscale still errors", () => {
+    const r = parseCli([], { CLAUDE_UI_HOSTNAME: "x.example.com" }, "/h", saved);
+    expect(r).toMatchObject({ kind: "run", hostname: "x.example.com" });
+    expect(r).not.toHaveProperty("tailscale");
+    expect(parseCli(["--tailscale"], { CLAUDE_UI_HOSTNAME: "x.example.com" }, "/h", saved)).toMatchObject({ kind: "error" });
+  });
+  it("empty saved roots mean the home directory", () => {
+    expect(parseCli([], {}, "/h", { ...saved, roots: [] })).toMatchObject({ roots: ["/h"] });
+  });
+  it("client commands ignore saved options", () => {
+    expect(parseCli(["status"], {}, "/h", saved)).toEqual(parseCli(["status"], {}, "/h"));
+  });
+  it("the LAN and bypass hints of Settings › Launcher match --help", async () => {
+    const { default: en } = await import("../../web/src/i18n/en/settings.ts");
+    const help = HELP.replace(/\s+/g, " ");
+    for (const [key, flag] of [["lan", "--lan"], ["allowBypass", "--allow-bypass"]] as const) {
+      const hint = (en as unknown as Record<string, string>)[`settings.row.launcher.${key}.hint`]!.replace(` (${flag}).`, "");
+      expect(help).toContain(hint[0]!.toLowerCase() + hint.slice(1));
+    }
+  });
+});
