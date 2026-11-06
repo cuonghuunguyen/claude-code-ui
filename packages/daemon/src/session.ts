@@ -82,6 +82,8 @@ type SessionOpts = Partial<SessionSettings> & {
   onCleared?: (heir: Session, from: Session) => void;
   /** A CLI process started or was dropped (worker_close, Plugins Restart, idle close, rewind): the session's `live` changed, the daemon re-lists it. */
   onLiveChange?: (id: string) => void;
+  /** An Edit or Write of the agent replaced an existing file: `original` is the text it had before (Local history, GH-565). A new file (originalFile null) calls nothing. */
+  onFileEdit?: (path: string, original: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
   onLimitStop?: (id: string, resetsAt: number | undefined) => void;
   /** Asks the CLI for a predicted next prompt after each turn (Settings › Focus › Next for you); read when the CLI starts. */
@@ -1216,6 +1218,28 @@ export class Session {
     }
   }
 
+  /** Edit/Write call id -> file_path, until its result arrives. */
+  private editCalls = new Map<string, string>();
+  /** Reports the text an Edit or Write replaced (`tool_use_result.originalFile`, the data the adapter reads for the changes tab). */
+  private trackEdits(m: SDKMessage) {
+    if (m.type === "assistant") {
+      for (const b of m.message.content) {
+        if (b.type !== "tool_use" || (b.name !== "Edit" && b.name !== "Write")) continue;
+        const path = (b.input as { file_path?: unknown }).file_path;
+        if (typeof path === "string") this.editCalls.set(b.id, path);
+      }
+    } else if (m.type === "user" && !("isReplay" in m && m.isReplay) && Array.isArray(m.message.content)) {
+      const original = (m.tool_use_result as { originalFile?: unknown } | undefined)?.originalFile;
+      const results = m.message.content.filter((b) => b.type === "tool_result");
+      for (const b of results) {
+        const path = this.editCalls.get(b.tool_use_id);
+        this.editCalls.delete(b.tool_use_id);
+        // One tool_use_result per message: with several results it cannot be told which one it belongs to.
+        if (path && results.length === 1 && !b.is_error && typeof original === "string") this.opts.onFileEdit?.(path, original);
+      }
+    }
+  }
+
   /** One SDK message of this session's live query. */
   private receive(m: SDKMessage, q: Query) {
     this.received++;
@@ -1229,6 +1253,7 @@ export class Session {
       if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
     }
     if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
+    if (this.opts.onFileEdit) this.trackEdits(m);
     // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
     // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
     if (m.type === "user" && "isReplay" in m && m.isReplay) {

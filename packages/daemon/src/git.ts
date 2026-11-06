@@ -1267,7 +1267,7 @@ const branchList = async (top: string, stamp?: string) => {
   if (stamp) branchCache.set(top, { stamp, list });
   return list;
 };
-export type GitLogOptions = { skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; allowed: (p: string) => boolean };
+export type GitLogOptions = { skip?: number; limit?: number; ref?: string; author?: string; text?: string; fresh?: boolean; /** Relative to the top: only commits touching this file, following renames, from HEAD. */ path?: string; allowed: (p: string) => boolean };
 const NO_COMMITS = /does not have any commits|bad revision 'HEAD'|unknown revision or path not in the working tree/;
 /** One page of the history, newest first in topological order; null outside a git work tree. */
 export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | null> {
@@ -1275,6 +1275,7 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
   const limit = intIn(o.limit, 1, GIT_LOG_MAX_LIMIT, LOG_DEFAULT, "limit");
   const author = filterText(o.author, "author");
   const text = filterText(o.text, "text");
+  const file = o.path === undefined ? undefined : repoPath(o.path);
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   return graphTask(async () => {
@@ -1282,11 +1283,12 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
     const stamp = await refsStamp(top);
     const head = await headRef(top);
     const first = (log: GitLog, branches: string[]): GitLog => (skip === 0 ? { ...log, branches, refs: stamp, ...optional("head", head) } : log);
-    const branches = skip === 0 ? branchList(top, o.fresh ? undefined : stamp) : undefined;
+    const branches = skip === 0 && !file ? branchList(top, o.fresh ? undefined : stamp) : undefined;
     // A rejection of the branch list would be unhandled while the ref is checked.
     branches?.catch(() => {});
     let ref: string | undefined;
-    if (o.ref !== undefined) ref = o.ref === "HEAD" ? o.ref : await checkBranchRef(top, o.ref, await branches);
+    if (file) ref = "HEAD";
+    else if (o.ref !== undefined) ref = o.ref === "HEAD" ? o.ref : await checkBranchRef(top, o.ref, await branches);
     const format = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
     const parse = (out: string) => out.split("\0").filter(Boolean).map((r) => commitOf(r.split("\x1f")));
     // A hash-like filter shows that one commit when it names one; else it filters by message text.
@@ -1302,7 +1304,8 @@ export async function gitLog(cwd: string, o: GitLogOptions): Promise<GitLog | nu
     if (author || text) args.push("--fixed-strings", "--regexp-ignore-case");
     if (author) args.push(`--author=${author}`);
     if (text) args.push(`--grep=${text}`);
-    args.push(...(ref ? ["--end-of-options", ref] : ["--all"]), "--");
+    if (file) args.push("--follow");
+    args.push(...(ref ? ["--end-of-options", ref] : ["--all"]), "--", ...(file ? [file] : []));
     const key = `${top}\0${args.join("\0")}`;
     let out: string;
     const hit = !o.fresh && cacheable(stamp) ? logCache.get(key) : undefined;
