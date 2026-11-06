@@ -280,7 +280,7 @@ function hub(sides: ReturnType<typeof createSides>) {
     sides,
     send: (m) => void sent.push(m),
     local: async () => {},
-    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: { sessions: [], projects: [], recentProjects: [] } }),
+    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "settings.get" ? { settings: { orchestration: { enabled: true }, launcher: { port: 4999 } } } : { sessions: [], projects: [], recentProjects: [] } }),
     isLocalSession: async () => false,
   });
   const ask = async (msg: object) => {
@@ -585,6 +585,8 @@ describe("settings sync only to a Hub an attach started", () => {
     await h.ask({ type: "side.start", side: "wsl:A" });
     await new Promise((r) => setTimeout(r, 50));
     expect(settingsFrames(p)).toHaveLength(count);
+    // The Hub's launcher options (port, LAN, roots) are for its own machine, never synced to a side.
+    for (const f of settingsFrames(p)) expect(f.m.patch).toEqual({ orchestration: { enabled: true } });
     expect(s.attachStarted("wsl:A")).toBe(!!startedBy);
     s.close();
   });

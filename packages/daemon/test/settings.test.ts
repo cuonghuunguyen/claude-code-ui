@@ -1,14 +1,14 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
-import { checkPatch, createSettings, DEFAULTS } from "../src/settings.ts";
+import { checkPatch, createSettings, DEFAULTS, parseSettings } from "../src/settings.ts";
 
 const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -360,6 +360,13 @@ it("app name: accepts the default and a label name; stored and reset", () => {
 it("app name: refuses only whitespace, a control character, a too long name and a non-string", () => {
   const s = createSettings({ file: file() });
   for (const name of [" ", "a\tb", "a\nb", "x".repeat(61), 5]) expect(() => s.set({ app: { name: name as never } })).toThrow(/App name must be/);
+});
+
+it("launcher defaults and validation", () => {
+  expect(parseSettings({}).launcher).toEqual(DEFAULTS.launcher);
+  for (const port of [0, 70000]) expect(checkPatch({ launcher: { port } })).toBe("Port must be a whole number from 1 to 65535");
+  expect(checkPatch({ launcher: { roots: ["rel/dir"] } })).toMatch(/^Roots must be/);
+  expect(checkPatch({ launcher: { roots: [resolve("x")] } })).toBeUndefined();
 });
 
 it("commit message instructions: saved, read back, the default is not stored; bad values are refused", () => {

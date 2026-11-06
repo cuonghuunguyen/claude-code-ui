@@ -366,6 +366,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "update.install" }
   /** Restarts into the installed version once every session is idle (`now`: at once); reply UpdateRestartResult. */
   | { type: "update.restart"; now?: boolean }
+  /** Creates (on) or removes the OS launcher shortcut on the Hub's machine (docs/spec.md "Launcher shortcut"). Reply `{installed}`; errors shortcut_unavailable, shortcut_failed. */
+  | { type: "launcher.shortcut"; on: boolean }
 );
 
 /** `PushSubscription.toJSON()`. */
@@ -845,12 +847,26 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };
+  /** Settings › Launcher (GH-553): start options of claude-ui on the Hub's machine; apply on the next start, a flag or env var wins. */
+  launcher: {
+    /** Web UI port. */
+    port: number;
+    /** [] = home directory. */
+    roots: string[];
+    tailscale: boolean;
+    lan: boolean;
+    allowBypass: boolean;
+    updateCheck: boolean;
+    osNotify: boolean;
+    /** Open the browser at start. */
+    open: boolean;
+  };
   /** The app icon and name shared by every browser (tab and installed app); served at /app-icon and in /manifest.webmanifest. */
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 /** `daemon`: where the daemon runs (the desktop notification row names it) and whether it was started without desktop notifications (`--no-os-notify`). Absent from an older daemon. */
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean } }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
