@@ -105,7 +105,7 @@ const lanIps = lan ? Object.values(networkInterfaces()).flat().filter((a) => a &
 // The installed package ships the web build as dist/web beside this file; a source checkout builds packages/web/dist.
 const bundledWeb = new URL("./web", import.meta.url);
 const webRoot = fileURLToPath(existsSync(bundledWeb) ? bundledWeb : new URL("../../web/dist", import.meta.url));
-const state = { uploadDir: defaultUploadsDir(), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
+const state = { uploadDir: defaultUploadsDir(), historyDir: join(configDir(), "history"), settingsFile: join(configDir(), "sessions.json"), projects: createProjects({ file: join(configDir(), "projects.json") }), appSettings: createSettings({ file: join(configDir(), "settings.json") }), secrets: createSecrets({ file: join(configDir(), "secrets.json") }) };
 
 // A Hub another computer's attach started here retires first (ADR 0009): a start of the user takes over, attached Hubs follow it. Ctrl-C while waiting
 // ends this start only; the retire request stays (that Hub still exits once no turn runs).

@@ -10,6 +10,8 @@ import { runGit } from "./git-runner.ts";
 
 /** Test seam: the timeout of a write (hooks may run tests). */
 export const writeConfig = { timeout: 300_000 };
+/** Test seam: what `gitCommitDiff` hands to the prompt (characters; bytes git may print before the patch is dropped). */
+export const diffConfig = { maxChars: 60_000, maxBuffer: 4 << 20 };
 const MAX_PATHS = 10_000;
 const MAX_MESSAGE = 65_536;
 const MAX_OUTPUT = 8000;
@@ -17,12 +19,14 @@ const MAX_OUTPUT = 8000;
 type Failure = Error & { stderr?: string; stdout?: Buffer; killed?: boolean; code?: number | string };
 type Run = { out: string; code: number };
 /** One git call of a write. `soft`: exit code 1 is an answer, not a failure. Failure text: stdout and stderr (hooks print on either). */
-async function run(top: string, args: string[], env: NodeJS.ProcessEnv, o: { input?: string; soft?: boolean } = {}): Promise<Run> {
+async function run(top: string, args: string[], env: NodeJS.ProcessEnv, o: { input?: string; soft?: boolean; raw?: boolean; maxBuffer?: number } = {}): Promise<Run> {
   try {
-    const r = await runGit({ cwd: top, args: [...HARDEN, ...args], env, input: o.input, timeout: writeConfig.timeout, killTree: true });
-    return { out: tidy(`${r.stdout.toString("utf8")}\n${r.stderr}`, MAX_OUTPUT), code: 0 };
+    const r = await runGit({ cwd: top, args: [...HARDEN, ...args], env, input: o.input, timeout: writeConfig.timeout, killTree: true, maxBuffer: o.maxBuffer });
+    return { out: o.raw ? r.stdout.toString("utf8") : tidy(`${r.stdout.toString("utf8")}\n${r.stderr}`, MAX_OUTPUT), code: 0 };
   } catch (e) {
     const err = e as Failure;
+    // `maxBuffer` set: output over it is an answer (code -1), not a failure. `raw`: stdout as git printed it.
+    if (o.maxBuffer && err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { out: "", code: -1 };
     if (err.killed) throw new WorktreeError("git_failed", `git ${args.find((a) => !a.startsWith("-"))} timed out after ${Math.round(writeConfig.timeout / 1000)} s`);
     if (o.soft && err.code === 1) return { out: "", code: 1 };
     const text = tidy(`${err.stdout?.toString("utf8") ?? ""}\n${err.stderr ?? ""}`, MAX_ERROR) || tidy(err.message, MAX_ERROR);
@@ -34,6 +38,26 @@ const ask = async (top: string, args: string[], env: NodeJS.ProcessEnv) => (awai
 
 const LITERAL = ["--literal-pathspecs"];
 const FROM_STDIN = ["--pathspec-from-file=-", "--pathspec-file-nul"];
+
+/**
+ * Runs `fn` with a temporary index (`GIT_INDEX_FILE` in `tmp`) that starts from HEAD (`--empty` when `unborn`) and takes
+ * `files` with their working-tree content; the file and its `.lock` are removed afterwards, also on failure.
+ */
+async function withCheckedIndex<T>(top: string, env: NodeJS.ProcessEnv, unborn: boolean, files: string[], fn: (tmp: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  const name = `claude-ui-commit-${randomUUID()}.index`;
+  // git's own view of the path for GIT_INDEX_FILE; the daemon's view for the clean-up.
+  const gitPath = (await run(top, ["rev-parse", "--git-path", name], env)).out;
+  const hostPath = hostOf(top, gitPath);
+  const tmp = { ...env, GIT_INDEX_FILE: gitPath };
+  try {
+    await run(top, unborn ? ["read-tree", "--empty"] : ["read-tree", "HEAD"], tmp);
+    if (files.length) await run(top, [...LITERAL, "add", "-A", ...FROM_STDIN], tmp, { input: files.join("\0") });
+    return await fn(tmp);
+  } finally {
+    await rm(hostPath, { force: true }).catch(() => {});
+    await rm(`${hostPath}.lock`, { force: true }).catch(() => {});
+  }
+}
 
 /**
  * Commits exactly `paths` (relative to the repository top; a rename names both sides) with their working-tree content, like
@@ -66,20 +90,7 @@ export async function gitCommitFiles(cwd: string, o: { paths: unknown; message: 
         if (sym.code === 1) throw bad("HEAD is detached: use Commit");
         branchRef = sym.out;
       }
-      const name = `claude-ui-commit-${randomUUID()}.index`;
-      // git's own view of the path for GIT_INDEX_FILE; the daemon's view for the clean-up.
-      const gitPath = (await run(top, ["rev-parse", "--git-path", name], env)).out;
-      const hostPath = hostOf(top, gitPath);
-      const tmp = { ...env, GIT_INDEX_FILE: gitPath };
-      let out: string;
-      try {
-        await run(top, head.code === 1 ? ["read-tree", "--empty"] : ["read-tree", "HEAD"], tmp);
-        if (files.length) await run(top, [...LITERAL, "add", "-A", ...FROM_STDIN], tmp, { input: files.join("\0") });
-        out = (await run(top, ["commit", "-F", "-", ...(amend ? ["--amend"] : [])], tmp, { input: message })).out;
-      } finally {
-        await rm(hostPath, { force: true }).catch(() => {});
-        await rm(`${hostPath}.lock`, { force: true }).catch(() => {});
-      }
+      let out = await withCheckedIndex(top, env, head.code === 1, files, async (tmp) => (await run(top, ["commit", "-F", "-", ...(amend ? ["--amend"] : [])], tmp, { input: message })).out);
       // The commit is made: the real index takes HEAD's entries of the committed paths; a failure keeps the commit and says so.
       if (files.length) {
         try {
@@ -225,6 +236,36 @@ export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions
         await Promise.all(added.map((f) => rm(join(top, f), { force: true })));
       }
       return { output: "", refs: await gitRefs(top, o.allowed) };
+    });
+  });
+}
+
+export type CommitDiff = { diff: string; /** Characters before the cut. */ total: number; /** `chars`: the patch was cut to `diffConfig.maxChars`; `patch`: too big, only the file list is given. */ cut?: "chars" | "patch" };
+
+/**
+ * The diff Commit would record for `paths` (same temporary index as `gitCommitFiles`: untracked, deleted and renamed files
+ * included, unchecked files and the real index untouched), as a file list and patch capped at `diffConfig.maxChars`.
+ * No repository lock: it writes only its own index file. Null outside a work tree.
+ */
+export async function gitCommitDiff(cwd: string, o: { paths: unknown } & Pick<RemoteOptions, "allowed">): Promise<CommitDiff | null> {
+  if (!Array.isArray(o.paths) || o.paths.length > MAX_PATHS) throw bad("paths must be a list of at most 10000 paths");
+  const files = o.paths.map(repoPath);
+  if (!files.length) throw bad("No file to describe");
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    const env = await writeEnv(top);
+    const unborn = (await ask(top, ["rev-parse", "--verify", "-q", "HEAD"], env)).code === 1;
+    return withCheckedIndex(top, env, unborn, files, async (tmp) => {
+      const base = ["diff", "--cached", "-M", "--no-ext-diff", "--no-textconv", "--no-color", "--stat-width=200"];
+      const full = await run(top, [...base, "--patch-with-stat"], tmp, { raw: true, maxBuffer: diffConfig.maxBuffer, soft: true });
+      if (full.code === -1) {
+        const list = (await run(top, [...base, "--stat", "--summary"], tmp, { raw: true })).out;
+        return { diff: list.slice(0, diffConfig.maxChars), total: list.length, cut: "patch" as const };
+      }
+      if (full.out.length <= diffConfig.maxChars) return { diff: full.out, total: full.out.length };
+      const cut = full.out.slice(0, diffConfig.maxChars);
+      return { diff: cut.slice(0, cut.lastIndexOf("\n") + 1), total: full.out.length, cut: "chars" as const };
     });
   });
 }

@@ -244,6 +244,7 @@ export function ChangesPanel({
   onReload,
   onGitWrite,
   onResolve,
+  project,
 }: {
   client: Client;
   view: SessionView;
@@ -274,6 +275,8 @@ export function ChangesPanel({
   onGitWrite?: () => void;
   /** "Resolve with Claude": gets the prompt to put into the session's prompt box (never sent). Absent: no button. */
   onResolve?: (prompt: string) => void;
+  /** The project folder (key of the per-project commit message instruction). */
+  project?: string;
 }) {
   useT();
   const fresh = useMemo(() => sessionChanges(view), [view.parts, view.aux]);
@@ -834,7 +837,7 @@ export function ChangesPanel({
       )}
       {notGit}
       {operation && <ConflictBanner client={client} cwd={gitCwd} exact={!!repo} operation={operation} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} onOpen={onOpen} onResolve={onResolve} />}
-      {commitMode && !operation && <CommitBox client={client} cwd={gitCwd} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />}
+      {commitMode && !operation && <CommitBox client={client} cwd={gitCwd} project={project} exact={!!repo} repoName={selectorShown && selectedRepo ? repoLabel(selectedRepo) : undefined} rows={commitRows} checked={checked} onChecked={setChecked} base={gitDiff?.base} onCommitted={onGitWrite} />}
       {/* The result of a Continue or Abort stays after the banner is gone, in every mode. */}
       {git !== false && <GitOpResult cwd={gitCwd} {...OP_RESULT_IDS} />}
       {message ? (

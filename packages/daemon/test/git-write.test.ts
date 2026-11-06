@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { gitBranch } from "../src/git-remote.ts";
-import { gitCommitFiles } from "../src/git-write.ts";
+import { diffConfig, gitCommitDiff, gitCommitFiles } from "../src/git-write.ts";
 
 if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 const posix = process.platform !== "win32";
@@ -332,5 +332,74 @@ describe("gitCommitFiles", () => {
     await gitCommitFiles(dir, { paths: ["a.txt"], message: "m", allowed: inside });
     expect(existsSync(join(dir, ".git", "index.lock"))).toBe(false);
     expect(readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"))).toEqual([]);
+  });
+});
+
+describe("gitCommitDiff", () => {
+  const tmpIndexes = (dir: string) => readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"));
+  it("describes only the checked paths (changed, untracked), leaves the real index and no temporary file", async () => {
+    const { dir, inside } = repo();
+    put(dir, "a.txt", "a1\n");
+    put(dir, "b.txt", "b1\n");
+    put(dir, "n.txt", "new\n");
+    put(dir, "s.txt", "staged\n");
+    run(dir, "add", "s.txt");
+    const before = run(dir, "diff", "--cached", "--name-only");
+    const r = await gitCommitDiff(dir, { paths: ["a.txt", "n.txt"], allowed: inside });
+    expect(r?.diff).toContain("+a1");
+    expect(r?.diff).toContain("+new");
+    expect(r?.diff).not.toContain("b1");
+    expect(r?.diff).not.toContain("staged");
+    expect(r?.cut).toBeUndefined();
+    expect(run(dir, "diff", "--cached", "--name-only")).toBe(before);
+    expect(tmpIndexes(dir)).toEqual([]);
+  });
+  it("shows a rename with both sides checked and a deletion", async () => {
+    const { dir, inside } = repo();
+    renameSync(join(dir, "a.txt"), join(dir, "z.txt"));
+    rmSync(join(dir, "b.txt"));
+    const r = await gitCommitDiff(dir, { paths: ["a.txt", "z.txt", "b.txt"], allowed: inside });
+    expect(r?.diff).toContain("rename from a.txt");
+    expect(r?.diff).toContain("rename to z.txt");
+    expect(r?.diff).toContain("deleted file mode");
+  });
+  it("works before the first commit", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "gwr-")));
+    run(root, "init", "-q", "-b", "main");
+    put(root, "f.txt", "first\n");
+    const r = await gitCommitDiff(root, { paths: ["f.txt"], allowed: (p) => p.startsWith(root) });
+    expect(r?.diff).toContain("+first");
+    expect(tmpIndexes(root)).toEqual([]);
+  });
+  it("cuts a long patch at a line end and keeps the file list; a patch over the buffer gives the list only", async () => {
+    const { dir, inside } = repo();
+    put(dir, "a.txt", `${"line of text\n".repeat(200)}`);
+    put(dir, "b.txt", "b1\n");
+    const keep = { ...diffConfig };
+    try {
+      diffConfig.maxChars = 400;
+      const r = await gitCommitDiff(dir, { paths: ["a.txt", "b.txt"], allowed: inside });
+      expect(r?.cut).toBe("chars");
+      expect(r!.diff.length).toBeLessThanOrEqual(400);
+      expect(r!.diff.endsWith("\n")).toBe(true);
+      expect(r!.total).toBeGreaterThan(400);
+      expect(r!.diff).toContain("a.txt");
+      expect(r!.diff).toContain("b.txt");
+      diffConfig.maxChars = keep.maxChars;
+      diffConfig.maxBuffer = 300;
+      const s = await gitCommitDiff(dir, { paths: ["a.txt", "b.txt"], allowed: inside });
+      expect(s?.cut).toBe("patch");
+      expect(s?.diff).toContain("a.txt");
+      expect(s?.diff).not.toContain("line of text");
+    } finally {
+      Object.assign(diffConfig, keep);
+    }
+  });
+  it("refuses an empty or bad path list; null outside a work tree", async () => {
+    const { dir, root, inside } = repo();
+    await expect(gitCommitDiff(dir, { paths: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+    await expect(gitCommitDiff(dir, { paths: ["../x"], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+    const plain = mkdtempSync(join(root, "plain-"));
+    expect(await gitCommitDiff(plain, { paths: ["a"], allowed: inside })).toBeNull();
   });
 });

@@ -5,8 +5,10 @@ import type { SessionView, ToolCall } from "./store.ts";
 import { pendingPermission, wholeParts } from "./store.ts";
 import { editFiles } from "./tools.ts";
 
-/** `line`: first line to show (a Read's offset). `call`: the Edit/Write call whose diff shows. */
-export type ViewerTarget = { kind: "file"; path: string; line?: number } | { kind: "diff"; call: ToolCall } | { kind: "plan"; plan: string } | { kind: "changes" };
+/** One side of a `compare` target: `label` names the version (a timeline row's title). */
+export type CompareSide = { label: string; content: string };
+/** `line`: first line to show (a Read's offset). `call`: the Edit/Write call whose diff shows. `compare` (Timeline): two versions of one file. */
+export type ViewerTarget = { kind: "file"; path: string; line?: number } | { kind: "diff"; call: ToolCall } | { kind: "plan"; plan: string } | { kind: "changes" } | { kind: "compare"; path: string; old: CompareSide; new: CompareSide };
 
 /** A file target opens the file dialog; every other target opens the popup viewer. */
 export const isFileTarget = (t: ViewerTarget): t is Extract<ViewerTarget, { kind: "file" }> => t.kind === "file";
