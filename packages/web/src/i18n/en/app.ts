@@ -641,6 +641,7 @@ export default {
   "app.prompt.asideNotOpened": "Aside not opened: {message}",
   "app.prompt.notQueued": "Not queued: {message}",
   "app.prompt.attachFailed": "Attach failed: {message}",
+  "app.prompt.attachFolder": "Folders cannot be attached; mention them with @.",
   "app.prompt.attachTooBig": "Attach failed: {name} is larger than {mb} MB",
   "app.prompt.alreadySent": "Already sent",
   "app.prompt.sendNowFailed": "Send now failed: {message}",

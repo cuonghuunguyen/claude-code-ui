@@ -217,6 +217,38 @@ it("attach: an image type the API does not take (svg, bmp, heic) is uploaded as 
   expect($("image-strip")).toBeNull();
 });
 
+// ---- OS files pasted or dropped on the prompt box (GH-613) ----
+
+const fileEvent = (box: HTMLElement, type: "paste" | "drop", files: File[], dirs: string[] = []) => {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  const items = [
+    ...files.map((f) => ({ kind: "file", getAsFile: () => f, webkitGetAsEntry: () => ({ isDirectory: false, isFile: true, name: f.name }) })),
+    ...dirs.map((name) => ({ kind: "file", getAsFile: () => new File([], name), webkitGetAsEntry: () => ({ isDirectory: true, isFile: false, name }) })),
+  ];
+  const dt = { files, items, getData: () => (files[0]?.name ?? "") };
+  Object.defineProperty(e, type === "paste" ? "clipboardData" : "dataTransfer", { value: dt });
+  act(() => void box.dispatchEvent(e));
+  return e;
+};
+
+it("GH-613: a non-image OS file pasted in the box is uploaded and mentioned, its name is not inserted as text", async () => {
+  const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
+  const { box } = await render({ onUpload });
+  const e = fileEvent(box, "paste", [new File(["hi"], "a.txt", { type: "text/plain" })]);
+  expect(e.defaultPrevented).toBe(true);
+  await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
+  expect(onUpload).toHaveBeenCalledTimes(1);
+});
+
+it.each(["paste", "drop"] as const)("GH-613: a folder %s with a file is skipped with an error; the file is attached", async (type) => {
+  const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
+  const { box, $ } = await render({ onUpload });
+  fileEvent(type === "paste" ? box : box.parentElement!, type, [new File(["hi"], "a.txt", { type: "text/plain" })], ["dir"]);
+  await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
+  expect(onUpload).toHaveBeenCalledTimes(1);
+  expect($("prompt-error")!.textContent).toBe("Folders cannot be attached; mention them with @.");
+});
+
 it("attach: a file above the upload limit is refused before it is read or uploaded", async () => {
   const onUpload = vi.fn(async () => "/x");
   const { $ } = await render({ onUpload });
