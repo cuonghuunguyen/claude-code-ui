@@ -25,6 +25,8 @@ export function FileDialog({
   client,
   status,
   cwd,
+  side,
+  sideLabel,
   store,
   gitStamp,
   onClose,
@@ -43,6 +45,8 @@ export function FileDialog({
   client: Client;
   status: ConnectionStatus;
   cwd: string;
+  side?: string;
+  sideLabel?: string;
   store: EditorStore;
   gitStamp?: string;
   onClose: () => void;
@@ -98,6 +102,8 @@ export function FileDialog({
               client={client}
               status={status}
               cwd={cwd}
+              side={side}
+              sideLabel={sideLabel}
               onSend={onSend}
               onCopy={onCopy}
               onShowChanges={onShowChanges}

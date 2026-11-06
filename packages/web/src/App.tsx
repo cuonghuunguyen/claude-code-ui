@@ -2866,6 +2866,8 @@ export function App() {
             client={client.current!}
             status={status}
             cwd={cwd}
+            side={sideOf.sideOf(cwd)}
+            sideLabel={sideOf.label(cwd)}
             onSend={(mention) => (open(ownerOf(ref)), setInsert(mention))}
             onCopy={copyText}
             onViewer={(path) => popFile(path)}
@@ -4011,6 +4013,8 @@ export function App() {
                         client={client.current!}
                         status={status}
                         cwd={panelTarget.cwd}
+                        side={sideOf.sideOf(panelTarget.cwd)}
+                        sideLabel={sideOf.label(panelTarget.cwd)}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
                         onCopy={copyText}
                         onViewer={(path) => popFile(path)}
@@ -4344,6 +4348,8 @@ export function App() {
           client={client.current}
           status={status}
           cwd={fileDialog?.owner?.cwd ?? panelTarget!.cwd}
+          side={sideOf.sideOf(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
+          sideLabel={sideOf.label(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
           store={editors}
           // GH-503: opened from a docked session, the panels (Files, Changes, graph) are the shown session's: those actions are hidden, and Send goes to the docked prompt box.
           gitStamp={fileDialog?.owner ? undefined : treeStamp}

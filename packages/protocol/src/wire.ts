@@ -204,8 +204,19 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "history.create"; path: string; label: string }
   /** New empty file, or folder with `dir` (one level: the parent must exist). Fails `exists`, `bad_name`, `path_not_allowed`. Reply FsPathResult. */
   | { type: "fs.create"; path: string; dir?: boolean }
-  /** New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult. */
-  | { type: "fs.rename"; path: string; name: string }
+  /**
+   * New name in the same folder (`name`: one path segment). A link is renamed, never followed. Fails `exists`, `bad_name`, `not_found`, `root_protected`, `in_use`. Reply FsPathResult.
+   * GH-555: `dir` moves it into that folder (an existing folder in the roots; `into_itself` when `dir` is `path` or below it). `replace`: an existing target is replaced (a file: Local history entry `paste`; a folder: the whole folder).
+   */
+  | { type: "fs.rename"; path: string; name: string; dir?: string; replace?: boolean }
+  /** GH-555: every file, folder and link below `path` (`path` itself first, `rel` ""); links are never followed. Fails `not_found`, `path_not_allowed`, `too_many` (> TRANSFER_MAX_ENTRIES), `too_large` (> TRANSFER_MAX_BYTES). Reply FsWalkResult. */
+  | { type: "fs.walk"; path: string }
+  /** GH-555: copies one file or link to `to` (same Daemon; `to` must not exist: `exists`; a folder: `not_a_file`). Reply FsPathResult. */
+  | { type: "fs.copy"; from: string; to: string }
+  /** GH-555: `length` bytes (at most CHUNK_BYTES, else `bad_request`) of a file from `offset`. Fails `not_a_file`. Reply FsChunkResult. */
+  | { type: "fs.readChunk"; path: string; offset: number; length: number }
+  /** GH-555: `data` (base64) at `offset`. Offset 0 creates the file exclusively (`exists`); later pieces need the file to have exactly `offset` bytes (`conflict`). `mode`: permission bits. Reply `{ size }`. */
+  | { type: "fs.writeChunk"; path: string; offset: number; data: string; mode?: number }
   /** Deletes for good (no trash): a file, a link (never its target) or a folder with everything in it. `dryRun`: only counts. Fails `not_found`, `root_protected`, `in_use`. Reply FsDeleteResult. */
   | { type: "fs.delete"; path: string; dryRun?: boolean }
   /** Copy of a file next to it, named "<name> copy<.ext>", "<name> copy 2<.ext>", ... Files only (`not_a_file`), at most 512 MiB (`too_large`). Reply FsPathResult. */
@@ -653,6 +664,16 @@ export type MediaReadResult = { data: string; size: number; mtime: number; mime:
 export type FsWriteResult = { mtime: number };
 /** The path an fs.create / fs.rename / fs.duplicate made (parent as fs.list gives it, plus the name). */
 export type FsPathResult = { path: string };
+/** `rel`: path below the walked path with `/` ("" = the path itself); folders come before their content. `target`: the text of a link. */
+export type FsWalkEntry = { rel: string; kind: "file" | "dir" | "link"; size: number; mode: number; target?: string };
+export type FsWalkResult = { entries: FsWalkEntry[]; bytes: number };
+/** `data`: base64; `size`: of the whole file. */
+export type FsChunkResult = { data: string; size: number };
+/** Limits of one paste or drop (GH-555), checked before anything is written. */
+export const TRANSFER_MAX_BYTES = 512 * 1024 * 1024;
+export const TRANSFER_MAX_ENTRIES = 10_000;
+/** Largest piece of fs.readChunk / fs.writeChunk. */
+export const CHUNK_BYTES = 1024 * 1024;
 /** Entries below the folder (none for a file or link); `more`: the count stopped at 10 000 entries or 2 s. */
 export type FsDeleteResult = { files: number; folders: number; more?: boolean };
 /** `title`: "Terminal N", the smallest N free in its cwd. */
@@ -690,8 +711,8 @@ export type GitReposResult = { repos: GitRepo[]; truncated?: { scan?: "entries" 
 export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
-/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. */
-export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named"] as const;
+/** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. `paste`: a paste replaced the file (GH-555). */
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "restore", "named", "paste"] as const;
 export type HistoryReason = (typeof HISTORY_REASONS)[number];
 /** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
 export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };

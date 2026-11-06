@@ -374,6 +374,17 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it.skipIf(process.platform === "win32")("a transfer primitive with side goes to that side (GH-555)", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    const f = join(wslRoot, "chunk.bin");
+    expect(await c.request({ type: "fs.writeChunk", side: "wsl:Ubuntu", path: f, offset: 0, data: Buffer.from("hi").toString("base64") })).toMatchObject({ type: "reply", result: { size: 2 } });
+    expect(readFileSync(f, "utf8")).toBe("hi");
+    // The same path on the local daemon is outside its roots.
+    expect(await c.request({ type: "fs.writeChunk", side: "local", path: join(wslRoot, "other.bin"), offset: 0, data: "" })).toMatchObject({ type: "error", code: "path_not_allowed" });
+    c.ws.close();
+  });
+
   // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
   // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
   it.skipIf(process.platform === "win32")("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {
