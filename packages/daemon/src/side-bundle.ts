@@ -1,8 +1,8 @@
-// The Docker side bundle (docs/spec.md "Sides"): the hub assembles, per target (linux-x64, linux-arm64, glibc), one tar with
+// The side bundle (docs/spec.md "Sides"): the hub assembles, per target (linux-x64, linux-arm64 with glibc; darwin-x64, darwin-arm64 for SSH hosts), one tar with
 // everything the side runs on, so the container needs no Node.js, npm, network or build tools. Parts, each fetched from its
 // official source and checked before any use (also when cached): the Node.js runtime (nodejs.org, pinned version and SHA-256 from
-// its SHASUMS256.txt), node-pty with its Linux N-API prebuilds (npm registry, pinned sha512 integrity) and the Claude Code binary
-// and the Agent SDK's JS (`@anthropic-ai/claude-agent-sdk-linux-<arch>` and `@anthropic-ai/claude-agent-sdk` of the SDK version
+// its SHASUMS256.txt), node-pty with its N-API prebuilds (npm registry, pinned sha512 integrity) and the Claude Code binary
+// and the Agent SDK's JS (`@anthropic-ai/claude-agent-sdk-<target>` and `@anthropic-ai/claude-agent-sdk` of the SDK version
 // this build was made with, npm registry, the registry's integrity). The side JS is this build's dist/side (build.mjs), with its
 // inlined packages' license texts. Nothing is re-hosted: the hub downloads, the container gets a copy.
 import { createHash } from "node:crypto";
@@ -14,7 +14,7 @@ import { pipeline } from "node:stream/promises";
 import { NODE_MIN } from "@claude-ui/protocol";
 import { REGISTRY } from "./update.ts";
 
-export type BundleTarget = "linux-x64" | "linux-arm64";
+export type BundleTarget = "linux-x64" | "linux-arm64" | "darwin-x64" | "darwin-arm64";
 
 /** Node.js runtime of the bundle. SHA-256 values from https://nodejs.org/dist/v<version>/SHASUMS256.txt (update both on a bump). */
 export const NODE = {
@@ -22,9 +22,11 @@ export const NODE = {
   sha256: {
     "linux-x64": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
     "linux-arm64": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+    "darwin-x64": "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035",
+    "darwin-arm64": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
   } satisfies Record<BundleTarget, string>,
 };
-/** node-pty with Linux prebuilds (N-API, glibc 2.28+) in its npm tarball; the hub's own node-pty 1.1.0 has none for Linux. */
+/** node-pty with Linux (N-API, glibc 2.28+) and macOS prebuilds in its npm tarball; the hub's own node-pty 1.1.0 has none for Linux. */
 export const PTY = { name: "node-pty", version: "1.2.0-beta.15", integrity: "sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==" };
 /** Oldest glibc the Node.js and node-pty binaries run on. */
 const MIN_GLIBC = [2, 28] as const;
@@ -67,13 +69,13 @@ export const USABLE_NODE_FN = `usable_node() { n=; command -v node >/dev/null 2>
 const NODE_ARCH_LINES = 'case "$(uname -m)" in x86_64|amd64) na=x64;; aarch64|arm64) na=arm64;; *) na=;; esac';
 const NODE_PROBE_LINES = [USABLE_NODE_FN, NODE_ARCH_LINES, 'usable_node "$na" && emit foundnode 1 || emit foundnode 0'];
 export const TARGET_PROBE_LINES = [...TARGET_PROBE_BASE, ...NODE_PROBE_LINES];
-/** The probe lines of an SSH host: its Node.js may be a macOS or BSD one (`posix`), which only the npm install runs on. */
+/** The probe lines of an SSH host: its Node.js may be a macOS or BSD one (`posix`): the npm install and a darwin bundle run on it. */
 export const TARGET_PROBE_LINES_POSIX = TARGET_PROBE_LINES.map((l) => l.replace('usable_node "$na" &&', 'usable_node "$na" posix &&'));
 export const TARGET_PROBE = TARGET_PROBE_LINES.join("\n");
 /** The probe of a container: nvm first, like its setup script. */
 export const DOCKER_PROBE = [NVM_LINE, ...TARGET_PROBE_LINES].join("\n");
 
-export type ContainerTarget = { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string; cxxRuntime: boolean; /** A Node.js in range is in the target (the bundle then leaves its own out). */ node?: boolean };
+export type ContainerTarget = { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string; cxxRuntime: boolean; /** A Node.js in range is in the target (the bundle then leaves its own out). */ node?: boolean; /** `uname -s` (SSH hosts only; absent: Linux). */ os?: string };
 
 /** The target from `CLAUDE_UI_CHECK` lines (other lines are shell noise); undefined without an arch line. */
 export function parseTarget(out: string): ContainerTarget | undefined {
@@ -85,13 +87,19 @@ export function parseTarget(out: string): ContainerTarget | undefined {
   const arch = kv.get("arch");
   if (!arch) return undefined;
   const libc = kv.get("libc");
-  return { arch, libc: libc === "glibc" || libc === "musl" ? libc : "unknown", ...(kv.get("glibc") && { glibc: kv.get("glibc") }), cxxRuntime: kv.get("cxxrt") === "1", ...(kv.has("foundnode") && { node: kv.get("foundnode") === "1" }) };
+  return { arch, libc: libc === "glibc" || libc === "musl" ? libc : "unknown", ...(kv.get("glibc") && { glibc: kv.get("glibc") }), cxxRuntime: kv.get("cxxrt") === "1", ...(kv.has("foundnode") && { node: kv.get("foundnode") === "1" }), ...(kv.get("os") && { os: kv.get("os") }) };
 }
 
-/** The bundle that runs in a container, or why none does (a plain phrase: "the container uses musl ..."): then the side installs with npm. */
+/**
+ * The bundle that runs in a container, or why none does (a plain phrase: "the container uses musl ..."): then the side installs with npm.
+ * `os` (an SSH host's `uname -s`; absent: Linux): macOS (Darwin) gets a darwin bundle with no libc check; any other non-Linux OS none.
+ */
 export function bundleTargetOf(t: Partial<ContainerTarget>, noun: "container" | "distro" | "host" = "container"): { target: BundleTarget } | { reason: string } {
+  const mac = t.os === "Darwin";
+  if (t.os && !mac && t.os !== "Linux") return { reason: `the ${noun} runs ${t.os}; the bundle covers Linux and macOS only` };
   const arch = t.arch === "x86_64" || t.arch === "amd64" ? "x64" : t.arch === "aarch64" || t.arch === "arm64" ? "arm64" : undefined;
   if (!arch) return { reason: `the ${noun}'s CPU (${t.arch || "unknown"}) has no bundle (x86_64 and aarch64 only)` };
+  if (mac) return { target: `darwin-${arch}` };
   if (t.libc === "musl") return { reason: `the ${noun} uses musl (for example Alpine); the bundle needs glibc` };
   if (t.libc !== "glibc") return { reason: `the ${noun}'s C library could not be detected; the bundle needs glibc` };
   const [maj, min] = (t.glibc ?? "").split(".").map(Number);
@@ -118,6 +126,9 @@ export function sideCacheDir(env: NodeJS.ProcessEnv = process.env, home = homedi
 export type Part = { file: string; label: string; url?: string; sha256?: string; integrity?: string; registryPackage?: { name: string; version: string } };
 
 export const nodeDirName = (target: BundleTarget) => `node-v${NODE.version}-${target}`;
+/** The target's arch as `process.arch` names it (`x64`, `arm64`). */
+export const archOf = (target: BundleTarget) => target.slice(target.indexOf("-") + 1);
+export const isDarwin = (target: BundleTarget) => target.startsWith("darwin-");
 export const claudePackage = (target: BundleTarget) => `claude-agent-sdk-${target}`;
 
 /** `node: "found"`: the target has its own Node.js in range, so the Node.js part is left out (nothing is fetched from nodejs.org). */

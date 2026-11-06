@@ -642,11 +642,11 @@ export type SideCheckFacts = {
   installedKey?: string;
   /** Docker: the writable folders among /tmp, /dev/shm and the home folder. */
   writable?: string[];
-  /** Docker or WSL: the container's or distro's CPU (`uname -m`), C library and glibc version. */
-  target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string };
-  /** Docker or WSL: how an install gets claude-ui in: the host-assembled bundle, or npm in the container or distro (`reason`: why not the bundle). */
+  /** Docker, WSL or SSH: the CPU (`uname -m`), C library and glibc version; `os`: an SSH host's `uname -s` (absent: Linux). */
+  target?: { arch: string; libc: "glibc" | "musl" | "unknown"; glibc?: string; os?: string };
+  /** Docker, WSL or SSH: how an install gets claude-ui in: the host-assembled bundle, or npm in the container, distro or host (`reason`: why not the bundle). */
   install?: { method: "bundle" | "npm"; reason?: string; /** Bundle only, when the hub looked at its cache: every part file is there (`cached`), or the start must download them (`download`). */ parts?: "cached" | "download" };
-  /** Docker or WSL: tools and libraries found (each item of "What this container needs"). */
+  /** Docker, WSL or SSH: tools and libraries found (each item of "What this container needs"). */
   tools?: { tar: boolean; gzip: boolean; npm: boolean; git: boolean; cxxRuntime: boolean };
   /** Docker: false when the container has no network (`--network none`). */
   network?: boolean;

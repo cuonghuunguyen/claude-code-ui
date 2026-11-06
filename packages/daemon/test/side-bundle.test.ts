@@ -33,6 +33,26 @@ describe("target", () => {
     expect(bundleTargetOf({ arch: "x86_64", libc: "unknown", cxxRuntime: true })).toEqual({ reason: expect.stringMatching(/C library/) });
   });
 
+  it("macOS (os=Darwin) gets a darwin bundle without any libc check; another OS is named in the reason", () => {
+    expect(parseTarget("CLAUDE_UI_CHECK arch=arm64\nCLAUDE_UI_CHECK libc=unknown\nCLAUDE_UI_CHECK cxxrt=0\nCLAUDE_UI_CHECK os=Darwin\n")).toEqual({ arch: "arm64", libc: "unknown", cxxRuntime: false, os: "Darwin" });
+    const mac = { os: "Darwin", libc: "unknown" as const, cxxRuntime: false };
+    expect(bundleTargetOf({ arch: "arm64", ...mac }, "host")).toEqual({ target: "darwin-arm64" });
+    expect(bundleTargetOf({ arch: "x86_64", ...mac }, "host")).toEqual({ target: "darwin-x64" });
+    expect(bundleTargetOf({ arch: "ppc", ...mac }, "host")).toEqual({ reason: expect.stringMatching(/ppc/) });
+    expect(bundleTargetOf({ arch: "amd64", os: "FreeBSD", libc: "unknown", cxxRuntime: true }, "host")).toEqual({ reason: "the host runs FreeBSD; the bundle covers Linux and macOS only" });
+    // An explicit Linux keeps the Linux rules.
+    expect(bundleTargetOf({ arch: "x86_64", os: "Linux", libc: "glibc", glibc: "2.36", cxxRuntime: true }, "host")).toEqual({ target: "linux-x64" });
+    expect(bundleTargetOf({ arch: "x86_64", os: "Linux", libc: "unknown", cxxRuntime: true }, "host")).toEqual({ reason: expect.stringMatching(/C library/) });
+    expect(installMethodOf({ arch: "arm64", ...mac, node: true }, true, "host")).toEqual({ method: "bundle", target: "darwin-arm64", node: "found" });
+  });
+
+  it("darwin parts: the darwin Node.js tarball and Claude Code package", () => {
+    const p = partsFor("darwin-arm64", { sdkVersion: "0.3.1" });
+    expect(p.find((x) => x.file === "node.tar.gz")).toMatchObject({ url: expect.stringMatching(/node-v[\d.]+-darwin-arm64\.tar\.gz$/), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(p.find((x) => x.file === "claude.tgz")?.registryPackage).toEqual({ name: "@anthropic-ai/claude-agent-sdk-darwin-arm64", version: "0.3.1" });
+    expect(partsFor("darwin-x64", { sdkVersion: "0.3.1", node: "found" }).map((x) => x.file)).toEqual(["node-pty.tgz", "sdk.tgz", "claude.tgz"]);
+  });
+
   it("parses foundnode; installMethodOf picks found or pinned Node.js on the bundle path", () => {
     const g = "CLAUDE_UI_CHECK arch=x86_64\nCLAUDE_UI_CHECK libc=glibc\nCLAUDE_UI_CHECK glibc=2.36\nCLAUDE_UI_CHECK cxxrt=1\n";
     expect(installMethodOf(parseTarget(`${g}CLAUDE_UI_CHECK foundnode=1`), true)).toEqual({ method: "bundle", target: "linux-x64", node: "found" });
@@ -48,9 +68,9 @@ describe("target", () => {
   });
 
   describe("NODE_OK_JS (the rule the candidate node runs)", () => {
-    const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string }) => {
+    const ok = (o: { v?: string; min?: string; arch?: string; want?: string; platform?: string; bun?: string; deno?: string; posix?: boolean }) => {
       let out: string | undefined;
-      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? ""], platform: o.platform ?? "linux", arch: o.arch ?? "x64", stdout: { write: (t: string) => (out = t) } };
+      const process = { versions: { node: o.v ?? "22.0.0", ...(o.bun && { bun: o.bun }), ...(o.deno && { deno: o.deno }) }, argv: ["node", o.min ?? "22", o.want ?? "", ...(o.posix ? ["posix"] : [])], platform: o.platform ?? "linux", arch: o.arch ?? "x64", stdout: { write: (t: string) => (out = t) } };
       runInNewContext(NODE_OK_JS, { process });
       return out === NODE_OK_TOKEN;
     };
@@ -68,6 +88,13 @@ describe("target", () => {
       expect(ok({ want: "", arch: "ia32" })).toBe(true);
       expect(ok({ bun: "1.1.0" })).toBe(false);
       expect(ok({ deno: "2.0.0" })).toBe(false);
+    });
+    it("posix (SSH hosts, darwin bundles): a macOS Node.js of the asked arch counts; Windows never does", () => {
+      expect(ok({ platform: "darwin", want: "arm64", arch: "arm64", posix: true })).toBe(true);
+      expect(ok({ platform: "darwin", want: "arm64", arch: "x64", posix: true })).toBe(false);
+      expect(ok({ platform: "freebsd", posix: true })).toBe(true);
+      expect(ok({ platform: "win32", posix: true })).toBe(false);
+      expect(ok({ platform: "darwin", want: "arm64", arch: "arm64" })).toBe(false);
     });
   });
 
