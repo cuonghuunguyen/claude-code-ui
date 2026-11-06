@@ -10,6 +10,7 @@ import { trapTab } from "./focus-trap.ts";
 import { useT } from "./i18n.ts";
 import { DialogClose } from "./viewer-dialog.tsx";
 import type { RepoList } from "./repo-choice.ts";
+import type { GitRepo } from "@claude-ui/protocol";
 
 type Client = ReturnType<typeof connect>;
 
@@ -25,6 +26,8 @@ export function FileDialog({
   client,
   status,
   cwd,
+  side,
+  sideLabel,
   store,
   gitStamp,
   onClose,
@@ -33,6 +36,7 @@ export function FileDialog({
   onShowChanges,
   repos,
   onShowGraph,
+  onOpenCommit,
   onOpenInFiles,
   onOpenTab,
   onItem,
@@ -43,6 +47,8 @@ export function FileDialog({
   client: Client;
   status: ConnectionStatus;
   cwd: string;
+  side?: string;
+  sideLabel?: string;
   store: EditorStore;
   gitStamp?: string;
   onClose: () => void;
@@ -52,6 +58,7 @@ export function FileDialog({
   onShowChanges?: (path: string) => void;
   repos?: RepoList;
   onShowGraph?: () => void;
+  onOpenCommit?: (repo: GitRepo, hash: string) => void;
   /** Open in editor: close the dialog and show the Files tab. */
   onOpenInFiles?: () => void;
   /** Open in tab (GH-399): the caller closes the dialog and opens the file as a main-area tab. */
@@ -98,11 +105,14 @@ export function FileDialog({
               client={client}
               status={status}
               cwd={cwd}
+              side={side}
+              sideLabel={sideLabel}
               onSend={onSend}
               onCopy={onCopy}
               onShowChanges={onShowChanges}
               repos={repos}
               onShowGraph={onShowGraph}
+              onOpenCommit={onOpenCommit}
               onOpenInFiles={onOpenInFiles}
               onOpenTab={onOpenTab && ((p) => ((keepFocus.current = true), onOpenTab(p)))}
               onItem={onItem}

@@ -22,6 +22,7 @@ import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 import { noteRefs } from "./git-refs.ts";
+import { ackGraphFocus, useGraphFocus } from "./graph-focus.ts";
 import { timeAgo } from "./sessions.ts";
 import { useColorTheme, useDark } from "./theme.ts";
 import { diffThemes } from "./code-palette.ts";
@@ -245,6 +246,20 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
 
   const filtered = !!(q.text || q.author);
   const [selected, setSelected] = useState<string>();
+  // Annotate: show one commit (the filter finds it by hash), select it once the list holds it.
+  const focus = useGraphFocus(cwd);
+  const wanted = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!focus) return;
+    setRef(HEAD);
+    setAuthor("");
+    setText(focus.hash);
+    wanted.current = focus.hash;
+    ackGraphFocus(cwd, focus);
+  }, [focus]);
+  useEffect(() => {
+    if (wanted.current && commits.some((c) => c.hash === wanted.current)) (setSelected(wanted.current), (wanted.current = undefined));
+  }, [commits]);
   const index = commits.findIndex((c) => c.hash === selected);
   const scroller = useRef<HTMLDivElement>(null);
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW, overscan: 10, useFlushSync: false, initialRect: { width: 0, height: window.innerHeight },

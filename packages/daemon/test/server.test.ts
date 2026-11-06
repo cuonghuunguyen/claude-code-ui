@@ -1261,6 +1261,13 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "bin" })).toMatchObject({ code: "binary" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "../x" })).toMatchObject({ code: "bad_request" });
     expect(await c.request({ type: "git.fileAt", cwd: repo, hash, path: "nope" })).toMatchObject({ code: "not_found" });
+    // git.blame (GH-564): the working tree, so an edited line is not committed.
+    writeFileSync(join(repo, "t.txt"), "hi\nmore\n");
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "t.txt" })).toMatchObject({ result: { blame: { lines: [hash, null], commits: { [hash]: { author: "T", summary: "first" } } } } });
+    expect(await c.request({ type: "git.blame", cwd: join(webRoot, ".."), path: "t.txt" })).toMatchObject({ code: "cwd_not_allowed" });
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "../x" })).toMatchObject({ code: "bad_request" });
+    writeFileSync(join(repo, "big.txt"), "x".repeat(2 * 1024 * 1024 + 1));
+    expect(await c.request({ type: "git.blame", cwd: repo, path: "big.txt" })).toMatchObject({ code: "too_large", size: 2 * 1024 * 1024 + 1 });
   });
 
   describe("submodule folders and gitlink paths (GH-388)", () => {

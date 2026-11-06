@@ -36,6 +36,7 @@ import type {
   ArtifactsResult,
   TodoItem,
   UploadResult,
+  GitRepo,
   GitStatus,
   GitStatusResult,
   TerminalListResult,
@@ -142,7 +143,8 @@ import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { isDirty } from "./files.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
-import { repoProjectKey, type RepoList } from "./repo-choice.ts";
+import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
+import { focusCommit } from "./graph-focus.ts";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
@@ -2333,6 +2335,12 @@ export function App() {
     if (a === "side") setBottomMax(false);
     openArea(a);
   };
+  /** Annotate: the Graph shows one commit of `repo` (the selector set to it first). */
+  const openCommit = (repo: GitRepo, hash: string) => {
+    if (repoList?.projectKey) setRepoChoice(repoList.projectKey, repo.rel);
+    focusCommit(repo.path, hash);
+    reveal("graph");
+  };
   // GH-355 drag and drop: the pane being dragged and the target it is over (Esc cancels a native drag: dragend without drop).
   const [drag, setDrag] = useState<PaneId>();
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
@@ -2866,6 +2874,8 @@ export function App() {
             client={client.current!}
             status={status}
             cwd={cwd}
+            side={sideOf.sideOf(cwd)}
+            sideLabel={sideOf.label(cwd)}
             onSend={(mention) => (open(ownerOf(ref)), setInsert(mention))}
             onCopy={copyText}
             onViewer={(path) => popFile(path)}
@@ -2888,6 +2898,7 @@ export function App() {
             gitStamp={treeStamp}
             repos={cwd === panelCwd ? repoList : undefined}
             onShowGraph={() => reveal("graph")}
+            onOpenCommit={openCommit}
             visible={here && (lg || pane === "session")}
           />
         ) : (
@@ -4011,6 +4022,8 @@ export function App() {
                         client={client.current!}
                         status={status}
                         cwd={panelTarget.cwd}
+                        side={sideOf.sideOf(panelTarget.cwd)}
+                        sideLabel={sideOf.label(panelTarget.cwd)}
                         onSend={(mention) => (setInsert(mention), setPane("session"))}
                         onCopy={copyText}
                         onViewer={(path) => popFile(path)}
@@ -4032,6 +4045,7 @@ export function App() {
                         gitStamp={treeStamp}
                         repos={repoList}
                         onShowGraph={() => reveal("graph")}
+                        onOpenCommit={openCommit}
                         visible={inSight("files")}
                         sync={false}
                       />
@@ -4344,11 +4358,14 @@ export function App() {
           client={client.current}
           status={status}
           cwd={fileDialog?.owner?.cwd ?? panelTarget!.cwd}
+          side={sideOf.sideOf(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
+          sideLabel={sideOf.label(fileDialog?.owner?.cwd ?? panelTarget!.cwd)}
           store={editors}
           // GH-503: opened from a docked session, the panels (Files, Changes, graph) are the shown session's: those actions are hidden, and Send goes to the docked prompt box.
           gitStamp={fileDialog?.owner ? undefined : treeStamp}
           repos={fileDialog?.owner && fileDialog.owner.cwd !== panelCwd ? undefined : repoList}
           onShowGraph={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("graph"))}
+          onOpenCommit={fileDialog?.owner ? undefined : (repo, hash) => (setFileDialog(undefined), openCommit(repo, hash))}
           onClose={() => setFileDialog(undefined)}
           onSend={(m) => (setFileDialog(undefined), fileDialog?.owner ? dockCtl(fileDialog.owner.id).quote(m) : (setInsert(m), setPane("session")))}
           onCopy={copyText}

@@ -61,6 +61,19 @@ describe("local history over the wire", () => {
     c.ws.close();
   });
 
+  it("fs.rename with replace over a text file snapshots it with reason paste", async () => {
+    const dir = join(root, "paste");
+    mkdirSync(join(dir, "to"), { recursive: true });
+    writeFileSync(join(dir, "a.txt"), "new");
+    writeFileSync(join(dir, "to/a.txt"), "old");
+    const c = await client();
+    expect(await c.request({ type: "fs.rename", path: join(dir, "a.txt"), name: "a.txt", dir: join(dir, "to"), replace: true })).toMatchObject({ type: "reply" });
+    const l = (await c.request({ type: "history.list", path: join(dir, "to/a.txt") })).result.entries;
+    expect(l).toMatchObject([{ reason: "paste", size: 3 }]);
+    expect((await c.request({ type: "history.read", path: join(dir, "to/a.txt"), id: l[0].id })).result.content).toBe("old");
+    c.ws.close();
+  });
+
   it("refuses a path outside the roots", async () => {
     const c = await client();
     for (const type of ["history.list", "history.read", "history.restore", "history.delete", "history.create", "history.rename"])

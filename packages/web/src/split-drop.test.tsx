@@ -55,3 +55,14 @@ it("GH-402 a disabled area ignores the drag", () => {
   act(() => void area.dispatchEvent(ev("drop", { [PANE_DRAG_TYPE]: "plan" })));
   expect(onDrop).not.toHaveBeenCalled();
 });
+
+it("GH-555 a file tree row drag (application/x-claude-ui-entry) is neither shown nor dropped by the split area", () => {
+  const onDrop = vi.fn();
+  const { area, state } = mount({ enabled: () => true, onDrop, refuse: () => undefined });
+  const over = ev("dragover", { "application/x-claude-ui-entry": "{}", "text/plain": "/p/a.ts" });
+  act(() => void area.dispatchEvent(over));
+  act(() => void area.dispatchEvent(ev("drop", { "application/x-claude-ui-entry": "{}", "text/plain": "/p/a.ts" })));
+  expect(over.defaultPrevented).toBe(false);
+  expect(state()).toBeUndefined();
+  expect(onDrop).not.toHaveBeenCalled();
+});
