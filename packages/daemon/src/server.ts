@@ -2377,7 +2377,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           // Paths and output are never logged. A failed git call may have changed files too.
-          const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: (p: string) => localHistory.before(p, "rollback") };
+          const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: localHistory.before };
           try {
             if (msg.type === "git.rollbackPreview") return reply({ preview: await gitRollbackPreview(cwd, { paths: msg.paths, ...o }) });
             const rolledBack = msg.type === "git.rollback" ? await gitRollback(cwd, { paths: msg.paths, token: msg.token, deleteAdded: msg.deleteAdded, ...o }) : await gitRollbackHunk(cwd, { path: msg.path, hunk: msg.hunk, maxBytes: MAX_FILE_BYTES, ...o });
@@ -2409,7 +2409,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           try {
-            const written = await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: (p) => inRoots(real(p) ?? p) });
+            const written = await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: (p) => inRoots(real(p) ?? p), snapshot: localHistory.before });
             markRepoStale(cwd);
             return reply({ written });
           } catch (e) {
@@ -2437,7 +2437,7 @@ export function createDaemon(opts: {
           // Output is never logged. A hook may have changed files even when the run failed.
           try {
             const action = msg.type === "git.undoCommit" ? "undo" : msg.type === "git.cherryPick" ? "cherryPick" : msg.type === "git.revert" ? "revert" : "reset";
-            const written = await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, allowed: (p) => inRoots(real(p) ?? p) });
+            const written = await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, snapshot: localHistory.before, allowed: (p) => inRoots(real(p) ?? p) });
             markRepoStale(cwd);
             return reply({ written });
           } catch (e) {
@@ -2451,7 +2451,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
           try {
-            const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
+            const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: localHistory.before };
             const written = await (msg.type === "git.checkout" ? gitCheckout(cwd, { ref: msg.ref, smart: msg.smart, ...o }) : gitBranchCreate(cwd, { name: msg.name, at: msg.at, checkout: msg.checkout, smart: msg.smart, ...o }));
             markRepoStale(cwd);
             return reply({ written });
@@ -2493,7 +2493,7 @@ export function createDaemon(opts: {
           try {
             const written = msg.type === "git.stashPush"
               ? await gitStashPush(cwd, { message: msg.message, includeUntracked: msg.includeUntracked, allowed: inside })
-              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside });
+              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside, snapshot: localHistory.before });
             markRepoStale(cwd);
             return reply({ written });
           } catch (e) {

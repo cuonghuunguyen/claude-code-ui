@@ -66,7 +66,7 @@ Feature: Commit menu of the Graph: Undo Commit, Revert Commit, Cherry-Pick and R
     And the page has no horizontal scroll
     And I capture "pick-banner-phone"
 
-  Scenario: Reset hard shows the command and the lost file, and refuses when a file changed after the dialog opened
+  Scenario: Reset hard shows the command and the lost file, refuses when a file changed after the dialog opened, and keeps the lost text in the Timeline
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project's main has the commit "second" that changes "README.md" and an uncommitted edit of it
@@ -93,3 +93,11 @@ Feature: Commit menu of the Graph: Undo Commit, Revert Commit, Cherry-Pick and R
     And the last commit of the project is "initial"
     And the work tree of the project is clean
     And I capture "reset-done"
+    When I open the Files tab of the side panel
+    And I open the tree file "README.md"
+    And I open the Timeline
+    Then the Timeline lists "Before reset, initial"
+    When I choose "Restore" in the menu of the Timeline row "Before reset"
+    And I close the file tree drawer
+    Then the Files editor text is "changed again"
+    And I capture "reset-restored"

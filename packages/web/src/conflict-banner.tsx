@@ -46,7 +46,6 @@ export function ConflictBanner({ client, cwd, exact, operation, repoName, onOpen
     );
   const doAbort = () => {
     setAbort(false);
-    // shortcut: no "snapshot before" yet; Local history and Timeline is the place to hook it in, before this request.
     runRemoteOp(client, { type: "git.abort", cwd, kind, ...ex }, of(t("files.changes.opAborted", { kind })), of(t("files.changes.opAborting", { kind })));
   };
   const btn = "max-md:h-11";

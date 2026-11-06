@@ -4,11 +4,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash } from "@claude-ui/protocol";
+import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { branchInfo, branchRef, exclusive, gitBranch, HARDEN, MAX_ERROR, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { openChecked, OPEN_READ, readAll, sameFile } from "./fd-check.ts";
 import { runGit } from "./git-runner.ts";
+import { MAX_BYTES } from "./local-history.ts";
 
 /** Test seam: the timeout of a write (hooks may run tests). */
 export const writeConfig = { timeout: 300_000 };
@@ -218,7 +219,7 @@ export async function gitContinue(cwd: string, o: { kind: unknown } & RemoteOpti
 }
 
 /** Conflict banner Abort: `<kind> --abort`; kind `conflict`: the conflicted paths back to HEAD (other work stays; a failed `stash pop` keeps its entry). Null outside a work tree. */
-export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions): Promise<Written | null> {
+export async function gitAbort(cwd: string, o: { kind: unknown; snapshot: Snapshot } & RemoteOptions): Promise<Written | null> {
   const kind = kindOf(o.kind);
   return pinScope(async () => {
     const top = await topIn(cwd, o.allowed);
@@ -226,6 +227,8 @@ export async function gitAbort(cwd: string, o: { kind: unknown } & RemoteOptions
     return exclusive(top, async () => {
       const env = await writeEnvNoEditor(top);
       const op = await sameOperation(top, kind);
+      // Conflict markers and the work the abort drops (tracked changes vs HEAD) go to Local history first.
+      snapFiles(top, new Set([...op.conflicted, ...(kind === "conflict" ? [] : await nameList(top, ["diff", "--name-only", "-z", "--no-renames", "HEAD"], env))]), "abort", o.snapshot);
       if (kind !== "conflict") return { output: (await run(top, [kind, "--abort"], env)).out, refs: await gitRefs(top, o.allowed) };
       // Only the conflicted paths go back to HEAD (`reset --merge` would also drop other staged work). One that HEAD lacks (added by the stash) is removed.
       const files = op.conflicted;
@@ -248,7 +251,7 @@ const MAX_LOSE = 50;
 const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
 
 /** Everything the commit menu shows for `hash` and the exact argv of each action, re-read from git. `hard`: also the files a hard reset would lose. */
-async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, hard: boolean): Promise<GitCommitMenu> {
+async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, hard: boolean): Promise<{ menu: GitCommitMenu; lost: string[] }> {
   const known = await ask(top, ["rev-parse", "--verify", "-q", `${hash}^{commit}`], env);
   if (known.code === 1) throw bad("Unknown commit");
   const parents = (await run(top, ["rev-list", "--parents", "-n", "1", hash], env)).out.split(" ").length - 1;
@@ -259,9 +262,10 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
   if (head) info.headHash = head;
   const op = await gitOperation(top);
   const blocked = !headRef ? "HEAD is detached" : !head ? "No commits yet" : op ? (op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`) : undefined;
-  if (blocked) return { ...info, why: { undo: blocked, revert: blocked, cherryPick: blocked, reset: blocked } };
+  if (blocked) return { menu: { ...info, why: { undo: blocked, revert: blocked, cherryPick: blocked, reset: blocked } }, lost: [] };
   const current = shortRef(headRef);
   const why: NonNullable<GitCommitMenu["why"]> = {};
+  let lost: string[] = [];
   const ancestor = async (a: string, b: string) => {
     try {
       return (await ask(top, ["merge-base", "--is-ancestor", a, b], env)).code === 0;
@@ -293,7 +297,7 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
     };
     const lose = new Set(await names("HEAD"));
     for (const f of await names("--diff-filter=A", "HEAD", hash)) if (await lstat(join(top, f)).then(() => true, () => false)) lose.add(f);
-    const paths = [...lose].sort();
+    const paths = (lost = [...lose].sort());
     const h = createHash("sha256").update(head);
     for (const f of paths) {
       const st = await lstat(join(top, f)).catch(() => undefined);
@@ -304,7 +308,7 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
     info.dirty = h.digest("hex");
   }
   if (Object.keys(why).length) info.why = why;
-  return info;
+  return { menu: info, lost };
 }
 
 /** Commit menu data of `hash`; null outside a work tree. Read-only: no lock. */
@@ -314,11 +318,11 @@ export async function gitCommitMenu(cwd: string, o: { hash: unknown; hard?: unkn
   return pinScope(async () => {
     const top = await topIn(cwd, o.allowed);
     if (!top) return null;
-    return commitInfo(top, hash, await writeEnv(top), o.hard === true);
+    return (await commitInfo(top, hash, await writeEnv(top), o.hard === true)).menu;
   });
 }
 
-type CommitAction = { hash: unknown; headRef: unknown; headHash: unknown; argv: unknown; mode?: unknown; dirty?: unknown } & RemoteOptions;
+type CommitAction = { hash: unknown; headRef: unknown; headHash: unknown; argv: unknown; mode?: unknown; dirty?: unknown; snapshot: Snapshot } & RemoteOptions;
 /**
  * Undo Commit, Revert Commit, Cherry-Pick or Reset Current Branch to Here, as the menu showed it (`gitCommitMenu`): the daemon runs only the argv it computes
  * again to the same words, against the same HEAD; a hard reset also needs the same lost files (`dirty`). A stop on conflicts is a success whose reply has `operation`.
@@ -334,13 +338,13 @@ export async function gitCommitAction(cwd: string, action: "undo" | "revert" | "
     if (!top) return null;
     return exclusive(top, async () => {
       const env = await writeEnvNoEditor(top);
-      const info = await commitInfo(top, hash, env, o.mode === "hard");
+      const { menu: info, lost } = await commitInfo(top, hash, env, o.mode === "hard");
       if (o.headRef !== info.headRef || o.headHash !== info.headHash) throw new WorktreeError("stale", "HEAD moved since the menu opened: reopen it");
       const argv = action === "reset" ? info.reset?.[o.mode as "soft" | "mixed" | "hard"] : info[action];
       if (!argv) throw bad(info.why?.[action] ?? `${action} is not available`);
       if (shown.length !== argv.length || shown.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the menu opened");
       if (o.mode === "hard" && o.dirty !== info.dirty) throw new WorktreeError("stale", "Files changed since the dialog opened: reopen it");
-      // shortcut: no "snapshot before" yet; Local history and Timeline (#565) hook in here, before reset --hard.
+      if (o.mode === "hard") snapFiles(top, lost, "reset", o.snapshot);
       return runStop(top, argv.slice(HARDEN.length), env, o.allowed);
     });
   });
@@ -454,7 +458,20 @@ function entriesOf(status: string, files: Set<string>): { entries: Entry[]; reco
   return { entries, records };
 }
 
-type Common = { allowed: RemoteOptions["allowed"]; /** Local history entry of a file about to change (GH-565). */ snapshot: (hostPath: string) => void };
+/** Local history entry (`localHistory.before`) of a file about to change (GH-565, GH-606). */
+type Snapshot = (hostPath: string, reason: HistoryReason, content?: string) => void;
+type Common = { allowed: RemoteOptions["allowed"]; snapshot: Snapshot };
+/** Snapshots the repository paths that are plain files on disk now; deleted files, links and folders have no content to keep. */
+function snapFiles(top: string, paths: Iterable<string>, reason: HistoryReason, snap: Snapshot) {
+  for (const p of paths) {
+    const host = hostOf(top, p);
+    if (existsSync(host) && lstatSync(host).isFile()) snap(host, reason);
+  }
+}
+/** Raw NUL-separated name list of a git call (`run` keeps only the last 8000 chars of text). */
+async function nameList(top: string, args: string[], env: NodeJS.ProcessEnv): Promise<string[]> {
+  return (await run(top, args, env, { raw: true })).out.split("\0").filter(Boolean);
+}
 /** The validated repository-relative paths of a rollback. */
 function fileSet(paths: unknown): Set<string> {
   if (!Array.isArray(paths) || !paths.length || paths.length > MAX_PATHS) throw bad("paths must be a list of 1 to 10000 paths");
@@ -520,10 +537,7 @@ export async function gitRollback(cwd: string, o: { paths: unknown; token: unkno
         changing.push(e.path);
         if (e.oldPath !== undefined) (restore.push(e.oldPath), changing.push(e.oldPath));
       }
-      for (const p of changing) {
-        const host = hostOf(top, p);
-        if (existsSync(host) && lstatSync(host).isFile()) o.snapshot(host);
-      }
+      snapFiles(top, changing, "rollback", o.snapshot);
       const batch = async (cmd: string[], list: string[]) => list.length ? (await run(top, [...LITERAL, ...cmd, ...FROM_STDIN], env, { input: list.join("\0") })).out : "";
       const out = [
         await batch(["add", "-A"], track),
@@ -564,7 +578,7 @@ export async function gitRollbackHunk(cwd: string, o: { path: unknown; hunk: unk
         const bom = text.startsWith("\uFEFF");
         const next = revertHunk(bom ? text.slice(1) : text, h);
         if (next === undefined) throw new WorktreeError("stale", "The file changed since the diff was shown");
-        o.snapshot(file);
+        o.snapshot(file, "rollback");
         // Atomic: a temp file beside the target (same mode), renamed over it; any error leaves the original. A path swapped for a link meanwhile is replaced, never followed.
         const tmp = `${file}.claude-ui-${randomUUID()}.tmp`;
         try {
@@ -603,7 +617,7 @@ const refuseOperation = async (top: string) => {
  * `git switch <args>`. Tracked changes that would be overwritten: `local_changes` (the UI offers Smart checkout), or with `smart` stash them,
  * switch and `stash pop` (a conflict stops like a merge: `operation`). Staged state is not restored (plain `pop`, no `--index`).
  */
-async function switchTo(top: string, args: string[], smart: boolean, env: NodeJS.ProcessEnv, allowed: (p: string) => boolean): Promise<Written> {
+async function switchTo(top: string, args: string[], smart: boolean, env: NodeJS.ProcessEnv, allowed: (p: string) => boolean, snap: Snapshot): Promise<Written> {
   const lc = { ...env, LC_ALL: "C" };
   try {
     const { out } = await run(top, ["switch", ...args], lc);
@@ -613,7 +627,7 @@ async function switchTo(top: string, args: string[], smart: boolean, env: NodeJS
     if (!smart) throw new WorktreeError("local_changes", e.message);
   }
   const from = (await run(top, ["symbolic-ref", "--short", "-q", "HEAD"], env, { soft: true }).catch(() => ({ out: "" }))).out || "HEAD";
-  // shortcut: no "snapshot before" call yet, Local history and Timeline (#565) is not on this base; call it before the stash push when it lands.
+  snapFiles(top, await nameList(top, ["diff", "--name-only", "-z", "--no-renames", "HEAD"], env), "checkout", snap);
   await run(top, ["stash", "push", "-m", `claude-ui smart checkout ${from} -> ${args[args.length - 1]}`], env);
   const stash = (await run(top, ["rev-parse", "refs/stash"], env)).out;
   let switched: string;
@@ -652,7 +666,7 @@ const smartOf = (s: unknown) => {
 };
 
 /** `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash. */
-export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unknown; checkout?: unknown; smart?: unknown } & RemoteOptions): Promise<Written | null> {
+export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unknown; checkout?: unknown; smart?: unknown; snapshot: Snapshot } & RemoteOptions): Promise<Written | null> {
   const { name, at } = o;
   if (typeof name !== "string" || !name || name.length > 255 || name.startsWith("-") || name.includes("\0")) throw bad("Not a valid branch name");
   if (at !== undefined && !isHash(at)) throw bad("at must be a commit hash");
@@ -663,25 +677,46 @@ export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unkn
       throw bad("Not a valid branch name");
     });
     if (!o.checkout) return { output: (await run(top, ["branch", name, ...(at ? [at] : ["HEAD"])], env)).out, refs: await gitRefs(top, o.allowed) };
-    return switchTo(top, ["-c", name, ...(at ? [at] : [])], smart, env, o.allowed);
+    return switchTo(top, ["-c", name, ...(at ? [at] : [])], smart, env, o.allowed, o.snapshot);
   });
 }
 
 /** Checks out a local branch (`refs/heads/x`), or a remote branch (`refs/remotes/r/b`) as a new local branch that tracks it. */
-export async function gitCheckout(cwd: string, o: { ref: unknown; smart?: unknown } & RemoteOptions): Promise<Written | null> {
+export async function gitCheckout(cwd: string, o: { ref: unknown; smart?: unknown; snapshot: Snapshot } & RemoteOptions): Promise<Written | null> {
   const remote = typeof o.ref === "string" && REMOTE_REF.test(o.ref) && !o.ref.endsWith("/HEAD") && o.ref.length <= 255 && !o.ref.includes("..") && !o.ref.includes("@{");
   const ref = remote ? (o.ref as string) : branchRef(o.ref);
   const smart = smartOf(o.smart);
   return switching(cwd, o, async (top, env) => {
     if (remote) {
       if ((await run(top, ["rev-parse", "--verify", "-q", `${ref}^{commit}`], env, { soft: true })).code !== 0) throw bad("Not a remote branch");
-      return switchTo(top, ["--track", ref], smart, env, o.allowed);
+      return switchTo(top, ["--track", ref], smart, env, o.allowed, o.snapshot);
     }
-    return switchTo(top, ["--no-guess", ref.slice("refs/heads/".length)], smart, env, o.allowed);
+    return switchTo(top, ["--no-guess", ref.slice("refs/heads/".length)], smart, env, o.allowed, o.snapshot);
   });
 }
 
 // ---- Stash (docs/spec.md "Layout", Graph tab; wire `git.stash*`) ----
+
+/**
+ * Local history entries of what a dropped stash holds: its tracked changes (`<hash>^1..<hash>`) and, when it has one, its untracked-files commit (`<hash>^3`),
+ * each with the stashed text. Non-files, links and blobs over the history limit are skipped before reading.
+ * shortcut: one `cat-file` per file, upgrade to `cat-file --batch` when a drop is slow.
+ */
+async function snapStash(top: string, hash: string, env: NodeJS.ProcessEnv, snap: Snapshot) {
+  const from = async (rev: string, paths: string[]) => {
+    if (!paths.length) return;
+    const rows = (await run(top, [...LITERAL, "ls-tree", "-r", "-z", "-l", rev, "--", ...paths], env, { raw: true })).out.split("\0").filter(Boolean);
+    for (const row of rows) {
+      const tab = row.indexOf("\t");
+      const [mode, type, oid, size] = row.slice(0, tab).split(/ +/);
+      if (type !== "blob" || mode === "120000" || Number(size) > MAX_BYTES) continue;
+      const blob = await runGit({ cwd: top, args: [...HARDEN, "cat-file", "blob", oid!], env, timeout: writeConfig.timeout, killTree: true });
+      snap(hostOf(top, row.slice(tab + 1)), "stash-drop", blob.stdout.toString("utf8"));
+    }
+  };
+  await from(hash, await nameList(top, ["diff", "--name-only", "-z", "--no-renames", `${hash}^1`, hash], env));
+  if ((await ask(top, ["rev-parse", "-q", "--verify", `${hash}^3`], env)).out) await from(`${hash}^3`, await nameList(top, [...LITERAL, "ls-tree", "-r", "-z", "--name-only", `${hash}^3`], env));
+}
 
 /** The Graph tab's stash list, newest first. Not cached: `refsStamp` misses a drop of a non-top entry. Null outside a work tree. */
 export async function gitStashList(cwd: string, o: RemoteOptions): Promise<GitStash[] | null> {
@@ -722,7 +757,7 @@ export async function gitStashPush(cwd: string, o: { message?: unknown; includeU
  * `git stash apply|pop|drop stash@{index}`; `hash` is the entry's commit as the list showed it: a stash pushed or dropped elsewhere shifts the
  * indices, then `stale`. Apply and pop stopping on conflicts is a success with `operation`. Drop is allowed during an unfinished operation. Null outside a work tree.
  */
-export async function gitStash(cwd: string, verb: "apply" | "pop" | "drop", o: { index: unknown; hash: unknown } & RemoteOptions): Promise<Written | null> {
+export async function gitStash(cwd: string, verb: "apply" | "pop" | "drop", o: { index: unknown; hash: unknown; snapshot: Snapshot } & RemoteOptions): Promise<Written | null> {
   const { index, hash } = o;
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index > 9999 || !isHash(hash)) throw bad("index and hash must be a stash position and its commit hash");
   const ref = `stash@{${index}}`;
@@ -735,7 +770,7 @@ export async function gitStash(cwd: string, verb: "apply" | "pop" | "drop", o: {
       const now = await ask(top, ["rev-parse", "-q", "--verify", `${ref}^{commit}`], env).then((r) => r.out, () => "");
       if (now !== hash) throw new WorktreeError("stale", "The stash list changed: reload");
       if (verb === "drop") {
-        // shortcut: no "snapshot before" yet, Local history and Timeline (#565) is not on this base; call it here before the drop.
+        await snapStash(top, hash, env, o.snapshot);
         const { out } = await run(top, ["stash", "drop", ref], env);
         return { output: out, refs: await gitRefs(top, o.allowed) };
       }

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { HistoryReason } from "@claude-ui/protocol";
 import { gitLog } from "../src/git.ts";
 import { gitStash, gitStashList, gitStashPush } from "../src/git-write.ts";
 
@@ -23,7 +24,8 @@ function repo() {
   put(dir, "a.txt", "base\n");
   run(dir, "add", "-A");
   run(dir, "commit", "-q", "-m", "init");
-  return { root, dir, o: { allowed: (p: string) => p.startsWith(root) } };
+  const seen: { path: string; reason: HistoryReason; text: string }[] = [];
+  return { root, dir, o: { allowed: (p: string) => p.startsWith(root), snapshot: (p: string, reason: HistoryReason, c?: string) => void seen.push({ path: p, reason, text: c ?? readFileSync(p, "utf8") }) }, seen };
 }
 type R = ReturnType<typeof repo>;
 const count = (r: R) => run(r.dir, "stash", "list").split("\n").filter(Boolean).length;
@@ -118,6 +120,31 @@ describe("gitStash", () => {
     await gitStash(r.dir, "drop", { ...r.o, ...entry(left) });
     expect(count(r)).toBe(0);
     expect(read(r.dir, "a.txt")).toBe("two\n");
+  });
+  it("drop snapshots the stashed tracked and untracked contents with reason stash-drop; apply and pop snapshot nothing", async () => {
+    const r = repo();
+    put(r.dir, "a.txt", "stashed a\n");
+    put(r.dir, "u.txt", "stashed u\n");
+    await gitStashPush(r.dir, { ...r.o, includeUntracked: true });
+    const [s] = (await gitStashList(r.dir, r.o))!;
+    await gitStash(r.dir, "apply", { ...r.o, ...entry(s) });
+    run(r.dir, "checkout", "--", "a.txt");
+    rmSync(join(r.dir, "u.txt"));
+    await gitStash(r.dir, "apply", { ...r.o, ...entry(s) });
+    expect(r.seen).toEqual([]);
+    put(r.dir, "a.txt", "live\n");
+    await gitStash(r.dir, "drop", { ...r.o, ...entry(s) });
+    expect(r.seen.map((x) => ({ ...x, path: x.path.slice(r.dir.length + 1) })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "a.txt", reason: "stash-drop", text: "stashed a\n" },
+      { path: "u.txt", reason: "stash-drop", text: "stashed u\n" },
+    ]);
+  });
+  it("drop skips a stashed blob over the history limit", async () => {
+    const r = repo();
+    put(r.dir, "a.txt", "x".repeat(300 * 1024));
+    await gitStashPush(r.dir, r.o);
+    await gitStash(r.dir, "drop", { ...r.o, ...entry((await gitStashList(r.dir, r.o))![0]!) });
+    expect(r.seen).toEqual([]);
   });
   it("is stale when the hash is not the entry at the index, and refuses bad arguments", async () => {
     const r = repo();
