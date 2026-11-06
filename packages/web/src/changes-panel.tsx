@@ -64,7 +64,7 @@ const kindTitle = (k: keyof typeof KIND_KEY) => t(KIND_KEY[k]);
 /** The badge letter of a row: untracked additions show `U`. */
 const badgeOf = (r: { kind: Kind; untracked?: boolean }) => (r.kind === "A" && r.untracked ? "U" : r.kind);
 const MODE_KEY = { session: "files.changes.modeSession", uncommitted: "files.changes.modeUncommitted", branch: "files.changes.modeBranch" } as const;
-const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning", U: "text-warning" } as const;
+const KIND_COLOR = { A: "text-success", D: "text-destructive", M: "text-info", R: "text-warning", U: "text-destructive" } as const;
 
 // Diff style like OpenCode's review panel: split by default, the choice kept per browser; below md always unified.
 const STYLE_KEY = "claude-ui.diffStyle";

@@ -673,7 +673,7 @@ it("Uncommitted lists git.diff files with kinds and +N -N; the diff is HEAD (git
   expect(el.querySelector("[data-testid=pierre-diff]")).not.toBeNull();
 });
 
-it("GH-610 an untracked addition shows U (Untracked, text-warning), an indexed new file A (Added, text-success)", async () => {
+it("GH-610 an untracked addition shows U (Untracked, text-destructive), an indexed new file A (Added, text-success)", async () => {
   saveDiffMode("uncommitted");
   const git = { status: REPO, diff: D([{ status: "A", path: "tracked.ts", added: 1, removed: 0 }, { status: "A", path: "loose.ts", added: 1, removed: 0, untracked: true }]) };
   const client = fakeClient({ "/p/tracked.ts": "x\n", "/p/loose.ts": "y\n" }, git);
@@ -681,7 +681,7 @@ it("GH-610 an untracked addition shows U (Untracked, text-warning), an indexed n
   await flush();
   expect(rows()).toEqual(["Untracked loose.ts, +1 -0", "Added tracked.ts, +1 -0"]);
   const badge = (i: number) => el.querySelectorAll<HTMLElement>("[data-testid=change-badge]")[i]!;
-  expect([badge(0).textContent, badge(0).title, badge(0).className.includes("text-warning")]).toEqual(["U", "Untracked", true]);
+  expect([badge(0).textContent, badge(0).title, badge(0).className.includes("text-destructive")]).toEqual(["U", "Untracked", true]);
   expect([badge(1).textContent, badge(1).title, badge(1).className.includes("text-success")]).toEqual(["A", "Added", true]);
 });
 
