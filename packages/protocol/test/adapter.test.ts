@@ -1016,3 +1016,19 @@ describe("Artifact publish time (GH-176)", () => {
     expect(tools(parts).at(-1)).not.toHaveProperty("endedAt");
   });
 });
+
+describe("failed login (GH-615)", () => {
+  it("one warning row per failed auth turn: the retries are dropped, the assistant error is kept with its text", () => {
+    const parts = run([
+      { type: "system", subtype: "api_retry", error: "authentication_failed" },
+      { type: "system", subtype: "api_retry", error: "authentication_failed" },
+      { type: "assistant", uuid: "u1", error: "authentication_failed", parent_tool_use_id: null, message: { id: "m1", content: [{ type: "text", text: "Failed to authenticate. API Error: 401" }] } },
+    ]);
+    expect(parts.filter((p) => p.type === "raw")).toEqual([{ type: "raw", id: "u1:error", message: { error: "authentication_failed" } }]);
+    expect(parts.some((p) => p.type === "assistant_text")).toBe(true);
+  });
+
+  it("other api_retry errors still show", () => {
+    expect(run([{ type: "system", subtype: "api_retry", error: "rate_limit" }])).toHaveLength(1);
+  });
+});

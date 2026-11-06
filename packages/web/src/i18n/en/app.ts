@@ -46,6 +46,7 @@ export default {
   "app.plan.resets": "Resets {time} (in {duration})",
   "app.plan.limitReached": "Limit reached",
   "app.plan.limitReachedWindow": "Limit reached: {window}",
+  "app.plan.oauthAccountNote": "A token account (claude setup-token) cannot read plan usage. Switch to CLI login to see it here.",
   "app.plan.account": "Account: {name}",
   "app.plan.accountsLabel": "Claude account",
   "app.plan.switchAccount": "Switch account",

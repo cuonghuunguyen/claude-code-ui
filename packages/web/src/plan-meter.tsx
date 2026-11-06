@@ -105,7 +105,7 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
         )}
         {usage.auth === "oauth_token" && (
           <p data-testid="plan-auth-note" className="mt-2 text-muted-foreground text-xs">
-            {usage.windows.length ? t("app.plan.oauthPartial") : `${t("app.plan.oauthUnavailable")}. ${t("app.plan.oauthNote")}`}
+            {usage.windows.length ? t("app.plan.oauthPartial") : `${t("app.plan.oauthUnavailable")}. ${usage.account ? t("app.plan.oauthAccountNote") : t("app.plan.oauthNote")}`}
           </p>
         )}
         {limited && (

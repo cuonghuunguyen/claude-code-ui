@@ -201,3 +201,10 @@ it("no other choice, no switcher; a rejected limit points at the switcher", asyn
   const el2 = await render({ ...usage, status: "rejected" }, accounts);
   expect((await open(el2)).querySelector('[data-testid="plan-limit"]')!.textContent).toContain("Switch account below.");
 });
+
+it("a token account's note points at CLI login, not at claude login (GH-615)", async () => {
+  const el = await render({ plan: null, windows: [], status: "allowed", auth: "oauth_token", account: "bad" }, accounts);
+  const note = (await open(el)).querySelector('[data-testid="plan-auth-note"]')!.textContent!;
+  expect(note).toContain("Switch to CLI login");
+  expect(note).not.toContain("Run claude login");
+});

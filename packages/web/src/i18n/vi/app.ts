@@ -48,6 +48,7 @@ export default {
   "app.plan.resets": "Đặt lại lúc {time} (sau {duration})",
   "app.plan.limitReached": "Đã đạt giới hạn",
   "app.plan.limitReachedWindow": "Đã đạt giới hạn: {window}",
+  "app.plan.oauthAccountNote": "Tài khoản token (claude setup-token) không đọc được mức dùng gói. Chuyển sang đăng nhập CLI để xem tại đây.",
   "app.plan.account": "Tài khoản: {name}",
   "app.plan.accountsLabel": "Tài khoản Claude",
   "app.plan.switchAccount": "Đổi tài khoản",
