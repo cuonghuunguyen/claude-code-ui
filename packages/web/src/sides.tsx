@@ -83,7 +83,7 @@ export function MessageDetails({ details, testId }: { details: string; testId?: 
         {tr("side.details")}
       </CollapsibleTrigger>
       <CollapsibleContent id={id}>
-        <pre className="mt-1 max-h-48 select-text overflow-y-auto whitespace-pre-wrap font-mono text-xs [overflow-wrap:anywhere]" data-testid={testId}>{details}</pre>
+        <pre className="mt-1 max-h-48 text-left select-text overflow-y-auto whitespace-pre-wrap font-mono text-xs [overflow-wrap:anywhere]" data-testid={testId}>{details}</pre>
       </CollapsibleContent>
     </Collapsible>
   );

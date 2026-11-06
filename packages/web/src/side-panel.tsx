@@ -7,6 +7,7 @@ import { NODE_MIN, NODE_MIN_MAJOR, type SideCheck, type SideInfo, type SidePhase
 import { Button } from "@/components/ui/button";
 import { t, useT } from "./i18n.ts";
 import { ContainerNeeds } from "./container-needs.tsx";
+import { MessageDetails, splitMessage } from "./sides.tsx";
 
 /** What a button asks `side.start` for: a setup mode, or "plain" (a hub without side.check: no setup field). */
 export type RunMode = SideSetup | "plain";
@@ -136,7 +137,7 @@ export function SidePanel({
 }) {
   const t = useT();
   const { label } = side;
-  const retry = useRef<HTMLButtonElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
   const region = useRef<HTMLDivElement>(null);
   // The Hub there cannot work with this one: its row says both versions and the way out; Reinstall here cannot fix it.
   const mismatch = side.state === "error" ? side.mismatch : undefined;
@@ -153,8 +154,15 @@ export function SidePanel({
   // An install first looks at the container or distro (which install, which parts): no phase yet.
   // An update of the Hub there: the daemon's own text (it updates when nothing runs there).
   const progressText = side.state === "starting" && side.message ? side.message : !side.phase && mode !== "never" && state.check?.verdict !== "starting" ? t("app.sidePanel.preparing") : phase === "installing" && side.bundle ? t("app.sidePanel.unpacking", { noun }) : phaseText(phase, kindNoun === "host");
-  // A failed run puts the focus on Retry.
-  useEffect(() => void (state.error && retry.current?.focus()), [state.error]);
+  // A failed run puts the focus on the primary button.
+  useEffect(() => void (state.error && !state.checking && primaryRef.current?.focus()), [state.error]);
+  // While it checks there is no button: the region keeps the focus (unless it is elsewhere in the dialog), and hands it to the primary button after.
+  useEffect(() => {
+    const a = document.activeElement;
+    if (state.checking) {
+      if (!a || a === document.body || a.getAttribute("role") === "dialog" || region.current?.contains(a)) region.current?.focus();
+    } else if (a === region.current) primaryRef.current?.focus();
+  }, [state.checking]);
   // The button that started a run goes away (a disabled button loses the focus): the region keeps it, unless it is elsewhere in the dialog.
   useEffect(() => {
     const a = document.activeElement;
@@ -170,6 +178,23 @@ export function SidePanel({
   const action = check && !mismatch ? actionOf(check, failed !== undefined) : undefined;
   const updateThere = mismatch?.remoteOlder && onUpdateRemote;
   const fix = check && check.verdict !== "running" ? fixText(check, label) : undefined;
+  const { summary, details } = error ? splitMessage(error) : { summary: "" };
+  // At most one primary and one secondary button (none while it checks): the failed mode comes first, the other way out second.
+  type Btn = { label: string; testId: string; onClick: () => void };
+  const run = (label: string, m: RunMode, testId: string): Btn => ({ label, testId, onClick: () => onRun(m) });
+  const retry = run(t("app.sidePanel.retry"), mismatch ? "never" : (failed ?? "never"), "side-retry");
+  const again: Btn | undefined = state.legacy ? undefined : { label: t("app.sidePanel.checkAgain"), testId: "side-check-again", onClick: onCheck };
+  const act = action && run(action.label, action.mode, "side-install");
+  const legacyInstall = state.legacy ? run(t("app.sidePanel.install"), "plain", "side-install") : undefined;
+  let primary: Btn | undefined;
+  let secondary: Btn | undefined;
+  if (updateThere) [primary, secondary] = [{ label: t("app.sidePanel.action.updateRemote"), testId: "side-update-remote", onClick: updateThere }, retry];
+  else if (!error) [primary, secondary] = [act ?? legacyInstall, again];
+  else if (legacyInstall) [primary, secondary] = [retry, legacyInstall];
+  else if (action?.mode === "force") [primary, secondary] = [retry, failed === "force" ? undefined : act];
+  else if (action) [primary, secondary] = [failed !== undefined ? run(t(check?.verdict === "update" ? "app.sidePanel.action.retryUpdate" : "app.sidePanel.action.retryInstall"), action.mode, "side-retry") : act, again];
+  else [primary, secondary] = [retry, again];
+  const shown = [primary, secondary].filter((b): b is Btn => !!b);
   return (
     <div
       ref={region}
@@ -181,18 +206,9 @@ export function SidePanel({
       {error && !inProgress && (
         <>
           <p className="max-h-[min(12rem,40dvh)] w-full max-w-md shrink-0 select-text overflow-y-auto whitespace-pre-wrap text-destructive [overflow-wrap:anywhere]" role="alert" data-testid="side-error">
-            {error}
+            {summary}
           </p>
-          <div className="flex w-full max-w-md shrink-0 flex-wrap justify-center gap-2 max-md:flex-col">
-            {updateThere && (
-              <Button size="sm" onClick={updateThere} className={btn} ref={retry} data-testid="side-update-remote">
-                {t("app.sidePanel.action.updateRemote")}
-              </Button>
-            )}
-            <Button size="sm" variant={updateThere ? "outline" : "default"} onClick={() => onRun(mismatch ? "never" : (failed ?? "never"))} className={btn} ref={updateThere ? undefined : retry} data-testid="side-retry">
-              {t("app.sidePanel.retry")}
-            </Button>
-          </div>
+          {details && <MessageDetails details={details} testId="side-error-details" />}
         </>
       )}
       {state.checkError && !inProgress && (
@@ -259,24 +275,15 @@ export function SidePanel({
               </div>
             </div>
           )}
-          <div className="flex w-full max-w-md shrink-0 flex-wrap justify-center gap-2 max-md:flex-col">
-            {!state.legacy && (
-              // aria-disabled, not disabled: a disabled button loses the keyboard focus, and Check again keeps it while it checks.
-              <Button size="sm" variant="outline" aria-disabled={state.checking || undefined} onClick={() => !state.checking && onCheck()} className={`${btn} aria-disabled:opacity-50`} data-testid="side-check-again">
-                {t("app.sidePanel.checkAgain")}
-              </Button>
-            )}
-            {action && !state.checking && (
-              <Button size="sm" onClick={() => onRun(action.mode)} className={btn} data-testid="side-install">
-                {action.label}
-              </Button>
-            )}
-            {state.legacy && (
-              <Button size="sm" onClick={() => onRun("plain")} className={btn} data-testid="side-install">
-                {t("app.sidePanel.install")}
-              </Button>
-            )}
-          </div>
+          {!state.checking && (
+            <div className="flex w-full max-w-md shrink-0 flex-wrap justify-center gap-2 max-md:flex-col">
+              {shown.map((b, i) => (
+                <Button key={b.testId} size="sm" variant={i === 0 && b === primary ? "default" : "outline"} onClick={b.onClick} className={btn} ref={i === 0 ? primaryRef : undefined} data-testid={b.testId}>
+                  {b.label}
+                </Button>
+              ))}
+            </div>
+          )}
           {docker && <ContainerNeeds check={state.checking ? undefined : check} />}
         </>
       )}

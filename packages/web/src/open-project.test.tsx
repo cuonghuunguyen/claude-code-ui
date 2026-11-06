@@ -669,34 +669,64 @@ describe("side chooser", () => {
       expect(onStartSide).not.toHaveBeenCalled();
     });
 
-    it("a failed start of an installed side shows Retry (never again) and Check again; only after a check is Reinstall the main button, and its Retry sends force", async () => {
+    it("a failed start of an installed side shows Retry (never again) as the one primary and Reinstall (force) as the secondary; a failed force leaves Retry (force) alone", async () => {
       const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed")).mockRejectedValueOnce(new Error("npm failed again"));
       const { kind, click, byId, status } = await withCheck(chk("installed"), start);
       await click(kind("WSL"));
       expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "never");
       expect(byId("side-error")!.getAttribute("role")).toBe("alert");
       expect(status()).toContain("npm failed");
-      // The check shows it installed and its start failed: Reinstall is offered; Check again does not start it a second time.
-      expect(byId("side-install")!.textContent).toBe("Reinstall");
-      await click(byId("side-check-again")!);
+      // The check shows it installed and its start failed: Retry is the one primary, Reinstall the secondary, no Check again; nothing starts a second time by itself.
       expect(start).toHaveBeenCalledTimes(1);
+      expect(byId("side-retry")!.textContent).toBe("Retry");
       expect(byId("side-install")!.textContent).toBe("Reinstall");
+      expect(byId("side-check-again")).toBeNull();
       await click(byId("side-install")!);
       expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "force");
       expect(status()).toContain("npm failed again");
+      expect(byId("side-install")).toBeNull();
       await click(byId("side-retry")!);
       expect(start).toHaveBeenCalledTimes(3);
       expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "force");
     });
 
-    it("a failed update stays an update on Retry and is not offered as Reinstall", async () => {
+    it("a failed update shows one primary Retry update (needed), never Reinstall or a second primary", async () => {
       const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
       const { kind, click, byId } = await withCheck(chk("update"), start);
       await click(kind("WSL"));
       await click(byId("side-install")!);
-      expect(byId("side-install")!.textContent).toBe("Update");
+      expect(byId("side-install")).toBeNull();
+      expect(byId("side-retry")!.textContent).toBe("Retry update");
+      expect(byId("side-check-again")).not.toBeNull();
       await click(byId("side-retry")!);
       expect(start.mock.calls).toEqual([["wsl:Ubuntu", "needed"], ["wsl:Ubuntu", "needed"]]);
+    });
+
+    it("a failed install with a check that says install shows one primary Retry install and Check again; while it checks no button shows (GH-618)", async () => {
+      let release!: () => void;
+      const check = vi.fn(async (_id: string) => chk("install")).mockResolvedValueOnce(chk("install")).mockImplementationOnce(() => new Promise<SideCheck>((r) => (release = () => r(chk("install")))));
+      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("Installing claude-ui in WSL: Ubuntu failed. Check its network and npm, then retry.\nnpm ERR! 403"));
+      const { kind, click, byId, status } = await renderSides(sides(), start, false, check);
+      await click(kind("WSL"));
+      await click(byId("side-install")!);
+      expect(status()).toContain("failed. Check its network");
+      expect(status()).not.toContain("npm ERR!");
+      expect(byId("side-error-details")).toBeNull();
+      expect(byId("side-retry")!.textContent).toBe("Retry install");
+      expect(byId("side-install")).toBeNull();
+      expect(byId("side-check-again")).not.toBeNull();
+      expect(document.activeElement).toBe(byId("side-retry"));
+      const buttons = [...byId("side-status")!.querySelectorAll("button")].map((b) => b.textContent);
+      expect(buttons).toEqual(["Details", "Retry install", "Check again"]);
+      await click([...byId("side-status")!.querySelectorAll("button")].find((b) => b.textContent === "Details")!);
+      expect(byId("side-error-details")!.textContent).toBe("npm ERR! 403");
+      // Check again: the summary stays, no button shows until the check ends.
+      await click(byId("side-check-again")!);
+      expect(status()).toContain("failed. Check its network");
+      for (const id of ["side-retry", "side-check-again", "side-install"]) expect(byId(id)).toBeNull();
+      await act(async () => release());
+      expect(byId("side-retry")!.textContent).toBe("Retry install");
+      expect(document.activeElement).toBe(byId("side-retry"));
     });
 
     it("a side error the dialog did not cause (a stopped container) offers Retry that only starts what is installed, never Reinstall", async () => {
@@ -746,7 +776,7 @@ describe("side chooser", () => {
     });
 
     describe("keyboard focus", () => {
-      it("Check again keeps the focus while it checks (aria-disabled, never disabled) and after", async () => {
+      it("Check again hands the focus to the panel while it checks (no buttons then), then to the primary button", async () => {
         let release!: () => void;
         const check = vi.fn(async (_id: string) => chk("install")).mockResolvedValueOnce(chk("install")).mockImplementationOnce(() => new Promise<SideCheck>((r) => (release = () => r(chk("install")))));
         const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
@@ -755,17 +785,23 @@ describe("side chooser", () => {
         again.focus();
         await click(again);
         expect(check).toHaveBeenCalledTimes(2);
-        expect(byId("side-check-again")).toBe(again);
-        expect(again.disabled).toBe(false);
-        expect(again.getAttribute("aria-disabled")).toBe("true");
-        expect(document.activeElement).toBe(again);
-        // Pressing it while it checks asks nothing more.
-        await click(again);
-        expect(check).toHaveBeenCalledTimes(2);
+        for (const id of ["side-check-again", "side-install", "side-retry"]) expect(byId(id)).toBeNull();
+        expect(document.activeElement).toBe(byId("side-status"));
         await act(async () => release());
-        expect(again.getAttribute("aria-disabled")).toBeNull();
-        expect(document.activeElement).toBe(byId("side-check-again"));
-        expect(document.activeElement).toBe(again);
+        expect(document.activeElement).toBe(byId("side-install"));
+      });
+
+      it("a focus elsewhere in the dialog stays put while it checks and after", async () => {
+        let release!: () => void;
+        const check = vi.fn(async (_id: string) => chk("install")).mockResolvedValueOnce(chk("install")).mockImplementationOnce(() => new Promise<SideCheck>((r) => (release = () => r(chk("install")))));
+        const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
+        await click(kind("WSL"));
+        const again = byId("side-check-again") as HTMLButtonElement;
+        await click(again);
+        const select = byId("side-target") as HTMLElement;
+        select.focus();
+        await act(async () => release());
+        expect(document.activeElement).toBe(select);
       });
 
       it.each([
@@ -851,7 +887,7 @@ describe("side chooser", () => {
       expect(input()!.value).toBe("/home/u/");
     });
 
-    it("Check again that finds an older hub moves the focus to the panel, not the body", async () => {
+    it("Check again that finds an older hub moves the focus to Install, not the body", async () => {
       const old = Object.assign(new Error("unknown message type side.check"), { code: "unknown_type" });
       const check = vi.fn(async (_id: string) => chk("install")).mockRejectedValueOnce(new Error("timed out")).mockRejectedValueOnce(old);
       const { kind, click, byId } = await renderSides(sides(), undefined, false, check);
@@ -860,7 +896,7 @@ describe("side chooser", () => {
       await click(byId("side-check-again")!);
       expect(byId("side-check-again")).toBeNull();
       expect(byId("side-install")).not.toBeNull();
-      expect(document.activeElement).toBe(byId("side-status"));
+      expect(document.activeElement).toBe(byId("side-install"));
     });
 
     it("a check of a side the hub does not know (unknown_side) is a check failure, not an older hub", async () => {
@@ -888,10 +924,10 @@ describe("side chooser", () => {
       expect(select.compareDocumentPosition(byId("side-check")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
-    it("the buttons are real buttons in Tab order (select, Check again, Install) and 44 px high below md", async () => {
+    it("the buttons are real buttons in Tab order (select, Install, Check again) and 44 px high below md", async () => {
       const { kind, click, byId } = await withCheck(chk("install"));
       await click(kind("WSL"));
-      const order = [byId("side-target")!, byId("side-check-again")!, byId("side-install")!];
+      const order = [byId("side-target")!, byId("side-install")!, byId("side-check-again")!];
       for (let i = 1; i < order.length; i++) expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       for (const b of order.slice(1)) {
         expect(b.tagName).toBe("BUTTON");
