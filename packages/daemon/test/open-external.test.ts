@@ -97,5 +97,6 @@ describe("custom editor command (GH-646)", () => {
   it("editorLabel: name, else program name without folder and extension", () => {
     expect(editorLabel({ command: '"C:\\Sublime Text\\subl.exe" {path}', name: "" })).toBe("subl");
     expect(editorLabel({ command: "/usr/bin/subl", name: "S" })).toBe("S");
+    expect(editorLabel({ command: "/x/.edit", name: "" })).toBe(".edit");
   });
 });

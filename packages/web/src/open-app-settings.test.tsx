@@ -14,8 +14,9 @@ const type = (el: HTMLInputElement, v: string) => {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
   el.dispatchEvent(new Event("input", { bubbles: true }));
 };
-async function setup(fail?: { code: string; message: string }) {
+async function setup(fail?: { code: string; message: string }, hold?: Promise<void>) {
   const request = vi.fn(async (_m: unknown) => {
+    await hold;
     if (fail) throw Object.assign(new Error(fail.message), { code: fail.code });
     return {} as SettingsResult;
   });
@@ -81,4 +82,14 @@ it("customEditor labels by name, else program name; none without a command", () 
   expect(customEditor({ command: '"C:\\Program Files\\Sublime Text\\subl.exe" {path}', name: "" })).toEqual([{ id: "custom", label: "subl" }]);
   expect(customEditor({ command: "subl", name: "My Editor" })).toEqual([{ id: "custom", label: "My Editor" }]);
   expect(customEditor({ command: "", name: "X" })).toEqual([]);
+});
+
+it("inputs are disabled while the section's own save is pending", async () => {
+  let release = () => {};
+  const { q, edit } = await setup(undefined, new Promise<void>((r) => (release = r)));
+  await edit("settings-openapp-command", "subl");
+  expect(q("settings-openapp-command").disabled).toBe(true);
+  expect(q("settings-openapp-name").disabled).toBe(true);
+  await act(async () => release());
+  expect(q("settings-openapp-command").disabled).toBe(false);
 });
