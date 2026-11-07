@@ -167,6 +167,35 @@ describe("findInFiles", () => {
     expect((await run(d, "x++", { regex: true })).matches).toBe(0);
   });
 
+  it("a catastrophic regex cannot block the event loop: the highlight times out, the lines stay", async () => {
+    const d = tmp();
+    init(d);
+    // Git matches `x` at once; the JS highlight then backtracks without end on the `a` run.
+    put(d, "r.txt", `x ${"a".repeat(298)}\nx ${"a".repeat(21)}c\n`);
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 20);
+    const t0 = Date.now();
+    const r = await run(d, "x|(a+)+b", { regex: true }, { limits: { highlightMs: 300 } });
+    clearInterval(timer);
+    expect(Date.now() - t0).toBeLessThan(4000);
+    expect(r.matches).toBe(2);
+    expect(r.files[0]!.lines.map((l) => l.ranges)).toEqual([[], []]);
+    expect(ticks).toBeGreaterThan(5);
+  });
+
+  it("a regex highlight within the time is kept", async () => {
+    const d = tmp();
+    init(d);
+    put(d, "r.txt", "foo1 foo2\n");
+    expect((await run(d, "foo\\d", { regex: true })).files[0]!.lines[0]!.ranges).toEqual([[0, 4], [5, 9]]);
+  });
+
+  it("PCRE's match limit (git exits with an error) fails the search as grep_failed", async () => {
+    const d = fixture();
+    setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: pcre2_match failed with error code -47: match limit exceeded\n", stdout: Buffer.alloc(0) })));
+    await expect(run(d, "(a+)+b", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringContaining("match limit") });
+  });
+
   it("a pattern git refuses is grep_failed with git's message", async () => {
     const d = fixture();
     await expect(run(d, "a(", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringMatching(/\S/) });

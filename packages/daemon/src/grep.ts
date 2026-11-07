@@ -3,12 +3,13 @@
 // nested repositories' work trees. Inside a repository, each nested repository or submodule (`git.repos`) gets its own run,
 // because git grep stops at them. Caps: bytes per run and in total, a deadline, files and match lines of the reply.
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { wslPathOf } from "@claude-ui/protocol";
 import type { FsGrepResult, GitRepo, GrepFile, GrepLine } from "@claude-ui/protocol";
 import { gitEscapes, gitTopOf, limiter, pinEnv } from "./git.ts";
 import { runGit } from "./git-runner.ts";
 
-export const GREP_LIMITS = { matches: 2000, files: 200, runBytes: 8 << 20, bytes: 16 << 20, ms: 5000, lineChars: 300, context: 2 };
+export const GREP_LIMITS = { matches: 2000, files: 200, runBytes: 8 << 20, bytes: 16 << 20, ms: 5000, lineChars: 300, context: 2, highlightMs: 1000 };
 export type GrepLimits = typeof GREP_LIMITS;
 export class GrepError extends Error {
   constructor(message: string, readonly code: "grep_failed" | "git_missing" | "regex_unsupported") {
@@ -53,6 +54,54 @@ export function cutLine(text: string, ranges: [number, number][] | undefined, ma
   const lead = s > 0 ? 1 : 0;
   const shifted = ranges?.flatMap(([a, b]): [number, number][] => (a >= s && b <= e ? [[a - s + lead, b - s + lead]] : []));
   return { text: (s > 0 ? "…" : "") + text.slice(s, e) + (e < text.length ? "…" : ""), ranges: shifted, cut: true };
+}
+
+// A user regex can backtrack without end (`x|(a+)+b`), and a JS RegExp cannot be interrupted: regex highlights run in a thread
+// that is killed at the deadline (the match lines then have empty ranges), so the event loop is never blocked.
+// shortcut: one thread per regex search with results (about 30 ms); keep one alive if that shows up in a profile.
+const HIGHLIGHT_THREAD = `
+const { parentPort } = require("node:worker_threads");
+parentPort.on("message", ({ query, texts }) => {
+  let re;
+  try { re = new RegExp(query, "gi"); } catch { return parentPort.postMessage(undefined); }
+  parentPort.postMessage(texts.map((t) => {
+    const out = [];
+    re.lastIndex = 0;
+    for (let m = re.exec(t); m && out.length < 50; m = re.exec(t)) {
+      if (m[0] === "") re.lastIndex++;
+      else out.push([m.index, m.index + m[0].length]);
+    }
+    return out;
+  }));
+});`;
+
+/** Highlight ranges of each text; undefined when the query is no JS RegExp or a regex search ran out of `ms` (or `signal` fired). */
+export function highlights(query: string, regex: boolean, texts: string[], ms: number, signal: AbortSignal): Promise<[number, number][][] | undefined> {
+  if (!regex) {
+    const re = matcher(query, false);
+    return Promise.resolve(texts.map((t) => rangesOf(t, re)));
+  }
+  if (!texts.length) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    let w: Worker | undefined;
+    const done = (r?: [number, number][][]) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", stop);
+      void w?.terminate();
+      resolve(r);
+    };
+    const stop = () => done();
+    const timer = setTimeout(stop, ms);
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      w = new Worker(HIGHLIGHT_THREAD, { eval: true });
+      w.on("message", done);
+      w.on("error", stop);
+      w.postMessage({ query, texts });
+    } catch {
+      stop();
+    }
+  });
 }
 
 export function grepArgs(q: { query: string; regex: boolean; globs: string[]; includeIgnored: boolean; git: boolean }): string[] {
@@ -123,13 +172,6 @@ export async function findInFiles(
     return out.toString("utf8");
   };
   const outs = await Promise.all(runs.map((r) => slot(() => one(r.dir))));
-  // Highlights come from JS RegExp: PCRE syntax JS rejects (possessive quantifiers, `(?i)`) still searches, without ranges.
-  let re: RegExp | undefined;
-  try {
-    re = matcher(q.query, q.regex);
-  } catch {
-    // no highlight
-  }
   const files: GrepFile[] = [];
   const okPath = new Map<string, boolean>();
   let matches = 0;
@@ -151,10 +193,8 @@ export async function findInFiles(
         capped = "matches";
         break scan;
       }
-      const ranges = l.match ? (re ? rangesOf(l.text, re) : []) : undefined;
-      const c = cutLine(l.text, ranges, limits.lineChars);
-      cut ||= c.cut;
-      const line: GrepLine = { n: l.n, text: c.text, ...(l.match ? { ranges: c.ranges ?? [] } : {}) };
+      // Raw text and no ranges yet: they come after the caps (`highlights`), the cut after them.
+      const line: GrepLine = { n: l.n, text: l.text, ...(l.match ? { ranges: [] } : {}) };
       if (!cur) files.push((cur = { path: l.path, lines: [] }));
       cur.lines.push(line);
       if (l.match) matches++;
@@ -169,6 +209,15 @@ export async function findInFiles(
       if (!last.lines.length) files.pop();
     }
   }
+  const hits = files.flatMap((f) => f.lines.filter((l) => l.ranges));
+  const found = await highlights(q.query, q.regex, hits.map((l) => l.text), limits.highlightMs, signal);
+  hits.forEach((l, i) => (l.ranges = found?.[i] ?? []));
+  for (const f of files)
+    f.lines = f.lines.map((l) => {
+      const c = cutLine(l.text, l.ranges, limits.lineChars);
+      cut ||= c.cut;
+      return { n: l.n, text: c.text, ...(l.ranges ? { ranges: c.ranges ?? [] } : {}) };
+    });
   const stopped = capped ?? (hit.bytes ? "bytes" : hit.time ? "time" : hit.canceled || signal.aborted ? "canceled" : undefined);
   return { files, matches, ms: Date.now() - t0, includeIgnored, git, ...(stopped ? { stopped } : {}), ...(cut ? { cut: true as const } : {}) };
 }
