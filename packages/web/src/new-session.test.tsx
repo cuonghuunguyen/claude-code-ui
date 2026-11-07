@@ -13,13 +13,16 @@ globalThis.ResizeObserver ??= class {
 } as never;
 Element.prototype.scrollIntoView ??= () => {};
 
+import type { EngineCapabilities } from "@claude-ui/protocol";
 const models: ModelInfo[] = [{ value: "default", displayName: "Default (recommended)", description: "", supportsEffort: true, supportedEffortLevels: ["low", "high"] }];
 let unmount = () => {};
 // App owns the draft's model, mode and effort; the harness holds them like App does.
-type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes">;
-function Draft(p: Props) {
-  const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default" });
-  return <NewSession {...p} draft={draft} onDraft={setDraft} modes={["default", "acceptEdits", "plan"]} />;
+type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes"> & { engine?: StartOptions["engine"] };
+// Like App: another engine's draft starts clean and takes that engine's flags.
+const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false } as EngineCapabilities;
+function Draft({ engine, ...p }: Props) {
+  const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default", engine });
+  return <NewSession {...p} draft={draft} onDraft={(d) => setDraft(d.engine !== draft.engine ? { ...d, model: "default", effort: "default" } : d)} modes={["default", "acceptEdits", "plan"]} caps={draft.engine === "opencode" ? OPENCODE_CAPS : undefined} />;
 }
 afterEach(() => unmount());
 
@@ -414,4 +417,59 @@ it("a long project name in the project chip truncates and the chip can shrink to
   expect(has(chip, "min-w-0") && has(chip, "max-w-full"), "chip can shrink to the row").toBe(true);
   expect(has(chip.parentElement!, "min-w-0") && has(chip.parentElement!, "max-w-full"), "row is bounded").toBe(true);
   expect(chip.getAttribute("title")).toBe(long);
+});
+
+it("engine chip is first in the chip row, labelled, and starts at the given engine", async () => {
+  const { el } = await render({ engine: "opencode" });
+  const chip = el.querySelector<HTMLElement>('[data-testid="engine-chip"]')!;
+  expect(chip.getAttribute("aria-label")).toBe("Engine: OpenCode");
+  expect(chip.textContent).toMatch(/^EngineOpenCode/);
+  expect(chip.compareDocumentPosition(el.querySelector('[data-testid="project-chip"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(chip.className).toContain("max-md:h-11!");
+});
+
+it("keyboard opens the engine chip and picks OpenCode; effort picker hides, session.create carries the engine", async () => {
+  const onStart = vi.fn(async () => {});
+  const { el, box } = await render({ onStart });
+  const chip = el.querySelector<HTMLElement>('[data-testid="engine-chip"]')!;
+  expect(chip.getAttribute("aria-label")).toBe("Engine: Claude");
+  expect(el.querySelector('[data-testid="effort-select"]')).not.toBeNull();
+  await act(async () => chip.focus());
+  await key(chip, { key: "ArrowDown" });
+  const item = document.querySelector<HTMLElement>('[data-testid="engine-opencode"]')!;
+  expect(item.textContent).toBe("OpenCode");
+  await act(async () => item.click());
+  expect(chip.getAttribute("aria-label")).toBe("Engine: OpenCode");
+  expect(el.querySelector('[data-testid="effort-select"]')).toBeNull();
+  await type(box, "hi");
+  await key(box, { key: "Enter" });
+  expect(onStart).toHaveBeenCalledWith("/p/a", expect.objectContaining({ engine: "opencode", model: "default" }), { text: "hi", images: [] });
+});
+
+it("startSession sends the engine in session.create", async () => {
+  const request = vi.fn(async (m: { type: string }) => (m.type === "session.create" ? { session: { id: "ses_1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } } : {}));
+  await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default", engine: "opencode" }, { text: "x", images: [] });
+  expect(request.mock.calls[0]![0]).toMatchObject({ type: "session.create", engine: "opencode" });
+});
+
+it("an opencode_missing create error shows inline under the chips with a button to the OpenCode settings", async () => {
+  const onOpenOpenCodeSettings = vi.fn();
+  const onStart = vi.fn(async () => void (await Promise.reject(Object.assign(new Error("OpenCode not found. Set its path in Settings > OpenCode."), { code: "opencode_missing" }))));
+  const { el, box } = await render({ engine: "opencode", onStart, onOpenOpenCodeSettings });
+  expect(el.querySelector('[data-testid="engine-error"]')).toBeNull();
+  await type(box, "hi");
+  await key(box, { key: "Enter" });
+  const alert = el.querySelector<HTMLElement>('[data-testid="engine-error"]')!;
+  expect(alert.getAttribute("role")).toBe("alert");
+  expect(alert.textContent).toContain("OpenCode not found");
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
+  expect(onOpenOpenCodeSettings).toHaveBeenCalled();
+});
+
+it("another create error keeps the old path: no engine error block", async () => {
+  const onStart = vi.fn(async () => void (await Promise.reject(Object.assign(new Error("boom"), { code: "other" }))));
+  const { el, box } = await render({ onStart });
+  await type(box, "hi");
+  await key(box, { key: "Enter" });
+  expect(el.querySelector('[data-testid="engine-error"]')).toBeNull();
 });

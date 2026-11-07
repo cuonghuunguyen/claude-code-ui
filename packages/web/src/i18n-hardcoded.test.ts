@@ -21,7 +21,7 @@ const DENY = new Set([
 ]);
 const readable = (name: string) => !DENY.has(name) && !name.startsWith("data-") && (!name.startsWith("aria-") || READABLE_ARIA.has(name));
 /** Not words of a language: product and protocol names, units, key names, symbols. */
-const ALLOWED = new Set<string>(["claude-code-ui", "Claude", "Claude Code", "Git", "MCP", "Jira", "URL", "ID", "PID", "WSL", "Docker", "OK", "Esc", "Enter", "Tab", "Shift", "Ctrl", "Alt", "Cmd"]);
+const ALLOWED = new Set<string>(["claude-code-ui", "Claude", "Claude Code", "OpenCode", "Git", "MCP", "Jira", "URL", "ID", "PID", "WSL", "Docker", "OK", "Esc", "Enter", "Tab", "Shift", "Ctrl", "Alt", "Cmd"]);
 const word = /\p{L}{2,}/u;
 
 type Node = { type?: string; start: number; [k: string]: unknown };

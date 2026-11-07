@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -30,6 +30,9 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
+import { OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeEngine } from "./opencode-engine.ts";
+import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
+import type { OpenCodeMessage } from "./opencode-parts.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
@@ -118,6 +121,9 @@ const IDLE_CHECK_MS = 60_000;
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
 
+/** An OpenCode session id: it reaches a request path, so only this shape does. */
+const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
+type OpenCodeSessionRow = { id: string; directory: string; title: string; time: { created: number; updated: number; archived?: number } };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type History = {
@@ -317,6 +323,8 @@ export function createDaemon(opts: {
   historyDir?: string;
   /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
   secrets?: Secrets;
+  /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
+  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv };
   /** Test seam (GH-447): the fetch of the Jira client. */
   jiraFetch?: typeof fetch;
   /** Test seam (GH-164): delays of auto-continue.ts. */
@@ -437,6 +445,21 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
+  const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...opts.opencode });
+  /** Directory and title of each OpenCode session this daemon listed, created or opened. */
+  const openCodeMeta = new Map<string, { cwd: string; title: string }>();
+  const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
+  /** Settings `sessions.engine`: the Engine of the last created session. */
+  const rememberEngine = (engine: EngineName) => {
+    if (appSettings.get().sessions.engine === engine) return;
+    try {
+      broadcastSettings(appSettings.set({ sessions: { engine } }));
+    } catch (err) {
+      console.error("saving the last engine failed:", err);
+    }
+  };
   /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
   const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
@@ -513,7 +536,7 @@ export function createDaemon(opts: {
     cli: opts.cli ?? runCli,
     // Plugins are user- or project-wide: every live query reloads, as the extension reloads every open session.
     reload: async () => {
-      const live = [...sessions.values()].filter((s) => s.liveQuery());
+      const live = [...sessions.values()].filter((s) => s.live());
       const results = await Promise.allSettled(live.map((s) => timed(s.reloadPlugins())));
       const failed = live.filter((s, i) => results[i]!.status === "rejected" && (console.error(`session ${s.id}: reloadPlugins failed:`, (results[i] as PromiseRejectedResult).reason), true)).map((s) => s.id);
       const errorCount = results.reduce((n, r) => n + (r.status === "fulfilled" ? (r.value ?? 0) : 0), 0);
@@ -1029,6 +1052,7 @@ export function createDaemon(opts: {
   /** A session's title as list() gives it: the SDK summary, a cleared session's first prompt, "New session" without transcript. */
   async function titleOf(s: Session) {
     if (s.untitled()) return "New session";
+    if (OPENCODE_ID.test(s.id)) return openCodeMeta.get(s.id)?.title ?? "New session";
     const info = await history.getSessionInfo(s.id).catch(() => undefined);
     if (!info) return "New session";
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
@@ -1051,8 +1075,41 @@ export function createDaemon(opts: {
     const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!allowed(cwd)), ok.get(cwd)!));
     const ids = new Set((await transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId));
     for (const id of sessions.keys()) ids.add(id);
+    for (const id of openCodeMeta.keys()) ids.add(id);
     for (const id of deleting) ids.delete(id);
     return [...ids];
+  }
+
+  /** The error text of the last failed OpenCode listing: logged once per change, not on every list. */
+  let openCodeListError: string | undefined;
+  /**
+   * OpenCode sessions of `cwds` (docs/spec.md "OpenCode engine"). Only when the server runs or the last created session was OpenCode's, so a Claude-only
+   * user never starts it. shortcut: a user whose last engine is Claude sees OpenCode-TUI sessions only after the server started in this daemon run.
+   * `ran`: the listing answered for every folder (an entry missing from it is gone); a failing OpenCode lists none and never fails the Claude list.
+   */
+  async function listOpenCode(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
+    const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
+    if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return out;
+    try {
+      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd })] as const);
+      openCodeListError = undefined;
+      out.ran = true;
+      for (const [cwd, list] of rows)
+        for (const row of list) {
+          const loaded = sessions.get(row.id);
+          const saved = linked.get(row.id);
+          const mode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
+          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: "opencode" as const };
+          openCodeMeta.set(row.id, { cwd, title: row.title });
+          out.ids.add(row.id);
+          out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
+        }
+    } catch (err) {
+      const text = (err as Error).message;
+      if (text !== openCodeListError) console.error("listing OpenCode sessions failed:", text);
+      openCodeListError = text;
+    }
+    return out;
   }
 
   async function listNow(): Promise<ListResult> {
@@ -1071,9 +1128,7 @@ export function createDaemon(opts: {
       const l = linked.get(id);
       return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
     };
-    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
     const known = new Set(all.map((t) => t.sessionId));
-    saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id)));
     // One realpath per distinct cwd per list, not two per transcript: each is a blocking call (slow on Windows), and hundreds of
     // transcripts share a few dozen cwds.
     const canonical = new Map<string, string | undefined>();
@@ -1083,13 +1138,13 @@ export function createDaemon(opts: {
       // An Aside is not a session of the list until Keep as session.
       if (!t.cwd || !allowedCwd(t.cwd) || linked.get(t.sessionId)?.ownerId) continue;
       const loaded = sessions.get(t.sessionId);
-      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
+      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: ALL_CAPABILITIES, engine: "claude" as const };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.liveQuery() && { live: false as const }), ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.live() && { live: false as const }), ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
+      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -1112,13 +1167,24 @@ export function createDaemon(opts: {
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
     // Sessions of a project's worktrees show under the project (outside the roots there are none: `listed` has only allowed cwds).
     const shown = new Set([...open, ...worktreePaths]);
-    const topIds = new Set(listed.filter((s) => shown.has(trim(s.cwd))).map((s) => s.id));
+    const oc = await listOpenCode([...shown], linked, links);
+    const byId = new Map(listed.map((s) => [s.id, s]));
+    for (const s of oc.items) byId.set(s.id, s);
+    const all2 = [...byId.values()];
+    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
+    // An OpenCode entry stays unless this list asked OpenCode and it did not return the session.
+    saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id) || (OPENCODE_ID.test(id) && !(oc.ran && !oc.ids.has(id)))));
+    const topIds = new Set(all2.filter((s) => shown.has(trim(s.cwd))).map((s) => s.id));
     return {
+      engines: [
+        { engine: "claude", capabilities: ALL_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }) },
+        { engine: "opencode", capabilities: OPENCODE_CAPABILITIES, permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }) },
+      ],
       projects: open,
       recentProjects: projects.recent(listed).filter((r) => !shown.has(r.cwd)),
       worktrees,
       // A worker of a listed coordinator shows under it, also when the user removed the worker's project.
-      sessions: listed.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
+      sessions: all2.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
       permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }),
     };
   }
@@ -1129,15 +1195,37 @@ export function createDaemon(opts: {
     return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
   };
 
+  /** An OpenCode session rebuilt from its stored messages. Its folder: the one listed or created, else asked of OpenCode. */
+  async function restoreOpenCode(id: string): Promise<Session | undefined> {
+    const known = openCodeMeta.get(id);
+    // shortcut: a session of a folder not seen yet is found only when OpenCode answers `GET /session/{id}` without a directory (unverified against a real server).
+    const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd }).catch(() => undefined);
+    const cwd = row && allowed(known?.cwd ?? row.directory);
+    if (!row || !cwd || isRemoving(cwd)) return undefined;
+    const messages = await openCode.request<OpenCodeMessage[]>(`/session/${id}/message`, { directory: cwd });
+    openCodeMeta.set(id, { cwd, title: row.title });
+    const saved = settings.get(id);
+    const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
+    const effort = EFFORTS.includes(saved?.effort as never) ? (saved!.effort as SessionSettings["effort"]) : undefined;
+    const model = isModel(saved?.model) ? saved.model : undefined;
+    return track(Session.restore(id, cwd, messages as never, openCodeSessionOpts({ model, permissionMode, effort })));
+  }
+
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
     // Its transcript still exists until the delete ends; a restore now would bring the session back.
     if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
     if (live) return Promise.resolve(live);
-    // The ID becomes a transcript file name; only a UUID may reach the SDK.
-    if (typeof id !== "string" || !UUID.test(id)) return Promise.resolve(undefined);
+    // The ID becomes a transcript file name or a request path; only a UUID may reach the SDK, only `ses_…` OpenCode.
+    if (typeof id !== "string" || (!UUID.test(id) && !OPENCODE_ID.test(id))) return Promise.resolve(undefined);
     let p = restoring.get(id);
+    if (!p && OPENCODE_ID.test(id)) {
+      p = restoreOpenCode(id)
+        .catch((err) => void console.error(`restoring session ${id} failed:`, err))
+        .finally(() => restoring.delete(id));
+      restoring.set(id, p);
+    }
     if (!p) {
       p = (async () => {
         const info = await history.getSessionInfo(id);
@@ -1751,9 +1839,27 @@ export function createDaemon(opts: {
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
+          if (msg.engine !== undefined && !(ENGINES as readonly unknown[]).includes(msg.engine)) return fail("bad_request", `engine must be one of ${ENGINES.join(", ")}`);
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
+          if (msg.engine === "opencode") {
+            // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
+            let row: OpenCodeSessionRow;
+            try {
+              row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: {} });
+            } catch (err) {
+              const e = openCodeFail(err);
+              return fail(e.code, e.message);
+            }
+            if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
+            const mode = appSettings.get().sessions.defaultMode;
+            const s = track(new Session(cwd, openCodeSessionOpts({ model: msg.model, permissionMode: OPENCODE_MODES.includes(mode) ? mode : "default" }), { id: row.id }));
+            openCodeMeta.set(s.id, { cwd, title: row.title });
+            addProject(cwd);
+            rememberEngine("opencode");
+            return reply({ session: s.info() });
+          }
           await modelList().catch(() => {});
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
@@ -1762,8 +1868,11 @@ export function createDaemon(opts: {
           if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
           const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
+          rememberEngine("claude");
           return reply({ session: s.info() });
         }
+        case "opencode.status":
+          return reply(await openCode.status());
         case "session.defaultMode": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
@@ -1948,7 +2057,7 @@ export function createDaemon(opts: {
           if (msg.type === "session.setPermissionMode" && settings.get(s.id)?.readOnly) {
             saveSettings(() => settings.set(s.id, { readOnly: undefined }, ["readOnly"]));
             // shortcut: while a turn runs the edits stay off until its CLI ends (idle close, restart); restart at turn end if users ask.
-            if (s.info().state === "idle" && s.liveQuery()) s.restartQuery();
+            if (s.info().state === "idle" && s.live()) s.restartQuery();
           }
           return reply({ session: s.info() });
         }
@@ -2152,7 +2261,9 @@ export function createDaemon(opts: {
             const picked = msg.patch?.claude?.account;
             if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
             const before = appSettings.get().claude.account;
+            const openCodePath = appSettings.get().opencode.path;
             const settings = appSettings.set(msg.patch);
+            if (settings.opencode.path !== openCodePath) void openCode.reset();
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
             const urlPatched = msg.patch?.jira?.url !== undefined;
@@ -2174,6 +2285,7 @@ export function createDaemon(opts: {
         }
         case "session.rename":
         case "session.archive": {
+          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
           // 200: the web title input's maxLength.
           if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
@@ -2191,10 +2303,12 @@ export function createDaemon(opts: {
           return reply({});
         }
         case "session.delete": {
+          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const err = await deleteSessionById(msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
         case "aside.open": {
+          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "text must be a non-empty string");
           const owner = await find(msg.sessionId);
           if (!owner) return;
@@ -2914,7 +3028,7 @@ export function createDaemon(opts: {
           // The session's running query when it runs in that project; otherwise the project's config query.
           const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
           try {
-            const live = s?.cwd === cwd ? s.liveQuery() : undefined;
+            const live = s?.cwd === cwd ? s.claudeQuery() : undefined;
             const r = msg.type.startsWith("skills.") ? await config.skills(msg as SkillsRequest, cwd, live) : await config.mcp(msg as McpRequest, cwd, live);
             if (msg.type === "skills.setState") commandCache.clear();
             return reply(r);
@@ -3009,7 +3123,7 @@ export function createDaemon(opts: {
               );
               continue;
             }
-            if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery()) {
+            if (!holds.get(s.id) && s.live() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery()) {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
               orchestration.released(s.id);
             }
@@ -3026,7 +3140,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), void openCode.stop(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

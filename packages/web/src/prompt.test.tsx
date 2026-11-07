@@ -719,6 +719,13 @@ it("GH-165: a running turn has exactly one Stop, in the prompt box; the header h
   expect($("session-header")).not.toBeNull();
 });
 
+it("the session header shows a static engine tag next to the project", async () => {
+  const b = await render({ session: { id: "s2", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], engine: "opencode" } });
+  const tag = b.$("session-header")!.querySelector('[data-testid="engine-tag"]')!;
+  expect(tag.textContent).toBe("OpenCode");
+  expect(tag.closest("button")).toBeNull();
+});
+
 it("GH-165: no state chip for idle, running or needs_input; error and closed keep theirs", async () => {
   for (const state of ["idle", "running", "needs_input"] as const) {
     const d = await render({}, { ...emptySession(), state });

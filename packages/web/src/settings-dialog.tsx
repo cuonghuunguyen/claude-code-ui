@@ -41,6 +41,7 @@ import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { ClaudeAccountSection } from "./claude-account-settings.tsx";
 import { JiraSection } from "./jira-settings.tsx";
+import { OpenCodeSection } from "./opencode-settings.tsx";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
@@ -1062,6 +1063,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
+    // An older daemon has no `opencode` settings: no group.
+    ...(settings?.opencode ? [{ id: "opencode", title: "OpenCode", category: "Integrations" as const, body: <OpenCodeSection opencode={settings.opencode} saving={saving} save={save} request={request} /> }] : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
     ...(launcher
       ? [

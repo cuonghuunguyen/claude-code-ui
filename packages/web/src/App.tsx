@@ -14,6 +14,7 @@ import type {
   McpListResult,
   RecentProject,
   ArtifactPreviewResult,
+  Engine,
   EngineCapabilities,
   MediaResult,
   ModelInfo,
@@ -47,7 +48,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { capabilitiesOf, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { capabilitiesOf, ENGINES, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -170,6 +171,7 @@ import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
 import { projectLabel, saveLabel, setLabels, useLabels } from "./labels.ts";
+import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -294,6 +296,9 @@ export function App() {
   const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
+  // Every Engine with its flags and start modes (session.list); none on an older daemon: claude only. `lastEngine`: Settings sessions.engine, the draft's engine until one is picked.
+  const [engines, setEngines] = useState<NonNullable<ListResult["engines"]>>([]);
+  const [lastEngine, setLastEngine] = useState<Engine>("claude");
   const [openingProject, setOpeningProject] = useState(false);
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
   // Kept after closing, so the dialog stays mounted for its close and focus return.
@@ -715,7 +720,7 @@ export function App() {
   async function refreshList() {
     const gen = connGen.current;
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes, engines: listedEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
@@ -739,6 +744,7 @@ export function App() {
       setWorktrees(worktrees);
       setListLoaded(true);
       if (permissionModes) setNewModes(permissionModes);
+      if (listedEngines) setEngines(listedEngines);
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
         for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
@@ -1398,7 +1404,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1425,7 +1431,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -2950,11 +2956,20 @@ export function App() {
     setFileTree(true);
     reveal("files");
   };
-  const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
+  const draftEngine = pick.engine ?? lastEngine;
+  const engineEntry = engines.find((e) => e.engine === draftEngine);
+  // Claude: the start modes follow the model and the daemon config; another Engine: the modes it lists.
+  const modesFor = (engine: Engine, model: string) => engines.find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
+  const draftModes = modesFor(draftEngine, pick.model);
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
-  const draft: StartOptions = { ...pick, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : "default") };
+  const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
   const changeDraft = (d: StartOptions) => {
+    if (d.engine !== draft.engine) {
+      // Another Engine has its own models, modes and effort levels.
+      const offered = modesFor(d.engine!, "default");
+      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: offered.includes(d.mode) ? d.mode : offered[0] });
+    }
     const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(models, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
@@ -3137,7 +3152,7 @@ export function App() {
     joinSplits: split ? joinSplits : undefined,
     sessions: list,
     session: draftShown
-      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
+      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, capabilities: engineEntry?.capabilities, running: false, prompts: [], draft: true }
       : shown && ownerOnScreen ? {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
@@ -3999,6 +4014,8 @@ export function App() {
                   draft={draft}
                   onDraft={changeDraft}
                   modes={draftModes}
+                  caps={engineEntry?.capabilities}
+                  onOpenOpenCodeSettings={() => openSettingsGroup("opencode")}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
@@ -4644,14 +4661,14 @@ export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
-  { model, mode, effort, draft }: StartOptions,
+  { model, mode, effort, draft, engine }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
   /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
   onDraftClaimed: () => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
-  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(draft && { draft }) })).session;
+  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(draft && { draft }) })).session;
   if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);
@@ -4738,6 +4755,8 @@ export function NewSession({
   draft,
   onDraft,
   modes,
+  caps,
+  onOpenOpenCodeSettings,
   onOpenProject,
   onUpload,
   onSearch,
@@ -4763,6 +4782,10 @@ export function NewSession({
   draft: StartOptions;
   onDraft: (d: StartOptions) => void;
   modes: PermissionMode[];
+  /** Flags of the draft's Engine; none = all. */
+  caps?: EngineCapabilities;
+  /** The inline OpenCode error's button. */
+  onOpenOpenCodeSettings?: () => void;
   onOpenProject: () => void;
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
@@ -4782,6 +4805,16 @@ export function NewSession({
 }) {
   const tr = useT();
   const { model, mode, effort } = draft;
+  const engine = draft.engine ?? "claude";
+  // A failed start of the OpenCode engine (missing, too old, failed to start) shows under the chips with the way to fix it.
+  const [engineError, setEngineError] = useState<string>();
+  const start = (c: string, first: FirstMessage) => {
+    setEngineError(undefined);
+    return onStart(c, { model, mode, effort, engine: draft.engine }, first).catch((e: RequestError) => {
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") setEngineError(e.message);
+      throw e;
+    });
+  };
   const project = cwd ? projectOf(cwd, worktrees) : "";
   const runIn = ((project && worktrees[project]) || []).filter((w) => !w.outsideRoots).sort(byRow);
   const here = runIn.find((w) => w.path === cwd);
@@ -4811,13 +4844,14 @@ export function NewSession({
           onModel={(m) => onDraft({ ...draft, model: m })}
           effort={effort}
           onEffort={(e) => onDraft({ ...draft, effort: e })}
+          caps={caps}
           mode={mode}
           modes={modes}
           onMode={(m) => onDraft({ ...draft, mode: m })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
-          onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, { text, images }) : Promise.reject(new Error("no project")))}
-          onBash={cwd ? (command) => onStart(cwd, { model, mode, effort }, { command }) : undefined}
+          onPrompt={(text, images) => (cwd ? start(cwd, { text, images }) : Promise.reject(new Error("no project")))}
+          onBash={cwd ? (command) => start(cwd, { command }) : undefined}
           state={connected ? "idle" : "disconnected"}
           blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
@@ -4833,6 +4867,21 @@ export function NewSession({
       {cwd ? (
         // Project chip: Base UI Select like the prompt toolbar pickers; "Open project…" is its last item.
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-1">
+        <Select value={engine} onValueChange={(v) => v && onDraft({ ...draft, engine: v as Engine })}>
+          <SelectTrigger aria-label={tr("app.main.engineNamed", { name: ENGINE_NAME[engine] })} data-testid="engine-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+            <span className="text-muted-foreground">{tr("app.main.engine")}</span>
+            <EngineIcon engine={engine} />
+            <span className="font-medium">{ENGINE_NAME[engine]}</span>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-40 p-0.5">
+            {ENGINES.map((e) => (
+              <SelectItem key={e} value={e} className={ROW} data-testid={`engine-${e}`}>
+                <EngineIcon engine={e} />
+                {ENGINE_NAME[e]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={project} onValueChange={(v) => (v === OPEN ? onOpenProject() : v && onCwd(v))}>
           <SelectTrigger aria-label={tr("app.main.project")} title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
             <ProjectAvatar cwd={project} />
@@ -4898,6 +4947,16 @@ export function NewSession({
             {tr("app.main.worktreeNotCreated", { message: worktreeJob.error })}
           </p>
         )}
+        {engineError && (
+          <div role="alert" className="flex w-full flex-col items-center gap-1 text-center text-destructive text-sm" data-testid="engine-error">
+            <p>{engineError}</p>
+            {onOpenOpenCodeSettings && (
+              <Button variant="secondary" size="sm" onClick={onOpenOpenCodeSettings} className="max-md:h-11" data-testid="engine-error-settings">
+                {tr("app.main.openOpenCodeSettings")}
+              </Button>
+            )}
+          </div>
+        )}
         </div>
       ) : (
         <Button variant="secondary" size="sm" onClick={onOpenProject} data-testid="new-open-project" className="max-md:h-11">
@@ -4909,10 +4968,15 @@ export function NewSession({
   );
 }
 
+function EngineIcon({ engine }: { engine: Engine }) {
+  const Icon = ENGINE_ICON[engine];
+  return <Icon aria-hidden />;
+}
+
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
-export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string };
+export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string; engine?: Engine };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
@@ -5188,6 +5252,7 @@ export function SessionPane({
           {place ?? projectName(session.cwd)}
         </span>
         <SideBadge cwd={session.cwd} />
+        <EngineTag engine={session.engine} />
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
