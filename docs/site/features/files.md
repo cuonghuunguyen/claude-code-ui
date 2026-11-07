@@ -41,11 +41,22 @@ Right-click (long press, or <kbd>Shift</kbd>+<kbd>F10</kbd>) a file or folder:
 | **Open in tab** | Moves the file into its own tab next to its session (also middle click on the row). See [Panes & layout](panes#one-file-or-one-artifact-as-a-tab). |
 | **Add to prompt** | Inserts the file into the prompt box as an @mention. |
 
+## Find in files
+
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> (<kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>F</kbd> on Mac, or **Find in files** in the command palette) searches the text of the project's files with `git grep`, so git must be installed. Text selected in the editor or a text field becomes the query.
+
+- Results are grouped by file, with two lines of context and the hits marked. <kbd>Enter</kbd> or a click opens the match at its line.
+- The regex button switches to a regular expression (Perl-compatible, as `git grep -P`: `\d`, `\w` and `\b` work; a git built without PCRE says so). **Files to include** takes patterns such as `*.ts, *.tsx`.
+- Ignored files are skipped in a git project; the eye button includes them. A folder that is not a git project searches everything, ignored files included, and the button hides them.
+- <kbd>↑</kbd> and <kbd>↓</kbd> in the boxes recall earlier searches; in the result list (<kbd>Tab</kbd>) they move between matches.
+- A search stops after 5 s, 200 files or 2000 matches, and says so. Binary files are skipped.
+
 ## Keys
 
 | Key | Where | Does |
 | --- | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Anywhere | Open a file by name. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> in the list inserts `@path` into the prompt instead. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | Anywhere | Find in files |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> | Editor | Save |
 | <kbd>Alt</kbd>+<kbd>K</kbd> | Editor | Insert the file and the selected lines into the prompt box (<kbd>⌥</kbd> <kbd>K</kbd> on Mac) |
 | <kbd>Ctrl</kbd>+<kbd>\\</kbd> | Anywhere | Show or hide the file tree |

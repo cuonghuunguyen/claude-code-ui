@@ -26,6 +26,7 @@ Phím tắt hoạt động ở mọi nơi trong ứng dụng, kể cả ô promp
 | Bảng lệnh | <kbd>Ctrl</kbd>+<kbd>K</kbd> | <kbd>⌘</kbd> <kbd>K</kbd> |
 | Bảng lệnh (phím thứ hai) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>P</kbd> |
 | Mở tệp | <kbd>Ctrl</kbd>+<kbd>P</kbd> | <kbd>⌘</kbd> <kbd>P</kbd> |
+| Tìm trong tệp | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>F</kbd> |
 | Mở cài đặt | <kbd>Ctrl</kbd>+<kbd>,</kbd> | <kbd>⌘</kbd> <kbd>,</kbd> |
 | Phím tắt | <kbd>Ctrl</kbd>+<kbd>/</kbd> | <kbd>⌘</kbd> <kbd>/</kbd> |
 | Đến thông báo | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>N</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>N</kbd> |

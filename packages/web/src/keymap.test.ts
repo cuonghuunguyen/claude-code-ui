@@ -21,6 +21,12 @@ it("an override wins, null disables, reset restores the default", () => {
   expect(specOf("file.open", false)).toBe("mod+p");
 });
 
+it("Find in files can be rebound", () => {
+  expect(specOf("find.files", false)).toBe("mod+shift+f");
+  bind("find.files", "mod+alt+f");
+  expect(specOf("find.files", false)).toBe("mod+alt+f");
+});
+
 it("overrides are saved in localStorage", () => {
   bind("sidebar.toggle", "mod+alt+b");
   expect(JSON.parse(localStorage.getItem("claude-ui.keybindings")!)).toEqual({ "sidebar.toggle": "mod+alt+b" });

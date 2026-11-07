@@ -398,6 +398,7 @@ export default {
   "shortcut.palette.open": "Command palette",
   "shortcut.palette.alt": "Command palette (second key)",
   "shortcut.file.open": "Open file",
+  "shortcut.find.files": "Find in files",
   "shortcut.settings.open": "Open settings",
   "shortcut.shortcuts.open": "Keyboard shortcuts",
   "shortcut.notifications.focus": "Go to notifications",

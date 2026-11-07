@@ -103,4 +103,37 @@ describe("git-runner", () => {
     h.disable();
     expect(h.max / 1e6).toBeLessThan(50);
   });
+
+  describe("signal", () => {
+    const sleeper = (signal: AbortSignal) => ({ cwd: tmpdir(), file: process.execPath, args: ["-e", "setTimeout(()=>{}, 10000)"], env: env(), killTree: true, signal });
+    const abortLater = async (name: string) => {
+      const ctl = new AbortController();
+      const t0 = Date.now();
+      const p = runGit(sleeper(ctl.signal)).then(() => undefined, (e) => e as Error);
+      setTimeout(() => ctl.abort(), 300);
+      expect(await p, name).toBeInstanceOf(Error);
+      expect(Date.now() - t0).toBeLessThan(3000);
+    };
+
+    it("kills a killTree run in the thread runner", () => abortLater("thread"));
+
+    it("kills a killTree run in the child-process fallback", async () => {
+      const script = gitRunnerConfig.script;
+      gitRunnerConfig.script = "throw new Error('x')";
+      try {
+        await runGit({ cwd: tmpdir(), args: ["--version"], env: env() }).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 200));
+        expect(gitRunnerConfig.broken).toBe(true);
+        await abortLater("direct");
+      } finally {
+        gitRunnerConfig.script = script;
+      }
+    });
+
+    it("rejects an already aborted signal without starting", async () => {
+      const t0 = Date.now();
+      await expect(runGit(sleeper(AbortSignal.abort()))).rejects.toMatchObject({ code: "ABORT_ERR" });
+      expect(Date.now() - t0).toBeLessThan(500);
+    });
+  });
 });

@@ -6223,3 +6223,25 @@ describe("artifact supporting files (GH-335)", () => {
     c.ws.close();
   });
 });
+
+describe("fs.grep", () => {
+  it("searches the cwd, replies empty for a blank query and rejects bad input", async () => {
+    const proj = join(webRoot, "grep proj");
+    mkdirSync(proj, { recursive: true });
+    writeFileSync(join(proj, "a.txt"), "hello Needle\n");
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "needle" })).toMatchObject({ type: "reply", result: { files: [{ path: "a.txt", lines: [{ n: 1, text: "hello Needle", ranges: [[6, 12]] }] }], matches: 1 } });
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "  " })).toMatchObject({ type: "reply", result: { files: [], matches: 0 } });
+      expect(await c.request({ type: "fs.grep", cwd: outside, query: "x" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "a(", regex: true })).toMatchObject({ type: "error", code: "grep_failed" });
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "x".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "x", globs: "../x" })).toMatchObject({ type: "error", code: "bad_glob" });
+    } finally {
+      d.close();
+    }
+  });
+});

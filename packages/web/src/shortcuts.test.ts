@@ -37,6 +37,12 @@ it("Ctrl+P and Cmd+P are quick open, not Ctrl+Shift+P", () => {
   expect(matchesKey(KEYS["file.open"], ev("p"), false)).toBe(false);
 });
 
+it("Ctrl+Shift+F and Cmd+Shift+F are Find in files, not plain Ctrl+F", () => {
+  expect(matchesKey(KEYS["find.files"], ev("F", { ctrlKey: true, shiftKey: true }), false)).toBe(true);
+  expect(matchesKey(KEYS["find.files"], ev("F", { metaKey: true, shiftKey: true }), true)).toBe(true);
+  expect(matchesKey(KEYS["find.files"], ev("f", { ctrlKey: true }), false)).toBe(false);
+});
+
 it("labels each key for the palette's keybind chips", () => {
   expect(keyLabels("mod+shift+p", false)).toEqual(["Ctrl", "Shift", "P"]);
   expect(keyLabels("mod+shift+p", true)).toEqual(["⌘", "⇧", "P"]);
