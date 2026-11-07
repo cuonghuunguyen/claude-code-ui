@@ -1,15 +1,42 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
-import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Effort, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
+import type { Effort, EffortLevel, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
 import type { HistSummary } from "./histogram.ts";
 
-export type { ModelInfo };
+/** A model an Engine offers (models.list). `value` goes to session.setModel; "default" = the Engine's default. */
+export type ModelInfo = {
+  value: string;
+  /** The model id an alias `value` resolves to. */
+  resolvedModel?: string;
+  displayName: string;
+  description: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: EffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+  supportsFastMode?: boolean;
+  supportsAutoMode?: boolean;
+};
 
 /** All permission modes, in picker order. Shift+Tab cycles them without dontAsk (Claude Code's order). */
 export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
-/** The modes offered now: auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
-export const permissionModesFor = ({ allowBypass, supportsAuto }: { allowBypass?: boolean; supportsAuto?: boolean }) =>
-  PERMISSION_MODES.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));
+/** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
+export type EngineCapabilities = {
+  /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
+  permissionModes: PermissionMode[];
+  effort: boolean;
+  rewind: boolean;
+  fork: boolean;
+  steering: boolean;
+  slashCommands: boolean;
+  planMeter: boolean;
+  account: boolean;
+  contextUsage: boolean;
+};
+export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true };
+/** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
+export const capabilitiesOf = (s: { capabilities?: EngineCapabilities }) => s.capabilities ?? ALL_CAPABILITIES;
+/** The modes offered now, of `modes` (the Engine's own): auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
+export const permissionModesFor = ({ allowBypass, supportsAuto, modes = PERMISSION_MODES }: { allowBypass?: boolean; supportsAuto?: boolean; modes?: PermissionMode[] }) =>
+  modes.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
 /** Prefix of the user message the daemon sends a coordinator on worker events; the web app shows it as a chip. */
 export const ORCHESTRATION_NOTICE = "[claude-ui orchestration notice]";
@@ -26,6 +53,8 @@ export type SessionInfo = {
   permissionMode: PermissionMode;
   effort: Effort;
   permissionModes: PermissionMode[];
+  /** What the session's Engine supports; absent (an older daemon) = everything (capabilitiesOf). */
+  capabilities?: EngineCapabilities;
 };
 /**
  * A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run.
