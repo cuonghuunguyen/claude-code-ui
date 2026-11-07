@@ -14,6 +14,7 @@ import type {
   McpListResult,
   RecentProject,
   ArtifactPreviewResult,
+  EngineCapabilities,
   MediaResult,
   ModelInfo,
   ModelsResult,
@@ -46,7 +47,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { capabilitiesOf, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -71,7 +72,7 @@ import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
-import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
+import { GHOST, ModePicker, modesOf, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
@@ -868,8 +869,8 @@ export function App() {
       setInfos((i) => {
         const old = i[from] ?? listRef.current.find((x) => x.id === from);
         if (i[to] || !old) return i;
-        const { cwd, state, model, permissionMode, effort, permissionModes } = old;
-        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes } };
+        const { cwd, state, model, permissionMode, effort, permissionModes, capabilities } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes, capabilities } };
       });
       // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
       setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
@@ -3141,7 +3142,8 @@ export function App() {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models),
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models, capabilitiesOf(shown)),
+      capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
@@ -4907,10 +4909,6 @@ export function NewSession({
   );
 }
 
-/** The modes a session offers now: SessionInfo.permissionModes is from the last reply; auto follows the current model, which another client can change. */
-const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) =>
-  offered.length && models.length ? permissionModesFor({ allowBypass: offered.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) }) : offered;
-
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
@@ -5074,7 +5072,7 @@ export function SessionPane({
   // In a subagent view only a request from inside that run replaces the notice; the session view shows every one.
   const permission = pendingPart && (!current || inRun(view, pendingPart.toolUseId, current.id)) ? pendingPart : undefined;
   const question = pendingAsk && (!current || inRun(view, pendingAsk.toolUseId, current.id)) ? pendingAsk : undefined;
-  const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
+  const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
   const sendModeSetting = useSendMode();
@@ -5374,7 +5372,8 @@ export function SessionPane({
               effort={view.effort ?? session.effort}
               onEffort={onEffort}
               mode={view.permissionMode ?? session.permissionMode}
-              modes={modesOf(session.permissionModes, view.model ?? session.model, models)}
+              modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))}
+              caps={capabilitiesOf(session)}
               onMode={onMode}
               onUpload={onUpload}
               onPrompt={onPrompt}
@@ -5435,6 +5434,7 @@ function PromptBox({
   onEffort,
   mode,
   modes,
+  caps,
   onMode,
   onUpload,
   onPrompt,
@@ -5479,6 +5479,8 @@ function PromptBox({
   onEffort: (effort: Effort) => void;
   mode: PermissionMode;
   modes: PermissionMode[];
+  /** The session's Engine flags; none (new-session draft) = all. */
+  caps?: EngineCapabilities;
   onMode: (mode: PermissionMode) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
@@ -6031,6 +6033,7 @@ function PromptBox({
       />
       <PromptToolbar
         models={models}
+        caps={caps}
         model={model}
         onModel={onModel}
         effort={effort}

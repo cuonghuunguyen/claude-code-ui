@@ -6,7 +6,7 @@ import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
 import type { SendMode } from "./send-mode.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { ContextUsage, Effort, ModelInfo, PermissionMode } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, permissionModesFor, type ContextUsage, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode } from "@claude-ui/protocol";
 import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
@@ -43,8 +43,13 @@ export const shortModel = (name: string) => {
   return short === "Default" ? t("app.toolbar.defaultModel") : short;
 };
 
-/** The model's effort levels plus "default"; none when the model does not support effort (the chooser is hidden). */
-export function effortOptions(models: ModelInfo[], model: string): Effort[] {
+/** The modes a session offers now: SessionInfo.permissionModes is from the last reply; auto follows the current model, which another client can change. `caps`: the session's Engine. */
+export const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[], caps: EngineCapabilities = ALL_CAPABILITIES) =>
+  offered.length && models.length ? permissionModesFor({ allowBypass: offered.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode), modes: caps.permissionModes }) : offered;
+
+/** The model's effort levels plus "default"; none when the model does not support effort or the Engine has no effort (the chooser is hidden). */
+export function effortOptions(models: ModelInfo[], model: string, caps: EngineCapabilities = ALL_CAPABILITIES): Effort[] {
+  if (!caps.effort) return [];
   const m = models.find((x) => x.value === model);
   return m?.supportsEffort && m.supportedEffortLevels?.length ? ["default", ...m.supportedEffortLevels] : [];
 }
@@ -136,6 +141,8 @@ export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortc
 
 export function PromptToolbar(props: {
   models: ModelInfo[];
+  /** The session's Engine flags; none (new-session draft) = all. */
+  caps?: EngineCapabilities;
   model: string;
   onModel: (model: string) => void;
   effort: Effort;
@@ -169,7 +176,7 @@ export function PromptToolbar(props: {
   const file = useRef<HTMLInputElement>(null);
   // Keep the current value selectable while the list loads or if it is not in the list.
   const models = props.models.some((m) => m.value === props.model) ? props.models : [{ value: props.model, displayName: props.model, description: "" }, ...props.models];
-  const efforts = effortOptions(props.models, props.model);
+  const efforts = effortOptions(props.models, props.model, props.caps);
   const phone = usePhone();
   const effort = efforts.includes(props.effort) ? props.effort : "default";
   const modelItems = models.map((m) => ({

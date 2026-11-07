@@ -1,5 +1,5 @@
 // The app's commands: palette rows and the shortcuts that run them. Only commands that apply right now are listed.
-import type { Effort, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
+import type { Effort, EngineCapabilities, ModelInfo, PermissionMode, SessionListItem } from "@claude-ui/protocol";
 import { grp, type PaletteItem } from "./palette.tsx";
 import { type Area, type DockArea } from "./layout.ts";
 import { matchesKey, shortcutById } from "./shortcuts.ts";
@@ -22,6 +22,8 @@ export type CommandContext = {
     effort: Effort;
     mode: PermissionMode;
     modes: PermissionMode[];
+    /** The session's Engine flags. */
+    capabilities?: EngineCapabilities;
     running: boolean;
     /** User prompts, oldest first: the rewind targets. */
     prompts: { id: string; text: string }[];
@@ -149,7 +151,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
   const step = (d: number) => c.tabs[(at + d + c.tabs.length) % c.tabs.length]!;
   // The prompt box that had focus is hidden with its tab; focus goes to the shown tab's prompt.
   const go = (id: string) => (c.selectTab(id), c.focusPrompt(id));
-  const efforts = s ? effortOptions(c.models, s.model) : [];
+  const efforts = s ? effortOptions(c.models, s.model, s.capabilities) : [];
   // The shortcut's title and its current binding come from the registry (shortcuts.ts, keymap.ts).
   const cmd = (id: string, title: string, run: () => void, searchOnly?: boolean): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys: specOf(id), run, searchOnly });
   const page = (id: string, title: string, placeholder: string, items: PaletteItem[], keys = specOf(id)): PaletteItem => ({ id, ...grp("app.palette.groupCommands"), title, keys, page: { placeholder, items } });
