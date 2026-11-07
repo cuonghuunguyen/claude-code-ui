@@ -4,7 +4,7 @@ import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BackMark } from "@claude-ui/protocol";
-import { Snooze } from "./back-panel.tsx";
+import { RING, Snooze } from "./back-panel.tsx";
 import { answeredLabel, backRows, type BackRow, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { useT, type Key } from "./i18n.ts";
 import { loadDraft, saveDraft } from "./drafts.ts";
@@ -435,11 +435,11 @@ function BackRowView({ row, title, now, onOpen, onSet }: { row: BackRow; title: 
         )}
       </div>
       <div className="flex shrink-0 flex-wrap gap-2 max-sm:basis-full max-sm:px-1.5">
-        <Button type="button" variant="outline" size="sm" className="max-md:h-11" onClick={onOpen}>{t("app.back.open")}</Button>
+        <Button type="button" variant="outline" size="sm" className={`max-md:h-11 ${RING}`} onClick={onOpen}>{t("app.back.open")}</Button>
         {row.fired && (
           <>
             <Snooze mark={mark} apply={(ms) => onSet({ remindMs: ms })} />
-            <Button type="button" variant="ghost" size="sm" className="max-md:h-11 max-md:px-3" aria-label={t("app.back.dismissLabel")} onClick={() => onSet({ remindMs: null })}>{t("app.back.dismiss")}</Button>
+            <Button type="button" variant="ghost" size="sm" className={`max-md:h-11 max-md:px-3 ${RING}`} aria-label={t("app.back.dismissLabel")} onClick={() => onSet({ remindMs: null })}>{t("app.back.dismiss")}</Button>
           </>
         )}
       </div>

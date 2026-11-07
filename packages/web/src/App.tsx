@@ -5177,7 +5177,11 @@ export function SessionPane({
   const triedBack = useRef<string>(undefined);
   const focusPanel = (partId: string, tries = 30) => {
     const el = [...document.querySelectorAll<HTMLElement>("[data-back-panel]")].find((e) => e.dataset.backPanel === partId);
-    if (el) return el.focus({ preventScroll: true });
+    if (el) {
+      // The reply is revealed at the top; on a phone it is taller than the view, so the panel itself is brought to the top (scroll-mt clears the sticky prompt bar).
+      el.focus({ preventScroll: true });
+      return el.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "auto" });
+    }
     if (tries > 0) requestAnimationFrame(() => focusPanel(partId, tries - 1));
   };
   useEffect(() => {

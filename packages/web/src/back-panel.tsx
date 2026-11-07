@@ -11,7 +11,9 @@ import { TOAST_CARD } from "./toast.tsx";
 
 const clock = (at: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(at);
 /** Panel and row targets: 28 px from md up, 44 px below. */
-const BTN = "max-md:h-11 max-md:px-3 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring";
+/** The 2px --ring outline (plan 6.0 Focus); the shared Button only draws a halo. */
+export const RING = "focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring";
+const BTN = `max-md:h-11 max-md:px-3 ${RING}`;
 const INPUT = "h-7 min-w-0 rounded-md border-[0.5px] border-border bg-background px-2 text-base text-foreground outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring max-md:h-11 md:text-[13px]";
 
 /** The "I'll be back" button of a reply's action row. Marked: a plain button that goes to the panel (never a toggle: Done is only in the panel). */
@@ -19,7 +21,7 @@ export function BackButton({ partId, marked, onMark, onGo }: { partId: string; m
   const tr = useT();
   const text = tr(marked ? "app.back.marked" : "app.back.mark");
   return (
-    <MessageAction data-back-button={partId} className="max-md:size-11 max-md:ml-1" title={text} label={text} onClick={marked ? onGo : onMark}>
+    <MessageAction data-back-button={partId} className={`max-md:size-11 max-md:ml-1 ${RING}`} title={text} label={text} onClick={marked ? onGo : onMark}>
       {marked ? <BookmarkCheckIcon className="text-foreground" /> : <BookmarkIcon />}
     </MessageAction>
   );
@@ -118,7 +120,7 @@ export function BackPanel({ sessionId, mark, stale, gone, held, request, onNotic
       <div role="status" aria-atomic="true" className="sr-only">
         {status}
       </div>
-      <div className="flex min-h-24 flex-col gap-2 max-sm:min-h-48">
+      <div className="flex min-h-40 flex-col gap-2 max-sm:min-h-72">
         {pending && !mark.brief ? (
           mark.briefState === "running" ? (
             <>
