@@ -4753,7 +4753,6 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
   );
 }
 
-/** The new-session tab's card. Hidden, not unmounted, while another tab is active: it keeps its draft, images, model, mode and effort. */
 /** A control the session's Engine lacks: muted and aria-disabled (still focusable), the reason in a tooltip on hover, focus and tap. */
 function UnsupportedAction({ label, reason, children }: { label: string; reason: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -4767,6 +4766,7 @@ function UnsupportedAction({ label, reason, children }: { label: string; reason:
   );
 }
 
+/** The new-session tab's card. Hidden, not unmounted, while another tab is active: it keeps its draft, images, model, mode and effort. */
 export function NewSessionTab({ active, ...props }: { active: boolean } & ComponentProps<typeof NewSession>) {
   return (
     <Activity mode={active ? "visible" : "hidden"}>

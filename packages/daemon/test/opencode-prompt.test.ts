@@ -282,6 +282,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(parts[0]).toMatchObject({ text: "run it" });
     expect(parts.find((p) => p.type === "tool_call")).toMatchObject({ tool: "Bash", input: { command: "ls" } });
     expect(sub.session.state).toBe("needs_input");
+    // No saved mode: the mode of the last block in OpenCode.
+    expect(sub.session.permissionMode).toBe("acceptEdits");
     // The saved mode differs from OpenCode's last block after a mode change made elsewhere: the next prompt writes the block first.
     await d.ok({ type: "permission.respond", requestId: "per_old", decision: "allow" });
     expect(d.requests("POST", "/permission/per_old/reply")[0]!.body).toEqual({ reply: "once" });

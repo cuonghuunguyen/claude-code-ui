@@ -94,6 +94,9 @@ class OpenCodeSession implements EngineSession {
   private aborted = false;
   private failed = false;
   private resyncing: Promise<void> | undefined;
+  /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
+  private stopped = false;
+  private leavingPlan = false;
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -102,7 +105,9 @@ class OpenCodeSession implements EngineSession {
     private readonly history?: OpenCodeHistory,
   ) {
     this.model = opts.model ?? "default";
-    this.permissionMode = opts.permissionMode ?? "default";
+    // A restored session without a saved mode has the one of its last block in OpenCode (bypass only when the daemon allows it).
+    const marked = history && modeOf(history.permission);
+    this.permissionMode = opts.permissionMode ?? (marked && OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
     this.effort = opts.effort ?? "default";
     // A new session got its block with `POST /session`.
     this.written = history ? modeOf(history.permission) : this.permissionMode;
@@ -127,6 +132,8 @@ class OpenCodeSession implements EngineSession {
     this.session.setState(this.history.busy ? "running" : "idle");
     if (this.history.busy) this.turnAt = Date.now();
     this.requests(this.history);
+    // Events between the history read and the stream connecting are lost: read again once it is open.
+    void this.server.streamReady().then(() => this.resync());
   }
 
   /** Emits stored history (also after a stream reconnect: part ids are stable, a re-emit replaces). */
@@ -149,7 +156,8 @@ class OpenCodeSession implements EngineSession {
         this.requests(h);
         const state = this.session.currentState();
         if (h.busy && state === "idle") (this.turnAt = Date.now()), this.session.setState("running");
-        else if (!h.busy && state === "running") this.finish();
+        // A prompt just sent may not be busy in OpenCode yet.
+        else if (!h.busy && state === "running" && Date.now() - this.turnAt > 3000) this.finish();
       })
       .catch(() => {})
       .finally(() => (this.resyncing = undefined)));
@@ -192,6 +200,7 @@ class OpenCodeSession implements EngineSession {
   prompt(text: string, images: string[] = []): string {
     if (this.session.currentState() !== "idle") throw new Error("Steering OpenCode sessions comes in a later version");
     const messageID = ascending("msg");
+    this.stopped = false;
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     this.beginTurn();
@@ -207,6 +216,10 @@ class OpenCodeSession implements EngineSession {
     // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
     await this.server.streamReady();
     if (this.written !== this.permissionMode) await this.writeBlock(this.permissionMode);
+    if (this.stopped) {
+      this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
+      return this.session.setState("idle");
+    }
     const [providerID, ...rest] = this.model.split("/");
     const parts = [
       ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
@@ -236,6 +249,7 @@ class OpenCodeSession implements EngineSession {
 
   async interrupt() {
     if (this.session.currentState() === "idle") return;
+    this.stopped = true;
     this.session.interruptPending();
     await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd });
   }
@@ -248,7 +262,10 @@ class OpenCodeSession implements EngineSession {
       case "message.updated": {
         const info = p.info;
         // plan_exit "Yes" (or a build prompt from OpenCode's own UI) leaves plan mode.
-        if (info.role === "user" && info.agent === "build" && !this.mapper.own.has(info.id) && this.permissionMode === "plan") void this.setPermissionMode("default").catch(() => {});
+        if (root && info.role === "user" && info.agent === "build" && !this.mapper.own.has(info.id) && this.permissionMode === "plan" && !this.leavingPlan) {
+          this.leavingPlan = true;
+          void this.setPermissionMode("default").catch(() => {}).finally(() => (this.leavingPlan = false));
+        }
         return this.emitAll(this.mapper.message(info));
       }
       case "message.part.updated":

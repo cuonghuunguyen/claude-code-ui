@@ -123,7 +123,8 @@ export class OpenCodeMapper {
       return [part];
     }
     if (p.type === "step-finish") {
-      this.finishes.set(p.id, p);
+      // Stored history is no part of the running turn: only live updates count (shortcut: after a stream reconnect the steps before it are missing from the turn's sum).
+      if (live) this.finishes.set(p.id, p);
       return [];
     }
     if (p.type === "tool" && p.state && p.callID) return this.tool(p, p.callID, p.state);

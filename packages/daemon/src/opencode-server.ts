@@ -219,10 +219,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     pumping = true;
     let delay = RECONNECT_MIN_MS;
     let again = false;
+    connected = new Promise<void>((r) => (markConnected = r));
     while (handlers.size) {
-      connected = new Promise<void>((r) => (markConnected = r));
       try {
         const u = await ensure();
+        if (!handlers.size) break;
         streamAbort = new AbortController();
         const res = await fetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
@@ -235,6 +236,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         // Retried below; a start failure shows when the next request needs the server.
       }
       if (!handlers.size) break;
+      // Down until the next connect: a prompt waits for it.
+      connected = new Promise<void>((r) => (markConnected = r));
       await sleep(delay);
       delay = Math.min(delay * 2, RECONNECT_MAX_MS);
     }

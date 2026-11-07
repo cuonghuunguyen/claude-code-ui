@@ -85,6 +85,9 @@ describe("OpenCodeMapper (live)", () => {
     expect(m.turn()).toEqual({ usage: { inputTokens: 11, outputTokens: 4, cacheReadTokens: 5, cacheCreationTokens: 3 }, cost: 0.75 });
     m.resetTurn();
     expect(m.turn().cost).toBe(0);
+    // Stored history is not part of the running turn.
+    m.part({ id: "prt_old", messageID: "msg_a", type: "step-finish", tokens: { input: 99 }, cost: 9 }, false);
+    expect(m.turn().cost).toBe(0);
   });
 });
 
