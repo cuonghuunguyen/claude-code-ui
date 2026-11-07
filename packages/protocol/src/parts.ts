@@ -101,6 +101,8 @@ export type Part = { parentId?: string } & (
       /** ExitPlanMode: the plan text to show when the CLI's `input` has none (it keeps the plan in a file). Display only: never sent back as the input. */
       plan?: string;
       title?: string;
+      /** The Engine cannot run an edited input (OpenCode): the panel hides "Edit content"; the diff stays. */
+      noEdit?: true;
       suggestions: PermissionUpdate[];
       settled: boolean;
       decision?: PermissionDecision;
