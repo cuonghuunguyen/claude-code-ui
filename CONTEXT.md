@@ -45,8 +45,16 @@ A `claude-ui <command>` (status, open, sessions, projects, workers) that asks th
 _Avoid_: CLI session, remote control
 
 **Session**:
-One SDK session in one working directory, identified by its session ID. The SDK transcript is its durable history. It may be driven by several `query()` runs over time (e.g. resumed after a daemon restart).
+One Engine session in one working directory, identified by its session ID. The Engine's own store is its durable history. It may be driven by several runs over time (e.g. resumed after a daemon restart).
 _Avoid_: chat, conversation, thread
+
+**Engine**:
+The agent runtime that runs a Session: Claude (Claude Agent SDK) or OpenCode. Chosen per Session when it is created, fixed afterwards, and shown as a tag on the Session in the sidebar. The UI is the same for every Engine; a control the Engine cannot support is hidden or disabled for its Sessions. Coordinators and Workers each pick their own Engine.
+_Avoid_: provider (OpenCode's word for a model vendor), backend, agent
+
+**OpenCode server**:
+The one `opencode serve` process a Daemon starts on the first OpenCode Session. It holds OpenCode Session history and provider credentials; the Daemon keeps neither.
+_Avoid_: OpenCode daemon
 
 **Docked session**:
 A session tab shown in the side or bottom panel instead of the tabs bar (wide screens). It keeps its place in the stored tab list but is never the current session.
