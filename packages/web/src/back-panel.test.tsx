@@ -205,6 +205,9 @@ it("reminder card: only from a live change; Open, Snooze 2h, Dismiss in that ord
   expect(el.querySelector("div.sr-only[role=status]")!.textContent).toBe("Reminder: come back to My session");
   await click([...card.querySelectorAll("button")].find((b) => b.textContent === "Snooze 2h"));
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ type: "back.set", remindMs: 7_200_000 }));
+  // The daemon's settings_changed (mark re-armed) arrives before the reply: the card still shows "Snoozed until" for its 3 s.
+  await act(async () => setBack({ marks: { s: [{ ...base }] } }));
+  expect(card.isConnected).toBe(true);
   expect(card.querySelector('[role="status"]')!.textContent).toMatch(/^Snoozed until /);
   await click(card.querySelector("button"));
   expect(el.querySelector('[data-testid="back-reminder-card"]')).toBeNull();

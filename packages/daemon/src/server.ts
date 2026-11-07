@@ -2347,7 +2347,10 @@ export function createDaemon(opts: {
           try {
             appSettings.changeMarks((m) => {
               const list = (m[s.id] ??= []);
-              isNew = upsertMark(list, msg as { partId: string; title: string }, clock()).isNew;
+              const r = upsertMark(list, msg as { partId: string; title: string }, clock());
+              isNew = r.isNew;
+              // In the same write: the first settings_changed already shows the pending brief, not the fallback.
+              if (isNew) r.mark.briefState = "queued";
             });
           } catch (e) {
             return fail("save_failed", (e as Error).message);

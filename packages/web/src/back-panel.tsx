@@ -11,8 +11,8 @@ import { TOAST_CARD } from "./toast.tsx";
 
 const clock = (at: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(at);
 /** Panel and row targets: 28 px from md up, 44 px below. */
-const BTN = "max-md:h-11 max-md:px-3";
-const INPUT = "h-7 min-w-0 rounded-md border-[0.5px] border-border bg-background px-2 text-base text-foreground outline-none focus-visible:outline-2 focus-visible:outline-offset-[2.5px] focus-visible:outline-ring max-md:h-11 md:text-[13px]";
+const BTN = "max-md:h-11 max-md:px-3 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring";
+const INPUT = "h-7 min-w-0 rounded-md border-[0.5px] border-border bg-background px-2 text-base text-foreground outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring max-md:h-11 md:text-[13px]";
 
 /** The "I'll be back" button of a reply's action row. Marked: a plain button that goes to the panel (never a toggle: Done is only in the panel). */
 export function BackButton({ partId, marked, onMark, onGo }: { partId: string; marked: boolean; onMark: () => void; onGo: () => void }) {
@@ -90,7 +90,7 @@ export function BackPanel({ sessionId, mark, stale, gone, held, request, onNotic
       aria-labelledby={head}
       tabIndex={-1}
       data-back-panel={mark.partId}
-      className="my-2 flex scroll-mt-14 flex-col gap-3 rounded-[10px] border-[0.5px] border-border bg-muted p-3 outline-none focus-visible:outline-2 focus-visible:outline-offset-[2.5px] focus-visible:outline-ring"
+      className="my-2 flex scroll-mt-14 flex-col gap-3 rounded-[10px] border-[0.5px] border-border bg-muted p-3 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring"
     >
       <div className="flex flex-wrap items-center gap-2 max-md:gap-2">
         <BookmarkIcon aria-hidden className="size-4 shrink-0" />
@@ -118,7 +118,7 @@ export function BackPanel({ sessionId, mark, stale, gone, held, request, onNotic
       <div role="status" aria-atomic="true" className="sr-only">
         {status}
       </div>
-      <div className="flex min-h-[4.5rem] flex-col gap-2">
+      <div className="flex min-h-24 flex-col gap-2 max-sm:min-h-48">
         {pending && !mark.brief ? (
           mark.briefState === "running" ? (
             <>
@@ -353,7 +353,7 @@ export function BriefRow({ answer, children }: { answer?: string; children?: Rea
         aria-expanded={open}
         aria-controls={body}
         onClick={() => setOpen(!open)}
-        className="group flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-left outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-[2.5px] focus-visible:outline-ring max-md:min-h-11"
+        className="group flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-left outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[2.5px] focus-visible:outline-ring max-md:min-h-11"
       >
         <BookmarkIcon aria-hidden className="size-4 shrink-0 text-faint" />
         <span className="shrink-0 font-medium text-sm">{tr("app.back.briefRow")}</span>
@@ -429,7 +429,7 @@ export function BackReminderCards({ enabled, skip, title, marks, onOpen, request
               <p className="min-w-0 flex-1 truncate font-[530] text-[13px]" title={sessionTitle}>
                 {tr("app.back.cardTitle", { title: sessionTitle })}
               </p>
-              <button type="button" aria-label={tr("app.toast.dismiss")} className="rounded p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring max-md:size-11" onClick={() => drop(c)}>
+              <button type="button" aria-label={tr("app.toast.dismiss")} className="rounded p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring max-md:size-11" onClick={() => drop(c)}>
                 <XIcon aria-hidden className="size-4" />
               </button>
             </div>
@@ -447,12 +447,14 @@ export function BackReminderCards({ enabled, skip, title, marks, onOpen, request
                   </Button>
                   <Snooze
                     mark={mark}
-                    apply={(ms) =>
-                      void request({ type: "back.set", sessionId: c.sessionId, partId: mark.partId, title: mark.title, remindMs: ms }).then(() => {
-                        setSnoozed({ key: key(c), text: tr("app.back.snoozed", { time: clock(Date.now() + ms) }) });
-                        setTimeout(() => drop(c), 3000);
-                      }, () => {})
-                    }
+                    apply={(ms) => {
+                      // Before the request: the daemon's settings_changed (mark re-armed) arrives before its reply and would drop the card.
+                      setSnoozed({ key: key(c), text: tr("app.back.snoozed", { time: clock(Date.now() + ms) }) });
+                      void request({ type: "back.set", sessionId: c.sessionId, partId: mark.partId, title: mark.title, remindMs: ms }).then(
+                        () => void setTimeout(() => drop(c), 3000),
+                        () => setSnoozed(undefined),
+                      );
+                    }}
                   />
                   <Button variant="ghost" size="sm" className={BTN} aria-label={tr("app.back.dismissLabel")} onClick={() => void request({ type: "back.set", sessionId: c.sessionId, partId: mark.partId, title: mark.title, remindMs: null }).then(() => drop(c), () => {})}>
                     {tr("app.back.dismiss")}

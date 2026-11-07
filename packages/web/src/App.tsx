@@ -524,6 +524,12 @@ export function App() {
   /** GH-622: Open of a Back mark (Focus, a reminder card, a push click): the session shows scrolled to the marked reply, its panel focused. */
   const [revealBack, setRevealBack] = useState<{ sessionId: string; partId: string }>();
   const backMarks = useBack();
+  /** Open of a mark from Focus or a card: a history entry first, so browser Back returns to where it was (open() replaces the entry). */
+  const openBackMark = (sessionId: string, partId: string) => {
+    history.pushState(null, "", tabHash(sessionId));
+    open(sessionId, true);
+    setRevealBack({ sessionId, partId });
+  };
   // A push click that opened a new window: ?back=<part id>#<session id> (sw.js).
   useEffect(() => {
     const part = new URLSearchParams(location.search).get("back");
@@ -4051,7 +4057,7 @@ export function App() {
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                   marks={backMarks}
-                  onOpenBack={(sessionId, partId) => (open(sessionId), setRevealBack({ sessionId, partId }))}
+                  onOpenBack={(sessionId, partId) => openBackMark(sessionId, partId)}
                   onBack={(m) => client.current!.request(m as never)}
                 />
               )}
@@ -4475,7 +4481,7 @@ export function App() {
           skip={(id) => !!list.find((x) => x.id === id)?.archived}
           marks={backMarks}
           title={(id) => displayTitle(list.find((x) => x.id === id)?.title || "") || tr("app.focusPage.untitled")}
-          onOpen={(sessionId, partId) => (open(sessionId), setRevealBack({ sessionId, partId }))}
+          onOpen={(sessionId, partId) => openBackMark(sessionId, partId)}
           request={(m) => client.current!.request(m as never)}
         />
         <NotificationStack

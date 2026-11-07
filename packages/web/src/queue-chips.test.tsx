@@ -144,5 +144,7 @@ it("a brief item shows its label, no Edit, and a named Delete", async () => {
   expect(row.textContent).toContain("Brief for your mark");
   expect(row.textContent).not.toContain("long prompt");
   expect(row.querySelector('[data-action="edit"]')).toBeNull();
+  // A brief never steers into a running turn: no Send now either.
+  expect(row.querySelector('[data-action="send"]')).toBeNull();
   expect(row.querySelector('[aria-label="Delete queued brief"]')).not.toBeNull();
 });
