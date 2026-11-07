@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { alwaysOf, modeBlock, modeOf } from "../src/opencode-engine.ts";
+import { alwaysOf, modeBlock, modeOf, splitLabels } from "../src/opencode-engine.ts";
 import { mapTool, OpenCodeMapper, openCodeParts, type OpenCodeMessage } from "../src/opencode-parts.ts";
 import { olderThan, parseVersion } from "../src/opencode-server.ts";
 
@@ -112,5 +112,14 @@ describe("version compare", () => {
     expect(olderThan([1, 9, 0], [1, 18, 0])).toBe(true);
     expect(olderThan([1, 18, 0], [1, 18, 0])).toBe(false);
     expect(olderThan([2, 0, 0], [1, 18, 0])).toBe(false);
+  });
+});
+
+describe("splitLabels", () => {
+  it("cuts a multi-select answer at the option labels, keeps a label with a comma whole and the rest as one text", () => {
+    expect(splitLabels("Red, Blue", ["Red", "Blue"])).toEqual(["Red", "Blue"]);
+    expect(splitLabels("Yes, always, Blue", ["Yes", "Yes, always", "Blue"])).toEqual(["Yes, always", "Blue"]);
+    expect(splitLabels("Red, my own idea", ["Red", "Blue"])).toEqual(["Red", "my own idea"]);
+    expect(splitLabels("", ["Red"])).toEqual([]);
   });
 });

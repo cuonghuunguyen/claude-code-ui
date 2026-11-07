@@ -77,6 +77,19 @@ export async function openCodeModels(server: OpenCodeServer): Promise<ModelInfo[
   return [{ value: "default", displayName: name, description: "" }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name })))];
 }
 
+/** A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text. */
+export function splitLabels(value: string, labels: string[]): string[] {
+  const out: string[] = [];
+  const byLength = [...labels].sort((a, b) => b.length - a.length);
+  for (let rest = value; rest; ) {
+    const hit = byLength.find((l) => rest === l || rest.startsWith(`${l}, `));
+    const part = hit ?? rest;
+    out.push(part);
+    rest = rest.length > part.length ? rest.slice(part.length + 2) : "";
+  }
+  return out;
+}
+
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {
@@ -390,8 +403,7 @@ class OpenCodeSession implements EngineSession {
     this.reqs.delete(id);
     if (!req) return;
     if (r.kind === "answer") {
-      // shortcut: a multi-select answer is split at ", " (the wire joins labels with it); a label containing ", " splits wrong. Upgrade when the web sends arrays.
-      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : q.multiSelect ? r.answers[q.question]!.split(", ") : [r.answers[q.question]!]));
+      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : q.multiSelect ? splitLabels(r.answers[q.question]!, q.options.map((o) => o.label)) : [r.answers[q.question]!]));
       return this.post(`/question/${id}/reply`, { answers });
     }
     if (r.kind !== "cancel" || r.message !== ANSWERED) this.post(`/question/${id}/reject`, {});

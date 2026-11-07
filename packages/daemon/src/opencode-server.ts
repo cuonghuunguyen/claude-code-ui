@@ -273,7 +273,10 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       };
     },
     /** Resolves when the event stream is connected (or after a few seconds): a prompt sent before it would lose its first events. */
-    streamReady: () => Promise.race([connected, sleep(STREAM_WAIT_MS)]).then(() => {}),
+    streamReady: () => {
+      let timer: NodeJS.Timeout;
+      return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, STREAM_WAIT_MS)))]).then(() => clearTimeout(timer));
+    },
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
     reset: () => ((fastExits = []), (lastError = undefined), stop()),
     running: () => !!up && !!child,

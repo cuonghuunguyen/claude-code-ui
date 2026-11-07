@@ -25,14 +25,14 @@ const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
 type Boot = Awaited<ReturnType<typeof boot>>;
-async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string } = {}) {
+async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string; env?: Record<string, string> } = {}) {
   const root = o.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
-  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(",") };
+  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -245,8 +245,13 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
     // plan_exit "Yes": OpenCode writes a user message of the build agent.
-    await d.fake("/__emit", { events: [{ type: "message.updated", properties: { sessionID: s.id, info: { id: "msg_fromtui", role: "user", agent: "build", sessionID: s.id } } }] });
+    const patches = d.requests("PATCH", `/session/${s.id}`).length;
+    const buildMessage = (id: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent: "build", sessionID: s.id } } });
+    // OpenCode repeats message.updated: one block only.
+    await d.fake("/__emit", { events: [buildMessage("msg_fromtui"), buildMessage("msg_fromtui")] });
     await until(() => s.find("session_permission_mode")?.mode === "default");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches + 1);
     expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[0].pattern).toBe("mode:default");
   });
 
@@ -284,6 +289,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(sub.session.state).toBe("needs_input");
     // No saved mode: the mode of the last block in OpenCode.
     expect(sub.session.permissionMode).toBe("acceptEdits");
+    // Events between the history read and the stream connecting are lost: the session is read again once the stream is open.
+    await until(() => d.requests("GET", "/session/ses_old/message").length >= 2);
     // The saved mode differs from OpenCode's last block after a mode change made elsewhere: the next prompt writes the block first.
     await d.ok({ type: "permission.respond", requestId: "per_old", decision: "allow" });
     expect(d.requests("POST", "/permission/per_old/reply")[0]!.body).toEqual({ reply: "once" });
@@ -331,5 +338,28 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await s.prompt("run ls");
     await until(() => !!s.find("permission_request"));
     expect(await d.request({ type: "session.prompt", sessionId: s.id, text: "again" })).toMatchObject({ type: "error", code: "prompt_failed" });
+  });
+  it("Stop pressed while the prompt waits for the event stream sends nothing and ends the turn as interrupted", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_STREAM_DELAY_MS: "1200" } });
+    const s = await d.open();
+    await s.prompt("hello");
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => !!s.find("turn_interrupted") && s.states().at(-1) === "idle", 12000);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+  });
+});
+
+describe("OpenCode event stream", { timeout: 30_000 }, () => {
+  it("after a drop a prompt waits for the reconnect instead of sending into a closed stream", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await until(() => d.requests("GET", "/global/event").length === 1);
+    await d.fake("/__drop");
+    await new Promise((r) => setTimeout(r, 300));
+    const before = Date.now();
+    await s.prompt("hi");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1, 12000);
+    expect(d.requests("GET", "/global/event")).toHaveLength(2);
+    expect(Date.now() - before).toBeGreaterThan(400);
   });
 });
