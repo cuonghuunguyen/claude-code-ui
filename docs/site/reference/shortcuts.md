@@ -26,6 +26,7 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 | Command palette | <kbd>Ctrl</kbd>+<kbd>K</kbd> | <kbd>⌘</kbd> <kbd>K</kbd> |
 | Command palette (second key) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>P</kbd> |
 | Open file | <kbd>Ctrl</kbd>+<kbd>P</kbd> | <kbd>⌘</kbd> <kbd>P</kbd> |
+| Find in files | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>F</kbd> |
 | Open settings | <kbd>Ctrl</kbd>+<kbd>,</kbd> | <kbd>⌘</kbd> <kbd>,</kbd> |
 | Keyboard shortcuts | <kbd>Ctrl</kbd>+<kbd>/</kbd> | <kbd>⌘</kbd> <kbd>/</kbd> |
 | Go to notifications | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>N</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>N</kbd> |

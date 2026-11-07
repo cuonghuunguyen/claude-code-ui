@@ -176,6 +176,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.rewind"; sessionId: string; userMessageId: string; mode: RewindMode }
   /** @-mention autocomplete: fuzzy matches under `cwd` (a session's cwd, inside the roots). */
   | { type: "fs.search"; cwd: string; query: string }
+  /** Find in files (docs/spec.md "Wire protocol"): git grep over the cwd's files, one reply FsGrepResult. A new one on the connection cancels the running one; a blank query only cancels. `includeIgnored` undefined: false in a git repository, true elsewhere. */
+  | { type: "fs.grep"; cwd: string; query: string; regex?: boolean; globs?: string; includeIgnored?: boolean }
   /** Content search (docs/spec.md "Wire protocol"): streams `sessions.search.result`, then the reply SessionsSearchResult. A new search on the connection cancels the running one; a query under MIN_SEARCH_CHARS only cancels. */
   | { type: "sessions.search"; query: string; cwd?: string }
   /** Liveness probe: answered with `{}` by the daemon itself (never routed to a side). The page sends it after waking to find a zombie socket. */
@@ -677,6 +679,11 @@ export type FsListResult = { entries: FsEntry[] };
 export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
 /** Paths relative to the searched cwd, best first; folders end with `/`. */
 export type FsSearchResult = { paths: string[] };
+/** One line of a file: a match line has `ranges` ([start, end) UTF-16 offsets in `text`, possibly empty), a context line has none. A gap in `n` is a break between groups. */
+export type GrepLine = { n: number; text: string; ranges?: [number, number][] };
+export type GrepFile = { path: string; lines: GrepLine[] };
+/** `path`: relative to the cwd, "/"-separated. `stopped`: why results are partial. `cut`: a line was shortened around its match. `includeIgnored`: the value used; `git`: the cwd is in a git work tree. */
+export type FsGrepResult = { files: GrepFile[]; matches: number; ms: number; includeIgnored: boolean; git: boolean; stopped?: "matches" | "files" | "bytes" | "time" | "canceled"; cut?: true };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 /** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */

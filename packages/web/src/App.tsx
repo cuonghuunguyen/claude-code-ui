@@ -9,6 +9,7 @@ import type {
   Effort,
   Event,
   FsListResult,
+  FsGrepResult,
   FsSearchResult,
   ListResult,
   McpListResult,
@@ -151,6 +152,8 @@ import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
+import { FindInFiles, type FindQuery } from "./find-in-files.tsx";
+import { selectionQuery } from "./find-in-files.ts";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
 import { shownPrompt } from "./config-dialog.tsx";
@@ -583,6 +586,9 @@ export function App() {
   const [dockInsert, setDockInsert] = useState<Record<string, string>>({});
   // Quick open, and the file it asks the files panel to open (absolute path).
   const [quickOpen, setQuickOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  /** The selection Find in files opened with (GH-649). */
+  const [findQuery, setFindQuery] = useState<string>();
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
   /** A bare-name file link of a docked session: quick open searches that session's folder. */
   const [quickOpenOwner, setQuickOpenOwner] = useState<{ id: string; cwd: string }>();
@@ -606,6 +612,7 @@ export function App() {
   const [fileDialog, setFileDialog] = useState<{ opener: HTMLElement | null; owner?: { id: string; cwd: string } }>();
   useEffect(() => (setViewer(undefined), setFileDialog(undefined)), [activeId]);
   const quickOpener = useRef<Element>(null);
+  const findOpener = useRef<Element>(null);
   // Title editor: in the sidebar row or in the tab the Rename action came from.
   const [renaming, setRenaming] = useState<{ id: string; in: "list" | "tab"; menu: boolean }>();
   // Session waiting for the delete confirmation.
@@ -2645,7 +2652,23 @@ export function App() {
     status === "connected"
       ? client.current!.request<FsSearchResult>({ type: "fs.search", cwd, query }, { timeoutMs: 10_000 }).then((r) => r.paths)
       : Promise.reject(new Error(`the daemon is ${status}`));
+  const grep = (cwd: string) => (q: FindQuery) =>
+    status === "connected"
+      ? client.current!.request<FsGrepResult>({ type: "fs.grep", cwd, ...q }, { timeoutMs: 15_000 })
+      : Promise.reject(new Error(`the daemon is ${status}`));
   const canQuickOpen = !!shown && status !== "unauthorized";
+  // The shortcut runs in the keydown, so focus is still on the editor or field whose selection becomes the query.
+  const showFind = () => {
+    if (!findOpen) {
+      findOpener.current = document.activeElement;
+      setFindQuery(selectionQuery());
+    }
+    setFindOpen(true);
+  };
+  const hideFind = (restoreFocus: boolean) => {
+    setFindOpen(false);
+    if (restoreFocus && findOpener.current instanceof HTMLElement) findOpener.current.focus();
+  };
   const showQuickOpen = () => {
     if (!quickOpen) quickOpener.current = document.activeElement;
     setQuickOpen(true);
@@ -3173,6 +3196,7 @@ export function App() {
     togglePin: activeId && activeId !== NEW_TAB && activeId !== FOCUS_TAB && strip.includes(activeId) ? () => togglePin(activeId) : undefined,
     pinned: !!activeId && pinnedSet.has(activeId),
     quickOpen: showQuickOpen,
+    findInFiles: showFind,
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
@@ -4280,6 +4304,15 @@ export function App() {
           onClose={() => hideQuickOpen(true)}
         />
       )}
+      {findOpen && shown && (
+        <FindInFiles
+          connected={status === "connected"}
+          initialQuery={findQuery}
+          onSearch={grep(shown.cwd)}
+          onOpen={(p, line) => (hideFind(false), openInPanel(p, line))}
+          onClose={() => hideFind(true)}
+        />
+      )}
       {palette && (
         <CommandPalette
           items={commands}
@@ -4445,7 +4478,7 @@ export function App() {
         {toast && <Toast key={toast.key} message={toast.message} action={toast.action} onClose={closeToast} />}
         {rec && <Toast key={`rec-${rec.key}`} message={rec.message} action={rec.action} onClose={() => setRec(undefined)} />}
         <KeyTips
-          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || findOpen || openingProject || !!guideRun}
           onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
           onTurnedOff={() => setToast(tr("app.main.tipsOff"))}
         />
@@ -4453,7 +4486,7 @@ export function App() {
           items={cardItems}
           now={cardsNow}
           focusTick={cardFocus}
-          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject}
+          hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || findOpen || openingProject}
           onRespond={(card, decision) => client.current!.request({ type: "permission.respond", requestId: card.requestId!, decision })}
           onOpenFocus={(card) => (open(FOCUS_TAB), setFocusSel(card.requestId))}
           onOpenSession={(card) => (open(card.sessionId), setScrollKeys((k) => ({ ...k, [card.sessionId]: (k[card.sessionId] ?? 0) + 1 })))}

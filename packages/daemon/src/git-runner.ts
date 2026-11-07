@@ -6,7 +6,9 @@ import { perf } from "./perf.ts";
 
 export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string; /** May run twice: the call only reads. A WSL side lost after the call was sent re-runs it through wsl.exe only then. */ idempotent?: boolean;
   /** The process and everything it starts (ssh, per-remote fetches) run in their own group, which a timeout kills as a whole; the call settles after the group's pipes closed. */
-  killTree?: boolean };
+  killTree?: boolean;
+  /** Kills the process group and rejects (the rejection has the partial stdout). Honoured only together with `killTree`: only then the main thread knows the pid; without it the run ends at its timeout. An already aborted signal rejects without starting. */
+  signal?: AbortSignal };
 export type GitRunOutput = { stdout: Buffer; stderr: string };
 /** Rejection: Error & { stderr: string; stdout: Buffer; killed: boolean; code?: string | number; signal?: string } */
 export type GitRunner = (o: GitRunOptions) => Promise<GitRunOutput>;
@@ -57,7 +59,7 @@ let thread: Worker | undefined;
 let threadBroken = false;
 let started = false;
 let nextCall = 0;
-type Call = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout; w: Worker; pid?: number };
+type Call = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout; w: Worker; pid?: number; aborted?: boolean };
 const calls = new Map<number, Call>();
 
 /** Test seam: the thread's script. `reset()` drops the thread and the broken mark. */
@@ -99,6 +101,7 @@ function runThread(): Worker | undefined {
       if (pid !== undefined) {
         c.pid = pid;
         noteTree(pid);
+        if (c.aborted) killProcessTree(pid);
         return;
       }
       if (c.pid !== undefined) trees.delete(c.pid);
@@ -162,6 +165,8 @@ function noteTree(pid: number | undefined): void {
     });
 }
 
+const abortedError = () => Object.assign(new Error("aborted"), { stderr: "", stdout: Buffer.alloc(0), killed: false, code: "ABORT_ERR" });
+
 const direct: GitRunner = (o) =>
   new Promise((ok, fail) => {
     const timeout = o.timeout ?? DEFAULT_TIMEOUT;
@@ -170,6 +175,7 @@ const direct: GitRunner = (o) =>
       if (!err) return ok({ stdout, stderr });
       fail(Object.assign(new Error(err.message), { stderr, stdout, killed: !!err.killed, code: err.code, signal: err.signal }));
     };
+    if (o.signal?.aborted && o.killTree) return fail(abortedError());
     if (!o.killTree) {
       const child = execFile(o.file ?? "git", o.args, { cwd: o.cwd, env: o.env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, (err, stdout, stderr) => done(err, Buffer.from(stdout ?? []), String(stderr ?? "")));
       child.stdin?.on("error", () => {});
@@ -186,6 +192,8 @@ const direct: GitRunner = (o) =>
     let settled = false;
     const pid = child.pid;
     if (pid) noteTree(pid);
+    const onAbort = () => pid && killProcessTree(pid);
+    o.signal?.addEventListener("abort", onAbort, { once: true });
     const take = (arr: Buffer[]) => (b: Buffer) => {
       arr.push(b);
       size += b.length;
@@ -201,6 +209,7 @@ const direct: GitRunner = (o) =>
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
       if (pid) trees.delete(pid);
       done(e, Buffer.concat(out), Buffer.concat(err).toString("utf8"));
     };
@@ -213,6 +222,7 @@ const direct: GitRunner = (o) =>
 /** Git in a worker thread; a thread that cannot start falls back to child processes of this thread. */
 export const threadRunner: GitRunner = (o) =>
   new Promise((ok, fail) => {
+    if (o.signal?.aborted && o.killTree) return fail(abortedError());
     const w = runThread();
     if (!w) return void direct(o).then(ok, fail);
     const id = ++nextCall;
@@ -225,7 +235,15 @@ export const threadRunner: GitRunner = (o) =>
     timer.unref();
     // The thread runs git: the diagnostics channel does not see it, so the call is timed here (thread time, not main-loop time).
     const done = perf.child({ cmd: "git", args: o.args, cwd: o.cwd, thread: "worker" });
-    calls.set(id, { ok: (r) => (done(0), ok(r)), fail: (e) => (done("error"), fail(e)), timer, w });
+    const onAbort = () => {
+      const c = calls.get(id);
+      if (!c) return;
+      if (c.pid !== undefined) killProcessTree(c.pid);
+      else c.aborted = true;
+    };
+    if (o.killTree) o.signal?.addEventListener("abort", onAbort, { once: true });
+    const settle = () => o.signal?.removeEventListener("abort", onAbort);
+    calls.set(id, { ok: (r) => (settle(), done(0), ok(r)), fail: (e) => (settle(), done("error"), fail(e)), timer, w });
     w.postMessage({ id, file: o.file, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input, tree: o.killTree });
   });
 
