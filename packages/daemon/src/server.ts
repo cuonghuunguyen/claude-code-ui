@@ -927,7 +927,9 @@ export function createDaemon(opts: {
     // Always through the queue: it sends at once when the session takes a prompt, and it honours a usage-limit pause and a scheduled auto-continue (a direct send would bypass both).
     editMark(s.id, partId, (m) => ((m.briefState = "queued"), delete m.briefError));
     const r = queue.enqueue(s.id, { text, images: [], brief: partId });
-    if (typeof r !== "string") briefFailed(s.id, partId, r.message);
+    if (typeof r !== "string") return void briefFailed(s.id, partId, r.message);
+    // A closed or errored session: the queue shows its pause (the panel says why) instead of a brief that stays queued without a reason.
+    queue.setNotLive(s.id, !s.isLive());
   }
   /** Follows a session's events for its brief turn: starts at the tagged prompt, takes the last assistant text, ends at the result. */
   function observeBrief(s: Session, e: { part: { type: string } }) {

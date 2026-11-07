@@ -526,8 +526,8 @@ export function App() {
   const backMarks = useBack();
   /** Open of a mark from Focus or a card: a history entry first, so browser Back returns to where it was (open() replaces the entry). */
   const openBackMark = (sessionId: string, partId: string) => {
-    history.pushState(null, "", tabHash(sessionId));
-    open(sessionId, true);
+    history.pushState(null, "", location.href);
+    open(sessionId);
     setRevealBack({ sessionId, partId });
   };
   // A push click that opened a new window: ?back=<part id>#<session id> (sw.js).
