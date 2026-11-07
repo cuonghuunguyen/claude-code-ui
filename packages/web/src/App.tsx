@@ -4050,6 +4050,9 @@ export function App() {
                   unread={unread}
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
+                  marks={backMarks}
+                  onOpenBack={(sessionId, partId) => (open(sessionId), setRevealBack({ sessionId, partId }))}
+                  onBack={(m) => client.current!.request(m as never)}
                 />
               )}
               {!(layout.side === "left" && lg) && (

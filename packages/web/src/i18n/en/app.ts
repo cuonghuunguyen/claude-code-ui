@@ -774,4 +774,7 @@ export default {
   "app.back.ready": "Brief ready",
   "app.back.failedStatus": "Brief not written",
   "app.back.noteCount": "{count}/280",
+  "app.back.focusHeading": "Come back to · {count}",
+  "app.back.remindsShort": "Reminds {time}",
+  "app.back.focusAge": "{age}",
 } as const;

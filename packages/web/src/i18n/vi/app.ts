@@ -776,4 +776,7 @@ export default {
   "app.back.ready": "Tóm tắt đã sẵn sàng",
   "app.back.failedStatus": "Chưa viết được tóm tắt",
   "app.back.noteCount": "{count}/280",
+  "app.back.focusHeading": "Quay lại · {count}",
+  "app.back.remindsShort": "Nhắc lúc {time}",
+  "app.back.focusAge": "{age}",
 } satisfies Partial<Messages>;

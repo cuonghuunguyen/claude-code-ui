@@ -359,3 +359,12 @@ it("the collapsed groups load as a set; bad or blocked storage means none collap
   expect(loadFocusCollapsed().size).toBe(0);
   expect(() => saveFocusCollapsed(new Set(["a"]), [item("a")])).not.toThrow();
 });
+
+import { backRows } from "./focus.ts";
+it("backRows: fired first (earliest fire first), then newest mark; archived and unlisted sessions hidden", () => {
+  const s = (id: string, archived = false) => ({ id, archived }) as never;
+  const m = (partId: string, at: number, extra: object = {}) => ({ partId, at, title: partId, ...extra });
+  const rows = backRows([s("a"), s("b"), s("x", true)], { a: [m("p1", 10), m("p2", 30, { remindedAt: 90 })], b: [m("p3", 20, { remindedAt: 80 })], x: [m("p4", 99)], z: [m("p5", 99)] });
+  expect(rows.map((r) => r.mark.partId)).toEqual(["p3", "p2", "p1"]);
+  expect(rows.map((r) => r.fired)).toEqual([true, true, false]);
+});
