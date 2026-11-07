@@ -1,4 +1,5 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
+import { EngineTag } from "./engine-tag.tsx";
 import { SideBadge, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 import { Fragment, memo, use, useEffect, useRef, useState, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
@@ -821,6 +822,7 @@ const SessionRow = memo(function SessionRow({
           ) : (
             <span className="min-w-0 flex-1 truncate font-medium text-foreground">{displayTitle(s.title)}</span>
           )}
+          <EngineTag engine={s.engine} />
           {unread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
           <StateIcon state={st} />
           <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{ago}</span>
