@@ -285,3 +285,11 @@ _Avoid_: mod (alone), addon
 **Marketplace**:
 A plugin catalog known to the Claude Code CLI (a GitHub repo, git or URL source, a local directory or file, an npm package).
 _Avoid_: plugin store, registry
+
+**Back mark**:
+A user mark on one assistant reply, "I'll be back": it holds a brief, an optional note and an optional reminder, and stays until the user clicks Done (or the session is deleted). Kept in the Hub's settings, shown in the reply's panel and in Focus ("Come back to").
+_Avoid_: bookmark, pin, reminder (a mark's optional part)
+
+**Brief turn**:
+The turn claude-ui sends to a marked session when the mark is made (or refreshed or retried), asking the session itself for a brief (About / Focus now / Next). A normal turn in the transcript, recognised by its tag line; the timeline shows it as one collapsed row.
+_Avoid_: summary turn, recap
