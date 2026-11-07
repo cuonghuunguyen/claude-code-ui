@@ -96,6 +96,8 @@ class OpenCodeSession implements EngineSession {
   private resyncing: Promise<void> | undefined;
   /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
   private stopped = false;
+  /** When the last prompt was posted (a prompt just sent may not be busy in OpenCode yet). */
+  private sentAt = 0;
   private leavingPlan = false;
 
   constructor(
@@ -157,7 +159,7 @@ class OpenCodeSession implements EngineSession {
         const state = this.session.currentState();
         if (h.busy && state === "idle") (this.turnAt = Date.now()), this.session.setState("running");
         // A prompt just sent may not be busy in OpenCode yet.
-        else if (!h.busy && state === "running" && Date.now() - this.turnAt > 3000) this.finish();
+        else if (!h.busy && state === "running" && Date.now() - this.sentAt > 3000) this.finish();
       })
       .catch(() => {})
       .finally(() => (this.resyncing = undefined)));
@@ -225,6 +227,7 @@ class OpenCodeSession implements EngineSession {
       ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
       ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
     ];
+    this.sentAt = Date.now();
     await this.server.request(`/session/${this.id}/prompt_async`, {
       method: "POST",
       directory: this.cwd,
