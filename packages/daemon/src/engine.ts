@@ -1,10 +1,9 @@
-// The Engine interface (CONTEXT.md "Engine", ADR 0012): the agent runtime behind a Session. Slice 1 has one, the Claude Engine.
-import type { Effort, EngineCapabilities, PermissionMode, RewindMode, RewindPreview } from "@claude-ui/protocol";
-import type { Query } from "./claude-engine.ts";
+// The Engine interface (CONTEXT.md "Engine", ADR 0012): the agent runtime behind a Session: the Claude Engine and the OpenCode Engine.
+import type { Effort, Engine as EngineName, EngineCapabilities, PermissionMode, RewindMode, RewindPreview } from "@claude-ui/protocol";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 export interface Engine {
-  readonly name: "claude";
+  readonly name: EngineName;
   readonly capabilities: EngineCapabilities;
   /** Modes a session can switch to now. */
   permissionModes(o: { allowBypass?: boolean; supportsAuto?: boolean }): PermissionMode[];
@@ -52,7 +51,8 @@ export interface EngineSession {
   sync(): Promise<void>;
   close(): Promise<void>;
   activity(): { received: number; at: number; progress: number };
-  liveQuery(): Query | undefined;
+  /** The runtime process of the session runs (Claude: its CLI query). */
+  live(): boolean;
   reloadPlugins(): Promise<number | undefined>;
   restartQuery(): void;
   releaseQuery(): boolean;

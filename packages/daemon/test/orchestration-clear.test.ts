@@ -5,12 +5,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createOrchestration } from "../src/orchestration.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
-type Fake = { id: string; live: boolean; tier: () => Promise<string>; pending: Set<string> };
+type Fake = { id: string; cli: boolean; tier: () => Promise<string>; pending: Set<string> };
 function fakeSession(id: string, live = true): any {
-  const f: Fake = { id, live, tier: async () => "low", pending: new Set() };
+  const f: Fake = { id, cli: live, tier: async () => "low", pending: new Set() };
   return Object.assign(f, {
     isLive: () => true,
-    liveQuery: () => (f.live ? {} : undefined),
+    live: () => f.cli,
     activity: () => ({ received: 0, at: 0, progress: 0 }),
     info: () => ({ state: "idle", permissionMode: "default" }),
     working: () => false,
@@ -85,7 +85,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     await tick();
     expect(prompts.map((p) => p[0])).toEqual(["C"]);
     // /clear before the coordinator calls worker_wait (e.g. the user stops the notice turn, then /clear).
-    C.live = false;
+    C.cli = false;
     o.handOver("C", "H");
     o.observe(W, turnEnd);
     await tick();
@@ -104,7 +104,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     W.pending.add("req1");
     o.observe(W, { part: { type: "permission_request", id: "p", requestId: "req1", tool: "Bash", input: {}, settled: false } } as any);
     await tick();
-    C.live = false;
+    C.cli = false;
     o.handOver("C", "H");
     release("low");
     await tick();
@@ -171,7 +171,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     const c = await mcp(o.mcpServers("C"));
     const p = c.callTool({ name: "worker_wait", arguments: { timeoutMs: 3000 } });
     await tick();
-    C.live = false;
+    C.cli = false;
     o.handOver("C", "H");
     o.observe(W, turnEnd);
     const r = JSON.parse(((await p) as any).content[0].text);
@@ -239,7 +239,7 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     W.pending.add("r1");
     o.observe(W, perm("r1"));
     await tick();
-    C.live = false;
+    C.cli = false;
     o.handOver("C", "H");
     o.handOver("W", "W2");
     release("low");

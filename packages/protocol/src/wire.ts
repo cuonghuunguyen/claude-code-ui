@@ -18,6 +18,11 @@ export type ModelInfo = {
 
 /** All permission modes, in picker order. Shift+Tab cycles them without dontAsk (Claude Code's order). */
 export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+/** The agent runtimes a session can run on (ADR 0012); the engine of a session follows its id (UUID = claude, `ses_` = opencode). */
+export const ENGINES = ["claude", "opencode"] as const;
+export type Engine = (typeof ENGINES)[number];
+/** Oldest OpenCode this daemon works with: its API was checked against 1.18.34. Raise when a later feature needs newer endpoints. */
+export const OPENCODE_MIN = "1.18.0";
 /** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
 export type EngineCapabilities = {
   /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
@@ -55,6 +60,8 @@ export type SessionInfo = {
   permissionModes: PermissionMode[];
   /** What the session's Engine supports; absent (an older daemon) = everything (capabilitiesOf). */
   capabilities?: EngineCapabilities;
+  /** The Engine the session runs on; absent (an older daemon) = claude. */
+  engine?: Engine;
 };
 /**
  * A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run.
@@ -73,7 +80,9 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
   /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. */
-  | { type: "session.create"; cwd: string; model?: string; draft?: string }
+  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
+  /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
+  | { type: "opencode.status" }
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
@@ -539,6 +548,8 @@ export type AsideOpenResult = { session: SessionInfo; title: string; from: strin
 export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
+/** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */
+export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; path?: string; message?: string };
 /** session.defaultMode. */
 export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
@@ -573,6 +584,8 @@ export type ListResult = {
   projects: string[];
   recentProjects: RecentProject[];
   permissionModes: PermissionMode[];
+  /** Every Engine of this daemon with its flags and the modes a new session starts with; the new-session tab reads the selected one. Absent (an older daemon): claude only. */
+  engines?: { engine: Engine; capabilities: EngineCapabilities; permissionModes: PermissionMode[] }[];
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
   /**
@@ -908,7 +921,7 @@ export const APP_ICON_PX = 512;
 export const APP_ICON_MAX = 300_000;
 /** The app name when `Settings.app.name` is "". */
 export const APP_NAME_DEFAULT = "Claude UI";
-export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number] }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
+export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number]; /** The Engine of the last session created: the new-session tab starts with it. */ engine: Engine }; /** OpenCode engine (docs/spec.md "OpenCode engine"): `path` of its binary, "" = look it up on PATH. */ opencode: { path: string }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */

@@ -541,6 +541,10 @@ export class ClaudeSession implements EngineSession {
     return this.session.isLive() ? this.query : undefined;
   }
 
+  live() {
+    return !!this.liveQuery();
+  }
+
   /** Plugins dialog: `reloadPlugins()` on the running query (none: undefined); the new command list becomes the commands part. */
   async reloadPlugins(): Promise<number | undefined> {
     const q = this.liveQuery();

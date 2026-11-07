@@ -262,7 +262,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
   };
   /** Workers with a running CLI process (or about to start one) plus worker_start calls in flight; with `root`, only that root coordinator's tree. */
   const running = (root?: string) =>
-    deps.links.entries().filter(([id, l]) => l.coordinatorId && (starting.has(id) || deps.sessions.get(id)?.liveQuery()) && (!root || rootOf(id) === root)).length +
+    deps.links.entries().filter(([id, l]) => l.coordinatorId && (starting.has(id) || deps.sessions.get(id)?.live()) && (!root || rootOf(id) === root)).length +
     [...reserved].filter((k) => !root || rootOf(k.slice(0, k.indexOf("\0"))) === root).length;
   /** Worker names from the depth-1 ancestor down to `id`. */
   const chainOf = (id: string) => {
@@ -277,7 +277,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
   };
   /** Live direct workers of `c` (starting, or a CLI runs) plus worker_start calls of `c` in flight. */
   const liveChildren = (c: string) =>
-    workers(c).filter((w) => starting.has(w.id) || deps.sessions.get(w.id)?.liveQuery()).length + [...reserved].filter((k) => k.startsWith(`${c}\0`)).length;
+    workers(c).filter((w) => starting.has(w.id) || deps.sessions.get(w.id)?.live()).length + [...reserved].filter((k) => k.startsWith(`${c}\0`)).length;
   const checkDepth = (c: string) => {
     const max = deps.settings().maxDepth;
     const d = depthOf(c);
@@ -348,7 +348,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const port = deps.port();
     // Started by a daemon on another port (or this one before a restart on another port), and no live query here: refused only
     // while a CLI process of another daemon or a terminal runs it; otherwise this daemon takes it over.
-    if (!deps.sessions.get(w.id)?.liveQuery() && w.port !== port && deps.heldElsewhere(w.id))
+    if (!deps.sessions.get(w.id)?.live() && w.port !== port && deps.heldElsewhere(w.id))
       throw new ToolError(`Worker ${n} is running in another process (the claude-ui daemon on port ${w.port} or a terminal CLI), not in this daemon (port ${port}).`, "held_elsewhere");
   }
 
@@ -395,9 +395,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (notified.has(coordinator)) return;
     const c = deps.sessions.get(coordinator);
     // No notice that would wake a coordinator without its tools: orchestration off, or a live query started without the server.
-    if (!c?.isLive() || !deps.settings().enabled || (c.liveQuery() && !served.has(coordinator))) return;
+    if (!c?.isLive() || !deps.settings().enabled || (c.live() && !served.has(coordinator))) return;
     // A worker coordinator without a CLI while its tree (or the daemon total) is at the cap: a notice would start a CLI past it; the next event or worker_send delivers.
-    if (linkOf(coordinator)?.coordinatorId && !c.liveQuery() && capHit(coordinator)) return;
+    if (linkOf(coordinator)?.coordinatorId && !c.live() && capHit(coordinator)) return;
     notified.add(coordinator);
     // Push: Steering while the coordinator's turn runs, a new turn when it is idle. Names and event type only, no worker text:
     // the notice arrives as a user message, so nothing from the worker rides on it.
@@ -600,7 +600,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         quiet.delete(s.id);
       }
     }
-    if (s.liveQuery()) s.restartQuery();
+    if (s.live()) s.restartQuery();
     wake(s.id);
   }
 
@@ -725,7 +725,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           const s = await worker(coordinator, a.name);
           coordinator = cur(); // a /clear during the await moved the tree
           // No await from the cap check to the mark: parallel sends to closed workers see each other.
-          const start = !s.liveQuery() && !starting.has(s.id);
+          const start = !s.live() && !starting.has(s.id);
           if (start) {
             checkCap(coordinator);
             checkChildren(coordinator);
@@ -858,7 +858,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           } catch (e) {
             throw asToolError(e);
           }
-          const live = [...deps.sessions.values()].filter((s) => s.liveQuery() || ["running", "needs_input"].includes(s.info().state));
+          const live = [...deps.sessions.values()].filter((s) => s.live() || ["running", "needs_input"].includes(s.info().state));
           const owner = (cwd: string) => entries.filter((e) => cwd === e.path || cwd.startsWith(e.path + "/") || cwd.startsWith(e.path + "\\")).sort((x, y) => y.path.length - x.path.length)[0];
           const sessions = new Map<Target, object[]>();
           for (const s of live) {
@@ -883,7 +883,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
             const stalledNow = stallOf(w.id);
             const at = lastActivity.get(w.id);
             const agent = linkOf(w.id)?.agent;
-            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.liveQuery(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}), ...(stalledNow && { stalled: stalledNow }) };
+            return { name: w.name, sessionId: w.id, ...(agent && { agent }), cwd: s?.cwd ?? w.cwd, state: s?.info().state ?? "not_loaded", live: !!s?.live(), ...(at ? { lastActivity: new Date(at).toISOString() } : {}), ...(stalledNow && { stalled: stalledNow }) };
           };
           return {
             workers: a.tree ? descendants(coordinator).map((d) => ({ ...row({ ...d, cwd: linkOf(d.id)?.cwd }), path: d.path, ...(d.coordinator && { coordinator: d.coordinator }), depth: d.depth })) : workers(coordinator).map(row),

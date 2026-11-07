@@ -22,8 +22,8 @@ import type { runBash } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
 import type { TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
-import { claudeEngine, type Options, type Query, type QueryFn, type SessionMessage, type Transcript } from "./claude-engine.ts";
-import type { EngineSession, Reply, Restored } from "./engine.ts";
+import { claudeEngine, ClaudeSession, type Options, type Query, type QueryFn, type SessionMessage, type Transcript } from "./claude-engine.ts";
+import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 
 // The SDK-facing code lives in claude-engine.ts; these names stay importable from here.
 export { withQuery, openQuery, queuedQuery, listModels, transcriptModel, THROWAWAY_TIMEOUT_MS, CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, STALE_TURN_MS, INTERRUPT_GRACE_MS, BASH_BACKGROUND_WAIT_MS, type Transcript } from "./claude-engine.ts";
@@ -45,6 +45,8 @@ export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "ef
  * `onCleared`: a /clear handed the live query of `from` (the session that was cleared) to `heir`, a new session (the daemon lists it).
  */
 export type SessionOpts = Partial<SessionSettings> & {
+  /** The Engine the session runs on; default: the Claude Engine. */
+  engine?: Engine;
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
@@ -136,6 +138,7 @@ export class Session {
 
   /** The Engine runtime of this session (engine use). */
   readonly run: EngineSession;
+  private readonly engine: Engine;
 
   constructor(
     readonly cwd: string,
@@ -145,7 +148,8 @@ export class Session {
   ) {
     this.id = restored?.id ?? randomUUID();
     this.uploadOwner = this.id;
-    this.run = claudeEngine.open(this, opts, restored);
+    this.engine = opts.engine ?? claudeEngine;
+    this.run = this.engine.open(this, opts, restored);
     this.run.begin();
   }
 
@@ -171,8 +175,9 @@ export class Session {
       model,
       permissionMode,
       effort,
-      permissionModes: claudeEngine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model) }),
-      capabilities: claudeEngine.capabilities,
+      permissionModes: this.engine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model) }),
+      capabilities: this.engine.capabilities,
+      engine: this.engine.name,
     };
   }
 
@@ -241,8 +246,13 @@ export class Session {
   activity() {
     return this.run.activity();
   }
-  liveQuery(): Query | undefined {
-    return this.run.liveQuery();
+  /** Whether the Engine's runtime process runs. */
+  live(): boolean {
+    return this.run.live();
+  }
+  /** The running Claude query, for the config dialogs; none for another Engine or before the first prompt. */
+  claudeQuery(): Query | undefined {
+    return this.run instanceof ClaudeSession ? this.run.liveQuery() : undefined;
   }
   reloadPlugins() {
     return this.run.reloadPlugins();
