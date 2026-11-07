@@ -381,5 +381,19 @@ describe("OpenCode restore", { timeout: 30_000 }, () => {
     const states = d.inbox.filter((m) => m.type === "event" && m.part.type === "session_state").map((m: any) => m.part.state);
     expect(states.at(-1)).toBe("idle");
   });
+
+  it("a prompt waiting for a slow reconnect is not ended by the resync that comes with it", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_STREAM_DELAY_MS: "3500" } });
+    const s = await d.open();
+    await until(() => d.requests("GET", "/global/event").length === 1);
+    await new Promise((r) => setTimeout(r, 3700));
+    await d.fake("/__drop");
+    await new Promise((r) => setTimeout(r, 200));
+    await s.prompt("hi");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1, 15000);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states().at(-1)).toBe("running");
+  });
 });
 

@@ -109,7 +109,7 @@ class OpenCodeSession implements EngineSession {
   private resyncing: Promise<void> | undefined;
   /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
   private stopped = false;
-  /** When the last prompt was made (a prompt just sent may not be busy in OpenCode yet). */
+  /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
   private leavingPlan = false;
 
@@ -216,7 +216,7 @@ class OpenCodeSession implements EngineSession {
     if (this.session.currentState() !== "idle") throw new Error("Steering OpenCode sessions comes in a later version");
     const messageID = ascending("msg");
     this.stopped = false;
-    this.sentAt = Date.now();
+    this.sentAt = Infinity;
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     this.beginTurn();
@@ -246,6 +246,7 @@ class OpenCodeSession implements EngineSession {
       directory: this.cwd,
       body: { messageID, parts, agent: this.permissionMode === "plan" ? "plan" : "build", ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
     });
+    this.sentAt = Date.now();
   }
 
   private beginTurn() {
