@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -45,7 +45,7 @@ import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } fro
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
-import { customCommand, EDITORS, editorLabel, findOnPath, isOpenWith, openCommand, parseEditorCommand, type Launcher, type OpenCommand } from "./open-external.ts";
+import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";

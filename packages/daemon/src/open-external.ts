@@ -1,5 +1,5 @@
 // fs.openExternal: a fixed OS command per platform (no shell, except a Windows .cmd editor launcher) for a path the server already checked.
-import { basename, dirname, posix, win32 } from "node:path";
+import { dirname, posix, win32 } from "node:path";
 import { appendFileSync } from "node:fs";
 import type { EditorId } from "@claude-ui/protocol";
 import { runOpener } from "./ctl/commands.ts";
@@ -36,28 +36,6 @@ export function findOnPath(o: { platform: NodeJS.Platform; env: NodeJS.ProcessEn
   if (isAbsolute(name)) return exts.map((x) => name + x).find(o.exists);
   return (o.env.PATH ?? o.env.Path ?? "").split(delimiter).filter(Boolean).flatMap((d) => exts.map((x) => join(d, name + x))).find(o.exists);
 }
-
-/** An editor command line as argv: words split at spaces, `"..."` groups (also inside a word). No escapes, no expansion. [] for an empty line or an unbalanced quote. */
-export function parseEditorCommand(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let open = false;
-  let quoted = false;
-  for (const ch of line) {
-    if (ch === '"') (open = !open), (quoted = true);
-    else if (!open && /\s/.test(ch)) {
-      if (cur || quoted) out.push(cur);
-      cur = "";
-      quoted = false;
-    } else cur += ch;
-  }
-  if (open) return [];
-  if (cur || quoted) out.push(cur);
-  return out;
-}
-
-/** The menu label of the custom editor: its name, else the program name without folder and extension. */
-export const editorLabel = (e: { command: string; name: string }) => e.name || basename(parseEditorCommand(e.command)[0]?.replaceAll("\\", "/") ?? "").replace(/\.[^.]+$/, "");
 
 /** The user's editor command for `path`: `{path}` and `{root}` are replaced in the arguments; with none, the paths are appended as for the built-in editors. The program is never passed through a shell (Windows .cmd: cmd.exe with every argument quoted). */
 export function customCommand(argv: string[], path: string, root: string, isDir: boolean, platform: NodeJS.Platform, find: (name: string) => string | undefined): OpenCommand {

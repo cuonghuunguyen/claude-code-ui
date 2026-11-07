@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { customCommand, detectEditors, editorLabel, findOnPath, openCommand, parseEditorCommand } from "../src/open-external.ts";
+import { editorLabel, parseEditorCommand } from "@claude-ui/protocol";
+import { customCommand, detectEditors, findOnPath, openCommand } from "../src/open-external.ts";
 
 const cli = { cli: "/bin/code" };
 describe("openCommand", () => {

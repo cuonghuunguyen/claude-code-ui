@@ -1339,7 +1339,7 @@ export function App() {
 
   /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
   const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
-    ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
+    ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: RequestError) => setToast(e.code === "open_failed" && appEditors.find((x) => x.id === how) ? tr("files.menu.openFailed", { app: appEditors.find((x) => x.id === how)!.label, reason: e.message }) : e.message)) }
     : undefined;
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */

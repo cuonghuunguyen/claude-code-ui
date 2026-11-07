@@ -1,6 +1,6 @@
 // GH-612: "Reveal in file manager / Open in editor / Open with default app" entries of the file context menus, as data.
 import { createContext, useContext } from "react";
-import { LOCAL_SIDE, type EditorId } from "@claude-ui/protocol";
+import { editorLabel, LOCAL_SIDE, type EditorId } from "@claude-ui/protocol";
 import { t } from "./i18n.ts";
 
 export type ExternalHow = "reveal" | "default" | EditorId | "custom";
@@ -9,8 +9,7 @@ export type ExternalEntry = { id: ExternalId; how: ExternalHow; label: string; d
 export type EditorInfo = { id: EditorId | "custom"; label: string };
 /** The menu entry of Settings › Open in app (GH-646): its name, else the program of the command; none when no command is set. The daemon builds the same label for settings.get. */
 export const customEditor = (e?: { command: string; name: string }): EditorInfo[] => {
-  const prog = e?.command.match(/^\s*(?:"([^"]*)"|(\S+))/);
-  const label = e?.name || (prog?.[1] ?? prog?.[2] ?? "").split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "");
+  const label = e ? editorLabel(e) : "";
   return e?.command.trim() && label ? [{ id: "custom", label }] : [];
 };
 /** `run` asks the daemon to open `path` (a session folder `cwd` holds it); absent from the context: the browser is not on the daemon machine or the daemon is older. */
