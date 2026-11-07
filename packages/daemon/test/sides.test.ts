@@ -28,6 +28,7 @@ const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 /** A side daemon in this process, wired like the attach server of a Hub (`claude-ui side --attach`). */
 function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: ReturnType<typeof createDaemon>) => void): SideProcess {
   const side = createDaemon({
+    openExternal: sideOpen,
     webRoot,
     token: "",
     roots: [root],
@@ -50,6 +51,9 @@ function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: Ret
   return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
 }
 let sidePush: (p: PushPayload) => void = () => {};
+/** The side daemon's fs.openExternal option (a WSL daemon: `winPath` set); `run` records the commands. */
+const sideRun = vi.fn(async (_c: { cmd: string; args: string[] }) => {});
+const sideOpen = { run: sideRun, editors: () => new Map(), winPath: async (p: string) => "\\\\wsl.localhost\\Ubuntu" + p.replaceAll("/", "\\") };
 /** What the hub wrote to the side's stdin. */
 const sideFrames: string[] = [];
 
@@ -492,12 +496,31 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it.skipIf(win32)("fs.openExternal of a side path is side_unsupported", async () => {
+  it.skipIf(win32)("fs.openExternal of a WSL side path runs explorer.exe in the side with the converted path", async () => {
+    writeFileSync(join(wslRoot, "o.txt"), "x");
+    sideRun.mockClear();
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
-    expect(await c.request({ type: "fs.openExternal", path: join(wslRoot, "s.png"), cwd: wslRoot, with: "reveal" })).toMatchObject({ type: "error", code: "side_unsupported" });
+    const file = join(wslRoot, "o.txt");
+    expect(await c.request({ type: "fs.openExternal", path: file, cwd: wslRoot, with: "reveal" })).toMatchObject({ type: "reply" });
+    expect(sideRun).toHaveBeenCalledWith({ cmd: "explorer.exe", args: ["/select," + (await sideOpen.winPath(file))], ignoreExit: true });
+    expect(await c.request({ type: "fs.openExternal", path: file, cwd: wslRoot, with: "idea" })).toMatchObject({ type: "error", code: "editor_missing" });
     c.ws.close();
+  });
+
+  it("fs.openExternal: a WSL side is refused for a browser on another machine; a Docker side is side_unsupported", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const run = async (sameHost: boolean | undefined, id: string) => {
+      const sent: ServerMessage[] = [];
+      const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost });
+      await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "reveal", side: id, reqId: "r" } as never);
+      return sent[0] as any;
+    };
+    expect(await run(false, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
+    expect(await run(undefined, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
+    expect(await run(true, "docker:dev")).toMatchObject({ code: "side_unsupported" });
   });
 
   it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {

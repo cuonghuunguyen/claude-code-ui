@@ -47,4 +47,14 @@ describe("detectEditors", () => {
     expect([...m]).toEqual([["cursor", { app: "/Applications/Cursor.app" }], ["idea", { app: "/h/Applications/IntelliJ IDEA CE.app" }]]);
   });
   it("none", () => expect(detectEditors({ platform: "linux", env: {}, exists: () => false, home: "/h" }).size).toBe(0));
+  it("WSL: reveal and default go to Windows Explorer with the Windows path as one argument", () => {
+    const w = "\\\\wsl.localhost\\Ubuntu\\p\\a b\\ä.txt";
+    expect(openCommand("linux", "reveal", "/p/a b/ä.txt", "/p", false, undefined, w)).toEqual({ cmd: "explorer.exe", args: ["/select," + w], ignoreExit: true });
+    expect(openCommand("linux", "reveal", "/p/d", "/p", true, undefined, w)).toEqual({ cmd: "explorer.exe", args: ["/select," + w], ignoreExit: true });
+    expect(openCommand("linux", "default", "/p/a.pdf", "/p", false, undefined, w)).toEqual({ cmd: "explorer.exe", args: [w], ignoreExit: true });
+    expect(() => openCommand("linux", "default", "/p/d", "/p", true, undefined, w)).toThrow(/folder/);
+  });
+  it("WSL: an editor keeps the POSIX paths", () => {
+    expect(openCommand("linux", "code", "/p/a.ts", "/p", false, { cli: "/bin/code" }, "\\\\wsl.localhost\\U\\p\\a.ts")).toEqual({ cmd: "/bin/code", args: ["/p", "/p/a.ts"] });
+  });
 });

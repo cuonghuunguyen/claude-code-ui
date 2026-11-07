@@ -134,9 +134,12 @@ export function runOpener(cmd: string, args: string[], waitMs = OPENER_WAIT_MS, 
   });
 }
 
+/** This process runs in WSL (1 or 2). */
+export const isWsl = process.platform === "linux" && /microsoft/i.test(release());
+
 /** Opens `url` in the default browser: `open` on macOS, `cmd /c start` on Windows, `cmd.exe /c start` in WSL, else xdg-open. */
 export function openInBrowser(url: string): Promise<void> {
-  const wsl = process.platform === "linux" && /microsoft/i.test(release());
+  const wsl = isWsl;
   const [cmd, args]: [string, string[]] =
     process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : wsl ? ["cmd.exe", ["/c", "start", "", url]] : ["xdg-open", [url]];
   return runOpener(cmd, args);

@@ -1,7 +1,7 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, createServer as netServer, type AddressInfo } from "node:net";
-import { homedir, networkInterfaces, release, userInfo } from "node:os";
+import { homedir, networkInterfaces, userInfo } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,7 @@ import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
-import { askUpdate, openInBrowser, runClient, updateLiveHub } from "./ctl/commands.ts";
+import { askUpdate, isWsl, openInBrowser, runClient, updateLiveHub } from "./ctl/commands.ts";
 import { pidAlive, readToken, tokenPath } from "./ctl/connect.ts";
 import { retireAttachHub } from "./ctl/retire.ts";
 import { claimDaemonFile, readDaemonFile } from "./ctl/daemon-file.ts";
@@ -234,7 +234,7 @@ const keepAwake = createKeepAwake({ inhibitor: inhibitorFor(process.platform, pr
 process.on("exit", keepAwake.close);
 let attachRunning: (on: boolean) => void = () => {};
 const shortcut = startedBy ? undefined : createShortcut({ platform: process.platform, env: process.env, home: homedir(), configDir: configDir(), webRoot, shell: userInfo().shell ?? undefined });
-const openExternal = { run: process.env.CLAUDE_UI_OPEN_LOG ? logOpen(process.env.CLAUDE_UI_OPEN_LOG) : spawnOpen, editors: () => detectEditors({ platform: process.platform, env: process.env, exists: existsSync, home: homedir() }) };
+const openExternal = { ...(isWsl && { winPath: async (p: string) => (await exec("wslpath", ["-w", p])).stdout.trim() }), run: process.env.CLAUDE_UI_OPEN_LOG ? logOpen(process.env.CLAUDE_UI_OPEN_LOG) : spawnOpen, editors: () => detectEditors({ platform: process.platform, env: process.env, exists: existsSync, home: homedir() }) };
 const server = createDaemon({ openExternal, shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
 // The attach server (ADR 0009): every POSIX Hub accepts attaching Hubs on a Unix socket (mode 0600, same user). A Hub started by an attach also
 // records its install folder in `.live` (the install sweep keeps it) and ends after its Grace period.
@@ -308,7 +308,7 @@ server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
       `\n${await QRCode.toString(urls[0]!, { type: "terminal", small: true })}`,
   );
   // This machine's browser gets the loopback pairing URL (always the last); a failing opener only leaves the link above to click.
-  if (open !== false && autoOpen(process.env, process.platform, process.platform === "linux" && /microsoft/i.test(release())))
+  if (open !== false && autoOpen(process.env, process.platform, isWsl))
     openInBrowser(urls.at(-1)!).catch((e: Error) => console.error(`claude-ui: could not open a browser (${e.message}); open the link above`));
 });
 

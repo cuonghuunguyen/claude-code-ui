@@ -347,7 +347,7 @@ export function createDaemon(opts: {
   /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
   keepAwake?: KeepAwake;
   /** GH-612: fs.openExternal. `run` starts the OS command, `editors` lists the installed editors; none (a side, tests without it): the request and the editor list are absent. */
-  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher> };
+  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher>; /** A daemon in WSL: the Windows form of a path (`wslpath -w`); it opens reveal and default in Windows and trusts its attached Hubs. */ winPath?: (path: string) => Promise<string> };
   /** GH-518: sleep detection (Hub only; a Side runs on the Hub's machine). `everyMs` and `now` are test seams. */
   watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
@@ -1555,7 +1555,9 @@ export function createDaemon(opts: {
   http.on("close", () => clearInterval(pinger));
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
-    const sameHost = sameMachine(req);
+    const sameBrowser = sameMachine(req);
+    // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011).
+    const sameHost = sameBrowser || (virtual.has(ws) && !!opts.openExternal?.winPath);
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
@@ -2718,7 +2720,8 @@ export function createDaemon(opts: {
             if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
             const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
             if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
-            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher));
+            const wslPath = msg.with === "reveal" || msg.with === "default" ? await opts.openExternal.winPath?.(target) : undefined;
+            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher, wslPath));
             return reply({});
           } catch (err) {
             return fail("open_failed", (err as Error).message);
@@ -2972,6 +2975,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
       });
