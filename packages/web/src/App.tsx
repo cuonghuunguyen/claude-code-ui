@@ -180,7 +180,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
-import { OpenExternalContext, canOpenSide, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
+import { OpenExternalContext, canOpenSide, customEditor, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -1397,7 +1397,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.

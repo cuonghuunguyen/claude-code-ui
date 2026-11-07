@@ -834,9 +834,11 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   it("the hub's settings reach a side, so a coordinator there starts workers in the container", async () => {
     const c = await client(await dport());
     await c.request({ type: "side.start", side: "docker:dev" });
-    expect(await c.request({ type: "settings.set", patch: { orchestration: { enabled: true, workerNotifications: false } } })).toMatchObject({ type: "reply" });
+    expect(await c.request({ type: "settings.set", patch: { orchestration: { enabled: true, workerNotifications: false }, editor: { command: "subl" } } })).toMatchObject({ type: "reply" });
     await expect.poll(async () => (await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.orchestration.workerNotifications).toBe(false);
     await expect.poll(async () => (await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.orchestration.enabled).toBe(true);
+    // GH-646: the editor command runs on the Hub's desktop only.
+    expect((await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.editor.command).toBe("");
     const coord = await c.request({ type: "session.create", cwd: dockRoot });
     expect(coord).toMatchObject({ type: "reply" });
     const tools = sideDaemon.orchestration.tools(coord.result.session.id);

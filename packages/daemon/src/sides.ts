@@ -1515,8 +1515,9 @@ export function createRouter(opts: {
       settings = (r.result as SettingsResult).settings;
     }
     // Not `launcher`: those are the start options of this machine's claude-ui (a later manual start there would use them).
+    // Not `editor`: the command runs on the Hub's desktop only.
     // Not `claude`: the Claude account is Hub-local (a token account id is unknown to the Side, "cli" would change its login).
-    const { launcher: _launcher, claude: _claude, ...patch } = settings;
+    const { launcher: _launcher, claude: _claude, editor: _editor, ...patch } = settings;
     await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
   }
 
@@ -1708,7 +1709,8 @@ export function createRouter(opts: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) return opts.local(msg);
-        if (kindOf(id) === "wsl") {
+        // GH-646: the custom editor command is the Hub's own setting; a Side has none.
+        if (kindOf(id) === "wsl" && msg.with !== "custom") {
           if (!opts.sameHost) return send({ type: "error", reqId: msg.reqId, code: "not_local", message: "Open in an app only works from a browser on the daemon machine" });
           const { side: _side, ...rest } = msg;
           return forward(id, rest as ClientMessage);

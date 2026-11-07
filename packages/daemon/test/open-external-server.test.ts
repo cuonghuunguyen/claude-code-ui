@@ -137,3 +137,37 @@ describe("fs.openExternal in a WSL daemon (winPath)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+describe("fs.openExternal custom editor (GH-646)", () => {
+  const prog = process.execPath;
+  it("unset: editor_missing, runs nothing", async () => {
+    run.mockClear();
+    expect(await (await client(port))(open(join(root, "a.txt"), "custom"))).toMatchObject({ type: "error", code: "editor_missing" });
+    expect(run).not.toHaveBeenCalled();
+  });
+  it("a Host that is not local cannot set it (not_local)", async () => {
+    const req = await client(tailPort, "box.tail1234.ts.net");
+    expect(await req({ type: "settings.set", patch: { editor: { command: "evil" } } })).toMatchObject({ type: "error", code: "not_local" });
+    expect((await req({ type: "settings.get" })).result.settings.editor.command).toBe("");
+  });
+  it("invalid commands are bad_settings", async () => {
+    const req = await client(port);
+    for (const command of ['a "b', '""', "a\nb", "x".repeat(1025)]) expect(await req({ type: "settings.set", patch: { editor: { command } } })).toMatchObject({ type: "error", code: "bad_settings" });
+  });
+  it("set: listed in daemon.editors, runs the configured argv with the path; shell characters stay literal", async () => {
+    const req = await client(port);
+    const r = await req({ type: "settings.set", patch: { editor: { command: `"${prog}" --goto={path}`, name: "My Editor" } } });
+    expect(r.result.daemon.editors.at(-1)).toEqual({ id: "custom", label: "My Editor" });
+    writeFileSync(join(root, "a;b$(x)`y`'z.txt"), "x");
+    run.mockClear();
+    expect(await req(open(join(root, "a;b$(x)`y`'z.txt"), "custom"))).toMatchObject({ type: "reply" });
+    expect(run.mock.calls[0]![0]).toEqual({ cmd: prog, args: [`--goto=${join(root, "a;b$(x)`y`'z.txt")}`] });
+  });
+  it("missing program: editor_missing; the command never comes from the message", async () => {
+    const req = await client(port);
+    await req({ type: "settings.set", patch: { editor: { command: "no-such-editor-xyz" } } });
+    run.mockClear();
+    expect(await req({ ...open(join(root, "a.txt"), "custom"), command: "evil" })).toMatchObject({ type: "error", code: "editor_missing" });
+    expect(run).not.toHaveBeenCalled();
+  });
+});

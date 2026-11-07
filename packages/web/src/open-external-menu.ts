@@ -3,10 +3,16 @@ import { createContext, useContext } from "react";
 import { LOCAL_SIDE, type EditorId } from "@claude-ui/protocol";
 import { t } from "./i18n.ts";
 
-export type ExternalHow = "reveal" | "default" | EditorId;
+export type ExternalHow = "reveal" | "default" | EditorId | "custom";
 export type ExternalId = `ext:${ExternalHow}`;
 export type ExternalEntry = { id: ExternalId; how: ExternalHow; label: string; disabled?: boolean; testId: string };
-export type EditorInfo = { id: EditorId; label: string };
+export type EditorInfo = { id: EditorId | "custom"; label: string };
+/** The menu entry of Settings › Open in app (GH-646): its name, else the program of the command; none when no command is set. The daemon builds the same label for settings.get. */
+export const customEditor = (e?: { command: string; name: string }): EditorInfo[] => {
+  const prog = e?.command.match(/^\s*(?:"([^"]*)"|(\S+))/);
+  const label = e?.name || (prog?.[1] ?? prog?.[2] ?? "").split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "");
+  return e?.command.trim() && label ? [{ id: "custom", label }] : [];
+};
 /** `run` asks the daemon to open `path` (a session folder `cwd` holds it); absent from the context: the browser is not on the daemon machine or the daemon is older. */
 export type OpenExternal = { editors: EditorInfo[]; run: (path: string, how: ExternalHow, cwd: string) => void; /** The session folder is on this machine or in a WSL side (a Docker or SSH side cannot open it). */ canOpen: (cwd: string) => boolean };
 /** The side id of a path: this machine or a WSL distro (its daemon starts the app on the same Windows desktop). */

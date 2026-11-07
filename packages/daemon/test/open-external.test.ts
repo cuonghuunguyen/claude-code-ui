@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectEditors, openCommand } from "../src/open-external.ts";
+import { customCommand, detectEditors, editorLabel, findOnPath, openCommand, parseEditorCommand } from "../src/open-external.ts";
 
 const cli = { cli: "/bin/code" };
 describe("openCommand", () => {
@@ -56,5 +56,42 @@ describe("detectEditors", () => {
   });
   it("WSL: an editor keeps the POSIX paths", () => {
     expect(openCommand("linux", "code", "/p/a.ts", "/p", false, { cli: "/bin/code" }, "\\\\wsl.localhost\\U\\p\\a.ts")).toEqual({ cmd: "/bin/code", args: ["/p", "/p/a.ts"] });
+  });
+});
+
+describe("custom editor command (GH-646)", () => {
+  const found = (n: string) => (n.startsWith("/") || n.startsWith("C:") ? n : "/usr/bin/" + n);
+  it("parseEditorCommand: words, quotes, unbalanced", () => {
+    expect(parseEditorCommand('subl  {root} "{path}"')).toEqual(["subl", "{root}", "{path}"]);
+    expect(parseEditorCommand('"C:\\Program Files\\S\\subl.exe" --a="b c"')).toEqual(["C:\\Program Files\\S\\subl.exe", "--a=b c"]);
+    expect(parseEditorCommand('a "" b')).toEqual(["a", "", "b"]);
+    expect(parseEditorCommand('a "b')).toEqual([]);
+    expect(parseEditorCommand("  ")).toEqual([]);
+  });
+  it("appends the paths without placeholders: file → root path, folder → path", () => {
+    expect(customCommand(["subl"], "/p/a.ts", "/p", false, "linux", found)).toEqual({ cmd: "/usr/bin/subl", args: ["/p", "/p/a.ts"] });
+    expect(customCommand(["subl", "-n"], "/p/d", "/p", true, "linux", found)).toEqual({ cmd: "/usr/bin/subl", args: ["-n", "/p/d"] });
+  });
+  it("replaces {path} and {root} inside an argument, appends nothing", () => {
+    expect(customCommand(["subl", "--goto={path}", "{root}"], "/p/a.ts", "/p", false, "linux", found)).toEqual({ cmd: "/usr/bin/subl", args: ["--goto=/p/a.ts", "/p"] });
+  });
+  it("shell metacharacters stay literal in argv", () => {
+    const p = "/p/a;b|c&$(x)`y`'z.ts";
+    expect(customCommand(["e", "{path}"], p, "/p", false, "linux", found).args).toEqual([p]);
+  });
+  it("not found: editor_missing; Windows .cmd: cmd.exe with quoted arguments, % refused", () => {
+    expect(() => customCommand(["nope"], "/p/a", "/p", false, "linux", () => undefined)).toThrow(/not found: nope/);
+    expect(customCommand(["ed", "{path}"], "C:\\p\\a & b.ts", "C:\\p", false, "win32", () => "C:\\bin\\ed.cmd")).toEqual({ cmd: "cmd.exe", args: ["/d", "/s", "/c", '""C:\\bin\\ed.cmd" "C:\\p\\a & b.ts""'], verbatim: true });
+    expect(() => customCommand(["ed", "{path}"], "C:\\p\\%X%.ts", "C:\\p", false, "win32", () => "C:\\bin\\ed.cmd")).toThrow(/%/);
+  });
+  it("findOnPath: PATH search with PATHEXT, absolute path as is", () => {
+    const o = { platform: "win32" as const, env: { PATH: "C:\\a;C:\\b", PATHEXT: ".EXE;.CMD" }, exists: (p: string) => p === "C:\\b\\ed.cmd" || p === "C:\\x\\y.exe" };
+    expect(findOnPath(o, "ed")).toBe("C:\\b\\ed.cmd");
+    expect(findOnPath(o, "C:\\x\\y.exe")).toBe("C:\\x\\y.exe");
+    expect(findOnPath({ ...o, platform: "linux", env: { PATH: "/a:/b" }, exists: (p) => p === "/b/ed" }, "ed")).toBe("/b/ed");
+  });
+  it("editorLabel: name, else program name without folder and extension", () => {
+    expect(editorLabel({ command: '"C:\\Sublime Text\\subl.exe" {path}', name: "" })).toBe("subl");
+    expect(editorLabel({ command: "/usr/bin/subl", name: "S" })).toBe("S");
   });
 });

@@ -45,7 +45,7 @@ import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } fro
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
-import { EDITORS, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
+import { customCommand, EDITORS, editorLabel, findOnPath, isOpenWith, openCommand, parseEditorCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -730,7 +730,7 @@ export function createDaemon(opts: {
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...opts.openExternal.editors().keys()].map((id) => ({ id, label: EDITORS[id].label })) }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...[...opts.openExternal.editors().keys()].map((id) => ({ id: id as EditorId | "custom", label: EDITORS[id].label })), ...(appSettings.get().editor.command ? [{ id: "custom" as const, label: editorLabel(appSettings.get().editor) }] : [])] }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -2150,6 +2150,8 @@ export function createDaemon(opts: {
           }
         }
         case "settings.set": {
+          // The command runs on the daemon machine's desktop: a remote browser must not plant it for the local user's next click.
+          if (msg.patch?.editor !== undefined && !sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
           try {
             const picked = msg.patch?.claude?.account;
             if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
@@ -2718,6 +2720,17 @@ export function createDaemon(opts: {
           try {
             const isDir = statSync(target).isDirectory();
             if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
+            if (msg.with === "custom") {
+              // From the hub's own settings, never from the message.
+              const argv = parseEditorCommand(appSettings.get().editor.command);
+              const env = process.env;
+              try {
+                await opts.openExternal.run(customCommand(argv, target, root, isDir, process.platform, (n) => findOnPath({ platform: process.platform, env, exists: existsSync }, n)));
+              } catch (err) {
+                return fail((err as { code?: string }).code === "editor_missing" ? "editor_missing" : "open_failed", (err as Error).message);
+              }
+              return reply({});
+            }
             const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
             if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
             const wslPath = msg.with === "reveal" || msg.with === "default" ? await opts.openExternal.winPath?.(target) : undefined;

@@ -1,10 +1,11 @@
 // App-wide settings (docs/spec.md "Settings"): settings.json in the config dir, shared by the daemons of one user like projects.json.
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { isAbsolute } from "node:path";
+import { parseEditorCommand } from "./open-external.ts";
 import { createJsonFile } from "./json-file.ts";
 import { APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -105,6 +106,10 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     open: bool("Open browser at start"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
+  editor: {
+    command: { valid: (v) => v === "" || (typeof v === "string" && v.length <= 1024 && !/[\0\r\n]/.test(v) && !!parseEditorCommand(v)[0]), label: "Editor command", rule: "one line, at most 1024 characters, with a program first and balanced quotes" },
+    name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters without control characters` },
+  },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },
 };
 const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
