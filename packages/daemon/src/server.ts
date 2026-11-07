@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -36,6 +36,8 @@ import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
+import { briefPrompt, checkSet, find as findMark, total as marksTotal, upsert as upsertMark } from "./back-marks.ts";
+import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-reminders.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
@@ -352,6 +354,10 @@ export function createDaemon(opts: {
   watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
   onRunning?: (running: boolean) => void;
+  /** GH-622: a Hub started by another Hub's attach (a Side): it keeps no Back marks (they are the Hub's settings) and runs no reminders; back.* is refused there. */
+  attached?: boolean;
+  /** Test seam (GH-622): the reminder tick (default 30 s) and clock. */
+  backReminders?: { everyMs?: number; now?: () => number };
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
   /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
@@ -885,6 +891,125 @@ export function createDaemon(opts: {
     show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
   });
 
+  // ---- GH-622 "I'll be back": Back marks, the brief turn and reminders (docs/spec.md "I'll be back") ----
+  /** The brief turn running per session (started by the tag line of its prompt): the mark's part id and the last assistant text so far. */
+  const briefs = new Map<string, { partId: string; text?: string }>();
+  /** Changes one mark under the settings file's change() and tells every browser; false when the mark is gone (Done). */
+  function editMark(sessionId: string, partId: string, fn: (m: BackMark) => void): boolean {
+    let found = false;
+    try {
+      appSettings.changeMarks((marks) => {
+        const m = findMark(marks, sessionId, partId);
+        if (!m) return;
+        found = true;
+        fn(m);
+      });
+    } catch (err) {
+      console.error("saving back marks failed:", err);
+    }
+    if (found) broadcastSettings();
+    return found;
+  }
+  const briefFailed = (sessionId: string, partId: string, why: string) =>
+    editMark(sessionId, partId, (m) => ((m.briefState = "failed"), (m.briefError = why.slice(0, 200))));
+  /** The brief of a finished turn replaces the old one; an empty answer is a failure. */
+  const briefDone = (sessionId: string, partId: string, text: string | undefined) => {
+    const t = text?.trim().slice(0, BACK_BRIEF_MAX);
+    if (!t) return briefFailed(sessionId, partId, "The brief was empty");
+    editMark(sessionId, partId, (m) => ((m.brief = { text: t, at: Date.now() }), delete m.briefState, delete m.briefError));
+  };
+  /** Sends the brief turn of a mark now (an idle session) or queues it behind the running turn and the queued items. */
+  async function startBrief(s: Session, partId: string, refresh: boolean) {
+    const mark = findMark(appSettings.get().back.marks, s.id, partId);
+    if (!mark) return;
+    const text = briefPrompt(partId, mark.title, refresh);
+    if (s.info().state === "idle" && !queue.items(s.id).length && !queue.sending(s.id)) {
+      editMark(s.id, partId, (m) => ((m.briefState = "running"), delete m.briefError));
+      const err = await sendPrompt(s, text);
+      if (!err) return void autoContinue.cancel(s.id);
+      if (!["external_turn", "session_busy", "bash_running"].includes(err.code)) return void briefFailed(s.id, partId, err.message);
+    }
+    const r = queue.enqueue(s.id, { text, images: [], brief: partId });
+    if (typeof r !== "string") return void briefFailed(s.id, partId, r.message);
+    editMark(s.id, partId, (m) => ((m.briefState = "queued"), delete m.briefError));
+  }
+  /** Follows a session's events for its brief turn: starts at the tagged prompt, takes the last assistant text, ends at the result. */
+  function observeBrief(s: Session, e: { part: { type: string } }) {
+    const part = e.part as { type: string; text?: string; streaming?: boolean; isError?: boolean; state?: string };
+    const cap = briefs.get(s.id);
+    if (part.type === "user_text") {
+      const tag = BACK_TAG.exec((part.text ?? "").split("\n")[0] ?? "");
+      const partId = tag?.[1];
+      if (!partId) return;
+      const m = findMark(appSettings.get().back.marks, s.id, partId);
+      if (!m || (m.briefState !== "queued" && m.briefState !== "running")) return;
+      briefs.set(s.id, { partId });
+      if (m.briefState === "queued") editMark(s.id, partId, (x) => (x.briefState = "running"));
+    } else if (!cap) return;
+    else if (part.type === "assistant_text") cap.text = part.text;
+    else if (part.type === "turn_result") {
+      briefs.delete(s.id);
+      if (part.isError) briefFailed(s.id, cap.partId, "The brief turn failed");
+      else briefDone(s.id, cap.partId, cap.text);
+    } else if (part.type === "turn_interrupted") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The brief turn was stopped"));
+    else if (part.type === "session_state" && part.state === "error") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The session stopped with an error"));
+  }
+  /** A brief item the user deleted from the queue (or Done removed): the mark says so. */
+  const briefDropped = (sessionId: string, item: { brief?: string } | undefined) => item?.brief && briefFailed(sessionId, item.brief, "Removed from queue");
+  /** Done or a deleted session: the queued brief leaves the queue. A running brief turn goes on; its answer is dropped (the mark is gone). */
+  const dropQueuedBrief = (sessionId: string, partId: string) => {
+    const item = queue.items(sessionId).find((i) => i.brief === partId);
+    if (item) queue.take(sessionId, item.id);
+  };
+  // A restart ends every queued or running brief (the queue lives in memory): the mark shows the fallback.
+  if (!opts.attached) {
+    const stuck = Object.entries(appSettings.get().back.marks).flatMap(([id, l]) => l.filter((m) => m.briefState === "queued" || m.briefState === "running").map((m) => [id, m.partId] as const));
+    if (stuck.length) {
+      try {
+        appSettings.changeMarks((marks) => stuck.forEach(([id, p]) => {
+          const m = findMark(marks, id, p);
+          if (m) (m.briefState = "failed"), (m.briefError = "Interrupted by a restart");
+        }));
+      } catch (err) {
+        console.error("saving back marks failed:", err);
+      }
+    }
+  }
+  const clock = opts.backReminders?.now ?? Date.now;
+  const hhmm = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const nextLine = (m: BackMark) => /^Next:\s*(.+)$/im.exec(m.brief?.text ?? "")?.[1]?.trim();
+  /** remindedAt first (a crash then loses the notification, never sends it twice), then one push (grouped for several) for the sessions no page covers with an in-app card. */
+  async function fireBack(items: Due[]) {
+    const now = clock();
+    const fired = new Set<string>();
+    appSettings.changeMarks((marks) => {
+      for (const { sessionId, mark } of items) {
+        const m = findMark(marks, sessionId, mark.partId);
+        if (m && m.remindedAt === undefined) (m.remindedAt = now), fired.add(`${sessionId}\0${m.partId}`);
+      }
+    });
+    broadcastSettings();
+    const send: Due[] = [];
+    for (const it of items) {
+      if (!fired.has(`${it.sessionId}\0${it.mark.partId}`)) continue;
+      const info = await history.getSessionInfo(it.sessionId).catch(() => undefined);
+      if (info?.tag === ARCHIVED_TAG) continue;
+      // The quiet rule: a page in front shows the in-app card (one event, one channel).
+      if ([...covered.values()].some((c) => c.has(it.sessionId)) || [...focused.values()].includes(it.sessionId)) continue;
+      send.push(it);
+    }
+    if (!send.length || !opts.push) return;
+    const late = (m: BackMark) => (now - (m.remindAt ?? now) > 2 * BACK_TICK_MS ? ` (was due ${hhmm(m.remindAt!)})` : "");
+    if (send.length === 1) {
+      const { sessionId, mark } = send[0]!;
+      await opts.push.send({ sessionId, title: `Come back: ${await pushTitleOf(sessionId)}`, body: `${mark.note || nextLine(mark) || mark.title}${late(mark)}`, tag: `back-${mark.partId}`, backPart: mark.partId });
+      return;
+    }
+    const titles = [...new Set(await Promise.all(send.map((i) => pushTitleOf(i.sessionId))))];
+    await opts.push.send({ sessionId: send[0]!.sessionId, title: `${send.length} replies to come back to`, body: `${titles.slice(0, 2).join(", ")}${titles.length > 2 ? ", …" : ""}`, tag: "back" });
+  }
+  const backReminders = opts.attached ? undefined : createBackReminders({ marks: () => appSettings.get().back.marks, fire: fireBack, now: clock, everyMs: opts.backReminders?.everyMs });
+
   function track(s: Session) {
     sessions.set(s.id, s);
     s.subscribe(Infinity, (e) => {
@@ -898,6 +1023,7 @@ export function createDaemon(opts: {
       }
     });
     s.subscribe(Infinity, notifier.observe);
+    s.subscribe(Infinity, (e) => observeBrief(s, e));
     s.subscribe(Infinity, (e) => orchestration.observe(s, e));
     s.subscribe(Infinity, () => touched.set(s.id, Date.now()));
     return s;
@@ -1212,6 +1338,15 @@ export function createDaemon(opts: {
     // The folder of a session whose CLI a /clear heir still uses stays with the heir.
     if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
+    briefs.delete(id);
+    if (appSettings.get().back.marks[id]) {
+      try {
+        appSettings.changeMarks((marks) => void delete marks[id]);
+        broadcastSettings();
+      } catch (e) {
+        console.error(`session ${id}: removing its back marks failed:`, e);
+      }
+    }
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
   }
@@ -1893,6 +2028,7 @@ export function createDaemon(opts: {
           const s = sessions.get(msg.sessionId);
           if (!s) return fail("unknown_item", "queued message not found (already sent?)");
           const item = queue.take(s.id, msg.itemId);
+          briefDropped(s.id, item);
           return item ? reply({ text: item.text, images: item.images, ...(item.bash && { bash: true }) }) : fail("unknown_item", "queued message not found (already sent?)");
         }
         case "session.sendQueued": {
@@ -2171,6 +2307,53 @@ export function createDaemon(opts: {
           } catch (err) {
             return fail("bad_settings", (err as Error).message);
           }
+        }
+        case "back.set":
+        case "back.done":
+        case "back.brief": {
+          if (opts.attached) return fail("back_unsupported", "Back marks are kept by the Hub; mark this reply on the Hub");
+          if (typeof msg.sessionId !== "string" || typeof msg.partId !== "string") return fail("bad_request", "sessionId and partId must be strings");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          const marks = appSettings.get().back.marks;
+          if (msg.type === "back.done") {
+            // Existing mark or not: Done is idempotent. A queued brief leaves the queue; a running one ends into nothing.
+            dropQueuedBrief(s.id, msg.partId);
+            try {
+              appSettings.changeMarks((m) => {
+                const list = m[s.id]?.filter((x) => x.partId !== msg.partId);
+                if (list?.length) m[s.id] = list;
+                else delete m[s.id];
+              });
+            } catch (e) {
+              return fail("save_failed", (e as Error).message);
+            }
+            broadcastSettings();
+            return reply({});
+          }
+          if (msg.type === "back.brief") {
+            const m = findMark(marks, s.id, msg.partId);
+            if (!m) return fail("unknown_mark", "no such mark");
+            if (m.briefState === "queued" || m.briefState === "running") return fail("brief_busy", "a brief is already being written");
+            await startBrief(s, msg.partId, !!m.brief);
+            return reply({});
+          }
+          const bad = checkSet(msg);
+          if (bad) return fail("bad_request", bad);
+          const exists = !!findMark(marks, s.id, msg.partId);
+          if (!exists && marksTotal(marks) >= BACK_MARKS_MAX) return fail("too_many_marks", `at most ${BACK_MARKS_MAX} marks`);
+          let isNew = false;
+          try {
+            appSettings.changeMarks((m) => {
+              const list = (m[s.id] ??= []);
+              isNew = upsertMark(list, msg as { partId: string; title: string }, clock()).isNew;
+            });
+          } catch (e) {
+            return fail("save_failed", (e as Error).message);
+          }
+          broadcastSettings();
+          if (isNew) void startBrief(s, msg.partId, false).catch((e) => briefFailed(s.id, msg.partId, (e as Error).message));
+          return reply({});
         }
         case "session.rename":
         case "session.archive": {
@@ -3026,7 +3209,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

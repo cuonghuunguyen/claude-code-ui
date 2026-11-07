@@ -235,7 +235,7 @@ process.on("exit", keepAwake.close);
 let attachRunning: (on: boolean) => void = () => {};
 const shortcut = startedBy ? undefined : createShortcut({ platform: process.platform, env: process.env, home: homedir(), configDir: configDir(), webRoot, shell: userInfo().shell ?? undefined });
 const openExternal = { run: process.env.CLAUDE_UI_OPEN_LOG ? logOpen(process.env.CLAUDE_UI_OPEN_LOG) : spawnOpen, editors: () => detectEditors({ platform: process.platform, env: process.env, exists: existsSync, home: homedir() }) };
-const server = createDaemon({ openExternal, shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, warmUp: true });
+const server = createDaemon({ openExternal, shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, attached: !!startedBy, warmUp: true });
 // The attach server (ADR 0009): every POSIX Hub accepts attaching Hubs on a Unix socket (mode 0600, same user). A Hub started by an attach also
 // records its install folder in `.live` (the install sweep keeps it) and ends after its Grace period.
 const attachSock = process.platform === "win32" ? undefined : attachSocketPath(process.env, configDir());
