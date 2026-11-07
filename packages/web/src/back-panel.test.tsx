@@ -201,9 +201,11 @@ it("reminder card: only from a live change; Open, Snooze 2h, Dismiss in that ord
   const names = [...card.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent);
   expect(names).toEqual(["Dismiss", "Open", "Snooze 2 hours", "Dismiss reminder"]);
   expect(card.contains(document.activeElement)).toBe(false);
+  // The live region exists outside the card and announces it without taking focus.
+  expect(el.querySelector("div.sr-only[role=status]")!.textContent).toBe("Reminder: come back to My session");
   await click([...card.querySelectorAll("button")].find((b) => b.textContent === "Snooze 2h"));
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ type: "back.set", remindMs: 7_200_000 }));
-  expect(el.querySelector('[role="status"]')!.textContent).toMatch(/^Snoozed until /);
+  expect(card.querySelector('[role="status"]')!.textContent).toMatch(/^Snoozed until /);
   await click(card.querySelector("button"));
   expect(el.querySelector('[data-testid="back-reminder-card"]')).toBeNull();
 });

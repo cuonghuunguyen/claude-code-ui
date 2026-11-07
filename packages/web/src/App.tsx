@@ -4472,6 +4472,7 @@ export function App() {
         />
         <BackReminderCards
           enabled={inApp}
+          skip={(id) => !!list.find((x) => x.id === id)?.archived}
           marks={backMarks}
           title={(id) => displayTitle(list.find((x) => x.id === id)?.title || "") || tr("app.focusPage.untitled")}
           onOpen={(sessionId, partId) => (open(sessionId), setRevealBack({ sessionId, partId }))}

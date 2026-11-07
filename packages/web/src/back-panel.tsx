@@ -373,8 +373,10 @@ export function BriefRow({ answer, children }: { answer?: string; children?: Rea
 }
 
 /** In-app reminder cards: one per fired reminder of a live settings change, until Open, Snooze, Dismiss or close. Not focused, announced politely by the region. */
-export function BackReminderCards({ enabled, title, marks, onOpen, request }: {
+export function BackReminderCards({ enabled, skip, title, marks, onOpen, request }: {
   enabled: boolean;
+  /** A session that gets no card (archived: the daemon sends no push for it either). */
+  skip?: (sessionId: string) => boolean;
   /** The session's title for the card. */
   title: (sessionId: string) => string;
   /** The marks now (a card follows its mark: Done or a new reminder removes it). */
@@ -398,7 +400,7 @@ export function BackReminderCards({ enabled, title, marks, onOpen, request }: {
   const key = (c: Fired) => `${c.sessionId}\0${c.mark.partId}`;
   const drop = (c: Fired) => setCards((all) => all.filter((x) => key(x) !== key(c)));
   // A card follows its mark: gone (Done, session deleted) or re-armed (Snooze elsewhere) removes it.
-  const live = cards.filter((c) => key(c) === snoozed?.key || marks[c.sessionId]?.find((m) => m.partId === c.mark.partId)?.remindedAt === c.mark.remindedAt);
+  const live = cards.filter((c) => !skip?.(c.sessionId) && (key(c) === snoozed?.key || marks[c.sessionId]?.find((m) => m.partId === c.mark.partId)?.remindedAt === c.mark.remindedAt));
   useEffect(() => {
     if (live.length !== cards.length) setCards(live);
   });
@@ -408,8 +410,13 @@ export function BackReminderCards({ enabled, title, marks, onOpen, request }: {
     return () => clearTimeout(t);
   }, [snoozed]);
   const shown = live.slice(-3);
+  const newest = shown.at(-1);
   return (
     <>
+      {/* The region exists before its text, so a screen reader announces each new card (the cards take no focus). */}
+      <div role="status" className="sr-only">
+        {newest ? tr("app.back.announce", { title: title(newest.sessionId) }) : ""}
+      </div>
       {shown.map((c) => {
         const mark = marks[c.sessionId]?.find((m) => m.partId === c.mark.partId) ?? c.mark;
         const sessionTitle = title(c.sessionId);

@@ -70,15 +70,27 @@ describe("back marks in the daemon", { timeout: 20_000 }, () => {
     const q2 = h.parts(id).filter((p: any) => p.type === "prompt_queue").at(-1) as any;
     expect(q2.items).toEqual([]);
   });
-  it("deleting a queued brief marks it failed; Stop fails a running one; Retry sends one new brief; busy is refused", async () => {
+  it("deleting a queued brief marks it failed; Send now of a brief is refused while a turn runs; busy is refused", async () => {
     const h = await harness(interruptQuery);
     const id = await h.session();
     await h.request({ type: "session.prompt", sessionId: id, text: "work" });
     await h.request(set(id));
     const item = (h.parts(id).filter((p: any) => p.type === "prompt_queue").at(-1) as any).items[0];
     expect((await h.request({ type: "back.brief", sessionId: id, partId: "msg_1:0" })).code).toBe("brief_busy");
+    expect((await h.request({ type: "session.sendQueued", sessionId: id, itemId: item.id })).code).toBe("session_busy");
     await h.request({ type: "session.dequeue", sessionId: id, itemId: item.id });
     expect(h.marks(id)[0]).toMatchObject({ briefState: "failed", briefError: "Removed from queue" });
+  });
+  it("Stop during the brief turn fails the brief; Retry sends one new brief turn", async () => {
+    const h = await harness(interruptQuery);
+    const id = await h.session();
+    await h.request(set(id));
+    await vi.waitFor(() => expect(h.marks(id)[0]?.briefState).toBe("running"), { timeout: 5000 });
+    await h.request({ type: "session.interrupt", sessionId: id });
+    await vi.waitFor(() => expect(h.marks(id)[0]).toMatchObject({ briefState: "failed", briefError: "The brief turn was stopped" }), { timeout: 5000 });
+    await h.request({ type: "back.brief", sessionId: id, partId: "msg_1:0" });
+    await vi.waitFor(() => expect(h.marks(id)[0]?.briefState).toBe("running"), { timeout: 5000 });
+    await vi.waitFor(() => expect(h.parts(id).filter((p: any) => p.type === "user_text")).toHaveLength(2), { timeout: 5000 });
   });
   it("back.set validates and refuses unknown sessions; settings.set refuses back; marks are capped", async () => {
     const h = await harness(fakeQuery);

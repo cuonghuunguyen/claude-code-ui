@@ -78,17 +78,19 @@ export function QueueChips({
                 {shown}
               </span>
               {item.imageCount > 0 && <span className="shrink-0 rounded-md bg-secondary px-1.5 text-muted-foreground text-xs">+{t("session.queue.images", { count: item.imageCount })}</span>}
-              <button
-                type="button"
-                data-action="send"
-                className={`${BTN} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
-                aria-label={t("session.queue.sendNowLabel", { label })}
-                aria-disabled={waits || undefined}
-                title={waits ? bashWait : item.bash ? t("session.queue.runNow") : t("session.queue.sendNow")}
-                onClick={() => !waits && run("send", i, item.id)}
-              >
-                <ArrowUpIcon aria-hidden />
-              </button>
+              {!item.brief && (
+                <button
+                  type="button"
+                  data-action="send"
+                  className={`${BTN} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
+                  aria-label={t("session.queue.sendNowLabel", { label })}
+                  aria-disabled={waits || undefined}
+                  title={waits ? bashWait : item.bash ? t("session.queue.runNow") : t("session.queue.sendNow")}
+                  onClick={() => !waits && run("send", i, item.id)}
+                >
+                  <ArrowUpIcon aria-hidden />
+                </button>
+              )}
               {!item.brief && (
                 <button type="button" data-action="edit" className={BTN} aria-label={t("session.queue.editLabel", { label })} title={t("session.queue.edit")} onClick={() => run("edit", i, item.id)}>
                   <PencilIcon aria-hidden />

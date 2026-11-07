@@ -893,7 +893,7 @@ export function createDaemon(opts: {
 
   // ---- GH-622 "I'll be back": Back marks, the brief turn and reminders (docs/spec.md "I'll be back") ----
   /** The brief turn running per session (started by the tag line of its prompt): the mark's part id and the last assistant text so far. */
-  const briefs = new Map<string, { partId: string; text?: string }>();
+  const briefs = new Map<string, { partId: string; at: number; text?: string }>();
   /** Changes one mark under the settings file's change() and tells every browser; false when the mark is gone (Done). */
   function editMark(sessionId: string, partId: string, fn: (m: BackMark) => void): boolean {
     let found = false;
@@ -910,28 +910,24 @@ export function createDaemon(opts: {
     if (found) broadcastSettings();
     return found;
   }
-  const briefFailed = (sessionId: string, partId: string, why: string) =>
-    editMark(sessionId, partId, (m) => ((m.briefState = "failed"), (m.briefError = why.slice(0, 200))));
+  // `at`: the mark's time when the brief turn started; a mark removed and made again meanwhile is another mark, the old turn's end must not touch it.
+  const briefFailed = (sessionId: string, partId: string, why: string, at?: number) =>
+    editMark(sessionId, partId, (m) => void (m.at === (at ?? m.at) && ((m.briefState = "failed"), (m.briefError = why.slice(0, 200)))));
   /** The brief of a finished turn replaces the old one; an empty answer is a failure. */
-  const briefDone = (sessionId: string, partId: string, text: string | undefined) => {
+  const briefDone = (sessionId: string, partId: string, text: string | undefined, at: number) => {
     const t = text?.trim().slice(0, BACK_BRIEF_MAX);
-    if (!t) return briefFailed(sessionId, partId, "The brief was empty");
-    editMark(sessionId, partId, (m) => ((m.brief = { text: t, at: Date.now() }), delete m.briefState, delete m.briefError));
+    if (!t) return briefFailed(sessionId, partId, "The brief was empty", at);
+    editMark(sessionId, partId, (m) => void (m.at === at && ((m.brief = { text: t, at: Date.now() }), delete m.briefState, delete m.briefError)));
   };
   /** Sends the brief turn of a mark now (an idle session) or queues it behind the running turn and the queued items. */
   async function startBrief(s: Session, partId: string, refresh: boolean) {
     const mark = findMark(appSettings.get().back.marks, s.id, partId);
     if (!mark) return;
     const text = briefPrompt(partId, mark.title, refresh);
-    if (s.info().state === "idle" && !queue.items(s.id).length && !queue.sending(s.id)) {
-      editMark(s.id, partId, (m) => ((m.briefState = "running"), delete m.briefError));
-      const err = await sendPrompt(s, text);
-      if (!err) return void autoContinue.cancel(s.id);
-      if (!["external_turn", "session_busy", "bash_running"].includes(err.code)) return void briefFailed(s.id, partId, err.message);
-    }
-    const r = queue.enqueue(s.id, { text, images: [], brief: partId });
-    if (typeof r !== "string") return void briefFailed(s.id, partId, r.message);
+    // Always through the queue: it sends at once when the session takes a prompt, and it honours a usage-limit pause and a scheduled auto-continue (a direct send would bypass both).
     editMark(s.id, partId, (m) => ((m.briefState = "queued"), delete m.briefError));
+    const r = queue.enqueue(s.id, { text, images: [], brief: partId });
+    if (typeof r !== "string") briefFailed(s.id, partId, r.message);
   }
   /** Follows a session's events for its brief turn: starts at the tagged prompt, takes the last assistant text, ends at the result. */
   function observeBrief(s: Session, e: { part: { type: string } }) {
@@ -940,19 +936,21 @@ export function createDaemon(opts: {
     if (part.type === "user_text") {
       const tag = BACK_TAG.exec((part.text ?? "").split("\n")[0] ?? "");
       const partId = tag?.[1];
+      // Another prompt (a steer) during the brief turn: its text would become the brief.
+      if (!partId && cap) (briefs.delete(s.id), briefFailed(s.id, cap.partId, "Another message arrived during the brief", cap.at));
       if (!partId) return;
       const m = findMark(appSettings.get().back.marks, s.id, partId);
       if (!m || (m.briefState !== "queued" && m.briefState !== "running")) return;
-      briefs.set(s.id, { partId });
+      briefs.set(s.id, { partId, at: m.at });
       if (m.briefState === "queued") editMark(s.id, partId, (x) => (x.briefState = "running"));
     } else if (!cap) return;
     else if (part.type === "assistant_text") cap.text = part.text;
     else if (part.type === "turn_result") {
       briefs.delete(s.id);
-      if (part.isError) briefFailed(s.id, cap.partId, "The brief turn failed");
-      else briefDone(s.id, cap.partId, cap.text);
-    } else if (part.type === "turn_interrupted") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The brief turn was stopped"));
-    else if (part.type === "session_state" && part.state === "error") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The session stopped with an error"));
+      if (part.isError) briefFailed(s.id, cap.partId, "The brief turn failed", cap.at);
+      else briefDone(s.id, cap.partId, cap.text, cap.at);
+    } else if (part.type === "turn_interrupted") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The brief turn was stopped", cap.at));
+    else if (part.type === "session_state" && (part.state === "error" || part.state === "closed")) (briefs.delete(s.id), briefFailed(s.id, cap.partId, part.state === "error" ? "The session stopped with an error" : "The session closed", cap.at));
   }
   /** A brief item the user deleted from the queue (or Done removed): the mark says so. */
   const briefDropped = (sessionId: string, item: { brief?: string } | undefined) => item?.brief && briefFailed(sessionId, item.brief, "Removed from queue");
@@ -2034,7 +2032,10 @@ export function createDaemon(opts: {
         case "session.sendQueued": {
           const s = sessions.get(msg.sessionId);
           if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
-          const bash = queue.items(s.id).find((i) => i.id === msg.itemId)?.bash;
+          const queued = queue.items(s.id).find((i) => i.id === msg.itemId);
+          const bash = queued?.bash;
+          // A brief turn never steers into a running turn: Send now only while the session takes a prompt.
+          if (queued?.brief && !s.takesQueued()) return fail("session_busy", "The brief waits for the current turn to end");
           const err = await queue.sendNow(s.id, msg.itemId);
           // A refused Send now (any reason) leaves a scheduled auto-continue alone.
           if (err) return fail(err.code, err.message);
