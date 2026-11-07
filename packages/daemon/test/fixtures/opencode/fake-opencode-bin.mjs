@@ -70,7 +70,11 @@ const server = createServer(async (req, res) => {
   if (url.pathname.startsWith("/__")) {
     const body = await readBody(req);
     if (url.pathname === "/__script") scripts.push(...body.files);
-    if (url.pathname === "/__emit") for (const e of body.events) send(body.directory, e);
+    if (url.pathname === "/__emit")
+      for (const e of body.events) {
+        if (e.type === "session.status") e.properties.status.type === "idle" ? busy.delete(e.properties.sessionID) : busy.add(e.properties.sessionID);
+        send(body.directory, e);
+      }
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }

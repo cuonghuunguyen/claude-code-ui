@@ -363,3 +363,23 @@ describe("OpenCode event stream", { timeout: 30_000 }, () => {
     expect(Date.now() - before).toBeGreaterThan(400);
   });
 });
+
+describe("OpenCode restore", { timeout: 30_000 }, () => {
+  it("a restored busy session whose idle event was lost ends its turn when the stream connects", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_busy", slug: "b", projectID: "global", directory: project, title: "Busy", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, env: { FAKE_OPENCODE_STREAM_DELAY_MS: "800" }, data: { sessions: [row], messages: { ses_busy: [] }, busy: ["ses_busy"] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_busy", sinceSeq: 0 });
+    expect(sub.session.state).toBe("running");
+    // OpenCode finishes before the stream is open: the idle event reaches nobody.
+    await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: "ses_busy", status: { type: "idle" } } }] });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "turn_result"), 10000);
+    const states = d.inbox.filter((m) => m.type === "event" && m.part.type === "session_state").map((m: any) => m.part.state);
+    expect(states.at(-1)).toBe("idle");
+  });
+});
+

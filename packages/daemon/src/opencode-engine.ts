@@ -109,7 +109,7 @@ class OpenCodeSession implements EngineSession {
   private resyncing: Promise<void> | undefined;
   /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
   private stopped = false;
-  /** When the last prompt was posted (a prompt just sent may not be busy in OpenCode yet). */
+  /** When the last prompt was made (a prompt just sent may not be busy in OpenCode yet). */
   private sentAt = 0;
   private leavingPlan = false;
 
@@ -216,6 +216,7 @@ class OpenCodeSession implements EngineSession {
     if (this.session.currentState() !== "idle") throw new Error("Steering OpenCode sessions comes in a later version");
     const messageID = ascending("msg");
     this.stopped = false;
+    this.sentAt = Date.now();
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     this.beginTurn();
@@ -240,7 +241,6 @@ class OpenCodeSession implements EngineSession {
       ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
       ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
     ];
-    this.sentAt = Date.now();
     await this.server.request(`/session/${this.id}/prompt_async`, {
       method: "POST",
       directory: this.cwd,
