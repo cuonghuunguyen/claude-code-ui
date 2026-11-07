@@ -76,6 +76,9 @@ describe("custom editor command (GH-646)", () => {
   it("replaces {path} and {root} inside an argument, appends nothing", () => {
     expect(customCommand(["subl", "--goto={path}", "{root}"], "/p/a.ts", "/p", false, "linux", found)).toEqual({ cmd: "/usr/bin/subl", args: ["--goto=/p/a.ts", "/p"] });
   });
+  it("a file name holding {root} is not replaced again", () => {
+    expect(customCommand(["e", "{path}"], "/p/n-{root}.md", "/p", false, "linux", found).args).toEqual(["/p/n-{root}.md"]);
+  });
   it("shell metacharacters stay literal in argv", () => {
     const p = "/p/a;b|c&$(x)`y`'z.ts";
     expect(customCommand(["e", "{path}"], p, "/p", false, "linux", found).args).toEqual([p]);

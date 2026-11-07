@@ -4,7 +4,7 @@ import { t } from "./i18n.ts";
 import type { ExternalEntry, ExternalId } from "./open-external-menu.ts";
 
 export type TabCommand = "closeOthers" | "closeRight" | "closeAll" | "reopen" | "pin" | "unpin" | "copyId" | "copyCwd" | "reveal" | "splitRight" | "splitDown" | "moveSide" | "moveBottom" | "goToSession" | "moveToFiles" | "moveToArtifacts" | "copyPath" | "copyRel" | "revealInFiles" | ExternalId;
-export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote" | TabCommand; label: string; disabled?: boolean; testId: string };
+export type TabMenuEntry = { id: "moveLeft" | "moveRight" | "close" | "splitNote" | TabCommand; label: string; title?: string; disabled?: boolean; testId: string };
 
 const entry = (id: TabMenuEntry["id"], label: string, disabled = false): TabMenuEntry => ({ id, label, disabled, testId: `tab-menu-${id}` });
 

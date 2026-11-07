@@ -40,8 +40,9 @@ export function findOnPath(o: { platform: NodeJS.Platform; env: NodeJS.ProcessEn
 /** The user's editor command for `path`: `{path}` and `{root}` are replaced in the arguments; with none, the paths are appended as for the built-in editors. The program is never passed through a shell (Windows .cmd: cmd.exe with every argument quoted). */
 export function customCommand(argv: string[], path: string, root: string, isDir: boolean, platform: NodeJS.Platform, find: (name: string) => string | undefined): OpenCommand {
   const prog = argv[0] ? find(argv[0]) : undefined;
-  if (!prog) throw Object.assign(new Error(`Editor command not found: ${argv[0] ?? ""}. Check Settings › Open in app.`), { code: "editor_missing" });
-  const sub = (a: string) => a.replaceAll("{path}", () => path).replaceAll("{root}", () => root);
+  if (!prog) throw Object.assign(new Error(`Editor command not found${argv[0] ? `: ${argv[0]}` : ""}. Check Settings › Open in app.`), { code: "editor_missing" });
+  // One pass: a file name that contains "{root}" is not replaced again.
+  const sub = (a: string) => a.replace(/\{(path|root)\}/g, (_, k: string) => (k === "path" ? path : root));
   const args = argv.slice(1).map(sub);
   if (args.every((a, i) => a === argv[i + 1])) args.push(...(isDir ? [path] : [root, path]));
   if (platform === "win32" && /\.(cmd|bat)$/i.test(prog)) {

@@ -733,7 +733,7 @@ export function ChangesPanel({
     const local = openExt?.canOpen(cwd) ? openExt : undefined;
     return [
       [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => onCopy(r.path, "path") }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
-      local ? externalEntries({ isDir: false, editors: local.editors, disabled: r.kind === "D" }).map((x) => ({ label: x.label, testId: `row-${x.testId}`, disabled: x.disabled, run: () => local.run(r.path, x.how, cwd) })) : [],
+      local ? externalEntries({ isDir: false, editors: local.editors, local: local.isLocal(cwd), disabled: r.kind === "D" }).map((x) => ({ label: x.label, title: x.title, testId: `row-${x.testId}`, disabled: x.disabled, run: () => local.run(r.path, x.how, cwd) })) : [],
     ];
   };
   const rowMenu = (r: Row, node: ReactElement) => (

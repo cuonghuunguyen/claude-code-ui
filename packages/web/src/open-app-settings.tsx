@@ -22,6 +22,7 @@ const ROW = "flex flex-col gap-1 border-t py-2";
 export function OpenAppSection({ editor, saving, request, onResult, onError }: Props) {
   const t = useT();
   const [draft, setDraft] = useState<Partial<Record<Key, string>>>({});
+  const [busy, setBusy] = useState(false);
   const [bad, setBad] = useState<Partial<Record<Key, string>>>({});
 
   const commit = async (k: Key) => {
@@ -29,6 +30,7 @@ export function OpenAppSection({ editor, saving, request, onResult, onError }: P
     if (v === undefined) return;
     const done = () => setDraft(({ [k]: _, ...rest }) => rest);
     if (v === editor[k]) return done();
+    setBusy(true);
     try {
       onResult(await request<SettingsResult>({ type: "settings.set", patch: { editor: { [k]: v } } }));
       setBad(({ [k]: _, ...rest }) => rest);
@@ -38,6 +40,8 @@ export function OpenAppSection({ editor, saving, request, onResult, onError }: P
       if (code === "bad_settings") setBad((b) => ({ ...b, [k]: message }));
       else if (code === "not_local") setBad((b) => ({ ...b, [k]: t("settings.openApp.notLocal") }));
       else onError(message);
+    } finally {
+      setBusy(false);
     }
   };
   const field = (k: Key, o: { mono?: boolean }) => {
@@ -52,7 +56,7 @@ export function OpenAppSection({ editor, saving, request, onResult, onError }: P
           onChange={(e) => (setDraft((d) => ({ ...d, [k]: e.target.value })), setBad(({ [k]: _, ...rest }) => rest))}
           onBlur={() => void commit(k)}
           onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())} // preventDefault: on a phone the focus falls to Back and this Enter would click it
-          disabled={saving}
+          disabled={saving || busy}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"

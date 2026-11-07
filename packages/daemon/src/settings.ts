@@ -107,7 +107,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
   editor: {
     command: { valid: (v) => v === "" || (typeof v === "string" && v.length <= 1024 && !/[\0\r\n]/.test(v) && !!parseEditorCommand(v)[0]), label: "Editor command", rule: "one line, at most 1024 characters, with a program first and balanced quotes" },
-    name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters without control characters` },
+    name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters, not only spaces, without control characters` },
   },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },
 };

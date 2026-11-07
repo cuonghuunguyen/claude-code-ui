@@ -509,6 +509,15 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it("fs.openExternal: custom on a WSL side is side_unsupported, nothing is forwarded (GH-646)", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const sent: ServerMessage[] = [];
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost: true });
+    await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "custom", side: "wsl:Ubuntu", reqId: "r" } as never);
+    expect(sent[0]).toMatchObject({ type: "error", code: "side_unsupported" });
+  });
+
   it("fs.openExternal: a WSL side is refused for a browser on another machine; a Docker side is side_unsupported", async () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide(() => ({})) });
     await s.refresh();

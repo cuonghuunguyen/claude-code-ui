@@ -14,6 +14,9 @@ describe("externalEntries (GH-612)", () => {
   it("custom editor: Open in <name>, own test id, before the default app", () => {
     expect(labels({ isDir: false, editors: [{ id: "custom", label: "My Editor" }], platform: "mac" })).toEqual(["Reveal in Finder", "Open in My Editor", "Open with Default App"]);
   });
+  it("custom editor is dropped for a path in a Side", () => {
+    expect(labels({ isDir: false, editors: [{ id: "custom", label: "My Editor" }], local: false, platform: "mac" })).toEqual(["Reveal in Finder", "Open with Default App"]);
+  });
   it("a folder has no default app", () => expect(labels({ isDir: true, editors, platform: "mac" })).toEqual(["Reveal in Finder", "Open in VS Code", "Open in IntelliJ IDEA"]));
   it("deleted: every entry disabled; ids round-trip", () => {
     const e = externalEntries({ isDir: false, editors, disabled: true, platform: "mac" });

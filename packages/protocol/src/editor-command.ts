@@ -20,4 +20,4 @@ export function parseEditorCommand(line: string): string[] {
 }
 
 /** The menu label of the custom editor: its name, else the program name without folder and extension; "" when the command has no program. */
-export const editorLabel = (e: { command: string; name: string }): string => e.name || (parseEditorCommand(e.command)[0] ?? "").split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
+export const editorLabel = (e: { command: string; name: string }): string => e.name || (parseEditorCommand(e.command)[0] ?? "").split(/[\\/]/).pop()!.replace(/(.)\.[^.]+$/, "$1");

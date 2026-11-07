@@ -1101,7 +1101,7 @@ it("GH-555 rows are draggable and dragstart carries the entry type and the path"
 });
 
 it("GH-645 the open-in-app entries show for this machine and a WSL side, not for a Docker or SSH side", async () => {
-  const ext = { editors: [{ id: "code" as const, label: "VS Code" }], canOpen: () => true, run: vi.fn() };
+  const ext = { editors: [{ id: "code" as const, label: "VS Code" }], canOpen: () => true, isLocal: () => true, run: vi.fn() };
   const ids = async (side: string) => {
     const t = setup({ side });
     const render = () => act(async () => t.root.render(<OpenExternalContext.Provider value={ext}><FileTree client={{ request: t.request } as never} cwd="/p" side={side} onOpen={() => {}} onViewer={() => {}} /></OpenExternalContext.Provider>));
