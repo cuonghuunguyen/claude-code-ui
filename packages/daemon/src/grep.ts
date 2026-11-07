@@ -11,7 +11,7 @@ import { runGit } from "./git-runner.ts";
 export const GREP_LIMITS = { matches: 2000, files: 200, runBytes: 8 << 20, bytes: 16 << 20, ms: 5000, lineChars: 300, context: 2 };
 export type GrepLimits = typeof GREP_LIMITS;
 export class GrepError extends Error {
-  constructor(message: string, readonly code: "grep_failed" | "git_missing") {
+  constructor(message: string, readonly code: "grep_failed" | "git_missing" | "regex_unsupported") {
     super(message);
   }
 }
@@ -58,7 +58,7 @@ export function cutLine(text: string, ranges: [number, number][] | undefined, ma
 export function grepArgs(q: { query: string; regex: boolean; globs: string[]; includeIgnored: boolean; git: boolean }): string[] {
   const where = q.git ? ["--untracked", ...(q.includeIgnored ? ["--no-exclude-standard"] : [])] : ["--no-index", ...(q.includeIgnored ? [] : ["--exclude-standard"])];
   // `-e` keeps a query that starts with `-` a pattern; `--null --column` tells match lines (3 NUL fields) from context lines (2).
-  return ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "grep", ...where, "-n", q.regex ? "-E" : "-F", "-I", "-i", "-C", String(GREP_LIMITS.context), "--null", "--column", "--no-color", "-e", q.query, "--", ...q.globs];
+  return ["-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "grep", ...where, "-n", q.regex ? "-P" : "-F", "-I", "-i", "-C", String(GREP_LIMITS.context), "--null", "--column", "--no-color", "-e", q.query, "--", ...q.globs];
 }
 
 /** Lines of `git grep --null --column -n`: `path\0n\0col\0text` (match), `path\0n\0text` (context), `--` (group break, skipped). */
@@ -111,6 +111,7 @@ export async function findInFiles(
       if (signal.aborted) hit.canceled = true;
       else if (err.killed) hit.time = true;
       else if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") hit.bytes = true;
+      else if (q.regex && /perl-compatible/i.test(err.stderr ?? "")) throw new GrepError("This git has no Perl regex support; update git", "regex_unsupported");
       else throw new GrepError(firstLine(err.stderr ?? "") || err.message, "grep_failed");
       out = err.stdout ?? Buffer.alloc(0);
       total += out.length;
@@ -122,7 +123,13 @@ export async function findInFiles(
     return out.toString("utf8");
   };
   const outs = await Promise.all(runs.map((r) => slot(() => one(r.dir))));
-  const re = matcher(q.query, q.regex);
+  // Highlights come from JS RegExp: PCRE syntax JS rejects (possessive quantifiers, `(?i)`) still searches, without ranges.
+  let re: RegExp | undefined;
+  try {
+    re = matcher(q.query, q.regex);
+  } catch {
+    // no highlight
+  }
   const files: GrepFile[] = [];
   const okPath = new Map<string, boolean>();
   let matches = 0;
@@ -144,7 +151,7 @@ export async function findInFiles(
         capped = "matches";
         break scan;
       }
-      const ranges = l.match ? rangesOf(l.text, re) : undefined;
+      const ranges = l.match ? (re ? rangesOf(l.text, re) : []) : undefined;
       const c = cutLine(l.text, ranges, limits.lineChars);
       cut ||= c.cut;
       const line: GrepLine = { n: l.n, text: c.text, ...(l.match ? { ranges: c.ranges ?? [] } : {}) };

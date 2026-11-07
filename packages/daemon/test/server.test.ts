@@ -6237,7 +6237,7 @@ describe("fs.grep", () => {
       expect(await c.request({ type: "fs.grep", cwd: proj, query: "needle" })).toMatchObject({ type: "reply", result: { files: [{ path: "a.txt", lines: [{ n: 1, text: "hello Needle", ranges: [[6, 12]] }] }], matches: 1 } });
       expect(await c.request({ type: "fs.grep", cwd: proj, query: "  " })).toMatchObject({ type: "reply", result: { files: [], matches: 0 } });
       expect(await c.request({ type: "fs.grep", cwd: outside, query: "x" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
-      expect(await c.request({ type: "fs.grep", cwd: proj, query: "a(", regex: true })).toMatchObject({ type: "error", code: "bad_regex" });
+      expect(await c.request({ type: "fs.grep", cwd: proj, query: "a(", regex: true })).toMatchObject({ type: "error", code: "grep_failed" });
       expect(await c.request({ type: "fs.grep", cwd: proj, query: "x".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
       expect(await c.request({ type: "fs.grep", cwd: proj, query: "x", globs: "../x" })).toMatchObject({ type: "error", code: "bad_glob" });
     } finally {

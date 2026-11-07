@@ -102,6 +102,7 @@ export default {
   "app.find.cut": "Dòng dài được rút gọn quanh kết quả.",
   "app.find.failed": "Tìm kiếm thất bại: {message}",
   "app.find.gitMissing": "Tìm trong tệp cần git. Hãy cài git và đảm bảo git nằm trong PATH, rồi thử lại.",
+  "app.find.regexUnsupported": "Git này không hỗ trợ regex Perl; hãy cập nhật git hoặc tắt biểu thức chính quy.",
   "app.find.notConnected": "Chưa kết nối với daemon. Tìm kiếm tiếp tục khi kết nối lại.",
   // quick-open.tsx
   "app.quickOpen.title": "Mở nhanh",

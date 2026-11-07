@@ -163,6 +163,13 @@ it("git_missing and other errors show an alert; the panel stays usable", async (
   expect(b.q("find-query")).toBeTruthy();
 });
 
+it("regex_unsupported shows plain words", async () => {
+  const a = await render({ res: Object.assign(new Error("x"), { code: "regex_unsupported" }) });
+  await a.type("a");
+  await a.wait();
+  expect(a.el.querySelector('[role="alert"]')!.textContent).toContain("no Perl regex support");
+});
+
 it("notes for partial and shortened results; offline says so", async () => {
   const a = await render({ res: { ...RESULT, stopped: "time", cut: true } });
   await a.type("needle");

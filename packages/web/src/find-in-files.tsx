@@ -193,7 +193,7 @@ export function FindInFiles({
         </div>
         {error && connected && (
           <p role="alert" className="shrink-0 px-3 pb-2 text-destructive">
-            {error.code === "git_missing" ? t("app.find.gitMissing") : t("app.find.failed", { message: error.message })}
+            {error.code === "git_missing" ? t("app.find.gitMissing") : error.code === "regex_unsupported" ? t("app.find.regexUnsupported") : t("app.find.failed", { message: error.message })}
           </p>
         )}
         {res?.files.length ? (

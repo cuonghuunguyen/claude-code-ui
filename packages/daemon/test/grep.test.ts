@@ -43,9 +43,10 @@ describe("grepArgs", () => {
       expect(a.includes("--no-index") && a.includes("--untracked")).toBe(false);
     }
   });
-  it("plain -F, regex -E, fixed flags, query after -e and globs after --", () => {
+  it("plain -F, regex -P, fixed flags, query after -e and globs after --", () => {
     expect(grepArgs({ ...base, git: true })).toContain("-F");
-    expect(grepArgs({ ...base, git: true, regex: true })).toContain("-E");
+    expect(grepArgs({ ...base, git: true, regex: true })).toContain("-P");
+    expect(grepArgs({ ...base, git: true, regex: true })).not.toContain("-E");
     const a = grepArgs({ ...base, query: "-x", git: true, globs: ["*.ts"] });
     for (const f of ["-I", "-n", "-i", "--null", "--column"]) expect(a).toContain(f);
     expect(a.slice(a.indexOf("-C"), a.indexOf("-C") + 2)).toEqual(["-C", "2"]);
@@ -144,12 +145,38 @@ describe("findInFiles", () => {
     expect(paths(await run(d, "needle", { includeIgnored: false }))).toEqual(["node_modules/m.js"]);
   });
 
-  it("regex: matches; a pattern JS accepts and git rejects is grep_failed", async () => {
+  it("regex is PCRE: \\d, \\b and \\w work and the highlight follows", async () => {
+    const d = tmp();
+    init(d);
+    put(d, "r.txt", "needle one\nneedle two\nfood\nfoo1 here\n");
+    expect((await run(d, "needle (one|two)", { regex: true })).files.find((f) => f.path === "r.txt")!.lines.filter((l) => l.ranges)).toHaveLength(2);
+    const digit = (await run(d, "foo\\d", { regex: true })).files[0]!.lines.filter((l) => l.ranges);
+    expect(digit).toEqual([{ n: 4, text: "foo1 here", ranges: [[0, 4]] }]);
+    expect((await run(d, "\\bfood", { regex: true })).files[0]!.lines.filter((l) => l.ranges).map((l) => l.n)).toEqual([3]);
+    expect((await run(d, "\\w+1\\b", { regex: true })).matches).toBe(1);
+  });
+
+  it("a pattern PCRE accepts and JS rejects still searches; the highlight is empty, never a crash", async () => {
+    const d = tmp();
+    init(d);
+    put(d, "r.txt", "FOOO\nbar\n");
+    expect(() => matcher("(?i)fo++", true)).toThrow();
+    const r = await run(d, "(?i)fo++", { regex: true });
+    expect(r.matches).toBe(1);
+    expect(r.files[0]!.lines.find((l) => l.ranges)).toEqual({ n: 1, text: "FOOO", ranges: [] });
+    expect((await run(d, "x++", { regex: true })).matches).toBe(0);
+  });
+
+  it("a pattern git refuses is grep_failed with git's message", async () => {
     const d = fixture();
-    put(d, "r.txt", "needle one\nneedle two\n");
-    expect((await run(d, "needle (one|two)", { regex: true })).files.find((f) => f.path === "r.txt")!.lines).toHaveLength(2);
-    expect(() => matcher("a{1", true)).not.toThrow();
-    await expect(run(d, "a{1", { regex: true })).rejects.toMatchObject({ code: "grep_failed" });
+    await expect(run(d, "a(", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringMatching(/\S/) });
+  });
+
+  it("a git without PCRE is regex_unsupported, only in regex mode", async () => {
+    const d = fixture();
+    setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n", stdout: Buffer.alloc(0) })));
+    await expect(run(d, "need.e", { regex: true })).rejects.toMatchObject({ code: "regex_unsupported" });
+    await expect(run(d, "needle")).rejects.toMatchObject({ code: "grep_failed" });
   });
 
   it("caps: matches, files, cut lines, run bytes", async () => {

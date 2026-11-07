@@ -100,6 +100,7 @@ export default {
   "app.find.cut": "Long lines are shortened around the match.",
   "app.find.failed": "Search failed: {message}",
   "app.find.gitMissing": "Find in files needs git. Install git and make sure it is on PATH, then try again.",
+  "app.find.regexUnsupported": "This git has no Perl regex support; update git, or turn off regular expressions.",
   "app.find.notConnected": "Not connected to the daemon. Search resumes when it reconnects.",
   // quick-open.tsx
   "app.quickOpen.title": "Quick open",

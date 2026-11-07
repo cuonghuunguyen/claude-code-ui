@@ -15,7 +15,7 @@ import { createLocalHistory, HistoryError } from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
-import { findInFiles, GrepError, matcher, parseGlobs } from "./grep.ts";
+import { findInFiles, GrepError, parseGlobs } from "./grep.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
@@ -2294,12 +2294,6 @@ export function createDaemon(opts: {
           if (msg.query.length > MAX_SEARCH_CHARS) return fail("bad_query", `query longer than ${MAX_SEARCH_CHARS} characters`);
           const globs = parseGlobs(msg.globs);
           if (typeof globs === "string") return fail("bad_glob", globs);
-          if (msg.regex)
-            try {
-              matcher(msg.query, true);
-            } catch (e) {
-              return fail("bad_regex", (e as Error).message);
-            }
           const ctl = (grepping = new AbortController());
           try {
             const repos = await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => []);
