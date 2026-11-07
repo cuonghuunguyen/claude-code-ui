@@ -167,6 +167,18 @@ describe("findInFiles", () => {
     expect(b.matches).toBeGreaterThan(0);
   });
 
+  it("a matches cap keeps the 2 context lines after the last kept match, and none of a new file", async () => {
+    const d = tmp();
+    init(d);
+    put(d, "a.txt", ["needle", "c1", "c2", "c3", "c4", "needle"].join("\n") + "\n");
+    put(d, "b.txt", "x\nneedle\n");
+    const same = await run(d, "needle", { globs: ["a.txt"] }, { limits: { matches: 1 } });
+    expect(same.files[0]!.lines.map((l) => l.n)).toEqual([1, 2, 3]);
+    const next = await run(d, "needle", {}, { limits: { matches: 2 } });
+    expect(next.files.map((f) => f.path)).toEqual(["a.txt"]);
+    expect(next.files[0]!.lines.map((l) => l.n)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it("an aborted signal returns canceled", async () => {
     const d = fixture();
     const ctl = new AbortController();

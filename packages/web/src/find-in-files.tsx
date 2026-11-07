@@ -140,7 +140,7 @@ export function FindInFiles({
     res?.stopped === "time" ? t("app.find.timeout") : undefined,
     res?.cut ? t("app.find.cut") : undefined,
   ].filter(Boolean);
-  const status = !connected ? undefined : busy && !res ? t("app.find.searching") : res ? (res.matches ? t("app.find.count", { matches: res.matches, files: res.files.length }) : t("app.find.none")) : undefined;
+  const status = !connected ? undefined : busy && !res ? t("app.find.searching") : res ? (res.matches ? t("app.find.count", { matches: t("app.find.matchCount", { count: res.matches }), files: t("app.find.fileCount", { count: res.files.length }) }) : t("app.find.none")) : undefined;
   const rowIndex = new Map(rows.map((r, i) => [r.key, i]));
 
   return (
@@ -219,7 +219,7 @@ export function FindInFiles({
                     </span>
                   </div>
                   {f.lines.map((l) => {
-                    const gap = prev && l.n > prev + 1;
+                    const gap = prev > 0 && l.n > prev + 1;
                     prev = l.n;
                     const k = `${f.path}:${l.n}`;
                     const i = l.ranges ? rowIndex.get(k) : undefined;

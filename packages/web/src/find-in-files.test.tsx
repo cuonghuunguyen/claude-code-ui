@@ -69,6 +69,15 @@ it("debounces: one search after typing stops; groups, context lines and marks", 
   expect(el.querySelector('[data-testid="find-status"]')!.textContent).toContain("3 matches in 2 files");
 });
 
+it("renders no stray 0 under a file header and says 1 match in 1 file", async () => {
+  const one: FsGrepResult = { files: [{ path: "a.ts", lines: [{ n: 1, text: "needle", ranges: [[0, 6]] }] }], matches: 1, ms: 1, includeIgnored: false, git: true };
+  const { el, type, wait } = await render({ res: one });
+  await type("needle");
+  await wait();
+  expect(el.querySelector('[data-testid="find-results"]')!.textContent).toBe("a.ts1needle");
+  expect(el.querySelector('[data-testid="find-status"]')!.textContent).toBe("1 match in 1 file");
+});
+
 it("initialQuery fills the box and searches at once", async () => {
   const { q, onSearch } = await render({ initialQuery: "foo" });
   expect(q("find-query").value).toBe("foo");

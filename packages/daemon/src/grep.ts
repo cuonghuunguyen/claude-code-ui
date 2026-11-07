@@ -154,10 +154,13 @@ export async function findInFiles(
     }
   }
   if (capped === "matches") {
-    // Context after the last kept match belongs to the match that was cut.
     const last = files[files.length - 1];
-    while (last && last.lines.length && last.lines[last.lines.length - 1]!.ranges === undefined) last.lines.pop();
-    if (last && !last.lines.length) files.pop();
+    const lastMatch = last?.lines.filter((l) => l.ranges).pop();
+    if (last) {
+      // Keep the context lines right after the last kept match; a file with no kept match (only the cut match's context) goes.
+      last.lines = lastMatch ? last.lines.filter((l) => l.n <= lastMatch.n + limits.context) : [];
+      if (!last.lines.length) files.pop();
+    }
   }
   const stopped = capped ?? (hit.bytes ? "bytes" : hit.time ? "time" : hit.canceled || signal.aborted ? "canceled" : undefined);
   return { files, matches, ms: Date.now() - t0, includeIgnored, git, ...(stopped ? { stopped } : {}), ...(cut ? { cut: true as const } : {}) };
