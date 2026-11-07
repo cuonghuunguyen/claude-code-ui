@@ -1,0 +1,1195 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794086910196
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Think briefly, then run the shell command `ls -la` with the bash tool and tell me how many files there are.",
+     "messageID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1b7e9b8f8001U7eRTm4q0k1rS5"
+    },
+    "time": 1794086910201
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+     "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794086910207
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7e9d28a001waEFHq4zBdvGLm",
+     "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+     "sessionID": "ses_ROOT",
+     "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+     "type": "step-start"
+    },
+    "time": 1794086916746
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+     "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_993d1d2eac2c488889a41227",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1794086916763
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_993d1d2eac2c488889a41227",
+     "state": {
+      "status": "running",
+      "input": {
+       "command": "ls -la"
+      },
+      "time": {
+       "start": 1794086916879
+      }
+     },
+     "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+    },
+    "time": 1794086916879
+   }
+  },
+  {
+   "type": "permission.asked",
+   "properties": {
+    "id": "per_1b7e9d330001Tp5XszMA1j6C16",
+    "sessionID": "ses_ROOT",
+    "permission": "bash",
+    "patterns": [
+     "ls -la"
+    ],
+    "metadata": {
+     "command": "ls -la"
+    },
+    "always": [
+     "ls *"
+    ],
+    "tool": {
+     "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+     "callID": "call_993d1d2eac2c488889a41227"
+    }
+   }
+  }
+ ],
+ "on": {
+  "once": {
+   "events": [
+    {
+     "type": "permission.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "per_1b7e9d330001Tp5XszMA1j6C16",
+      "reply": "once"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "metadata": {
+         "output": ""
+        },
+        "status": "running",
+        "input": {
+         "command": "ls -la"
+        },
+        "time": {
+         "start": 1794086916879
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928092
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "metadata": {
+         "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n"
+        },
+        "status": "running",
+        "input": {
+         "command": "ls -la"
+        },
+        "time": {
+         "start": 1794086916879
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928109
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "status": "completed",
+        "input": {
+         "command": "ls -la"
+        },
+        "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n",
+        "metadata": {
+         "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n",
+         "exit": 0,
+         "truncated": false
+        },
+        "title": "ls -la",
+        "time": {
+         "start": 1794086916879,
+         "end": 1794086928112
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928112
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7e9ff4a001XdXsc3uMp6qaN9",
+       "reason": "tool-calls",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794086928202
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086910207
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086910207,
+        "completed": 1794086928270
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794086910196
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08ef001oWj1h0yKrh5h6K",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "type": "step-start"
+      },
+      "time": 1794086930671
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "",
+       "time": {
+        "start": 1794086930674
+       }
+      },
+      "time": 1794086930674
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+      "field": "text",
+      "delta": "Two"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+      "field": "text",
+      "delta": " entries"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "Two entries excluding . and ..: .git and a.txt. How many files? One regular file (a.txt), plus a directory .git. I should answer concisely.\n\nThe listing shows 2 entries besides . and .. \u2014 .git directory and a.txt file. So \"files\" = 1 regular file. I could say 2 entries total (1 file, 1 directory).",
+       "time": {
+        "start": 1794086930674,
+        "end": 1794086931187
+       }
+      },
+      "time": 1794086931187
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1794086931188
+       }
+      },
+      "time": 1794086931188
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+      "field": "text",
+      "delta": "2"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+      "field": "text",
+      "delta": " entries"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "2 entries: 1 file (`a.txt`) and 1 directory (`.git`).",
+       "time": {
+        "start": 1794086931188,
+        "end": 1794086931321
+       }
+      },
+      "time": 1794086931321
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0bd2001h2GNc9OG5st2A2",
+       "reason": "stop",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794086931410
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272,
+        "completed": 1794086931475
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    }
+   ]
+  },
+  "always": {
+   "events": [
+    {
+     "type": "permission.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "per_1b7e9d330001Tp5XszMA1j6C16",
+      "reply": "always"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "metadata": {
+         "output": ""
+        },
+        "status": "running",
+        "input": {
+         "command": "ls -la"
+        },
+        "time": {
+         "start": 1794086916879
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928092
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "metadata": {
+         "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n"
+        },
+        "status": "running",
+        "input": {
+         "command": "ls -la"
+        },
+        "time": {
+         "start": 1794086916879
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928109
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_993d1d2eac2c488889a41227",
+       "state": {
+        "status": "completed",
+        "input": {
+         "command": "ls -la"
+        },
+        "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n",
+        "metadata": {
+         "output": "total 8\ndrwxr-xr-x   4 user  staff  128 Nov  8 04:27 .\ndrwxr-xr-x  15 user  staff  480 Nov  8 04:28 ..\ndrwxr-xr-x   9 user  staff  288 Nov  8 04:27 .git\n-rw-r--r--   1 user  staff    6 Nov  8 04:27 a.txt\n",
+         "exit": 0,
+         "truncated": false
+        },
+        "title": "ls -la",
+        "time": {
+         "start": 1794086916879,
+         "end": 1794086928112
+        }
+       },
+       "id": "prt_1b7e9d29b001uIDlOm3QYwRYaG",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU"
+      },
+      "time": 1794086928112
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7e9ff4a001XdXsc3uMp6qaN9",
+       "reason": "tool-calls",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "messageID": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794086928202
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086910207
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9b8ff001lA9wJT0Y0rOxWU",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14160,
+        "input": 12368,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1752
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086910207,
+        "completed": 1794086928270
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794086910196
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08ef001oWj1h0yKrh5h6K",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "type": "step-start"
+      },
+      "time": 1794086930671
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "",
+       "time": {
+        "start": 1794086930674
+       }
+      },
+      "time": 1794086930674
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+      "field": "text",
+      "delta": "Two"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+      "field": "text",
+      "delta": " entries"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea08f2001B6imzPRsgyRLtg",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "Two entries excluding . and ..: .git and a.txt. How many files? One regular file (a.txt), plus a directory .git. I should answer concisely.\n\nThe listing shows 2 entries besides . and .. \u2014 .git directory and a.txt file. So \"files\" = 1 regular file. I could say 2 entries total (1 file, 1 directory).",
+       "time": {
+        "start": 1794086930674,
+        "end": 1794086931187
+       }
+      },
+      "time": 1794086931187
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1794086931188
+       }
+      },
+      "time": 1794086931188
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+      "field": "text",
+      "delta": "2"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+      "partID": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+      "field": "text",
+      "delta": " entries"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0af4001r9DZJOgLohp7tq",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "2 entries: 1 file (`a.txt`) and 1 directory (`.git`).",
+       "time": {
+        "start": 1794086931188,
+        "end": 1794086931321
+       }
+      },
+      "time": 1794086931321
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ea0bd2001h2GNc9OG5st2A2",
+       "reason": "stop",
+       "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "messageID": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794086931410
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7e9ff90001b10jjDNegVpFB6",
+       "parentID": "msg_1b7e9b8f40017FyPb0ZOeQT1PR",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14389,
+        "input": 297,
+        "output": 21,
+        "reasoning": 81,
+        "cache": {
+         "write": 0,
+         "read": 13990
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794086928272,
+        "completed": 1794086931475
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    }
+   ]
+  }
+ }
+}

@@ -52,3 +52,19 @@ it("items that drop the current value do not reset it to the mounted value (Base
   await show("auto", items);
   expect(onChange).not.toHaveBeenCalled();
 });
+
+it("GH-656: consecutive items of one group sit under a muted, non-selectable label", async () => {
+  const grouped = [
+    { value: "a", label: "A", group: "Acme" },
+    { value: "b", label: "B", group: "Acme" },
+    { value: "c", label: "C", group: "Beta" },
+    { value: "d", label: "D" },
+  ];
+  const { trigger } = await mount("a", vi.fn(), grouped);
+  await act(async () => trigger().click());
+  const labels = [...document.querySelectorAll('[data-slot="select-label"]')];
+  expect(labels.map((l) => l.textContent)).toEqual(["Acme", "Beta"]);
+  expect(labels.every((l) => l.closest('[role="option"]') === null && l.className.includes("text-xs text-muted-foreground"))).toBe(true);
+  expect(document.querySelectorAll('[data-slot="select-group"] [role="option"]')).toHaveLength(3);
+  expect(document.querySelectorAll('[role="option"]')).toHaveLength(4);
+});

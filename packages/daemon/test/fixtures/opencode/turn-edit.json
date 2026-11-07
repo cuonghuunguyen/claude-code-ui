@@ -1,0 +1,2111 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794087131961
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Use the edit tool to change the content of a.txt from hello to hi. Then use the write tool to create b.txt with content bye.",
+     "messageID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1b7ed1b3a0019JlZhV73Lzzkq5"
+    },
+    "time": 1794087131963
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087131966
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1794087131961
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     },
+     "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7ed229f001VxhMnVXDbz54Xb",
+     "messageID": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "sessionID": "ses_ROOT",
+     "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+     "type": "step-start"
+    },
+    "time": 1794087133855
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7ed22c0001JiU8SNLrlc0uPN",
+     "messageID": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_d657233c00b14c2e9b12e5a9",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1794087133888
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_d657233c00b14c2e9b12e5a9",
+     "state": {
+      "status": "running",
+      "input": {
+       "filePath": "/work/proj/a.txt"
+      },
+      "time": {
+       "start": 1794087134089
+      }
+     },
+     "id": "prt_1b7ed22c0001JiU8SNLrlc0uPN",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_1b7ed1b3e001GwRbOg88xMOwlA"
+    },
+    "time": 1794087134089
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "read",
+     "callID": "call_d657233c00b14c2e9b12e5a9",
+     "state": {
+      "status": "completed",
+      "input": {
+       "filePath": "/work/proj/a.txt"
+      },
+      "output": "<path>/work/proj/a.txt</path>\n<type>file</type>\n<content>\n1: hello\n\n(End of file - total 1 lines)\n</content>",
+      "metadata": {
+       "preview": "hello",
+       "truncated": false,
+       "loaded": [],
+       "display": {
+        "type": "file",
+        "path": "/work/proj/a.txt",
+        "text": "hello",
+        "lineStart": 1,
+        "lineEnd": 1,
+        "totalLines": 1,
+        "truncated": false
+       }
+      },
+      "title": "a.txt",
+      "time": {
+       "start": 1794087134089,
+       "end": 1794087134094
+      }
+     },
+     "id": "prt_1b7ed22c0001JiU8SNLrlc0uPN",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_1b7ed1b3e001GwRbOg88xMOwlA"
+    },
+    "time": 1794087134094
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7ed23f4001CNRBcVZf7tuDLC",
+     "reason": "tool-calls",
+     "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+     "messageID": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "sessionID": "ses_ROOT",
+     "type": "step-finish",
+     "tokens": {
+      "total": 14486,
+      "input": 263,
+      "output": 65,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 14158
+      }
+     },
+     "cost": 0
+    },
+    "time": 1794087134196
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "total": 14486,
+      "input": 263,
+      "output": 65,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 14158
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087131966
+     },
+     "sessionID": "ses_ROOT",
+     "finish": "tool-calls"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7ed1b3e001GwRbOg88xMOwlA",
+     "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "total": 14486,
+      "input": 263,
+      "output": 65,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 14158
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087131966,
+      "completed": 1794087134267
+     },
+     "sessionID": "ses_ROOT",
+     "finish": "tool-calls"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+     "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087134269
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1794087131961
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     },
+     "summary": {
+      "diffs": []
+     },
+     "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7ed2922001Rjo6hJkIkD7mip",
+     "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+     "sessionID": "ses_ROOT",
+     "snapshot": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+     "type": "step-start"
+    },
+    "time": 1794087135522
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+     "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_521395902c73481498109c37",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1794087135530
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "edit",
+     "callID": "call_521395902c73481498109c37",
+     "state": {
+      "status": "running",
+      "input": {
+       "filePath": "/work/proj/a.txt",
+       "oldString": "hello",
+       "newString": "hi"
+      },
+      "time": {
+       "start": 1794087135921
+      }
+     },
+     "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP"
+    },
+    "time": 1794087135921
+   }
+  },
+  {
+   "type": "permission.asked",
+   "properties": {
+    "id": "per_1b7ed2aba001dHJjIdg3fBDGC6",
+    "sessionID": "ses_ROOT",
+    "permission": "edit",
+    "patterns": [
+     "a.txt"
+    ],
+    "metadata": {
+     "filepath": "/work/proj/a.txt",
+     "diff": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n"
+    },
+    "always": [
+     "*"
+    ],
+    "tool": {
+     "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+     "callID": "call_521395902c73481498109c37"
+    }
+   }
+  }
+ ],
+ "on": {
+  "once": {
+   "events": [
+    {
+     "type": "permission.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "per_1b7ed2aba001dHJjIdg3fBDGC6",
+      "reply": "always"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "edit",
+       "callID": "call_521395902c73481498109c37",
+       "state": {
+        "metadata": {
+         "diff": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+         "filediff": {
+          "file": "/work/proj/a.txt",
+          "patch": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1
+         },
+         "diagnostics": {}
+        },
+        "status": "running",
+        "input": {
+         "filePath": "/work/proj/a.txt",
+         "oldString": "hello",
+         "newString": "hi"
+        },
+        "time": {
+         "start": 1794087135921
+        }
+       },
+       "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP"
+      },
+      "time": 1794087142958
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "edit",
+       "callID": "call_521395902c73481498109c37",
+       "state": {
+        "status": "completed",
+        "input": {
+         "filePath": "/work/proj/a.txt",
+         "oldString": "hello",
+         "newString": "hi"
+        },
+        "output": "Edit applied successfully.",
+        "metadata": {
+         "diagnostics": {},
+         "diff": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+         "filediff": {
+          "file": "/work/proj/a.txt",
+          "patch": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1
+         },
+         "truncated": false
+        },
+        "title": "a.txt",
+        "time": {
+         "start": 1794087135921,
+         "end": 1794087142960
+        }
+       },
+       "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP"
+      },
+      "time": 1794087142960
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed46ce0013MnnR06xUuoNbo",
+       "reason": "tool-calls",
+       "snapshot": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087143118
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087134269
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4732001naZHlqe5J8vNNC",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "sessionID": "ses_ROOT",
+       "type": "patch",
+       "hash": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "files": [
+        "/work/proj/a.txt"
+       ]
+      },
+      "time": 1794087143218
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087134269,
+        "completed": 1794087143220
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4b93001lA6JWzxRG4Qeec",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "snapshot": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "type": "step-start"
+      },
+      "time": 1794087144339
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "pending",
+        "input": {},
+        "raw": ""
+       }
+      },
+      "time": 1794087144370
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "running",
+        "input": {
+         "filePath": "/work/proj/b.txt",
+         "content": "bye\n"
+        },
+        "time": {
+         "start": 1794087144607
+        }
+       },
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU"
+      },
+      "time": 1794087144607
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "completed",
+        "input": {
+         "filePath": "/work/proj/b.txt",
+         "content": "bye\n"
+        },
+        "output": "Wrote file successfully.",
+        "metadata": {
+         "diagnostics": {},
+         "filepath": "/work/proj/b.txt",
+         "exists": false,
+         "truncated": false
+        },
+        "title": "b.txt",
+        "time": {
+         "start": 1794087144607,
+         "end": 1794087144613
+        }
+       },
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU"
+      },
+      "time": 1794087144613
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4d3b001mFx4SrCcPVCmOt",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087144763
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4d8a001PiA1JZWaqO2YqM",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "patch",
+       "hash": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "files": [
+        "/work/proj/b.txt"
+       ]
+      },
+      "time": 1794087144842
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221,
+        "completed": 1794087144843
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         },
+         {
+          "file": "b.txt",
+          "patch": "Index: b.txt\n===================================================================\n--- b.txt\t\n+++ b.txt\t\n@@ -0,0 +1,1 @@\n+bye\n",
+          "additions": 1,
+          "deletions": 0,
+          "status": "added"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52f0001b8te4390oO4lD8",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087146225
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1794087146235
+       }
+      },
+      "time": 1794087146236
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+      "partID": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+      "field": "text",
+      "delta": "Done"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+      "partID": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+      "field": "text",
+      "delta": ":"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "Done: `a.txt` now contains `hi`, and `b.txt` was created with `bye`.",
+       "time": {
+        "start": 1794087146235,
+        "end": 1794087146331
+       }
+      },
+      "time": 1794087146331
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed53b9001tFbImIPQsBNvA1",
+       "reason": "stop",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087146425
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844,
+        "completed": 1794087146489
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         },
+         {
+          "file": "b.txt",
+          "patch": "Index: b.txt\n===================================================================\n--- b.txt\t\n+++ b.txt\t\n@@ -0,0 +1,1 @@\n+bye\n",
+          "additions": 1,
+          "deletions": 0,
+          "status": "added"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "user",
+       "sessionID": "ses_ROOT",
+       "time": {
+        "created": 1794087176000
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       }
+      }
+     }
+    }
+   ]
+  },
+  "always": {
+   "events": [
+    {
+     "type": "permission.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "per_1b7ed2aba001dHJjIdg3fBDGC6",
+      "reply": "always"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "edit",
+       "callID": "call_521395902c73481498109c37",
+       "state": {
+        "metadata": {
+         "diff": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+         "filediff": {
+          "file": "/work/proj/a.txt",
+          "patch": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1
+         },
+         "diagnostics": {}
+        },
+        "status": "running",
+        "input": {
+         "filePath": "/work/proj/a.txt",
+         "oldString": "hello",
+         "newString": "hi"
+        },
+        "time": {
+         "start": 1794087135921
+        }
+       },
+       "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP"
+      },
+      "time": 1794087142958
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "edit",
+       "callID": "call_521395902c73481498109c37",
+       "state": {
+        "status": "completed",
+        "input": {
+         "filePath": "/work/proj/a.txt",
+         "oldString": "hello",
+         "newString": "hi"
+        },
+        "output": "Edit applied successfully.",
+        "metadata": {
+         "diagnostics": {},
+         "diff": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+         "filediff": {
+          "file": "/work/proj/a.txt",
+          "patch": "Index: /work/proj/a.txt\n===================================================================\n--- /work/proj/a.txt\n+++ /work/proj/a.txt\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1
+         },
+         "truncated": false
+        },
+        "title": "a.txt",
+        "time": {
+         "start": 1794087135921,
+         "end": 1794087142960
+        }
+       },
+       "id": "prt_1b7ed292a001QrwmZ6VMV2CMR2",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP"
+      },
+      "time": 1794087142960
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed46ce0013MnnR06xUuoNbo",
+       "reason": "tool-calls",
+       "snapshot": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087143118
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087134269
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4732001naZHlqe5J8vNNC",
+       "messageID": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "sessionID": "ses_ROOT",
+       "type": "patch",
+       "hash": "2e81171448eb9f2ee3821e3d447aa6b2fe3ddba1",
+       "files": [
+        "/work/proj/a.txt"
+       ]
+      },
+      "time": 1794087143218
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed243d001CcOhPLNCCn1AYP",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14653,
+        "input": 262,
+        "output": 99,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14292
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087134269,
+        "completed": 1794087143220
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4b93001lA6JWzxRG4Qeec",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "snapshot": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "type": "step-start"
+      },
+      "time": 1794087144339
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "pending",
+        "input": {},
+        "raw": ""
+       }
+      },
+      "time": 1794087144370
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "running",
+        "input": {
+         "filePath": "/work/proj/b.txt",
+         "content": "bye\n"
+        },
+        "time": {
+         "start": 1794087144607
+        }
+       },
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU"
+      },
+      "time": 1794087144607
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "write",
+       "callID": "call_8b258f425c5e4349a6e2795c",
+       "state": {
+        "status": "completed",
+        "input": {
+         "filePath": "/work/proj/b.txt",
+         "content": "bye\n"
+        },
+        "output": "Wrote file successfully.",
+        "metadata": {
+         "diagnostics": {},
+         "filepath": "/work/proj/b.txt",
+         "exists": false,
+         "truncated": false
+        },
+        "title": "b.txt",
+        "time": {
+         "start": 1794087144607,
+         "end": 1794087144613
+        }
+       },
+       "id": "prt_1b7ed4bb2001jVAKq1OOWtAs0H",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU"
+      },
+      "time": 1794087144613
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4d3b001mFx4SrCcPVCmOt",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087144763
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed4d8a001PiA1JZWaqO2YqM",
+       "messageID": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "sessionID": "ses_ROOT",
+       "type": "patch",
+       "hash": "0d8a474fc67971fb3dd7616e26323d3066442555",
+       "files": [
+        "/work/proj/b.txt"
+       ]
+      },
+      "time": 1794087144842
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4735001bWhhbKtSkHoenU",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14749,
+        "input": 243,
+        "output": 82,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14424
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087143221,
+        "completed": 1794087144843
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         },
+         {
+          "file": "b.txt",
+          "patch": "Index: b.txt\n===================================================================\n--- b.txt\t\n+++ b.txt\t\n@@ -0,0 +1,1 @@\n+bye\n",
+          "additions": 1,
+          "deletions": 0,
+          "status": "added"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52f0001b8te4390oO4lD8",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087146225
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1794087146235
+       }
+      },
+      "time": 1794087146236
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+      "partID": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+      "field": "text",
+      "delta": "Done"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+      "partID": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+      "field": "text",
+      "delta": ":"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed52fb001J3eEroSW7UN8s2",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "Done: `a.txt` now contains `hi`, and `b.txt` was created with `bye`.",
+       "time": {
+        "start": 1794087146235,
+        "end": 1794087146331
+       }
+      },
+      "time": 1794087146331
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ed53b9001tFbImIPQsBNvA1",
+       "reason": "stop",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087146425
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ed4d8c001BNMyy63PyJecr2",
+       "parentID": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14788,
+        "input": 226,
+        "output": 24,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 14538
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087144844,
+        "completed": 1794087146489
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087131961
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": [
+         {
+          "file": "a.txt",
+          "patch": "Index: a.txt\n===================================================================\n--- a.txt\t\n+++ a.txt\t\n@@ -1,1 +1,1 @@\n-hello\n+hi\n",
+          "additions": 1,
+          "deletions": 1,
+          "status": "modified"
+         },
+         {
+          "file": "b.txt",
+          "patch": "Index: b.txt\n===================================================================\n--- b.txt\t\n+++ b.txt\t\n@@ -0,0 +1,1 @@\n+bye\n",
+          "additions": 1,
+          "deletions": 0,
+          "status": "added"
+         }
+        ]
+       },
+       "id": "msg_1b7ed1b39001rL23PH6ujLg4gZ",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "user",
+       "sessionID": "ses_ROOT",
+       "time": {
+        "created": 1794087176000
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

@@ -40,6 +40,13 @@ function lookup(env: NodeJS.ProcessEnv): string[] | undefined {
     }
 }
 
+/** A consumer of the server's event stream: `event` per payload of `GET /global/event`; `resync` after a reconnect (events may be lost). */
+export type OpenCodeEvents = { event(directory: string | undefined, payload: { type: string; properties: Record<string, any> }): void; resync(): void };
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 10_000;
+/** A prompt waits this long for the stream before it is sent anyway. */
+const STREAM_WAIT_MS = 5000;
+
 export type OpenCodeServerOpts = {
   /** Settings `opencode.path`: "" = look `opencode` up on PATH. */
   path: () => string;
@@ -173,9 +180,72 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       .finally(() => (starting = undefined)));
   };
 
+  // The event stream (`GET /global/event`, one for every folder): open while a handler exists, reconnected through ensure() with a growing delay.
+  const handlers = new Set<OpenCodeEvents>();
+  let pumping = false;
+  let streamAbort: AbortController | undefined;
+  let connected: Promise<void> = Promise.resolve();
+  let markConnected = () => {};
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function readStream(res: Response) {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buf += decoder.decode(value, { stream: true });
+      for (let i = buf.indexOf("\n\n"); i >= 0; i = buf.indexOf("\n\n")) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        let msg: { directory?: string; payload?: { type: string; properties: Record<string, any> } };
+        try {
+          msg = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        const payload = msg.payload;
+        if (!payload || payload.type === "sync" || payload.type === "server.heartbeat" || payload.type === "server.connected") continue;
+        for (const h of [...handlers]) h.event(msg.directory, payload);
+      }
+    }
+  }
+
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    let delay = RECONNECT_MIN_MS;
+    let again = false;
+    while (handlers.size) {
+      connected = new Promise<void>((r) => (markConnected = r));
+      try {
+        const u = await ensure();
+        streamAbort = new AbortController();
+        const res = await fetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
+        if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
+        if (again) for (const h of [...handlers]) h.resync();
+        again = true;
+        delay = RECONNECT_MIN_MS;
+        markConnected();
+        await readStream(res);
+      } catch {
+        // Retried below; a start failure shows when the next request needs the server.
+      }
+      if (!handlers.size) break;
+      await sleep(delay);
+      delay = Math.min(delay * 2, RECONNECT_MAX_MS);
+    }
+    pumping = false;
+    markConnected();
+  }
+
   /** Stops the child and its tree; resolves when it is gone. The next `ensure()` starts a new one. */
   const stop = async () => {
     const proc = child;
+    streamAbort?.abort();
     stopRequested = true;
     child = undefined;
     up = undefined;
@@ -188,6 +258,19 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   return {
     ensure,
     stop,
+    /** The daemon ends: no more event stream, the server stops and stays down. */
+    close: () => (handlers.clear(), stop()),
+    /** Registers a consumer of the event stream (opened now when it was not); returns its unsubscribe. */
+    events(h: OpenCodeEvents) {
+      handlers.add(h);
+      void pump();
+      return () => {
+        handlers.delete(h);
+        if (!handlers.size) streamAbort?.abort();
+      };
+    },
+    /** Resolves when the event stream is connected (or after a few seconds): a prompt sent before it would lose its first events. */
+    streamReady: () => Promise.race([connected, sleep(STREAM_WAIT_MS)]).then(() => {}),
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
     reset: () => ((fastExits = []), (lastError = undefined), stop()),
     running: () => !!up && !!child,

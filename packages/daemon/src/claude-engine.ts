@@ -48,7 +48,7 @@ export const BASH_BACKGROUND_WAIT_MS = 30 * 60_000;
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 
 // Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
-const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
+export const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
 
 // Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];

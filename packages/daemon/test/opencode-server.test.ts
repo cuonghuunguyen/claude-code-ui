@@ -138,7 +138,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(sub.session).toMatchObject({ engine: "opencode", id: "ses_hist" });
     expect(sub.title).toBe("Listed files");
     const parts = sub.snapshot.page.parts.map((p: any) => `${p.type}:${p.id}`);
-    expect(parts).toEqual(["user_text:prt_u1", "thinking:prt_a1", "tool_call:call_1", "tool_result:call_1:result", "tool_call:call_2", "tool_result:call_2:result", "tool_call:call_3", "assistant_text:prt_a6"]);
+    expect(parts).toEqual(["user_text:msg_u1", "thinking:prt_a1", "tool_call:call_1", "tool_result:call_1:result", "tool_call:call_2", "tool_result:call_2:result", "tool_call:call_3", "assistant_text:prt_a6"]);
   });
 
   it("a missing binary and an old version answer opencode_missing and opencode_old with an actionable message", async () => {
@@ -187,15 +187,6 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await until(() => !alive(pid));
   });
 
-  it("a prompt to an OpenCode session fails with prompt_failed and the later-version message", async () => {
-    const d = await boot();
-    const id = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).result.session.id;
-    await d.ok({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
-    const r = await d.request({ type: "session.prompt", sessionId: id, text: "hi" });
-    expect(r).toMatchObject({ type: "error", code: "prompt_failed" });
-    expect((r as any).message).toContain("later version");
-  });
-
   it("rename, archive, delete and aside of an OpenCode session answer not_supported", async () => {
     const d = await boot({ engine: "opencode" });
     for (const msg of [{ type: "session.rename", title: "x" }, { type: "session.archive", archived: true }, { type: "session.delete" }, { type: "aside.open", text: "x" }])
@@ -210,7 +201,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const up = await boot({ engine: "opencode", sessionsJson: entry });
     await d_list(up);
     expect(Object.keys(JSON.parse(readFileSync(join(up.root, "sessions.json"), "utf8")))).not.toContain("ses_gone");
-  });
+  }, 15_000);
 
   it("opencode.status reports missing, old, stopped and running and never starts the server", async () => {
     const missing = await boot({ path: join(tmpdir(), "no-such-opencode-binary") });

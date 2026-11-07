@@ -10,7 +10,7 @@ import { ALL_CAPABILITIES, permissionModesFor, type ContextUsage, type Effort, t
 import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
 export const MODE_LABEL: Record<PermissionMode, { label: Key; short: Key; Icon: typeof ShieldIcon }> = {
@@ -59,8 +59,21 @@ export function effortOptions(models: ModelInfo[], model: string, caps: EngineCa
 const FOCUS = "outline-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info";
 export const GHOST = `h-7! cursor-pointer gap-1.5 rounded-md border-0 bg-transparent px-[11px] text-muted-foreground text-sm font-normal tracking-[-0.04px] hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground pointer-coarse:h-11! dark:bg-transparent ${FOCUS}`;
 
+/** Consecutive items of one group, in order; items without a group form runs of their own. */
+const runs = <T extends string>(items: ChooserItem<T>[]) =>
+  items.reduce<[string | undefined, ChooserItem<T>[]][]>((acc, i) => {
+    const last = acc.at(-1);
+    if (last && last[0] !== undefined && last[0] === i.group) last[1].push(i);
+    else if (last && i.group === undefined && last[0] === undefined) last[1].push(i);
+    else acc.push([i.group, [i]]);
+    return acc;
+  }, []);
+
 /** Rich popup row (project, tab): 28px, 44px on touch; grows with a second line of text. */
 export const ROW = "min-h-7 cursor-pointer gap-2 rounded-sm py-1 pr-8 pl-3 font-normal pointer-coarse:min-h-11 data-[selected]:font-medium";
+
+/** `group`: consecutive items of one group sit under its label (OpenCode: the provider). */
+export type ChooserItem<T extends string> = { value: T; label: string; trigger?: ReactNode; description?: string; group?: string };
 
 export function Chooser<T extends string>({
   label,
@@ -73,7 +86,7 @@ export function Chooser<T extends string>({
 }: {
   label: string;
   value: T;
-  items: { value: T; label: string; trigger?: ReactNode; description?: string }[];
+  items: ChooserItem<T>[];
   onChange: (v: T) => void;
   icon?: ReactNode;
   testId: string;
@@ -105,17 +118,25 @@ export function Chooser<T extends string>({
       </SelectTrigger>
       {/* OpenCode menu-v2: 2px padding, radius 12 (Select popup); item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
           `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="w-auto min-w-44 p-0.5">
-        {items.map((i) => (
-          <SelectItem
-            key={i.value}
-            value={i.value}
-            title={i.description}
-            className="h-7 cursor-pointer gap-2 rounded-sm py-0 pr-8 pl-3 font-normal pointer-coarse:h-11 data-[selected]:font-medium data-[selected]:**:text-info!"
-          >
-            {i.label}
-          </SelectItem>
-        ))}
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="max-h-[min(20rem,var(--available-height))] w-auto min-w-44 p-0.5">
+        {runs(items).map(([group, run]) => {
+          const rows = run.map((i) => (
+            <SelectItem
+              key={i.value}
+              value={i.value}
+              title={i.description}
+              className="h-7 cursor-pointer gap-2 rounded-sm py-0 pr-8 pl-3 font-normal pointer-coarse:h-11 data-[selected]:font-medium data-[selected]:**:text-info!"
+            >
+              {i.label}
+            </SelectItem>
+          ));
+          return group === undefined ? rows : (
+            <SelectGroup key={`${group}:${run[0]!.value}`} className="p-0">
+              <SelectLabel className="px-3 py-1 text-xs text-muted-foreground">{group}</SelectLabel>
+              {rows}
+            </SelectGroup>
+          );
+        })}
       </SelectContent>
     </Select>
   );
@@ -183,6 +204,7 @@ export function PromptToolbar(props: {
     value: m.value,
     label: m.displayName,
     description: m.description,
+    group: m.group,
     trigger:
       shortModel(m.displayName) === m.displayName ? undefined : (
         <span>
@@ -232,7 +254,7 @@ export function PromptToolbar(props: {
       </div>
       <div className="flex items-end gap-1 pointer-coarse:gap-2">
         {props.usage && <ContextMeter usage={props.usage} stats={props.stats} />}
-        <SendButton state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} sendMode={props.sendMode} shell={props.shell} onStop={props.onStop} onFocusLost={props.onFocusLost} />
+        <SendButton steering={props.caps?.steering !== false} state={props.state} hasInput={props.hasInput} onSend={props.onSend} onQueue={props.onQueue} sendMode={props.sendMode} shell={props.shell} onStop={props.onStop} onFocusLost={props.onFocusLost} />
       </div>
     </div>
   );
@@ -246,7 +268,7 @@ function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { e
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
 function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems }: {
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
-  efforts: Effort[]; effort: Effort; modelItems: { value: string; label: string; description?: string; trigger?: ReactNode }[];
+  efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[];
 }) {
   const t = useT();
   const Mode = MODE_LABEL[mode].Icon;
@@ -292,7 +314,7 @@ export function sendHint({ steer, canQueue, queue, shell }: { steer: boolean; ca
   return t(queue ? "app.toolbar.hintQueueSteer" : "app.toolbar.hintSteerQueue", { enter, alt });
 }
 
-function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shell, onStop, onFocusLost }: { state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; shell?: boolean; onStop: () => void; onFocusLost: () => void }) {
+function SendButton({ steering = true, state, hasInput, onSend, onQueue, sendMode = "steer", shell, onStop, onFocusLost }: { steering?: boolean; state: SendState; hasInput: boolean; onSend: () => void; onQueue?: () => void; sendMode?: SendMode; shell?: boolean; onStop: () => void; onFocusLost: () => void }) {
   const t = useT();
   const ref = useRef<HTMLButtonElement>(null);
   const disabled = state === "disconnected" || (state === "idle" && !hasInput);
@@ -322,7 +344,7 @@ function SendButton({ state, hasInput, onSend, onQueue, sendMode = "steer", shel
         : [t(state === "running" ? "app.toolbar.working" : "app.toolbar.needsInput", { action: steer ? verb : t("app.toolbar.stop") }), steer ? " (Enter)" : " (Esc)"];
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : queue ? ListPlusIcon : ArrowUpIcon;
   // The hint above the button: Enter does the setting's mode, Alt+Enter the other (only when the box can queue).
-  const hint = sendHint({ steer, canQueue: !!onQueue, queue, shell });
+  const hint = sendHint({ steer, canQueue: !!onQueue && steering, queue, shell });
   const button = (
     <button
       type="button"

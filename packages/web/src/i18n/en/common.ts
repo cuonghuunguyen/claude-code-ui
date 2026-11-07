@@ -2,6 +2,7 @@
 export default {
   "language.label": "Language",
   "language.hint": "Language of the app. System follows the browser. Kept in this browser.",
+  "engine.unsupported": "Not supported by this session's engine",
   "language.system": "System",
   "common.fileName.empty": "A name is required.",
   "common.fileName.dots": "“.” and “..” are not names.",

@@ -217,14 +217,15 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     cmd("layout.reset", t("app.cmd.layoutReset"), c.resetLayout),
     c.panels && cmd("panel.flip", t(c.side === "left" ? "app.cmd.flipRight" : "app.cmd.flipLeft"), c.flipSide),
     (s || c.splitPrompt) && cmd("prompt.focus", t("app.cmd.promptFocus"), () => c.focusPrompt()),
-    c.askAside && cmd("aside.ask", t("app.cmd.asideAsk"), c.askAside),
+    // A fork-less Engine has no Aside: the row stays, disabled, with the reason.
+    c.askAside && (s?.capabilities?.fork === false ? { ...cmd("aside.ask", t("app.cmd.asideAsk"), c.askAside), disabled: true, description: t("engine.unsupported") } : cmd("aside.ask", t("app.cmd.asideAsk"), c.askAside)),
     s &&
       c.models.length > 0 &&
       page(
         "model.choose",
         t("app.cmd.changeModel"),
         t("app.cmd.chooseModel"),
-        c.models.map((m) => ({ id: `model:${m.value}`, ...grp("app.cmd.groupModels"), title: m.displayName, description: m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
+        c.models.map((m) => ({ id: `model:${m.value}`, ...grp("app.cmd.groupModels"), title: m.displayName, description: m.group ?? m.description, checked: m.value === s.model, run: () => c.setModel(m.value) })),
       ),
     s &&
       efforts.length > 0 &&
