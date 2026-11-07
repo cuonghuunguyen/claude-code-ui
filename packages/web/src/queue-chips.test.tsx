@@ -137,3 +137,12 @@ it("renders in Vietnamese when the language is vi", async () => {
   expect(el.textContent).toContain("+2 ảnh");
   expect(el.querySelector('[aria-label="Xóa: xin chào"]')).not.toBeNull();
 });
+
+it("a brief item shows its label, no Edit, and a named Delete", async () => {
+  const el = await render(<QueueChips items={[{ ...item("a", '<claude-ui-brief part="m:0"/>\nlong prompt'), brief: true }]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  const row = el.querySelector("li")!;
+  expect(row.textContent).toContain("Brief for your mark");
+  expect(row.textContent).not.toContain("long prompt");
+  expect(row.querySelector('[data-action="edit"]')).toBeNull();
+  expect(row.querySelector('[aria-label="Delete queued brief"]')).not.toBeNull();
+});

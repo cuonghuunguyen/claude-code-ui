@@ -63,7 +63,8 @@ export function QueueChips({
       </span>
       <ul ref={list} className={`flex min-w-0 flex-col ${items.length > 3 ? "max-h-40 overflow-y-auto" : ""}`}>
         {items.map((item, i) => {
-          const shown = summarizePasted(item.text);
+          // GH-622: the brief turn of a Back mark shows as a label, not its prompt text; it has no Edit.
+          const shown = item.brief ? t("app.back.queueChip") : summarizePasted(item.text);
           const label = (item.bash ? "! " : "") + shown.slice(0, 40);
           const waits = !!item.bash && !!bashWait;
           return (
@@ -88,10 +89,12 @@ export function QueueChips({
               >
                 <ArrowUpIcon aria-hidden />
               </button>
-              <button type="button" data-action="edit" className={BTN} aria-label={t("session.queue.editLabel", { label })} title={t("session.queue.edit")} onClick={() => run("edit", i, item.id)}>
-                <PencilIcon aria-hidden />
-              </button>
-              <button type="button" data-action="delete" className={BTN} aria-label={t("session.queue.deleteLabel", { label })} title={t("session.queue.delete")} onClick={() => run("delete", i, item.id)}>
+              {!item.brief && (
+                <button type="button" data-action="edit" className={BTN} aria-label={t("session.queue.editLabel", { label })} title={t("session.queue.edit")} onClick={() => run("edit", i, item.id)}>
+                  <PencilIcon aria-hidden />
+                </button>
+              )}
+              <button type="button" data-action="delete" className={BTN} aria-label={item.brief ? t("app.back.deleteQueued") : t("session.queue.deleteLabel", { label })} title={t("session.queue.delete")} onClick={() => run("delete", i, item.id)}>
                 <XIcon aria-hidden />
               </button>
               {item.error && (

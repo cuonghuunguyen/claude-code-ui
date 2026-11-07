@@ -111,3 +111,27 @@ export function foldBriefTurns<T extends { kind: string; part?: Part }>(items: r
   }
   return { items: out, answers };
 }
+
+type Item = { kind: string; part?: Part };
+const lineOf = (text: string, last = false) => {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (last ? lines.at(-1) : lines[0])?.slice(0, 200);
+};
+
+/** The reply a turn-end action row marks: the turn's last assistant text up to `index`, with its title (first line), last line and the turn's prompt line. Undefined when the turn has no text. */
+export function markFields(items: readonly Item[], index: number): { partId: string; title: string; lastLine?: string; prompt?: string } | undefined {
+  let reply: Extract<Part, { type: "assistant_text" }> | undefined;
+  let prompt: string | undefined;
+  for (let i = index; i >= 0; i--) {
+    const p = items[i]!.kind === "part" ? items[i]!.part : undefined;
+    if (!p) continue;
+    if (p.type === "user_text" || p.type === "bash") {
+      if (p.type === "user_text") prompt = lineOf(p.text);
+      break;
+    }
+    if (!reply && p.type === "assistant_text" && p.text.trim()) reply = p;
+  }
+  if (!reply) return undefined;
+  const title = lineOf(reply.text) ?? "";
+  return { partId: reply.id, title, ...(lineOf(reply.text, true) && { lastLine: lineOf(reply.text, true) }), ...(prompt && { prompt }) };
+}
