@@ -318,6 +318,21 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => !!s.find("turn_result"));
   });
 
+  it("a prompt that failed to send does not block the turn-end check of a later turn started in OpenCode", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
+    await s.prompt("hello");
+    await until(() => !!s.last(`${s.id}:prompt_failed`) && s.states().at(-1) === "idle");
+    // A turn started in OpenCode's own UI; it ends while the stream is down: the reconnect read ends it (3 s after the failed send).
+    await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "busy" } } }] });
+    await until(() => s.states().at(-1) === "running");
+    await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "idle" } } }] });
+    await new Promise((r) => setTimeout(r, 3200));
+    await d.fake("/__drop");
+    await until(() => s.states().at(-1) === "idle", 5000);
+  });
+
   it("a message queued while a turn runs is sent as the next prompt after the turn", async () => {
     const d = await boot({ script: ["bash", "text"] });
     const s = await d.open();

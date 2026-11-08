@@ -311,36 +311,39 @@ class OpenCodeSession implements EngineSession {
   }
 
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
-    // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
-    await Promise.all([this.server.streamReady(), this.attach()]);
-    if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
-    if (this.stopped) {
-      this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-      return this.session.setState("idle");
-    }
-    const [providerID, ...rest] = this.model.split("/");
-    const agent = this.permissionMode === "plan" ? "plan" : "build";
-    if (command) {
-      // The turn runs inside this request: no timeout.
-      await this.server.request(`/session/${this.id}/command`, {
+    // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
+    try {
+      // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
+      await Promise.all([this.server.streamReady(), this.attach()]);
+      if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
+      if (this.stopped) {
+        this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
+        return this.session.setState("idle");
+      }
+      const [providerID, ...rest] = this.model.split("/");
+      const agent = this.permissionMode === "plan" ? "plan" : "build";
+      if (command) {
+        // The turn runs inside this request: no timeout.
+        await this.server.request(`/session/${this.id}/command`, {
+          method: "POST",
+          directory: this.cwd,
+          timeoutMs: 0,
+          body: { messageID, command: command.name, arguments: command.args, agent, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+        });
+        return;
+      }
+      const parts = [
+        ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
+        ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
+      ];
+      await this.server.request(`/session/${this.id}/prompt_async`, {
         method: "POST",
         directory: this.cwd,
-        timeoutMs: 0,
-        body: { messageID, command: command.name, arguments: command.args, agent, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+        body: { messageID, parts, agent, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
       });
+    } finally {
       this.sentAt = Date.now();
-      return;
     }
-    const parts = [
-      ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
-      ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
-    ];
-    await this.server.request(`/session/${this.id}/prompt_async`, {
-      method: "POST",
-      directory: this.cwd,
-      body: { messageID, parts, agent, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
-    });
-    this.sentAt = Date.now();
   }
 
   private beginTurn() {

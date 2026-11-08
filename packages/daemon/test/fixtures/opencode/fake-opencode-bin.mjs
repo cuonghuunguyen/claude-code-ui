@@ -6,7 +6,7 @@
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -32,6 +32,7 @@ let counter = 0;
 const expected = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
 
 const clients = new Set();
+const failNext = new Set();
 const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boolean);
 /** The node waiting for a reply or abort, the asks not answered yet, the sessions that are busy. */
 let current;
@@ -109,6 +110,7 @@ const server = createServer(async (req, res) => {
       const s = sessions.find((x) => x.id === body.sessionId);
       (delete s.revert, updated(s));
     }
+    if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
@@ -116,6 +118,7 @@ const server = createServer(async (req, res) => {
   const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : undefined;
   log({ type: "request", method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), authed, ...(body !== undefined && { body }) });
   if (!authed) return json(401, { error: "unauthorized" });
+  if (failNext.delete(url.pathname)) return json(500, { name: "UnknownError", data: { message: "failed on purpose" } });
   const dir = url.searchParams.get("directory");
   const reply = (key) => {
     const node = current?.on?.[key];
