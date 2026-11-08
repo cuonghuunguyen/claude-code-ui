@@ -82,7 +82,8 @@ When("I type the API key {string} and connect", async ({ page }, key: string) =>
 Then("the provider {string} is connected with the status {string}", async ({ page }, name: string, status: string) => {
   const r = connected(page, name);
   await expect(r).toBeVisible({ timeout: 30_000 });
-  await expect(r.getByTestId("settings-opencode-provider-status")).toHaveText(status);
+  // The fake plugin hands back a key, which OpenCode stores as an API credential: "Connected · API key" also starts with "Connected".
+  await expect(r.getByTestId("settings-opencode-provider-status")).toContainText(status);
 });
 
 Then("the OpenCode providers say {string}", async ({ page }, text: string) => {
@@ -159,6 +160,7 @@ When("I cancel the OpenCode login", async ({ page }) => {
 When("I finish the login in the opened tab", async ({ page }) => {
   expect(opened).toBeDefined();
   await expect(t(page, "settings-opencode-oauth-wait")).toBeVisible();
+  await expect.poll(() => opened!.url(), { timeout: 15_000 }).toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
   const base = new URL(opened!.url()).origin;
   await opened!.goto(`${base}/done`);
   await expect(opened!.locator("body")).toContainText("Fake login done");
