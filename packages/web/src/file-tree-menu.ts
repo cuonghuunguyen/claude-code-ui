@@ -5,7 +5,7 @@ import type { ExternalEntry, ExternalId } from "./open-external-menu.ts";
 
 export type TreeTarget = { kind: "file"; entry: FsEntry; changed: boolean } | { kind: "dir"; entry: FsEntry; expanded: boolean; /** A listed, readable repository whose folder this is. */ repo?: GitRepo } | { kind: "root" };
 export type TreeCommand = "open" | "openTab" | "viewer" | "changes" | "repoChanges" | "repoGraph" | "mention" | "copyPath" | "copyRel" | "cut" | "copy" | "paste" | "rename" | "duplicate" | "delete" | "newFile" | "newFolder" | "collapse" | "refresh";
-export type TreeMenuEntry = { id: TreeCommand | ExternalId; label: string; disabled?: boolean; destructive?: boolean; /** Shown right-aligned. */ shortcut?: string; /** `aria-keyshortcuts`. */ keys?: string; testId: string };
+export type TreeMenuEntry = { id: TreeCommand | ExternalId; label: string; title?: string; disabled?: boolean; destructive?: boolean; /** Shown right-aligned. */ shortcut?: string; /** `aria-keyshortcuts`. */ keys?: string; testId: string };
 
 const item = (id: TreeCommand, label: string, extra: Partial<TreeMenuEntry> = {}): TreeMenuEntry => ({ id, label, testId: `tree-menu-${id}`, ...extra });
 

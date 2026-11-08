@@ -66,3 +66,39 @@ Then("the daemon started a file manager command for {string}", async ({ project 
     .poll(() => (existsSync(openLog(runDir())) ? readFileSync(openLog(runDir()), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { args: string[] }) : []).some((c) => c.args.some((a) => a.includes(want))), { timeout: 10_000 })
     .toBe(true);
 });
+
+// GH-646: Settings › Open in app. "<node>" is this test's own Node binary: an absolute program that exists on every OS.
+const openSettings = async (page: Page) => {
+  const drawer = page.getByTestId("open-drawer");
+  if (await drawer.isVisible()) await drawer.click();
+  await page.getByTestId("open-settings").last().click();
+  await page.getByTestId("settings-group-open-in-app").click();
+};
+When("I set the editor command {string} with the name {string} in Settings", async ({ page }, command: string, name: string) => {
+  await openSettings(page);
+  await page.getByTestId("settings-openapp-command").fill(command.replace("<node>", `"${process.execPath}"`));
+  await page.getByTestId("settings-openapp-name").fill(name);
+  await page.getByTestId("settings-openapp-name").blur();
+  await expect(page.getByTestId("settings-openapp-name")).toBeEnabled();
+  await page.keyboard.press("Escape");
+});
+Then("the tree menu entry {string} reads {string}", async ({ page }, how: string, text: string) => {
+  await expect(menu(page).locator(`[data-testid="ext-menu-${how}"]`)).toHaveText(text);
+});
+Then("the daemon started the editor command with the argument {string} and the file {string}", async ({ project }, prefix: string, rel: string) => {
+  const want = prefix + realpathSync(join(project.path, rel));
+  await expect
+    .poll(() => (existsSync(openLog(runDir())) ? readFileSync(openLog(runDir()), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { cmd: string; args: string[] }) : []).some((c) => c.cmd === process.execPath && c.args.includes(want)), { timeout: 10_000 })
+    .toBe(true);
+});
+When("I open Settings › Open in app", async ({ page }) => openSettings(page));
+When("I enter the editor command {string} and leave the field", async ({ page }, command: string) => {
+  await page.getByTestId("settings-openapp-command").fill(command);
+  await page.getByTestId("settings-openapp-command").blur();
+});
+Then("the editor command shows an error and keeps the text", async ({ page }) => {
+  const input = page.getByTestId("settings-openapp-command");
+  await expect(page.getByTestId("settings-openapp-command-error")).toBeVisible();
+  await expect(input).toHaveAttribute("aria-invalid", "true");
+  await expect(input).not.toHaveValue("");
+});

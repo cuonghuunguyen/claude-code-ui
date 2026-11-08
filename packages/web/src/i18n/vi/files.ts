@@ -60,6 +60,7 @@ export default {
   "files.menu.revealWin": "Hiện trong File Explorer",
   "files.menu.revealOther": "Mở thư mục chứa tệp",
   "files.menu.openIn": "Mở bằng {app}",
+  "files.menu.openFailed": "Không mở được bằng {app}: {reason}",
   "files.menu.openDefault": "Mở bằng ứng dụng mặc định",
   "files.menu.rename": "Đổi tên…",
   "files.menu.duplicate": "Nhân bản",

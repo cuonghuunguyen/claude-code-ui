@@ -195,7 +195,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
    */
   | { type: "push.focus"; sessionId?: string; covered?: string[] }
   /** Opens a file or folder (absolute, inside the roots; `cwd` is the session folder, also inside) in the OS file manager (`reveal`), the default app (`default`, files only) or a detected editor. Only for a browser on the daemon machine (`not_local` otherwise); a side's path: `side_unsupported`. Reply `{}`. Other errors: `bad_request`, `cwd_not_allowed`, `path_not_allowed`, `not_found`, `editor_missing`, `open_failed`. */
-  | { type: "fs.openExternal"; path: string; cwd: string; with: "reveal" | "default" | EditorId }
+  | { type: "fs.openExternal"; path: string; cwd: string; with: "reveal" | "default" | EditorId | "custom" }
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }
   /** Image, SVG, video or audio file (extension allowlist): a URL that serves its bytes to this connection (docs/spec.md "Security"). */
@@ -969,6 +969,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   /** The app icon and name shared by every browser (tab and installed app); served at /app-icon and in /manifest.webmanifest. */
   /** GH-622 "I'll be back": Back marks per session ID. Written only by back.set, back.done and back.brief (settings.set refuses it). */
   back: { marks: Record<string, BackMark[]> };
+  /** GH-646: the user's own editor for "Open in <name>". `command`: one line, program then arguments, `"..."` groups; `{path}` and `{root}` are replaced, else the paths are appended. `name`: menu label, "" = the program name. Only a browser on the daemon machine may change it. */
+  editor: { command: string; name: string };
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
@@ -976,7 +978,7 @@ export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 export type ClaudeAccountInfo = { id: string; name: string };
 /** An editor the hub can open a path in. */
 export type EditorId = "code" | "cursor" | "idea";
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId; label: string }[] }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId | "custom"; label: string }[] }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */

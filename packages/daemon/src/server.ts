@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -47,7 +47,7 @@ import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } fro
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
-import { EDITORS, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
+import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -349,7 +349,7 @@ export function createDaemon(opts: {
   /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
   keepAwake?: KeepAwake;
   /** GH-612: fs.openExternal. `run` starts the OS command, `editors` lists the installed editors; none (a side, tests without it): the request and the editor list are absent. */
-  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher> };
+  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher>; /** A daemon in WSL: the Windows form of a path (`wslpath -w`); it opens reveal and default in Windows and trusts its attached Hubs. */ winPath?: (path: string) => Promise<string> };
   /** GH-518: sleep detection (Hub only; a Side runs on the Hub's machine). `everyMs` and `now` are test seams. */
   watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
@@ -736,7 +736,7 @@ export function createDaemon(opts: {
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...opts.openExternal.editors().keys()].map((id) => ({ id, label: EDITORS[id].label })) }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...[...opts.openExternal.editors().keys()].map((id) => ({ id: id as EditorId | "custom", label: EDITORS[id].label })), ...(appSettings.get().editor.command ? [{ id: "custom" as const, label: editorLabel(appSettings.get().editor) }] : [])] }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -1690,7 +1690,9 @@ export function createDaemon(opts: {
   http.on("close", () => clearInterval(pinger));
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
-    const sameHost = sameMachine(req);
+    const sameBrowser = sameMachine(req);
+    // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011).
+    const sameHost = sameBrowser || (virtual.has(ws) && !!opts.openExternal?.winPath);
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
@@ -2287,6 +2289,8 @@ export function createDaemon(opts: {
           }
         }
         case "settings.set": {
+          // The command runs on the daemon machine's desktop: a remote browser must not plant it for the local user's next click.
+          if (msg.patch?.editor !== undefined && !sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
           try {
             const picked = msg.patch?.claude?.account;
             if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
@@ -2905,9 +2909,21 @@ export function createDaemon(opts: {
           try {
             const isDir = statSync(target).isDirectory();
             if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
+            if (msg.with === "custom") {
+              // From the hub's own settings, never from the message.
+              const argv = parseEditorCommand(appSettings.get().editor.command);
+              const env = process.env;
+              try {
+                await opts.openExternal.run(customCommand(argv, target, root, isDir, process.platform, (n) => findOnPath({ platform: process.platform, env, exists: existsSync }, n)));
+              } catch (err) {
+                return fail((err as { code?: string }).code === "editor_missing" ? "editor_missing" : "open_failed", (err as Error).message);
+              }
+              return reply({});
+            }
             const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
             if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
-            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher));
+            const wslPath = msg.with === "reveal" || msg.with === "default" ? await opts.openExternal.winPath?.(target) : undefined;
+            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher, wslPath));
             return reply({});
           } catch (err) {
             return fail("open_failed", (err as Error).message);
@@ -3161,6 +3177,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
       });

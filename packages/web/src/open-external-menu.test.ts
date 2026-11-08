@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { externalEntries, externalHow, isExternalId } from "./open-external-menu.ts";
+import { canOpenSide, externalEntries, externalHow, isExternalId } from "./open-external-menu.ts";
 import { treeMenuSections } from "./file-tree-menu.ts";
 
 const editors = [{ id: "code" as const, label: "VS Code" }, { id: "idea" as const, label: "IntelliJ IDEA" }];
@@ -10,6 +10,12 @@ describe("externalEntries (GH-612)", () => {
     expect(labels({ isDir: false, editors, platform: "mac" })).toEqual(["Reveal in Finder", "Open in VS Code", "Open in IntelliJ IDEA", "Open with Default App"]);
     expect(labels({ isDir: false, editors: [], platform: "win" })).toEqual(["Reveal in File Explorer", "Open with Default App"]);
     expect(labels({ isDir: false, editors: [], platform: "other" })).toEqual(["Open Containing Folder", "Open with Default App"]);
+  });
+  it("custom editor: Open in <name>, own test id, before the default app", () => {
+    expect(labels({ isDir: false, editors: [{ id: "custom", label: "My Editor" }], platform: "mac" })).toEqual(["Reveal in Finder", "Open in My Editor", "Open with Default App"]);
+  });
+  it("custom editor is dropped for a path in a Side", () => {
+    expect(labels({ isDir: false, editors: [{ id: "custom", label: "My Editor" }], local: false, platform: "mac" })).toEqual(["Reveal in Finder", "Open with Default App"]);
   });
   it("a folder has no default app", () => expect(labels({ isDir: true, editors, platform: "mac" })).toEqual(["Reveal in Finder", "Open in VS Code", "Open in IntelliJ IDEA"]));
   it("deleted: every entry disabled; ids round-trip", () => {
@@ -28,5 +34,12 @@ describe("treeMenuSections with the section", () => {
     expect(ids(treeMenuSections(f, false, true, false, true, false, ext))[3]).toEqual(["ext:reveal", "ext:default"]);
     expect(treeMenuSections(f, false)).toHaveLength(4);
     expect(ids(treeMenuSections({ kind: "root" }, false, true, false, true, false, ext))[2]).toEqual(["ext:reveal", "ext:default"]);
+  });
+});
+
+describe("canOpenSide", () => {
+  it("this machine and WSL sides only", () => {
+    expect(["local", "wsl:Ubuntu"].map(canOpenSide)).toEqual([true, true]);
+    expect(["docker:dev", "ssh:box"].map(canOpenSide)).toEqual([false, false]);
   });
 });
