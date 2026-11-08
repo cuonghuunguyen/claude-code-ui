@@ -1,9 +1,12 @@
 // OpenCode parity features (GH-658): rewind, slash commands, hidden Claude-only controls, orchestration attach, aside.
+import { chmodSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { daemonOpenCodeServer } from "../support/opencode.ts";
 import { promptBox } from "../support/ui.ts";
 import { ownDaemon } from "./opencode-engine.steps.ts";
-import { Then, When } from "./fixtures.ts";
+import { runDir } from "../support/paths.ts";
+import { After, Given, Then, When } from "./fixtures.ts";
 
 const userMessage = (page: Page, text: string): Locator => page.getByTestId("user-message").filter({ hasText: text });
 const panel = (page: Page) => page.getByTestId("rewind-panel");
@@ -131,4 +134,113 @@ Then("the turn stays finished", async ({ page }) => {
 
 Then("the context meter shows a value", async ({ page }) => {
   await expect(page.getByTestId("session-area").getByTestId("context-meter")).toHaveText(/\d+%/, { timeout: 30_000 });
+});
+
+// GH-665 follow-ups.
+Then("the conversation shows no assistant reply", async ({ page }) => {
+  await expect(page.getByTestId("assistant-text")).toHaveCount(0);
+});
+
+Then("the commands popup offers {string}, {string} and {string}", async ({ page }, a: string, b: string, c: string) => {
+  await expect(commands(page)).toBeVisible({ timeout: 30_000 });
+  for (const name of [a, b, c]) await expect(commands(page).getByRole("option").filter({ has: page.getByText(`/${name}`, { exact: true }) })).toHaveCount(1);
+});
+
+// Enter picks the highlighted command while the popup is open, the next Enter sends it.
+When("I send the slash command {string}", async ({ page }, text: string) => {
+  await promptBox(page).fill(text);
+  for (let i = 0; i < 3 && (await promptBox(page).inputValue()) !== ""; i++) await promptBox(page).press("Enter");
+  await expect(promptBox(page)).toHaveValue("");
+});
+
+/** A phone keeps mode, model and effort behind one button. */
+const settingsOpen = async (page: Page) => {
+  const s = page.getByTestId("session-settings");
+  if (await s.isVisible()) await s.click();
+};
+
+When("I pick the OpenCode model {string} in the model chooser", async ({ page }, name: string) => {
+  await settingsOpen(page);
+  await page.getByTestId("session-model").click();
+  await page.getByRole("option", { name: new RegExp(`^${name}`) }).click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+});
+
+When("I open the effort chooser", async ({ page }) => {
+  await settingsOpen(page);
+  await page.getByTestId("effort-select").click();
+  await expect(page.getByRole("option").first()).toBeVisible();
+});
+
+Then("the effort chooser offers {string}", async ({ page }, list: string) => {
+  // The model chooser may still fade out: the effort list is the one without models.
+  const options = page.getByRole("listbox").filter({ hasNotText: /Pickle/ }).getByRole("option");
+  await expect.poll(async () => (await options.allTextContents()).map((s) => s.trim())).toEqual(list.split(", "));
+});
+
+Then("the effort chooser is hidden for this model", async ({ page }) => {
+  await settingsOpen(page);
+  await expect(page.getByTestId("mode-select")).toBeVisible();
+  await expect(page.getByTestId("effort-select")).toHaveCount(0);
+});
+
+Then("the prompt box asks {string}", async ({ page }, engine: string) => {
+  await expect(promptBox(page)).toHaveAttribute("placeholder", new RegExp(`^Ask ${engine}(…| in .*…)`));
+});
+
+Then("the engine error text shows once", async ({ page }) => {
+  const error = page.getByTestId("engine-error");
+  await expect(error).toHaveCount(1);
+  await expect(page.getByText(/OpenCode is not installed/)).toHaveCount(1);
+  await expect(page.getByText(/Prompt not sent/)).toHaveCount(0);
+});
+
+Then("the OpenCode path setting {string} is refused under the field", async ({ page }, path: string) => {
+  const input = page.getByTestId("settings-opencode-path");
+  await input.fill(path);
+  await input.press("Enter");
+  await expect(page.getByTestId("settings-opencode-path-error")).toContainText(/absolute path/);
+  await expect(page.getByRole("alert")).toHaveCount(1);
+});
+
+// OpenCode runs a ! command as a Bash tool call: a collapsed card, the output behind its header.
+Then("the Bash card of {string} shows the output {string}", async ({ page }, command: string, output: string) => {
+  const head = page.getByRole("button", { name: new RegExp(`^Bash ${command}`) });
+  await expect(head).toBeVisible({ timeout: 60_000 });
+  await expect(head).toHaveAccessibleName(/Completed/, { timeout: 60_000 });
+  if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
+  await expect(page.getByText(output, { exact: true })).toBeVisible();
+});
+
+Then("the shell command has ended", async ({ page }) => {
+  await expect(page.getByTestId("toolbar-stop")).toHaveCount(0);
+});
+
+// The owner's OpenCode login: E2E_OPENCODE_AUTH names a copy of the auth file. It is copied unread into the run's own OpenCode data dir and deleted after the scenario.
+const authCopy = () => join(runDir(), "opencode-data", "opencode", "auth.json");
+Given("OpenCode has the owner's login", async ({ $test }) => {
+  const src = process.env.E2E_OPENCODE_AUTH;
+  $test.skip(!src, "E2E_OPENCODE_AUTH is not set: point it at an OpenCode auth file to run the model scenarios");
+  mkdirSync(dirname(authCopy()), { recursive: true });
+  copyFileSync(src!, authCopy());
+  chmodSync(authCopy(), 0o600);
+});
+After({ name: "delete the OpenCode login copy" }, async () => {
+  try {
+    rmSync(authCopy(), { force: true });
+  } catch {}
+});
+
+Then("the conversation shows an assistant reply after the user message {string}", async ({ page }, text: string) => {
+  await expect(async () => {
+    const order = await page.locator('[data-testid="user-message"], [data-testid="assistant-text"]').evaluateAll((els) => els.map((e) => `${e.getAttribute("data-testid")}:${e.textContent ?? ""}`));
+    const at = order.reduce((last, o, i) => (o.startsWith("user-message:") && o.includes(text) ? i : last), -1);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(order.slice(at + 1).some((o) => /^assistant-text:\s*\S/.test(o))).toBe(true);
+  }).toPass({ timeout: 120_000 });
+});
+
+Then("the transcript shows a compaction marker", async ({ page }) => {
+  await expect(page.getByTestId("compaction")).toBeVisible({ timeout: 120_000 });
 });
