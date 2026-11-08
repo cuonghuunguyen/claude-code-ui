@@ -7,7 +7,7 @@
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -262,6 +262,7 @@ const server = createServer(async (req, res) => {
     if (body.time) s.time = { ...s.time, ...body.time };
     return json(200, s);
   }
+  if (m && s && m[2] === "/message" && req.method === "GET") await sleep(Number(process.env.FAKE_OPENCODE_MESSAGE_DELAY_MS ?? 0));
   if (m && s && req.method === "GET") return json(200, m[2] ? (data.messages[s.id] ?? []) : s);
   return json(404, { name: "NotFoundError", data: { message: `no route ${req.method} ${url.pathname}` } });
 });

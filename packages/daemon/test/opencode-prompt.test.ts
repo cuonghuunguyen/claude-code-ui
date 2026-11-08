@@ -541,11 +541,11 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
   const messages = [user("msg_u1", "one"), user("msg_u2", "two", [diff("a.ts", 2, 1)]), user("msg_u3", "three", [diff("a.ts", 1, 0), diff("b.ts", 3, 0)]), user("msg_u4", "four")];
   const row = (project: string, extra: object = {}) => ({ id: "ses_rw", slug: "rw", projectID: "global", directory: project, title: "Rewind", version: "1.18.34", time: { created: 1, updated: 2 }, ...extra });
   /** A stored OpenCode session, subscribed. */
-  async function restored(o: { revert?: string; busy?: boolean } = {}) {
+  async function restored(o: { revert?: string; busy?: boolean; env?: Record<string, string> } = {}) {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const project = join(root, "project");
     mkdirSync(project, { recursive: true });
-    const d = await boot({ root, data: { sessions: [row(project, o.revert ? { revert: { messageID: o.revert, snapshot: "s" } } : {})], messages: { ses_rw: messages }, busy: o.busy ? ["ses_rw"] : [] } });
+    const d = await boot({ root, data: { sessions: [row(project, o.revert ? { revert: { messageID: o.revert, snapshot: "s" } } : {})], messages: { ses_rw: messages }, busy: o.busy ? ["ses_rw"] : [] }, env: o.env });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     await d.ok({ type: "session.list" });
     const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_rw", sinceSeq: 0, paged: true });
@@ -596,6 +596,22 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     const before = cut();
     await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
     await until(() => cut() > before);
+  });
+
+  it("an unrevert that comes while a slow read predating it is in flight brings the cut messages back", async () => {
+    const r = await restored({ env: { FAKE_OPENCODE_MESSAGE_DELAY_MS: "600" } });
+    // The read after the stream connected has finished (it re-emits the history), so none is in flight from before the revert.
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4"), 12000);
+    await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
+    // A stream reconnect starts a read; its session row (still reverted) is read at once, its messages 600 ms later.
+    const reads = r.d.requests("GET", "/session/ses_rw/message").length;
+    await r.d.fake("/__drop");
+    await until(() => r.d.requests("GET", "/session/ses_rw/message").length > reads, 12000);
+    const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
+    const before = cut();
+    await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
+    await until(() => cut() > before, 3000);
   });
 });
 
