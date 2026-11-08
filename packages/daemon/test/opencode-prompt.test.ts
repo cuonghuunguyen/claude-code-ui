@@ -547,6 +547,11 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     expect(await r.preview("msg_u4")).toEqual({ filesChanged: [], insertions: 0, deletions: 0, conversation: true, modes: ["conversation"] });
   });
 
+  it("after an earlier rewind the preview counts only the messages still shown", async () => {
+    const r = await restored({ revert: "msg_u3" });
+    expect(await r.preview("msg_u1")).toEqual({ filesChanged: ["a.ts"], insertions: 2, deletions: 1, conversation: true, modes: ["both"] });
+  });
+
   it("rewind posts the revert, emits the rewind part and refuses a mode the preview does not offer", async () => {
     const r = await restored();
     expect(await r.rewind("msg_u2", "conversation")).toMatchObject({ type: "error", code: "rewind_failed" });

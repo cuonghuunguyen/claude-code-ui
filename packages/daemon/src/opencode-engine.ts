@@ -572,7 +572,10 @@ class OpenCodeSession implements EngineSession {
 
   /** The stored messages and what a revert to before the user message `id` covers: the files its turn and every later turn changed. */
   private async rewindPlan(id: string) {
-    const all = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+    const stored = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+    // Messages cut by an earlier revert are hidden: their changes are already undone and count once.
+    const cut = this.revertAt ? stored.findIndex((m) => m.info.id === this.revertAt) : -1;
+    const all = cut < 0 ? stored : stored.slice(0, cut);
     const at = all.findIndex((m) => m.info.id === id && m.info.role === "user");
     if (at < 0) throw new Error("unknown message");
     const diffs = all.slice(at).flatMap((m) => (m.info.role === "user" ? (m.info.summary?.diffs ?? []) : []));
