@@ -113,3 +113,17 @@ Feature: OpenCode parity features (GH-658)
     Then an aside popup shows
     And the page has no horizontal scroll
     And I capture "aside popup phone"
+
+  @model
+  Scenario: Steering while OpenCode runs shows the steered message, one turn ends, and the context meter shows
+    Given the viewport is 1440x900
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    When I send the first prompt "Count from 1 to 40, one number per line, then stop"
+    And I steer the running turn with "Also say DONE at the end"
+    Then the conversation shows the user message "Also say DONE at the end"
+    And the turn has finished
+    And the turn stays finished
+    And the context meter shows a value
+    And the page has no horizontal scroll
+    And I capture "steered"

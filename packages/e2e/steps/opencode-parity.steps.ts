@@ -116,3 +116,19 @@ When("I ask the aside {string} from the palette", async ({ page }, question: str
   await page.keyboard.press("Enter");
   await expect(popup(page).first()).toBeVisible({ timeout: 60_000 });
 });
+
+When("I steer the running turn with {string}", async ({ page }, text: string) => {
+  await expect(page.getByTestId("toolbar-stop")).toBeVisible({ timeout: 60_000 });
+  await promptBox(page).fill(text);
+  await promptBox(page).press("Enter");
+});
+
+Then("the turn stays finished", async ({ page }) => {
+  // One turn ends once: after the end, no new run starts.
+  await page.waitForTimeout(5_000);
+  await expect(page.getByTestId("toolbar-stop")).toHaveCount(0);
+});
+
+Then("the context meter shows a value", async ({ page }) => {
+  await expect(page.getByTestId("session-area").getByTestId("context-meter")).toHaveText(/\d+%/, { timeout: 30_000 });
+});
