@@ -6,7 +6,7 @@
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -100,6 +100,11 @@ const server = createServer(async (req, res) => {
         send(body.directory, e);
       }
     if (url.pathname === "/__oauth") for (const [id, done] of waiting) (waiting.delete(id), done(body.result));
+    if (url.pathname === "/__revert") {
+      const s = sessions.find((x) => x.id === body.sessionId);
+      s.revert = { messageID: body.messageID };
+      updated(s);
+    }
     if (url.pathname === "/__unrevert") {
       const s = sessions.find((x) => x.id === body.sessionId);
       (delete s.revert, updated(s));

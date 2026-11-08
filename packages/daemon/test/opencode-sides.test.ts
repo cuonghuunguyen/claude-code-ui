@@ -85,6 +85,7 @@ describe.skipIf(process.platform === "win32")("OpenCode in a side folder", () =>
     expect(id).toMatch(/^ses_/);
     expect(created.result.session).toMatchObject({ engine: "opencode", cwd: sideRoot });
     expect(await c.request({ type: "session.prompt", sessionId: id, text: "hi" })).toMatchObject({ type: "reply" });
+    for (let i = 0; i < 100 && !paths(sideOc).includes(`POST /session/${id}/prompt_async`); i++) await new Promise((x) => setTimeout(x, 25)); // the send is fire and forget
     expect(paths(sideOc)).toContain(`POST /session/${id}/prompt_async`);
     expect(hubOc.requests()).toEqual([]);
 

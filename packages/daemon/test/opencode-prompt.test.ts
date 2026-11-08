@@ -539,11 +539,12 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
 
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {
     const r = await restored();
-    await r.d.fake("/__emit", { events: [{ type: "session.updated", properties: { sessionID: "ses_rw", info: { id: "ses_rw", revert: { messageID: "msg_u3" } } } }] });
+    await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
-    const before = r.parts().length;
+    const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
+    const before = cut();
     await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
-    await until(() => r.parts().length > before && r.parts().filter((p) => p.id === "msg_u3").length > 1);
+    await until(() => cut() > before);
   });
 });
 

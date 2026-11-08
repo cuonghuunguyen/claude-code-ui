@@ -419,7 +419,7 @@ class OpenCodeSession implements EngineSession {
         const revert: string | undefined = p.info?.revert?.messageID;
         // Reverted elsewhere (OpenCode's /undo): cut like our own rewind. Unreverted elsewhere (/redo): read the restored messages again.
         if (revert && revert !== this.revertAt) (this.revertAt = revert, this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: revert }));
-        else if (!revert && this.revertAt) void this.resync();
+        else if (!revert && this.revertAt) void (this.resyncing?.then(() => this.resync()) ?? this.resync()); // a read already in flight may predate the unrevert
         return typeof p.info?.title === "string" ? this.engine.onTitle?.(this.id, p.info.title) : undefined;
       }
     }
