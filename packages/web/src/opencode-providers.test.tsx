@@ -229,6 +229,7 @@ it("Log out asks first: Cancel sends nothing, confirm sends opencode.logout and 
   expect(calls.at(-1)).toEqual({ type: "opencode.logout", provider: "groq" });
   expect(q("settings-opencode-providers-message")!.textContent).toBe("Logged out of Groq");
   expect(q("settings-opencode-providers-empty")).not.toBeNull();
+  expect(document.activeElement).toBe(el.querySelector("h4"));
   expect(onProviders).toHaveBeenCalledTimes(1);
 });
 

@@ -103,6 +103,7 @@ describe("OpenCode provider login", { timeout: 30_000 }, () => {
     const r = await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: KEY });
     expect(d.calls("PUT", "/auth/groq")[0]!.body).toEqual({ type: "api", key: KEY });
     await until(() => d.calls("POST", "/global/dispose").length === 1);
+    expect(d.inbox.filter((m) => m.type === "opencode.providersChanged")).toHaveLength(1);
     expect(r.providers.find((p: any) => p.id === "groq")).toMatchObject({ connected: true, source: "api" });
   });
 
@@ -198,8 +199,18 @@ describe("OpenCode provider login", { timeout: 30_000 }, () => {
     await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: KEY });
     await new Promise((r) => setTimeout(r, 300));
     expect(d.calls("POST", "/global/dispose")).toHaveLength(0);
+    expect(d.inbox.some((m) => m.type === "opencode.providersChanged")).toBe(false);
     await d.ok({ type: "session.interrupt", sessionId: id });
     await until(() => d.calls("POST", "/global/dispose").length === 1, 8000);
+    await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
+  });
+
+  it("a loginCancel sent while the provider list is still loading ends the wait", async () => {
+    const d = await boot();
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    const finish = d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 0 });
+    await d.ok({ type: "opencode.loginCancel", provider: "fakeprov" });
+    expect(await finish).toMatchObject({ type: "error", code: "cancelled" });
   });
 
   it("opencode.status never starts the server; opencode.providers does", async () => {

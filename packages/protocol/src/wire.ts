@@ -514,6 +514,8 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
+  /** To every connection when OpenCode read a changed provider set (after a login or logout): its model list is stale. */
+  | { type: "opencode.providersChanged" }
   /** To every connection of this daemon after `settings.set`. */
   | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; claudeAccounts?: ClaudeAccountInfo[] }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */

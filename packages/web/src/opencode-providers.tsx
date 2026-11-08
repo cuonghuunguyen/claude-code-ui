@@ -48,7 +48,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
   }, [status?.state]);
   // Focus after a login or logout lands in the list.
   useEffect(() => {
-    if (!focus) return;
+    if (focus === undefined) return;
     const el = root.current?.querySelector<HTMLElement>(`[data-testid="settings-opencode-logout"][data-provider-id="${CSS.escape(focus)}"]`) ?? root.current?.querySelector<HTMLElement>("h4");
     el?.focus();
     setFocus(undefined);
@@ -249,7 +249,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
                   <input value={values[p.key] ?? ""} onChange={(e) => setValues({ ...values, [p.key]: e.target.value })} placeholder={p.placeholder} className={input} autoComplete="off" {...errProps(p.key, `opencode-prompt-${p.key}-error`)} data-testid={`settings-opencode-prompt-${p.key}`} />
                 )}
                 {err(p.key) && (
-                  <span id={`opencode-prompt-${p.key}-error`} className="text-destructive text-xs">
+                  <span id={`opencode-prompt-${p.key}-error`} role="alert" className="text-destructive text-xs">
                     {err(p.key)}
                   </span>
                 )}
@@ -283,7 +283,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
             <div className="flex flex-col gap-2">
               <p className="select-text whitespace-pre-wrap break-words text-sm">{phase.start.instructions}</p>
               {phase.start.mode === "auto" ? (
-                <p className="flex items-center gap-2 text-muted-foreground text-sm" data-testid="settings-opencode-oauth-wait">
+                <p role="status" className="flex items-center gap-2 text-muted-foreground text-sm" data-testid="settings-opencode-oauth-wait">
                   <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
                   {t("settings.opencode.providers.waiting")}
                 </p>
@@ -298,7 +298,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
                   )}
                 </label>
               )}
-              <a href={phase.start.url} target="_blank" rel="noopener noreferrer" className="text-sm underline">
+              <a href={phase.start.url} target="_blank" rel="noopener noreferrer" className="text-sm underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
                 {t("settings.opencode.providers.again")}
               </a>
             </div>

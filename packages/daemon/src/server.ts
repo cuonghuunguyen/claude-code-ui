@@ -463,10 +463,11 @@ export function createDaemon(opts: {
   /** Login and logout change OpenCode's provider set; `POST /global/dispose` makes its instances read it, but cancels running turns: it waits for idle. */
   let providersStale = false;
   const openCodeBusy = () => [...sessions.values()].some((s) => OPENCODE_ID.test(s.id) && (s.currentState() !== "idle" || s.pendingCount() > 0));
-  function flushProviders() {
+  async function flushProviders() {
     if (!providersStale || openCodeBusy() || !openCode.running()) return;
     providersStale = false;
-    openCode.request("/global/dispose", { method: "POST" }).catch((err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
+    // Clients drop their OpenCode model list only after OpenCode read the new providers.
+    await openCode.request("/global/dispose", { method: "POST" }).then(() => broadcast({ type: "opencode.providersChanged" }), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
@@ -936,7 +937,7 @@ export function createDaemon(opts: {
         if (t === "session_state") (queue.setNotLive(s.id, !s.isLive()), syncRunning());
         queue.kick(s.id);
         // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
-        if (t === "session_state" && (e.part as { state?: string }).state === "idle") (markWorktreeStale(s.cwd), OPENCODE_ID.test(s.id) && flushProviders());
+        if (t === "session_state" && (e.part as { state?: string }).state === "idle") (markWorktreeStale(s.cwd), OPENCODE_ID.test(s.id) && void flushProviders());
       }
     });
     s.subscribe(Infinity, notifier.observe);
@@ -1900,23 +1901,29 @@ export function createDaemon(opts: {
           // Credentials pass straight to OpenCode: never logged, never in an error text.
           const provider = "provider" in msg && typeof msg.provider === "string" ? msg.provider : "";
           const field = (m: string) => fail("invalid_input", m);
+          let wait: AbortController | undefined;
+          const cleanWait = () => wait && oauthWaits.get(provider) === wait && oauthWaits.delete(provider);
           try {
             if (msg.type === "opencode.loginCancel") return (oauthWaits.get(provider)?.abort(), oauthWaits.delete(provider), reply({}));
-            const providers = await listProviders(openCode);
+            // Registered before the slow list: a loginCancel in that window must reach this wait.
+            wait = msg.type === "opencode.loginFinish" ? new AbortController() : undefined;
+            if (wait) (oauthWaits.get(provider)?.abort(), oauthWaits.set(provider, wait));
+            const providers = await listProviders(openCode).catch((err) => (cleanWait(), Promise.reject(err)));
+            if (wait?.signal.aborted) return fail("cancelled", "Login cancelled");
             if (msg.type === "opencode.providers") return reply({ providers });
             if (msg.type === "opencode.logout") {
               if (!providers.some((p) => p.id === provider)) return field("provider: Unknown provider");
               await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "DELETE" });
-              refreshProviders();
+              await refreshProviders();
               return reply({ providers: await listProviders(openCode) });
             }
             const api = msg.type === "opencode.login" && providers.find((p) => p.id === provider)?.methods[msg.method as number]?.type === "api";
             const c = checkLogin(msg, providers, api ? "api" : "oauth");
-            if ("error" in c) return field(c.error);
+            if ("error" in c) return (cleanWait(), field(c.error));
             const base = `/provider/${encodeURIComponent(provider)}/oauth`;
             if (msg.type === "opencode.login" && api) {
               await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "PUT", body: { type: "api", key: c.key, ...(c.inputs && Object.keys(c.inputs).length && { metadata: c.inputs }) } });
-              refreshProviders();
+              await refreshProviders();
               return reply({ providers: await listProviders(openCode) });
             }
             if (msg.type === "opencode.login") {
@@ -1925,9 +1932,7 @@ export function createDaemon(opts: {
               if (!r?.url) return fail("login_failed", "OpenCode gave no login page for this method.");
               return reply({ url: r.url, mode: r.method, instructions: r.instructions ?? "" });
             }
-            const ctl = new AbortController();
-            oauthWaits.get(provider)?.abort();
-            oauthWaits.set(provider, ctl);
+            const ctl = wait!;
             try {
               await openCode.request(`${base}/callback`, { method: "POST", body: { method: msg.method, ...(typeof msg.code === "string" && msg.code && { code: msg.code }) }, timeoutMs: 15 * 60_000, signal: ctl.signal });
             } catch (err) {
@@ -1936,7 +1941,7 @@ export function createDaemon(opts: {
             } finally {
               if (oauthWaits.get(provider) === ctl) oauthWaits.delete(provider);
             }
-            refreshProviders();
+            await refreshProviders();
             return reply({ providers: await listProviders(openCode) });
           } catch (err) {
             if (err instanceof OpenCodeError) return fail(err.code, err.message);

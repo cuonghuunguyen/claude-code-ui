@@ -37,6 +37,7 @@ export function connect(opts: {
   /** A config write (e.g. an MCP server added) in a project: an open config dialog of it refreshes. */
   onConfigChanged?: (m: Extract<ServerMessage, { type: "config.changed" }>) => void;
   /** Another client changed the app settings. */
+  onOpenCodeProviders?: () => void;
   onSettingsChanged?: (m: Extract<ServerMessage, { type: "settings_changed" }>) => void;
   /** A newer claude-ui and the update under way (update.tsx). */
   onUpdate?: (m: Extract<ServerMessage, { type: "update_available" | "update_state" }>) => void;
@@ -118,6 +119,7 @@ export function connect(opts: {
       if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
       if (m.type === "config.changed") return opts.onConfigChanged?.(m);
       if (m.type === "settings_changed") return opts.onSettingsChanged?.(m);
+      if (m.type === "opencode.providersChanged") return opts.onOpenCodeProviders?.();
       if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m);
       if (m.type === "daemon_stale") return opts.onStale?.(m.note);
       if (m.type === "daemon_slept") return opts.onSlept?.(m);
