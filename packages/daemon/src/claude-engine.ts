@@ -400,7 +400,7 @@ export class ClaudeSession implements EngineSession {
     };
     switch (r.kind) {
       case "allow": {
-        if (part.type !== "permission_request") return;
+        if (part.type !== "permission_request") return resolve({ behavior: "deny", message: REJECTED });
         const { decision, ruleIndex, updatedInput } = r;
         const { input, suggestions } = part;
         const updatedPermissions =

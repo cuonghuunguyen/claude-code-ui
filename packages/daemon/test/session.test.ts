@@ -1118,6 +1118,12 @@ describe("Session questions", () => {
     expect(s.info().state).toBe("needs_input");
   });
 
+  it("a question given an allow reply is denied instead of hanging the turn", async () => {
+    const { s, q, answered } = await ask();
+    (s as any).pending.get(q.requestId).reply({ kind: "allow", decision: "allow" });
+    expect(await Promise.race([answered(), new Promise((r) => setTimeout(() => r("timeout"), 1000))])).toMatchObject({ behavior: "deny" });
+  });
+
   it("settles without answers when the SDK aborts the question", async () => {
     const { s, events, q, answered } = await ask();
     aborts.at(-1)!.abort();
