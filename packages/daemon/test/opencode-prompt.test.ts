@@ -916,7 +916,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     expect(d.requests("POST", "/mcp").map((r) => r.body.name)).not.toContain(mcpName(session.id));
   });
 
-  it("worker_start with engine opencode from a Claude coordinator starts a ses_ worker; an unknown OpenCode model is refused with OpenCode's list; agent is Claude only", async () => {
+  it("worker_start with engine opencode from a Claude coordinator starts a ses_ worker; an unknown OpenCode model is refused with OpenCode's list; agent is one of OpenCode's primary agents and is used for its prompts", async () => {
     const d = await boot({ script: ["text"] });
     await on(d);
     const coord: string = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
@@ -926,14 +926,17 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
       return r.isError ? { error: r.content[0]!.text } : JSON.parse(r.content[0]!.text);
     };
     expect(await call({ name: "bad", cwd: d.project, prompt: "p", engine: "opencode", model: "nope/x" })).toEqual({ error: expect.stringContaining("Valid values: default, opencode/big-pickle, opencode/alpha, opencode/thinker, acme/x/y") });
-    expect(await call({ name: "agt", cwd: d.project, prompt: "p", engine: "opencode", agent: "Explore" })).toEqual({ error: expect.stringContaining("agent is Claude only") });
-    const w = await call({ name: "oc", cwd: d.project, prompt: "go", engine: "opencode", model: "opencode/alpha", effort: "high" });
+    // Subagents and hidden agents are not offered.
+    expect(await call({ name: "agt", cwd: d.project, prompt: "p", engine: "opencode", agent: "general" })).toEqual({ error: expect.stringContaining("OpenCode agents here: build, docs, plan") });
+    const w = await call({ name: "oc", cwd: d.project, prompt: "go", engine: "opencode", model: "opencode/alpha", effort: "high", agent: "docs" });
+    expect(w).toMatchObject({ agent: "docs" });
     expect(w).toMatchObject({ name: "oc", engine: "opencode", mode: "default" });
     expect(w).not.toHaveProperty("effortNote");
     expect((await d.ok({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 })).session.effort).toBe("high");
     expect(w.sessionId).toMatch(/^ses_/);
     expect(d.requests("POST", "/session").at(-1)!.body.permission).toContainEqual({ permission: "claude-ui", pattern: "mode:default", action: "allow" });
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
-    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], model: { providerID: "opencode", modelID: "alpha" } });
+    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], agent: "docs", model: { providerID: "opencode", modelID: "alpha" } });
+    expect(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[w.sessionId]).toMatchObject({ agent: "docs" });
   });
 });

@@ -151,6 +151,8 @@ export type OrchestrationDeps = {
   remove: (id: string) => Promise<{ code: string; message: string } | undefined>;
   /** Agent type names (`supportedAgents()` of a throwaway CLI) available in `cwd`: built-ins, project, user and plugin agents (`plugin:agent`). */
   agents: (cwd: string) => Promise<string[]>;
+  /** Names of OpenCode's primary agents (not hidden, not subagents) in `cwd` (`GET /agent`): the `agent` of an OpenCode worker. */
+  openCodeAgents?: (cwd: string) => Promise<string[]>;
   /** Longest wait for a stopped worker to settle (worker_stop, worker_close); default 10 s. */
   stopWaitMs?: number;
 };
@@ -295,14 +297,16 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (n >= max) throw new ToolError(`Children limit reached: ${n} of your workers run (Settings > Orchestration > Maximum workers per coordinator). Close one with worker_close first.`);
   };
   /** The agent type as the CLI knows it: exact name, else the one `*:name` plugin agent. Tool errors for lookup failure, unknown, ambiguous. */
-  const resolveAgent = async (given: string, cwd: string) => {
+  const resolveAgent = async (given: string, cwd: string, openCode = false) => {
     let list: string[];
     try {
-      list = await deps.agents(cwd);
+      list = await (openCode ? (deps.openCodeAgents?.(cwd) ?? Promise.resolve([])) : deps.agents(cwd));
     } catch (e) {
       throw new ToolError(`Agent types could not be read in ${cwd}: ${(e as Error).message}`);
     }
     if (list.includes(given)) return given;
+    // OpenCode agents have no plugin form.
+    if (openCode) throw new ToolError(`Unknown agent ${given}. OpenCode agents here: ${list.join(", ") || "none"}.`);
     const hits = list.filter((n) => n.endsWith(`:${given}`));
     if (hits.length === 1) return hits[0]!;
     if (hits.length > 1) throw new ToolError(`Agent type ${given} is ambiguous: ${hits.join(", ")}. Use the qualified name.`);
@@ -629,7 +633,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     return [
       def(
         "worker_start",
-        "Start a worker: a new session that runs `prompt` as its first turn. `engine`: claude or opencode (absent = your own engine); OpenCode workers take `model` as provider/model and no `agent`. One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
+        "Start a worker: a new session that runs `prompt` as its first turn. `engine`: claude or opencode (absent = your own engine); OpenCode workers take `model` as provider/model and `agent` as one of OpenCode's primary agents (`build`, `plan`, custom ones). One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent; OpenCode: a primary agent name); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
         {
           name,
           cwd: z.string().min(1).max(4096).optional(),
@@ -661,10 +665,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
           checkLimits(coordinator);
           const engine = engineOf(coordinator, a.engine);
           const openCode = engine === "opencode";
-          // shortcut: OpenCode agents (GET /agent) are not offered; follow-up.
-          if (openCode && a.agent) throw new ToolError("agent is Claude only: OpenCode workers take no agent.");
           const t = await target(a);
-          const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
+          const agent = a.agent ? await resolveAgent(a.agent, targetDir(t), openCode) : undefined;
           const ocModels = openCode ? await (deps.openCodeModels?.() ?? Promise.resolve([])).catch((e: Error) => Promise.reject(new ToolError(`OpenCode models could not be read: ${e.message}`))) : undefined;
           coordinator = cur(); // a /clear during the awaits moved the tree: check and reserve under the current ID
           const key = `${coordinator}\0${a.name}`;

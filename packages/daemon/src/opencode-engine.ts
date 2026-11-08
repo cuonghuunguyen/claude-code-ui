@@ -403,6 +403,9 @@ class OpenCodeSession implements EngineSession {
     });
   }
 
+  /** The OpenCode agent of a prompt: `plan` in plan mode, else the worker's `agent` (a primary agent of `GET /agent`), else `build`. */
+  private agent = () => (this.permissionMode === "plan" ? "plan" : (this.opts.agent?.(this.id) ?? "build"));
+
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
     // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
     try {
@@ -414,7 +417,7 @@ class OpenCodeSession implements EngineSession {
         return this.toIdle();
       }
       const [providerID, ...rest] = this.model.split("/");
-      const agent = this.permissionMode === "plan" ? "plan" : "build";
+      const agent = this.agent();
       // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
       const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       if (command) {
@@ -655,7 +658,7 @@ class OpenCodeSession implements EngineSession {
     const model = this.model.split("/");
     const done = () => (this.sentAt = Date.now());
     this.server
-      .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.permissionMode === "plan" ? "plan" : "build", ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
+      .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
       .then(done, (err) => {
         done();
         this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
