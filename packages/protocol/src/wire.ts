@@ -610,6 +610,8 @@ export type ListResult = {
   permissionModes: PermissionMode[];
   /** Every Engine of this daemon with its flags and the modes a new session starts with; the new-session tab reads the selected one. Absent (an older daemon): claude only. */
   engines?: { engine: Engine; capabilities: EngineCapabilities; permissionModes: PermissionMode[] }[];
+  /** A hub with sides: `engines` of each ready side, by side id (a side's daemon may allow other modes, e.g. bypass). The new-session tab of a folder of that side reads its entry; absent: use `engines`. */
+  sideEngines?: Record<string, NonNullable<ListResult["engines"]>>;
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
   /**

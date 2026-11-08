@@ -1359,7 +1359,7 @@ type Router = { attach(id: string): void; detach(id: string): void };
 /** The local daemon's answer to one message: its reply or error. */
 type LocalCall = (msg: ClientMessage) => Promise<ServerMessage>;
 
-type ListLike = { sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]> };
+type ListLike = { engines?: unknown[]; sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]> };
 
 /**
  * Per browser connection: forwards each request to its side and merges the answers that span sides. `local` handles a
@@ -1600,7 +1600,9 @@ export function createRouter(opts: {
     const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
     const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
     for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);
+    const sideEngines: Record<string, unknown[]> = {};
     for (const [id, r] of lists) {
+      if (r.engines) sideEngines[id] = r.engines;
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
@@ -1614,7 +1616,7 @@ export function createRouter(opts: {
     merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides } };
+    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides, ...(Object.keys(sideEngines).length && { sideEngines }) } };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {

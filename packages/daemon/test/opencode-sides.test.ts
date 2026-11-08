@@ -41,7 +41,7 @@ const hubOc = opencodeOf(hubRoot);
 const sideOc = opencodeOf(sideRoot);
 
 function inProcessSide(): SideProcess {
-  const side = createDaemon({ webRoot, token: "", roots: [sideRoot], appSettings: createSettings(), query: fakeQuery as never, projects: createProjects(), history, opencode: sideOc.opencode });
+  const side = createDaemon({ webRoot, token: "", roots: [sideRoot], appSettings: createSettings(), query: fakeQuery as never, projects: createProjects(), history, opencode: sideOc.opencode, allowBypass: true });
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const exit = new EventEmitter();
@@ -106,6 +106,16 @@ describe.skipIf(process.platform === "win32")("OpenCode in a side folder", () =>
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     const list = await c.request({ type: "session.list" });
     expect(list.result.engines.map((e: { engine: string }) => e.engine)).toEqual(["claude", "opencode"]);
+    c.ws.close();
+  });
+
+  it("the list carries each side's own engines: the side allows bypass, the hub does not", async () => {
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    const { result } = await c.request({ type: "session.list" });
+    const modes = (engines: { engine: string; permissionModes: string[] }[]) => engines.find((e) => e.engine === "opencode")!.permissionModes;
+    expect(modes(result.engines)).not.toContain("bypassPermissions");
+    expect(modes(result.sideEngines["wsl:Ubuntu"])).toContain("bypassPermissions");
     c.ws.close();
   });
 });
