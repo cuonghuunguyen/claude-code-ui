@@ -77,6 +77,8 @@ export class OpenCodeMapper {
 
   /** The call id of a child session, undefined for the root session. */
   parentOf = (sessionId: string | undefined) => (sessionId ? this.children.get(sessionId) : undefined);
+  /** The child session of a task call. */
+  childOf = (callId: string) => [...this.children].find(([, c]) => c === callId)?.[0];
   isChild = (sessionId: string) => this.children.has(sessionId);
   /** The mapped call of a tool call id (Claude card name and input). */
   call = (callId: string) => this.calls.get(callId);

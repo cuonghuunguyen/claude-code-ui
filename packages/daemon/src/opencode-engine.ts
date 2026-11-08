@@ -13,7 +13,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: false };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -265,7 +265,7 @@ class OpenCodeSession implements EngineSession {
       this.session.setState("running");
     }
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-    void this.send(messageID, text, images, cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
+    void this.send(messageID, text, images, !steer && cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
       if (!steer) this.session.setState("idle");
     });
@@ -488,7 +488,13 @@ class OpenCodeSession implements EngineSession {
   beforeStateEvent() {}
   idle() {}
   bashCwdPinned = () => false;
-  stopSubagent = async () => false;
+  /** Stop agent: aborts the child session of the task call. */
+  stopSubagent = async (callId: string) => {
+    const child = this.mapper.childOf(callId);
+    if (!child) return false;
+    await this.server.request(`/session/${child}/abort`, { method: "POST", directory: this.cwd });
+    return true;
+  };
   backgroundShell = async () => false;
   stopShell = async () => false;
   shellOutput = async () => undefined;

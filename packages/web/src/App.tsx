@@ -4888,7 +4888,7 @@ export function NewSession({
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? start(cwd, { text, images }) : Promise.reject(new Error("no project")))}
-          onBash={cwd ? (command) => start(cwd, { command }) : undefined}
+          onBash={cwd && caps?.shell !== false ? (command) => start(cwd, { command }) : undefined}
           state={connected ? "idle" : "disconnected"}
           blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
@@ -5488,7 +5488,7 @@ export function SessionPane({
               onQueue={onQueue}
               takeBack={takeBack}
               onTaken={() => (setTakeBack(undefined), setDraft(undefined))}
-              onBash={onBash}
+              onBash={capabilitiesOf(session).shell ? onBash : undefined}
               onSearch={onSearch}
               insert={insert}
               onInserted={onInserted}

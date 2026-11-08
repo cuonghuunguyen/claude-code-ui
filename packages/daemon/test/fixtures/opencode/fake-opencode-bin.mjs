@@ -229,12 +229,12 @@ const server = createServer(async (req, res) => {
     res.writeHead(204);
     return res.end();
   }
-  if (m && s && m[2] === "/abort" && req.method === "POST") {
+  if (m && m[2] === "/abort" && req.method === "POST") {
     generation++;
     asks = [];
-    busy.delete(s.id);
+    busy.delete(m[1]);
     const events = current?.abort ?? [{ type: "session.error", properties: { sessionID: "ses_ROOT", error: { name: "MessageAbortedError", data: { message: "Aborted" } } } }, { type: "session.status", properties: { sessionID: "ses_ROOT", status: { type: "idle" } } }, { type: "session.idle", properties: { sessionID: "ses_ROOT" } }];
-    for (const e of JSON.parse(JSON.stringify(events).replaceAll("ses_ROOT", s.id))) send(dir, e);
+    for (const e of JSON.parse(JSON.stringify(events).replaceAll("ses_ROOT", m[1]))) send(dir, e);
     return json(200, true);
   }
   if (m && s && !m[2] && req.method === "PATCH") {

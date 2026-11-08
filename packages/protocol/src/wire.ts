@@ -37,8 +37,10 @@ export type EngineCapabilities = {
   planMeter: boolean;
   account: boolean;
   contextUsage: boolean;
+  /** Bash mode (`!`): shell commands run in the session cwd. */
+  shell: boolean;
 };
-export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true };
+export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
 /** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
 export const capabilitiesOf = (s: { capabilities?: EngineCapabilities }) => s.capabilities ?? ALL_CAPABILITIES;
 /** The modes offered now, of `modes` (the Engine's own): auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */

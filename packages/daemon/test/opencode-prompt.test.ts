@@ -350,6 +350,28 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(1);
   });
 
+  it("a /command text sent while the turn runs is steering (plain prompt_async), not POST /command", async () => {
+    const d = await boot({ script: ["bash"] });
+    const s = await d.open();
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    await s.prompt("/review main");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    expect(d.requests("POST", `/session/${s.id}/command`)).toHaveLength(0);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body.parts[0].text).toBe("/review main");
+  });
+
+  it("Stop agent aborts the child session of the task call", async () => {
+    const d = await boot({ script: ["question"] });
+    const s = await d.open();
+    await s.prompt("ask me");
+    await until(() => !!s.find("question"));
+    await d.ok({ type: "question.respond", requestId: s.find("question")!.requestId, answers: { [s.find("question")!.questions[0]!.question]: "Blue" } });
+    await until(() => !!s.find("subagent"));
+    await d.ok({ type: "session.stopSubagent", sessionId: s.id, subagentId: s.find("subagent")!.id });
+    expect(d.requests("POST", `/session/${s.id}_child/abort`)).toHaveLength(1);
+  });
+
   it("slash commands: the session lists GET /command, session.commands answers for a draft; /name args runs POST /command, other /x is a plain prompt, a failure is a notice and idle", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();

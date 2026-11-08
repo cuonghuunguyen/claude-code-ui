@@ -19,7 +19,7 @@ let unmount = () => {};
 // App owns the draft's model, mode and effort; the harness holds them like App does.
 type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes"> & { engine?: StartOptions["engine"] };
 // Like App: another engine's draft starts clean and takes that engine's flags.
-const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false } as EngineCapabilities;
+const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false, shell: false } as EngineCapabilities;
 function Draft({ engine, ...p }: Props) {
   const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default", engine });
   return <NewSession {...p} draft={draft} onDraft={(d) => setDraft(d.engine !== draft.engine ? { ...d, model: "default", effort: "default" } : d)} modes={["default", "acceptEdits", "plan"]} caps={draft.engine === "opencode" ? OPENCODE_CAPS : undefined} />;
