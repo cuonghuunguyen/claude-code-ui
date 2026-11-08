@@ -92,33 +92,22 @@ Then("the effort chooser is absent", async ({ page }) => {
   await expect(page.getByTestId("effort-select")).toHaveCount(0);
 });
 
-Then("the rewind button is disabled", async ({ page }) => {
+Then("the rewind button is enabled", async ({ page }) => {
   await userMessage(page).hover();
-  await expect(rewind(page)).toHaveAttribute("aria-disabled", "true");
+  await expect(rewind(page)).not.toHaveAttribute("aria-disabled", "true");
 });
 
-When("I click the rewind button", async ({ page }) => {
-  await userMessage(page).hover();
-  await rewind(page).click({ force: true }); // aria-disabled, not disabled: the click opens the reason
-  await page.mouse.move(700, 500); // the tooltip closes after a click; a fresh hover keeps it open for the capture
-  await rewind(page).hover();
-});
-
-Then("the unsupported reason shows", async ({ page }) => {
-  await expect(page.getByTestId("engine-unsupported")).toBeVisible();
-  await page.waitForTimeout(800); // still open after the capture's own wait
-  await expect(page.getByTestId("engine-unsupported")).toBeVisible();
-});
-
-Then("the palette row {string} is disabled with a reason", async ({ page }, title: string) => {
+Then("the palette row {string} is enabled", async ({ page }, title: string) => {
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByTestId("palette");
   await expect(palette).toBeVisible();
   await palette.locator("input").first().fill(title);
   const row = palette.getByRole("option", { name: new RegExp(title, "i") }).first();
-  await expect(row).toHaveAttribute("aria-disabled", "true");
-  await expect(row).toContainText("Not supported by this session's engine");
+  await expect(row).toBeVisible();
+  await expect(row).not.toHaveAttribute("aria-disabled", "true");
+  await expect(row).not.toContainText("Not supported by this session's engine");
+  await page.keyboard.press("Escape");
 });
 
 Then("a subagent card is shown", async ({ page }) => {

@@ -10,17 +10,19 @@ import { After, Given, Then, When } from "./fixtures.ts";
 
 /** The scenario's own daemon: OpenCode's data dir is inside the run folder. */
 let own: Daemon | undefined;
+/** The scenario daemon (a step file of the OpenCode features reads its pid). */
+export const ownDaemon = () => own;
 const BIN = () => process.env.E2E_OPENCODE_BIN ?? "";
 
 const chip = (page: Page) => page.getByTestId("engine-chip");
-const sidebarRow = (page: Page, title?: string) => {
+export const sidebarRow = (page: Page, title?: string) => {
   const rows = page.getByTestId("session-item");
   return title ? rows.filter({ hasText: title }) : rows;
 };
 /** The tag in the session header: every tag that is not inside a sidebar row. */
 const headerTag = (page: Page) => page.locator('[data-testid="engine-tag"]:not([data-testid="session-item"] *)');
 /** A phone keeps the sidebar in a drawer. */
-const openDrawer = async (page: Page) => {
+export const openDrawer = async (page: Page) => {
   const drawer = page.getByTestId("open-drawer");
   if ((await drawer.isVisible()) && !(await page.getByTestId("sidebar").isVisible().then((v) => v && page.getByTestId("sidebar").evaluate((e) => e.getBoundingClientRect().right > 0)))) await drawer.click();
 };
@@ -125,6 +127,10 @@ Then("the session header, where shown, has the tag {string}", async ({ page, $te
 
 When("an OpenCode session {string} with the message {string} is created outside the app", async ({ project }, title: string, text: string) => {
   await createOpenCodeSession(BIN(), runDir(), project.path, title, text);
+});
+
+When("an OpenCode session {string} with the messages {string} is created outside the app", async ({ project }, title: string, texts: string) => {
+  await createOpenCodeSession(BIN(), runDir(), project.path, title, texts.split(" | "));
 });
 
 Then("the sidebar lists the OpenCode session {string} with the tag", async ({ page }, title: string) => {
