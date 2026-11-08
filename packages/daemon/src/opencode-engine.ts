@@ -35,7 +35,7 @@ const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false, mcp }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
-    mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch"].map((p) => star(p, "allow"))
+    mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : mode === "plan" ? [star("bash", "ask"), ...asks, ...planEdit]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];

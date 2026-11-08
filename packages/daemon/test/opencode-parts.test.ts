@@ -101,6 +101,9 @@ describe("permission blocks", () => {
     expect(modeOf(rules)).toBe("default");
     expect(alwaysOf(rules)).toEqual([rule("bash", "ls *"), rule("bash", "cat *")]);
     expect(modeOf([rule("bash", "x")])).toBeUndefined();
+    // bypass also allows outside-folder access and repeated calls; other modes do not.
+    expect(modeBlock("bypassPermissions", [], [])).toEqual(expect.arrayContaining([rule("external_directory", "*"), rule("doom_loop", "*")]));
+    expect(modeBlock("default", [], []).filter((r) => ["external_directory", "doom_loop"].includes(r.permission))).toEqual([]);
     expect(alwaysOf([rule("bash", "x")])).toEqual([]);
     // readOnly: the edit deny comes after the mode's edit rule and before the always marker.
     const ro = modeBlock("bypassPermissions", [], [], { readOnly: true });
