@@ -92,7 +92,10 @@ export async function openCodeModels(server: OpenCodeServer): Promise<ModelInfo[
   return [{ value: "default", displayName: name, description: "" }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name })))];
 }
 
-/** A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text. */
+/**
+ * A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text.
+ * shortcut: only for answers without `choices` (a coordinator's `worker_answer`); the web sends `choices`. Free text that starts with a label and ", ", or equals a label, is still read as that label.
+ */
 export function splitLabels(value: string, labels: string[]): string[] {
   const out: string[] = [];
   const byLength = [...labels].sort((a, b) => b.length - a.length);
@@ -539,7 +542,7 @@ class OpenCodeSession implements EngineSession {
     this.reqs.delete(id);
     if (!req) return;
     if (r.kind === "answer") {
-      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : q.multiSelect ? splitLabels(r.answers[q.question]!, q.options.map((o) => o.label)) : [r.answers[q.question]!]));
+      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : (r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(r.answers[q.question]!, q.options.map((o) => o.label)) : [r.answers[q.question]!]))));
       return this.post(`/question/${id}/reply`, { answers });
     }
     if (r.kind !== "cancel" || r.message !== ANSWERED) this.post(`/question/${id}/reject`, {});

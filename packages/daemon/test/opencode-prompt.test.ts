@@ -398,6 +398,18 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body.parts[0].text).toBe("/review main");
   });
 
+  it("a multi-select answer with choices reaches OpenCode exactly as chosen, also when a label holds the separator", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const options = ["Blue", "Blue, green", "Red"].map((label) => ({ label, description: "" }));
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "question.asked", properties: { id: "que_multi", sessionID: s.id, questions: [{ question: "Q", header: "H", options, multiple: true }] } }] });
+    await until(() => !!s.find("question"));
+    // "Blue, green" is the label Blue plus the user's own text "green": only the structure tells it from the label "Blue, green".
+    await d.ok({ type: "question.respond", requestId: "que_multi", answers: { Q: "Blue, green" }, choices: { Q: ["Blue", "green"] } });
+    expect(d.requests("POST", "/question/que_multi/reply")[0]!.body).toEqual({ answers: [["Blue", "green"]] });
+    expect(await d.request({ type: "question.respond", requestId: "x", answers: { Q: "a" }, choices: { Q: [1] } })).toMatchObject({ type: "error", code: "bad_request" });
+  });
+
   it("Stop agent aborts the child session of the task call", async () => {
     const d = await boot({ script: ["question"] });
     const s = await d.open();

@@ -2317,7 +2317,11 @@ export function createDaemon(opts: {
           const { answers } = msg;
           if (typeof msg.requestId !== "string" || typeof answers !== "object" || !answers || Object.values(answers).some((v) => typeof v !== "string"))
             return fail("bad_request", "requestId and answers (question text -> string) required");
-          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers));
+          const { choices } = msg;
+          // Each list is the chosen labels and the Other text: bounded like the answers a user can type.
+          if (choices !== undefined && (typeof choices !== "object" || !choices || Array.isArray(choices) || Object.values(choices).some((l) => !Array.isArray(l) || l.length > 50 || l.some((v) => typeof v !== "string" || v.length > 10_000))))
+            return fail("bad_request", "choices must map a question text to at most 50 strings");
+          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers, undefined, choices));
           return reply({ settled });
         }
         case "models.list": {

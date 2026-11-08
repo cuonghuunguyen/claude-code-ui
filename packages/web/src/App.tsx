@@ -1834,10 +1834,10 @@ export function App() {
     }
   }
 
-  async function answer(requestId: string, answers: Record<string, string>) {
+  async function answer(requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) {
     setError(undefined);
     try {
-      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers });
+      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers, ...(choices && { choices }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -5150,7 +5150,7 @@ export function SessionPane({
   onArtifactTab?: (partId: string) => void;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
-  onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  onAnswer: (requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) => void;
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
@@ -5460,7 +5460,7 @@ export function SessionPane({
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
-          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} mode={modePicker} />
+          <QuestionPanel key={question.id} part={question} onAnswer={(a, c) => onAnswer(question.requestId, a, c)} onDismiss={onInterrupt} mode={modePicker} />
         ) : current ? (
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (

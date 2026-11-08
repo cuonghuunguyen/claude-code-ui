@@ -17,8 +17,14 @@ export function answerText(q: Question, { chosen, other }: Choice): string {
   return [...labels, ...(text ? [text] : [])].join(", ");
 }
 
+/** The same answer as a list for an Engine that needs the structure: chosen labels in option order, then the Other text. */
+export function answerList(q: Question, { chosen, other }: Choice): string[] {
+  const text = other?.trim();
+  return [...q.options.map((o) => o.label).filter((l) => chosen.includes(l)), ...(text ? [text] : [])];
+}
+
 /** OpenCode question dock: one question per page, option cards, tray Dismiss · Back · Next / Submit. `onDismiss`: Claude Code's Esc (stops the turn). */
-export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>) => void; onDismiss?: () => void; mode?: ReactNode }) {
+export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>, choices: Record<string, string[]>) => void; onDismiss?: () => void; mode?: ReactNode }) {
   const t = useT();
   const [choices, setChoices] = useState<Choice[]>(() => part.questions.map(() => ({ chosen: [] })));
   const [page, setPage] = useState(0);
@@ -28,7 +34,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!last) return answers[page] && setPage(page + 1);
-    onAnswer(Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!])));
+    onAnswer(Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!])), Object.fromEntries(part.questions.map((q, i) => [q.question, answerList(q, choices[i]!)])));
   };
   const q = part.questions[page]!;
   const c = choices[page]!;
