@@ -125,6 +125,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "settings.get" }
   /** Sets only the fields in `patch`; reply `{settings}`, error `bad_settings` for an invalid value. Broadcasts `settings_changed`. */
   | { type: "settings.set"; patch: SettingsPatch }
+  /** GH-622 "I'll be back": upserts the Back mark of an assistant reply. A new mark makes the daemon send the brief turn at once. `remindMs` (a whole number, BACK_REMIND_MIN_MS..BACK_REMIND_MAX_MS) sets the reminder `now + remindMs` on the daemon's clock and re-arms a fired one (Snooze); `null` removes it (Dismiss). Reply `{}`; broadcasts `settings_changed`. Errors bad_request, unknown_session, too_many_marks, back_unsupported (a Side). */
+  | { type: "back.set"; sessionId: string; partId: string; title: string; lastLine?: string; prompt?: string; note?: string; remindMs?: number | null }
+  /** Removes the Back mark (Done). A queued brief turn is removed from the queue; a running one goes on and its answer is dropped. */
+  | { type: "back.done"; sessionId: string; partId: string }
+  /** Refresh or Retry: sends a new brief turn for the mark. Error `brief_busy` while one is queued or running, `unknown_mark`. */
+  | { type: "back.brief"; sessionId: string; partId: string }
   /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
   | { type: "jira.token"; token: string | null }
   /** Saves a named Claude token (from `claude setup-token`) in secrets.json; write-only, at most 20. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. Hub only. */
@@ -417,6 +423,8 @@ export type PushPayload = {
   silent?: boolean;
   /** Only replaces an earlier notification (a request that settled); the desktop fallback shows nothing for it. */
   replace?: boolean;
+  /** GH-622: a click opens the session with the mark panel of this assistant part (no turn is sent). */
+  backPart?: string;
 };
 
 /** Claude Code `/rewind` modes: `both` restores code, then conversation. */
@@ -879,6 +887,36 @@ export const APP_ICON_PX = 512;
 export const APP_ICON_MAX = 300_000;
 /** The app name when `Settings.app.name` is "". */
 export const APP_NAME_DEFAULT = "Claude UI";
+/** GH-622: a user mark on one assistant reply (docs/spec.md "I'll be back"). Times are the daemon's clock, in ms. */
+export type BackMark = {
+  /** The marked `assistant_text` part id (`<message id>:<index>`). */
+  partId: string;
+  at: number;
+  /** First line of the reply, sent by the client. */
+  title: string;
+  /** Last line of the reply and first line of the turn's user prompt (client-sent), for the brief written without the model. */
+  lastLine?: string;
+  prompt?: string;
+  note?: string;
+  /** The interval the user typed (Snooze reuses it) and the moment it ends. */
+  remindMs?: number;
+  remindAt?: number;
+  /** The reminder fired at this time. */
+  remindedAt?: number;
+  /** The answer of the last brief turn. */
+  brief?: { text: string; at: number };
+  briefState?: "queued" | "running" | "failed";
+  briefError?: string;
+};
+export const BACK_TEXT_MAX = 200;
+export const BACK_NOTE_MAX = 280;
+export const BACK_BRIEF_MAX = 4000;
+export const BACK_MARKS_MAX = 200;
+export const BACK_REMIND_MIN_MS = 60_000;
+export const BACK_REMIND_MAX_MS = 7 * 86_400_000;
+/** First line of the brief turn's prompt; the web app folds a user_text that starts with it. */
+export const BACK_TAG = /^<claude-ui-brief part="([^"]+)"\/>$/;
+
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number] }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
@@ -929,6 +967,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     open: boolean;
   };
   /** The app icon and name shared by every browser (tab and installed app); served at /app-icon and in /manifest.webmanifest. */
+  /** GH-622 "I'll be back": Back marks per session ID. Written only by back.set, back.done and back.brief (settings.set refuses it). */
+  back: { marks: Record<string, BackMark[]> };
   /** GH-646: the user's own editor for "Open in <name>". `command`: one line, program then arguments, `"..."` groups; `{path}` and `{root}` are replaced, else the paths are appended. `name`: menu label, "" = the program name. Only a browser on the daemon machine may change it. */
   editor: { command: string; name: string };
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };

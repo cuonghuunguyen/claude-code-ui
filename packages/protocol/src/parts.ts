@@ -188,7 +188,7 @@ export type Part = { parentId?: string } & (
 );
 
 /** A queued message as the clients see it: images are counted, not sent. */
-export type QueuedPrompt = { id: string; text: string; imageCount: number; /** Bash mode command (text = command, no `!`); runs like session.bash. */ bash?: true; /** A bash item that failed to run and stays at the head: the reason. */ error?: string };
+export type QueuedPrompt = { id: string; text: string; imageCount: number; /** Bash mode command (text = command, no `!`); runs like session.bash. */ bash?: true; /** A bash item that failed to run and stays at the head: the reason. */ error?: string; /** GH-622: the brief turn of a Back mark (the chip reads "Brief for your mark", no Edit). */ brief?: true };
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([

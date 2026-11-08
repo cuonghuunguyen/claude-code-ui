@@ -1517,7 +1517,7 @@ export function createRouter(opts: {
     // Not `launcher`: those are the start options of this machine's claude-ui (a later manual start there would use them).
     // Not `editor`: the command runs on the Hub's desktop only.
     // Not `claude`: the Claude account is Hub-local (a token account id is unknown to the Side, "cli" would change its login).
-    const { launcher: _launcher, claude: _claude, editor: _editor, ...patch } = settings;
+    const { launcher: _launcher, claude: _claude, editor: _editor, back: _back, ...patch } = settings;
     await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
   }
 
