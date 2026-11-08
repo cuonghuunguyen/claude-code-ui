@@ -11,7 +11,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: false, fork: false, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -112,6 +112,8 @@ class OpenCodeSession implements EngineSession {
   /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
   private leavingPlan = false;
+  /** Tokens and model of the last completed assistant message of this session (its context window use). */
+  private usage: { tokens: NonNullable<OpenCodeMessage["info"]["tokens"]>; providerID: string; modelID: string } | undefined;
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -154,6 +156,21 @@ class OpenCodeSession implements EngineSession {
   /** Emits stored history (also after a stream reconnect: part ids are stable, a re-emit replaces). */
   private apply(h: OpenCodeHistory) {
     for (const part of openCodeParts(h.messages, h.children, this.mapper)) this.session.emit(part);
+    for (const m of h.messages) this.noteUsage(m.info);
+    void this.emitUsage();
+  }
+
+  private noteUsage(info: OpenCodeMessage["info"]) {
+    if (info.role === "assistant" && info.time?.completed && info.tokens && info.providerID && info.modelID) this.usage = { tokens: info.tokens, providerID: info.providerID, modelID: info.modelID };
+  }
+
+  /** The `context_usage` part from the last completed assistant message; none while the window of its model is unknown. */
+  private async emitUsage() {
+    const u = this.usage;
+    const max = u && (await this.engine.contextLimit(u.providerID, u.modelID));
+    if (!u || !max) return;
+    const used = u.tokens.input + u.tokens.output + u.tokens.reasoning + u.tokens.cache.read + u.tokens.cache.write;
+    this.session.emit({ type: "context_usage", id: "context_usage", usage: { totalTokens: used, maxTokens: max, percentage: Math.round((used / max) * 100), categories: [{ name: "Used", tokens: used, kind: "used" }, { name: "Free", tokens: Math.max(max - used, 0), kind: "free" }] } });
   }
 
   /** Asks again what OpenCode still waits for (permissions and questions of this session and its subagents); settles what it no longer lists. */
@@ -213,17 +230,20 @@ class OpenCodeSession implements EngineSession {
   }
 
   prompt(text: string, images: string[] = []): string {
-    if (this.session.currentState() !== "idle") throw new Error("Steering OpenCode sessions comes in a later version");
+    // Steering: while a turn runs the message joins it and the model sees it at the next step (OpenCode loop); the turn still ends at one session.idle.
+    const steer = this.session.currentState() !== "idle";
     const messageID = ascending("msg");
-    this.stopped = false;
-    this.sentAt = Infinity;
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
-    this.beginTurn();
-    this.session.setState("running");
+    if (!steer) {
+      this.stopped = false;
+      this.sentAt = Infinity;
+      this.beginTurn();
+      this.session.setState("running");
+    }
     void this.send(messageID, text, images).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
-      this.session.setState("idle");
+      if (!steer) this.session.setState("idle");
     });
     return messageID;
   }
@@ -262,6 +282,7 @@ class OpenCodeSession implements EngineSession {
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.session.setState("idle");
+    void this.emitUsage();
   }
 
   async interrupt() {
@@ -283,6 +304,7 @@ class OpenCodeSession implements EngineSession {
           this.leavingPlan = true;
           void this.setPermissionMode("default").catch(() => {}).finally(() => (this.leavingPlan = false));
         }
+        if (root) this.noteUsage(info);
         return this.emitAll(this.mapper.message(info));
       }
       case "message.part.updated":
@@ -450,6 +472,7 @@ class OpenCodeEngineImpl implements Engine {
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
   private plan: Promise<Rule[]> | undefined;
+  private limits: Promise<Map<string, number>> | undefined;
 
   constructor(
     readonly server: OpenCodeServer,
@@ -485,6 +508,16 @@ class OpenCodeEngineImpl implements Engine {
       .then((agents) => agents.find((a) => a.name === "plan")?.permission.filter((r) => r.permission === "edit") ?? [])
       .catch((err) => ((this.plan = undefined), Promise.reject(err))));
   }
+
+  /** Context window of `provider/model` from `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); undefined when unknown. */
+  async contextLimit(providerID: string, modelID: string): Promise<number | undefined> {
+    this.limits ??= this.server
+      .request<{ providers: { id: string; models: Record<string, { limit?: { context?: number } }> }[] }>("/config/providers")
+      .then((r) => new Map(r.providers.flatMap((p) => Object.entries(p.models).flatMap(([id, m]) => (m.limit?.context ? [[`${p.id}/${id}`, m.limit.context] as const] : [])))))
+      .catch(() => ((this.limits = undefined), new Map<string, number>()));
+    return (await this.limits).get(`${providerID}/${modelID}`);
+  }
+  dropLimits = () => (this.limits = undefined);
 
   /** The rules `POST /session` gets for a new session in `mode`. */
   block = async (mode: PermissionMode, cwd: string): Promise<Rule[]> => modeBlock(mode, [], mode === "plan" ? await this.planEdit(cwd) : []);

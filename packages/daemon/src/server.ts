@@ -467,7 +467,7 @@ export function createDaemon(opts: {
     if (!providersStale || openCodeBusy() || !openCode.running()) return;
     providersStale = false;
     // Clients drop their OpenCode model list only after OpenCode read the new providers.
-    await openCode.request("/global/dispose", { method: "POST" }).then(() => broadcast({ type: "opencode.providersChanged" }), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
+    await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });

@@ -20,7 +20,7 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };

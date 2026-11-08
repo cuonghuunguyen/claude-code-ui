@@ -118,7 +118,7 @@ const server = createServer(async (req, res) => {
     return res.on("close", () => clients.delete(res));
   }
   if (url.pathname === "/config/providers")
-    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle" }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
+    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
   if (url.pathname === "/provider")
     return json(200, { all: PROVIDERS.map((p) => ({ ...p, source: auth[p.id] ? (auth[p.id].type === "api" ? "api" : "custom") : p.source })), connected: [...new Set([...PROVIDERS.filter((p) => ["env", "config"].includes(p.source) && p.id !== "groq").map((p) => p.id), ...Object.keys(auth)])], default: {} });
   if (url.pathname === "/provider/auth") return json(200, AUTH_METHODS);

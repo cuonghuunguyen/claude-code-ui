@@ -332,13 +332,53 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", /\/permission\/.*\/reply/)).toHaveLength(0);
   });
 
-  it("a prompt while a turn runs is refused", async () => {
+  it("a prompt while a turn runs is steering: sent at once, shown, the state stays and the turn ends once", async () => {
     const d = await boot({ script: ["bash"] });
     const s = await d.open();
     await s.prompt("run ls");
     await until(() => !!s.find("permission_request"));
-    expect(await d.request({ type: "session.prompt", sessionId: s.id, text: "again" })).toMatchObject({ type: "error", code: "prompt_failed" });
+    const states = s.states().length;
+    await s.prompt("also say DONE");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    const steer = d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body;
+    expect(steer).toMatchObject({ agent: "build", parts: [{ type: "text", text: "also say DONE" }] });
+    expect(s.parts().filter((p) => p.type === "user_text").map((p: any) => p.text)).toEqual(["run ls", "also say DONE"]);
+    expect(s.states()).toHaveLength(states);
+    expect(s.states().at(-1)).toBe("needs_input");
+    await d.ok({ type: "permission.respond", requestId: s.find("permission_request")!.requestId, decision: "allow" });
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(1);
   });
+
+  it("context usage: after a turn the last completed assistant message's tokens over the model's window; a restored session has it before any prompt", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    expect(s.find("context_usage")).toBeUndefined();
+    await s.prompt("hello");
+    await until(() => !!s.find("context_usage"));
+    expect(s.find("context_usage")!.usage).toEqual({ totalTokens: 14389, maxTokens: 200000, percentage: 7, categories: [{ name: "Used", tokens: 14389, kind: "used" }, { name: "Free", tokens: 185611, kind: "free" }] });
+    expect(d.requests("GET", "/config/providers")).toHaveLength(1);
+
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_ctx", slug: "c", projectID: "global", directory: project, title: "Ctx", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const tokens = { input: 100, output: 20, reasoning: 5, cache: { read: 1000, write: 75 } };
+    const msg = (id: string, info: object) => ({ info: { id, sessionID: "ses_ctx", ...info }, parts: [] });
+    const messages = [
+      msg("msg_u", { role: "user" }),
+      msg("msg_a", { role: "assistant", providerID: "opencode", modelID: "big-pickle", tokens, time: { created: 1, completed: 2 } }),
+      msg("msg_b", { role: "assistant", providerID: "opencode", modelID: "big-pickle", tokens: { ...tokens, input: 0 }, time: { created: 3 } }),
+    ];
+    const r = await boot({ root, data: { sessions: [row], messages: { ses_ctx: messages } } });
+    await r.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await r.ok({ type: "session.list" });
+    await r.ok({ type: "session.subscribe", sessionId: "ses_ctx", sinceSeq: 0 });
+    await until(() => r.inbox.some((m) => m.type === "event" && m.part.type === "context_usage"));
+    const usage = (r.inbox.find((m) => m.type === "event" && m.part.type === "context_usage") as any).part.usage;
+    expect(usage).toMatchObject({ totalTokens: 1200, maxTokens: 200000, percentage: 1 });
+  });
+
   it("Stop pressed while the prompt waits for the event stream sends nothing and ends the turn as interrupted", async () => {
     const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_STREAM_DELAY_MS: "1200" } });
     const s = await d.open();
