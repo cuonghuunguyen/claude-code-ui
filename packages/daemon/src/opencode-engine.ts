@@ -1,7 +1,7 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
-import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -14,7 +14,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: false };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -35,7 +35,7 @@ const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false, mcp }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
-    mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch"].map((p) => star(p, "allow"))
+    mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : mode === "plan" ? [star("bash", "ask"), ...asks, ...planEdit]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
@@ -83,16 +83,33 @@ export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cw
   return { messages, children, busy: status[id]?.type === "busy", revert, permission: row.permission ?? [], permissions, questions };
 }
 
-/** The models of the connected providers (`GET /config/providers`): Default, then every provider's models under the provider name. */
-export async function openCodeModels(server: OpenCodeServer): Promise<ModelInfo[]> {
-  const r = await server.request<{ providers: { id: string; name: string; models: Record<string, { name: string }> }[]; default?: Record<string, string> }>("/config/providers");
-  const [defProvider, defModel] = Object.entries(r.default ?? {})[0] ?? [];
-  const p = r.providers.find((x) => x.id === defProvider);
-  const name = p && defModel ? `Default (${p.name} ${p.models[defModel]?.name ?? defModel})` : "Default";
-  return [{ value: "default", displayName: name, description: "" }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name })))];
+/** `GET /config/providers`: the connected providers with their models (`variants`: the model's reasoning variants by name) and the default model per provider. */
+type ProviderList = { providers: { id: string; name: string; models: Record<string, { name: string; limit?: { context?: number }; variants?: Record<string, unknown> }> }[]; default?: Record<string, string> };
+const EFFORT_ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+/** The effort levels of a model: its variant names that are effort levels (`none`, `minimal` are not), in effort order. */
+const levelsOf = (m?: { variants?: Record<string, unknown> }) => EFFORT_ORDER.filter((l) => l in (m?.variants ?? {}));
+const defaultOf = (r: ProviderList) => {
+  const [provider, model] = Object.entries(r.default ?? {})[0] ?? [];
+  const p = r.providers.find((x) => x.id === provider);
+  return p && model ? { p, id: model, m: p.models[model] } : undefined;
+};
+/** Default, then every provider's models under the provider name; a model with reasoning variants offers them as effort levels. */
+export function modelsFrom(r: ProviderList): ModelInfo[] {
+  const effort = (m?: { variants?: Record<string, unknown> }) => {
+    const levels = levelsOf(m);
+    return levels.length ? { supportsEffort: true, supportedEffortLevels: levels } : {};
+  };
+  const def = defaultOf(r);
+  const name = def ? `Default (${def.p.name} ${def.m?.name ?? def.id})` : "Default";
+  return [{ value: "default", displayName: name, description: "", ...effort(def?.m) }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name, ...effort(m) })))];
 }
+/** The models of the connected providers (`GET /config/providers`). */
+export const openCodeModels = (server: OpenCodeServer): Promise<ModelInfo[]> => server.request<ProviderList>("/config/providers").then(modelsFrom);
 
-/** A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text. */
+/**
+ * A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text.
+ * shortcut: only for answers without `choices` (a coordinator's `worker_answer`); the web sends `choices`. Free text that starts with a label and ", ", or equals a label, is still read as that label.
+ */
 export function splitLabels(value: string, labels: string[]): string[] {
   const out: string[] = [];
   const byLength = [...labels].sort((a, b) => b.length - a.length);
@@ -105,6 +122,16 @@ export function splitLabels(value: string, labels: string[]): string[] {
   return out;
 }
 
+type TurnEnd = { done: Promise<void>; resolve: () => void };
+/** The longest a prompt sent after Stop waits for the aborted turn to end. */
+const TURN_END_WAIT_MS = 10_000;
+/** Commands the daemon itself runs for an OpenCode session (OpenCode's web app has them as session commands, not server commands). */
+const LOCAL_COMMANDS: SlashCommand[] = [
+  { name: "compact", description: "Summarize the conversation to free context", argumentHint: "" },
+  { name: "undo", description: "Undo the last message and its file changes", argumentHint: "" },
+  { name: "redo", description: "Redo the last undone message", argumentHint: "" },
+];
+const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {
@@ -127,6 +154,10 @@ class OpenCodeSession implements EngineSession {
   /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
   private leavingPlan = false;
+  /** A bash mode command (`POST /shell`, no model call) is running as the turn: its end sends no `turn_result`. */
+  private shellRun = false;
+  /** Settles when the running turn goes idle. */
+  private turnEnd: TurnEnd | undefined;
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
   /** The message OpenCode's revert cuts the conversation at, undefined when none (a prompt clears it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
@@ -174,7 +205,7 @@ class OpenCodeSession implements EngineSession {
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
-    if (this.history.busy) this.turnAt = Date.now();
+    if (this.history.busy) (this.turnAt = Date.now()), this.openTurnEnd();
     this.requests(this.history);
     // Events between the history read and the stream connecting are lost: read again once it is open.
     void this.server.streamReady().then(() => this.resync());
@@ -192,7 +223,8 @@ class OpenCodeSession implements EngineSession {
   private async emitCommands() {
     const commands = await this.engine.commands(this.cwd).catch(() => undefined);
     if (!commands) return;
-    this.commandNames = new Set(commands.map((c) => c.name));
+    // /compact, /undo and /redo are ours: with arguments they are a plain prompt, never a server command.
+    this.commandNames = new Set(commands.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
     this.session.emit({ type: "commands", id: "commands", commands });
   }
 
@@ -224,7 +256,7 @@ class OpenCodeSession implements EngineSession {
         void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
-        if (h.busy && state === "idle") (this.turnAt = Date.now()), this.session.setState("running");
+        if (h.busy && state === "idle") (this.turnAt = Date.now(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt just sent may not be busy in OpenCode yet.
         else if (!h.busy && state === "running" && Date.now() - this.sentAt > 3000) this.finish();
       })
@@ -289,15 +321,79 @@ class OpenCodeSession implements EngineSession {
       .finally(() => (this.attaching = undefined)));
   }
 
-  prompt(text: string, images: string[] = []): string {
-    // Steering: while a turn runs the message joins it and the model sees it at the next step (OpenCode loop); the turn still ends at one session.idle.
-    const steer = this.session.currentState() !== "idle";
+  prompt(text: string, images: string[] = []): string | undefined {
+    const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
+    if (local) {
+      void this.runLocal(local as "compact" | "undo" | "redo");
+      return undefined;
+    }
+    // Stop was pressed and the aborted turn still runs: a joining prompt would be lost with the loop, so it starts the next turn when this one has ended.
+    const afterStop = this.stopped && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
     this.mapper.own.add(messageID);
     this.revertAt = undefined;
     this.session.emit({ type: "user_text", id: messageID, text, images });
+    const start = () => this.start(messageID, text, images);
+    if (!afterStop) start();
+    else void Promise.race([this.turnEnd?.done, new Promise((r) => setTimeout(r, TURN_END_WAIT_MS))]).then(start);
+    return messageID;
+  }
+
+  /** `/compact`, `/undo` and `/redo` (nothing is echoed): only while idle; a running turn is not steered with them. */
+  private async runLocal(cmd: "compact" | "undo" | "redo") {
+    const say = (text: string) => this.notice(`local:${ascending("msg")}`, text);
+    if (this.session.currentState() !== "idle" || this.session.pendingCount()) return say("Stop the turn first");
+    try {
+      if (cmd === "compact") return await this.compact(say);
+      // User messages that show in the timeline (not a shell run's or a compaction's).
+      const all = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+      const shown = (m: OpenCodeMessage) => m.info.role === "user" && m.parts.some((p) => (p.type === "text" && !p.synthetic && !p.ignored) || (p.type === "file" && p.mime?.startsWith("image/")));
+      const at = this.revertAt ? all.findIndex((m) => m.info.id === this.revertAt) : -1;
+      if (cmd === "undo") {
+        const target = all.slice(0, at < 0 ? all.length : at).filter(shown).at(-1);
+        if (!target) return say("Nothing to undo");
+        return await this.rewind(target.info.id, (await this.previewRewind(target.info.id)).modes![0]!);
+      }
+      if (at < 0) return say("Nothing to redo");
+      const next = all.slice(at + 1).find(shown);
+      // The newest undone message is redone: the revert point goes away; else it moves to the next undone one.
+      if (!next) return void (await this.server.request(`/session/${this.id}/unrevert`, { method: "POST", directory: this.cwd }));
+      const before = this.revertAt;
+      this.revertAt = next.info.id; // the session.updated of this revert is not an external one
+      await this.server.request(`/session/${this.id}/revert`, { method: "POST", directory: this.cwd, body: { messageID: next.info.id } }).catch((err) => ((this.revertAt = before), Promise.reject(err)));
+      await this.resync(); // the messages between the old and the new revert point come back
+    } catch (err) {
+      say(`/${cmd} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** `/compact`: OpenCode summarizes the conversation (a turn: the compaction marker, the summary as an assistant message). */
+  private async compact(say: (text: string) => void) {
+    const [providerID, ...rest] = this.model.split("/");
+    const picked = this.model !== "default" && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : (this.usage ?? (await this.engine.defaultModel()));
+    if (!picked) return say("Choose a model first");
+    this.revertAt = undefined; // the summary removes the cut messages
+    this.stopped = false;
+    this.sentAt = Infinity;
+    this.beginTurn();
+    this.session.setState("running");
+    this.server
+      .request(`/session/${this.id}/summarize`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { providerID: picked.providerID, modelID: picked.modelID } })
+      .then(
+        () => (this.sentAt = Date.now()),
+        (err) => {
+          this.sentAt = Date.now();
+          say(`/compact failed: ${(err as Error).message}`);
+          this.toIdle();
+        },
+      );
+  }
+
+  /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
+  private start(messageID: string, text: string, images: string[]) {
+    const steer = this.session.currentState() !== "idle";
+    this.stopped = false;
     if (!steer) {
-      this.stopped = false;
       this.sentAt = Infinity;
       this.beginTurn();
       this.session.setState("running");
@@ -305,45 +401,62 @@ class OpenCodeSession implements EngineSession {
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     void this.send(messageID, text, images, !steer && cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
-      if (!steer) this.session.setState("idle");
+      if (!steer) this.toIdle();
     });
-    return messageID;
   }
 
+  /** The OpenCode agent of a prompt: `plan` in plan mode, else the worker's `agent` (a primary agent of `GET /agent`), else `build`. */
+  private agent = () => (this.permissionMode === "plan" ? "plan" : (this.opts.agent?.(this.id) ?? "build"));
+
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
-    // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
-    await Promise.all([this.server.streamReady(), this.attach()]);
-    if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
-    if (this.stopped) {
-      this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-      return this.session.setState("idle");
-    }
-    const [providerID, ...rest] = this.model.split("/");
-    const agent = this.permissionMode === "plan" ? "plan" : "build";
-    if (command) {
-      // The turn runs inside this request: no timeout.
-      await this.server.request(`/session/${this.id}/command`, {
+    // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
+    try {
+      // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
+      await Promise.all([this.server.streamReady(), this.attach()]);
+      if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
+      const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
+      if (this.stopped) {
+        this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
+        return this.toIdle();
+      }
+      const [providerID, ...rest] = this.model.split("/");
+      const agent = this.agent();
+      // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
+      if (command) {
+        // The turn runs inside this request: no timeout.
+        await this.server.request(`/session/${this.id}/command`, {
+          method: "POST",
+          directory: this.cwd,
+          timeoutMs: 0,
+          body: { messageID, command: command.name, arguments: command.args, agent, ...variant, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+        });
+        return;
+      }
+      const parts = [
+        ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
+        ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
+      ];
+      await this.server.request(`/session/${this.id}/prompt_async`, {
         method: "POST",
         directory: this.cwd,
-        timeoutMs: 0,
-        body: { messageID, command: command.name, arguments: command.args, agent, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+        body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
       });
+    } finally {
       this.sentAt = Date.now();
-      return;
     }
-    const parts = [
-      ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
-      ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
-    ];
-    await this.server.request(`/session/${this.id}/prompt_async`, {
-      method: "POST",
-      directory: this.cwd,
-      body: { messageID, parts, agent, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
-    });
-    this.sentAt = Date.now();
+  }
+
+  /** A turn is running (started here, found busy at a restore or resync): `turnEnd` settles when it goes idle. */
+  private openTurnEnd() {
+    if (this.turnEnd) return;
+    const end = {} as TurnEnd;
+    end.done = new Promise<void>((r) => (end.resolve = r));
+    this.turnEnd = end;
   }
 
   private beginTurn() {
+    this.turnEnd = undefined;
+    this.openTurnEnd();
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
@@ -354,9 +467,18 @@ class OpenCodeSession implements EngineSession {
   private finish() {
     if (this.session.currentState() === "idle") return;
     const { usage, cost } = this.mapper.turn();
-    if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
-    this.session.setState("idle");
+    const shell = this.shellRun;
+    this.shellRun = false;
+    if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
+    this.toIdle();
     void this.emitUsage();
+  }
+
+  /** The turn is over: idle, and a prompt waiting for the end of an aborted turn goes on. */
+  private toIdle() {
+    this.session.setState("idle");
+    this.turnEnd?.resolve();
+    this.turnEnd = undefined;
   }
 
   async interrupt() {
@@ -515,7 +637,7 @@ class OpenCodeSession implements EngineSession {
     this.reqs.delete(id);
     if (!req) return;
     if (r.kind === "answer") {
-      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : q.multiSelect ? splitLabels(r.answers[q.question]!, q.options.map((o) => o.label)) : [r.answers[q.question]!]));
+      const answers = req.questions!.map((q) => (r.answers[q.question] === undefined ? [] : (r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(r.answers[q.question]!, q.options.map((o) => o.label)) : [r.answers[q.question]!]))));
       return this.post(`/question/${id}/reply`, { answers });
     }
     if (r.kind !== "cancel" || r.message !== ANSWERED) this.post(`/question/${id}/reject`, {});
@@ -528,8 +650,31 @@ class OpenCodeSession implements EngineSession {
     void this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission: rules } }).catch((err) => this.notice("persist_failed", `Could not save the rule: ${(err as Error).message}`));
   }
 
-  bash(): void {
-    throw new Error("Shell commands in OpenCode sessions come in a later version");
+  /**
+   * Bash mode (`!`): OpenCode runs `command` in the folder without a model call (`POST /shell`; the request answers when it ends). Its events
+   * come as the Bash card (the mapper's `bash` tool), the turn is the command run, no `turn_result`. Stop = abort.
+   */
+  bash(command: string) {
+    if (!this.session.isLive()) throw new Error(`session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.session.currentState() !== "idle" || this.session.pendingCount()) throw new Error("session is busy: wait for the turn to end");
+    if (this.shellRun) throw new Error("a shell command is already running");
+    const messageID = ascending("msg");
+    this.mapper.own.add(messageID);
+    this.shellRun = true;
+    this.stopped = false;
+    this.sentAt = Infinity;
+    this.beginTurn();
+    this.session.setState("running");
+    const model = this.model.split("/");
+    const done = () => (this.sentAt = Date.now());
+    this.server
+      .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
+      .then(done, (err) => {
+        done();
+        this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
+        this.shellRun = false;
+        this.toIdle();
+      });
   }
   subscribed() {}
   beforeStateEvent() {}
@@ -548,7 +693,10 @@ class OpenCodeSession implements EngineSession {
 
   /** The stored messages and what a revert to before the user message `id` covers: the files its turn and every later turn changed. */
   private async rewindPlan(id: string) {
-    const all = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+    const stored = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+    // Messages cut by an earlier revert are hidden: their changes are already undone and count once.
+    const cut = this.revertAt ? stored.findIndex((m) => m.info.id === this.revertAt) : -1;
+    const all = cut < 0 ? stored : stored.slice(0, cut);
     const at = all.findIndex((m) => m.info.id === id && m.info.role === "user");
     if (at < 0) throw new Error("unknown message");
     const diffs = all.slice(at).flatMap((m) => (m.info.role === "user" ? (m.info.summary?.diffs ?? []) : []));
@@ -584,7 +732,7 @@ class OpenCodeSession implements EngineSession {
   releaseQuery = () => false;
   externalTurnRunning = () => false;
   untitled = () => false;
-  bashRunning = () => false;
+  bashRunning = () => this.shellRun;
   working = () => false;
   takesQueued = () => this.session.currentState() === "idle" && this.session.pendingCount() === 0;
 }
@@ -595,7 +743,7 @@ class OpenCodeEngineImpl implements Engine {
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
   private plan: Promise<Rule[]> | undefined;
-  private limits: Promise<Map<string, number>> | undefined;
+  private providers: Promise<ProviderList> | undefined;
 
   constructor(
     readonly server: OpenCodeServer,
@@ -633,13 +781,24 @@ class OpenCodeEngineImpl implements Engine {
       .catch((err) => ((this.plan = undefined), Promise.reject(err))));
   }
 
-  /** Context window of `provider/model` from `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); undefined when unknown. */
+  /** `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); empty when it fails (read again next time). */
+  private providerList(): Promise<ProviderList> {
+    return (this.providers ??= this.server.request<ProviderList>("/config/providers").catch(() => ((this.providers = undefined), { providers: [] })));
+  }
+  /** Context window of `provider/model`; undefined when unknown. */
   async contextLimit(providerID: string, modelID: string): Promise<number | undefined> {
-    this.limits ??= this.server
-      .request<{ providers: { id: string; models: Record<string, { limit?: { context?: number } }> }[] }>("/config/providers")
-      .then((r) => new Map(r.providers.flatMap((p) => Object.entries(p.models).flatMap(([id, m]) => (m.limit?.context ? [[`${p.id}/${id}`, m.limit.context] as const] : [])))))
-      .catch(() => ((this.limits = undefined), new Map<string, number>()));
-    return (await this.limits).get(`${providerID}/${modelID}`);
+    return (await this.providerList()).providers.find((p) => p.id === providerID)?.models[modelID]?.limit?.context;
+  }
+  /** The model OpenCode runs by default (`default` of `GET /config/providers`). */
+  async defaultModel(): Promise<{ providerID: string; modelID: string } | undefined> {
+    const d = defaultOf(await this.providerList());
+    return d && { providerID: d.p.id, modelID: d.id };
+  }
+  /** The effort levels of a session model (`default` = the default model of OpenCode); none when it has no reasoning variants. */
+  async effortLevels(model: string): Promise<EffortLevel[]> {
+    const r = await this.providerList();
+    const [provider, ...rest] = model.split("/");
+    return levelsOf(model === "default" ? defaultOf(r)?.m : r.providers.find((p) => p.id === provider)?.models[rest.join("/")]);
   }
   private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
   /** `GET /command` of a folder (built-ins, project and user commands, MCP prompts, skills), cached 60 s; dropped when the server restarts. */
@@ -648,12 +807,12 @@ class OpenCodeEngineImpl implements Engine {
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     const list = this.server
       .request<{ name: string; description?: string; hints?: string[] }[]>("/command", { directory: cwd })
-      .then((l) => l.map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") })));
+      .then((l) => [...LOCAL_COMMANDS, ...l.filter((c) => !LOCAL_NAMES.includes(c.name)).map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") }))]);
     this.commandLists.set(cwd, { at: Date.now(), list });
     list.catch(() => this.commandLists.delete(cwd));
     return list;
   }
-  dropLimits = () => (this.limits = undefined);
+  dropLimits = () => (this.providers = undefined);
 
   /** The rules `POST /session` gets for a new session in `mode`. */
   block = async (mode: PermissionMode, cwd: string): Promise<Rule[]> => modeBlock(mode, [], mode === "plan" ? await this.planEdit(cwd) : []);

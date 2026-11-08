@@ -1331,8 +1331,8 @@ it("Claude account (GH-615): add clears the token field and lists the account wi
   expect(q("settings-account-token-set")).toBeNull();
 });
 
-it("Settings › OpenCode: a relative path shows an error under the field and is not saved; empty and an absolute path are saved; status and Check again", async () => {
-  const { q, calls, pick } = await render();
+it("Settings › OpenCode: the daemon judges the path (a Windows-style path is sent) and its refusal shows once under the field; empty and absolute paths are saved; status and Check again", async () => {
+  const { q, calls, pick, refuse } = await render();
   await pick("opencode");
   expect(q("settings-opencode-status")?.textContent).toBe("OpenCode 1.18.34 · running");
   expect(document.querySelector("label")?.textContent).toContain("OpenCode binary path");
@@ -1346,9 +1346,15 @@ it("Settings › OpenCode: a relative path shows an error under the field and is
     await act(async () => input.blur());
   };
   const sets = () => calls.filter((c) => c.type === "settings.set");
-  await type("bin/opencode");
-  expect(q("settings-opencode-path-error")?.textContent).toContain("absolute path");
-  expect(sets()).toHaveLength(0);
+  const refusal = "OpenCode path must be an absolute path to an existing file";
+  refuse(refusal);
+  await type("C:/tools/opencode.exe");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "C:/tools/opencode.exe" } } });
+  expect(q("settings-opencode-path-error")?.textContent).toBe(refusal);
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(input.value).toBe("C:/tools/opencode.exe");
+  expect(document.body.textContent!.split(refusal)).toHaveLength(2);
+  refuse("");
   await type("/opt/opencode");
   expect(q("settings-opencode-path-error")).toBeNull();
   expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "/opt/opencode" } } });

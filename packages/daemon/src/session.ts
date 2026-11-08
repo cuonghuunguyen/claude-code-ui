@@ -517,10 +517,10 @@ export class Session {
   }
 
   /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. `by`: set only by orchestration; an escalated question refuses it. */
-  answer(requestId: string, answers: Record<string, string>, by?: "coordinator"): boolean {
+  answer(requestId: string, answers: Record<string, string>, by?: "coordinator", choices?: Record<string, string[]>): boolean {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "question" || (by && req.part.escalated)) return false;
-    req.reply({ kind: "answer", answers });
+    req.reply({ kind: "answer", answers, ...(choices && { choices }) });
     return this.settle(requestId, { answers, ...(by ? { by } : {}) }, true);
   }
 

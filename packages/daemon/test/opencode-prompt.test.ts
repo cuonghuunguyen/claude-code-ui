@@ -99,6 +99,12 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
 }
 
 describe("OpenCode prompting", { timeout: 30_000 }, () => {
+  it("plugins.reload counts no OpenCode session as reloaded", async () => {
+    const d = await boot();
+    await d.open();
+    expect(await d.ok({ type: "plugins.reload", cwd: d.project })).toEqual({ reloaded: 0, failed: [], errorCount: 0 });
+  });
+
   it("a prompt streams reasoning and text, ends with a turn result and sends the message id, agent, text and image", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
@@ -222,6 +228,19 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", `/session/${s.id}/abort`)).toHaveLength(2);
   });
 
+  it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
+    const d = await boot({ script: ["abort", "text"] });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await Promise.all([d.ok({ type: "session.interrupt", sessionId: s.id }), s.prompt("say DONE")]);
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2 && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body).toMatchObject({ messageID: s.parts().find((p) => p.type === "user_text" && p.text === "say DONE")!.id });
+    expect(s.parts().filter((p) => p.type === "user_text" && p.text === "say DONE")).toHaveLength(1);
+    expect(s.find("turn_interrupted")).toBeTruthy();
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
   it("models.list for OpenCode groups the models by provider; a chosen model reaches the prompt as providerID and modelID", async () => {
     const d = await boot({ script: ["text"] });
     const models = (await d.ok({ type: "models.list", engine: "opencode" })).models;
@@ -233,6 +252,87 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await s.prompt("hi");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.model).toEqual({ providerID: "acme", modelID: "x/y" });
+  });
+
+  it("effort: models with reasoning variants list them as effort levels; the prompt carries the variant only when the model has it", async () => {
+    const d = await boot({ script: ["text", "text", "text"] });
+    const models = (await d.ok({ type: "models.list", engine: "opencode" })).models;
+    expect(models.find((m: any) => m.value === "opencode/thinker")).toMatchObject({ supportsEffort: true, supportedEffortLevels: ["low", "high"] });
+    expect(models.find((m: any) => m.value === "acme/x/y")).not.toHaveProperty("supportsEffort");
+    expect(models[0]).not.toHaveProperty("supportsEffort");
+    const s = await d.open();
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    const turns = async (n: number) => until(() => s.parts().filter((p) => p.type === "turn_result").length === n);
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "opencode/thinker" });
+    await s.prompt("one");
+    await turns(1);
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "medium" });
+    await s.prompt("two");
+    await turns(2);
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    await s.prompt("three");
+    await turns(3);
+    const bodies = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(bodies[0]).toMatchObject({ variant: "high" });
+    expect(bodies[1]).not.toHaveProperty("variant");
+    expect(bodies[2]).not.toHaveProperty("variant");
+  });
+
+  it("/compact summarizes with the default model: compaction marker, summary text, turn result; while a turn runs it is refused with a notice", async () => {
+    const d = await boot({ script: ["compact", "bash"] });
+    const s = await d.open();
+    expect(await s.prompt("/compact")).toEqual({ local: true });
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(d.requests("POST", `/session/${s.id}/summarize`).map((r) => r.body)).toEqual([{ providerID: "opencode", modelID: "big-pickle" }]);
+    expect(s.find("compaction")).toMatchObject({ trigger: "manual" });
+    expect(s.find("assistant_text")).toMatchObject({ text: expect.stringContaining("Summary") });
+    expect(s.parts().some((p) => p.type === "user_text")).toBe(false);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    await s.prompt("/compact");
+    await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
+    expect(d.requests("POST", `/session/${s.id}/summarize`)).toHaveLength(1);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["run ls"]);
+  });
+
+  it("/compact uses the chosen model", async () => {
+    const d = await boot({ script: ["compact"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await s.prompt("/compact");
+    await until(() => !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/summarize`)[0]!.body).toEqual({ providerID: "acme", modelID: "x/y" });
+  });
+
+  it("bash mode runs the command through OpenCode's shell as a Bash card without a model call, user message or turn result; during a turn it is queued", async () => {
+    const d = await boot({ script: ["bash"] });
+    const s = await d.open();
+    await d.ok({ type: "session.bash", sessionId: s.id, command: "echo e2e-ok" });
+    await until(() => !!s.find("tool_result") && s.states().at(-1) === "idle");
+    const shell = d.requests("POST", `/session/${s.id}/shell`);
+    expect(shell).toHaveLength(1);
+    expect(shell[0]!.body).toMatchObject({ command: "echo e2e-ok", agent: "build", messageID: expect.stringMatching(/^msg_/) });
+    expect(shell[0]!.body.model).toBeUndefined();
+    expect(s.find("tool_call")).toMatchObject({ tool: "Bash", input: { command: "echo e2e-ok" }, status: "done" });
+    expect(s.find("tool_result")).toMatchObject({ isError: false, output: expect.stringContaining("e2e-ok") });
+    expect(s.states()).toEqual(["running", "idle"]);
+    expect(s.parts().some((p) => p.type === "user_text" || p.type === "turn_result")).toBe(false);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    // During a turn the command waits in the queue (the shell would refuse a busy session).
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    expect(await d.ok({ type: "session.bash", sessionId: s.id, command: "echo later" })).toHaveProperty("itemId");
+    expect(d.requests("POST", `/session/${s.id}/shell`)).toHaveLength(1);
+  });
+
+  it("a failing shell request is a notice and ends the run idle", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__fail", { path: `/session/${s.id}/shell` });
+    await d.ok({ type: "session.bash", sessionId: s.id, command: "echo x" });
+    await until(() => !!s.last(`${s.id}:shell_failed`) && s.states().at(-1) === "idle");
   });
 
   it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
@@ -263,7 +363,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const s = await d.open();
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "bypassPermissions" });
     const block = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as { permission: string; action: string }[];
-    expect(block.filter((r) => r.action === "allow" && r.permission !== "claude-ui").map((r) => r.permission)).toEqual(["bash", "edit", "webfetch", "websearch"]);
+    expect(block.filter((r) => r.action === "allow" && r.permission !== "claude-ui").map((r) => r.permission)).toEqual(["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"]);
   });
 
   it("a restored session shows the history with Claude card names and message ids, a busy turn as running, and the pending permission of the folder", async () => {
@@ -310,6 +410,21 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.parts().filter((p) => p.type === "permission_request")).toHaveLength(1);
     await d.ok({ type: "permission.respond", requestId: s.find("permission_request")!.requestId, decision: "allow" });
     await until(() => !!s.find("turn_result"));
+  });
+
+  it("a prompt that failed to send does not block the turn-end check of a later turn started in OpenCode", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
+    await s.prompt("hello");
+    await until(() => !!s.last(`${s.id}:prompt_failed`) && s.states().at(-1) === "idle");
+    // A turn started in OpenCode's own UI; it ends while the stream is down: the reconnect read ends it (3 s after the failed send).
+    await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "busy" } } }] });
+    await until(() => s.states().at(-1) === "running");
+    await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "idle" } } }] });
+    await new Promise((r) => setTimeout(r, 3200));
+    await d.fake("/__drop");
+    await until(() => s.states().at(-1) === "idle", 5000);
   });
 
   it("a message queued while a turn runs is sent as the next prompt after the turn", async () => {
@@ -364,6 +479,18 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body.parts[0].text).toBe("/review main");
   });
 
+  it("a multi-select answer with choices reaches OpenCode exactly as chosen, also when a label holds the separator", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const options = ["Blue", "Blue, green", "Red"].map((label) => ({ label, description: "" }));
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "question.asked", properties: { id: "que_multi", sessionID: s.id, questions: [{ question: "Q", header: "H", options, multiple: true }] } }] });
+    await until(() => !!s.find("question"));
+    // "Blue, green" is the label Blue plus the user's own text "green": only the structure tells it from the label "Blue, green".
+    await d.ok({ type: "question.respond", requestId: "que_multi", answers: { Q: "Blue, green" }, choices: { Q: ["Blue", "green"] } });
+    expect(d.requests("POST", "/question/que_multi/reply")[0]!.body).toEqual({ answers: [["Blue", "green"]] });
+    expect(await d.request({ type: "question.respond", requestId: "x", answers: { Q: "a" }, choices: { Q: [1] } })).toMatchObject({ type: "error", code: "bad_request" });
+  });
+
   it("Stop agent aborts the child session of the task call", async () => {
     const d = await boot({ script: ["question"] });
     const s = await d.open();
@@ -379,9 +506,9 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("commands"));
-    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["init", "review", "fail"]);
-    expect(s.find("commands")!.commands[0]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
-    expect(s.find("commands")!.commands[1]).toMatchObject({ description: "", argumentHint: "" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "init", "review", "fail"]);
+    expect(s.find("commands")!.commands[3]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[4]).toMatchObject({ description: "", argumentHint: "" });
     expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
 
     await s.prompt("/review main");
@@ -495,11 +622,11 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
   const messages = [user("msg_u1", "one"), user("msg_u2", "two", [diff("a.ts", 2, 1)]), user("msg_u3", "three", [diff("a.ts", 1, 0), diff("b.ts", 3, 0)]), user("msg_u4", "four")];
   const row = (project: string, extra: object = {}) => ({ id: "ses_rw", slug: "rw", projectID: "global", directory: project, title: "Rewind", version: "1.18.34", time: { created: 1, updated: 2 }, ...extra });
   /** A stored OpenCode session, subscribed. */
-  async function restored(o: { revert?: string; busy?: boolean } = {}) {
+  async function restored(o: { revert?: string; busy?: boolean; env?: Record<string, string> } = {}) {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const project = join(root, "project");
     mkdirSync(project, { recursive: true });
-    const d = await boot({ root, data: { sessions: [row(project, o.revert ? { revert: { messageID: o.revert, snapshot: "s" } } : {})], messages: { ses_rw: messages }, busy: o.busy ? ["ses_rw"] : [] } });
+    const d = await boot({ root, data: { sessions: [row(project, o.revert ? { revert: { messageID: o.revert, snapshot: "s" } } : {})], messages: { ses_rw: messages }, busy: o.busy ? ["ses_rw"] : [] }, env: o.env });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     await d.ok({ type: "session.list" });
     const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_rw", sinceSeq: 0, paged: true });
@@ -511,6 +638,11 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     const r = await restored();
     expect(await r.preview("msg_u2")).toEqual({ filesChanged: ["a.ts", "b.ts"], insertions: 6, deletions: 1, conversation: true, modes: ["both"] });
     expect(await r.preview("msg_u4")).toEqual({ filesChanged: [], insertions: 0, deletions: 0, conversation: true, modes: ["conversation"] });
+  });
+
+  it("after an earlier rewind the preview counts only the messages still shown", async () => {
+    const r = await restored({ revert: "msg_u3" });
+    expect(await r.preview("msg_u1")).toEqual({ filesChanged: ["a.ts"], insertions: 2, deletions: 1, conversation: true, modes: ["both"] });
   });
 
   it("rewind posts the revert, emits the rewind part and refuses a mode the preview does not offer", async () => {
@@ -537,14 +669,86 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     expect(r.sub.snapshot.page.parts.map((p: any) => p.id)).toEqual(["msg_u1", "msg_u2"]);
   });
 
+  it("/undo, /undo, /redo and /redo walk the revert point; each is local: no echo, no prompt, reply local", async () => {
+    const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4"));
+    const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
+    const reverts = () => r.d.requests("POST", "/session/ses_rw/revert").map((q) => q.body.messageID);
+    expect(await run("/undo")).toEqual({ local: true });
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u4"));
+    expect(reverts()).toEqual(["msg_u4"]);
+    await run("/undo");
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
+    expect(reverts()).toEqual(["msg_u4", "msg_u3"]);
+    // Redo moves the revert point to the next undone message: the messages before it are read again.
+    const shown = () => r.parts().filter((p) => p.id === "msg_u3").length;
+    const before = shown();
+    await run("/redo");
+    await until(() => reverts().length === 3 && shown() > before);
+    expect(reverts()[2]).toBe("msg_u4");
+    // The last undone message is redone with unrevert.
+    await run("/redo");
+    await until(() => r.d.requests("POST", "/session/ses_rw/unrevert").length === 1);
+    expect(r.parts().filter((p) => p.type === "user_text" && p.text.startsWith("/"))).toEqual([]);
+    expect(r.d.requests("POST", "/session/ses_rw/prompt_async")).toHaveLength(0);
+    expect(r.parts().filter((p) => p.type === "notice")).toEqual([]);
+  });
+
+  it("a message sent after Stop in a session restored while busy waits for the aborted turn and starts the next one", async () => {
+    const r = await restored({ busy: true });
+    await Promise.all([r.d.ok({ type: "session.interrupt", sessionId: "ses_rw" }), r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text: "next" })]);
+    await until(() => r.d.requests("POST", "/session/ses_rw/prompt_async").length === 1);
+    // The aborted turn ended (idle), then "next" started a new turn (running again); sent into the aborted loop it would leave the session idle.
+    const states = () => r.parts().filter((p) => p.type === "session_state").map((p) => (p as { state: string }).state);
+    await until(() => states().at(-1) === "running");
+    expect(states()).toContain("idle");
+  });
+
+  it("/undo and /redo with nothing to do are notices; with arguments or while a turn runs they are not run", async () => {
+    const r = await restored({ revert: "msg_u1" });
+    const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
+    const notices = () => r.parts().filter((p) => p.type === "notice").map((p) => (p as { text: string }).text);
+    await run("/undo");
+    await until(() => notices().includes("Nothing to undo"));
+    const busy = await restored({ busy: true });
+    await busy.d.ok({ type: "session.prompt", sessionId: "ses_rw", text: "/undo" });
+    await until(() => busy.parts().some((p) => p.type === "notice" && p.text === "Stop the turn first"));
+    expect(busy.d.requests("POST", "/session/ses_rw/revert")).toHaveLength(0);
+  });
+
+  it("the commands list has /compact, /undo and /redo first, before the server's", async () => {
+    const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "commands"));
+    const names = (r.parts().filter((p) => p.type === "commands").at(-1) as { commands: { name: string }[] }).commands.map((c) => c.name);
+    expect(names.slice(0, 3)).toEqual(["compact", "undo", "redo"]);
+    expect(names).toContain("review");
+  });
+
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {
     const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4")); // the read after the stream connected is done
     await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
     const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
     const before = cut();
     await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
     await until(() => cut() > before);
+  });
+
+  it("an unrevert that comes while a slow read predating it is in flight brings the cut messages back", async () => {
+    const r = await restored({ env: { FAKE_OPENCODE_MESSAGE_DELAY_MS: "600" } });
+    // The read after the stream connected has finished (it re-emits the history), so none is in flight from before the revert.
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4"), 12000);
+    await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
+    // A stream reconnect starts a read; its session row (still reverted) is read at once, its messages 600 ms later.
+    const reads = r.d.requests("GET", "/session/ses_rw/message").length;
+    await r.d.fake("/__drop");
+    await until(() => r.d.requests("GET", "/session/ses_rw/message").length > reads, 12000);
+    const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
+    const before = cut();
+    await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
+    await until(() => cut() > before, 3000);
   });
 });
 
@@ -722,7 +926,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     expect(d.requests("POST", "/mcp").map((r) => r.body.name)).not.toContain(mcpName(session.id));
   });
 
-  it("worker_start with engine opencode from a Claude coordinator starts a ses_ worker; an unknown OpenCode model is refused with OpenCode's list; agent is Claude only", async () => {
+  it("worker_start with engine opencode from a Claude coordinator starts a ses_ worker; an unknown OpenCode model is refused with OpenCode's list; agent is one of OpenCode's primary agents and is used for its prompts", async () => {
     const d = await boot({ script: ["text"] });
     await on(d);
     const coord: string = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
@@ -731,13 +935,18 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
       const r = (await d.http.orchestration.tools(coord).find((t) => t.name === "worker_start")!.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
       return r.isError ? { error: r.content[0]!.text } : JSON.parse(r.content[0]!.text);
     };
-    expect(await call({ name: "bad", cwd: d.project, prompt: "p", engine: "opencode", model: "nope/x" })).toEqual({ error: expect.stringContaining("Valid values: default, opencode/big-pickle, opencode/alpha, acme/x/y") });
-    expect(await call({ name: "agt", cwd: d.project, prompt: "p", engine: "opencode", agent: "Explore" })).toEqual({ error: expect.stringContaining("agent is Claude only") });
-    const w = await call({ name: "oc", cwd: d.project, prompt: "go", engine: "opencode", model: "opencode/alpha", effort: "high" });
-    expect(w).toMatchObject({ name: "oc", engine: "opencode", mode: "default", effortNote: expect.any(String) });
+    expect(await call({ name: "bad", cwd: d.project, prompt: "p", engine: "opencode", model: "nope/x" })).toEqual({ error: expect.stringContaining("Valid values: default, opencode/big-pickle, opencode/alpha, opencode/thinker, acme/x/y") });
+    // Subagents and hidden agents are not offered.
+    expect(await call({ name: "agt", cwd: d.project, prompt: "p", engine: "opencode", agent: "general" })).toEqual({ error: expect.stringContaining("OpenCode agents here: build, docs, plan") });
+    const w = await call({ name: "oc", cwd: d.project, prompt: "go", engine: "opencode", model: "opencode/alpha", effort: "high", agent: "docs" });
+    expect(w).toMatchObject({ agent: "docs" });
+    expect(w).toMatchObject({ name: "oc", engine: "opencode", mode: "default" });
+    expect(w).not.toHaveProperty("effortNote");
+    expect((await d.ok({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 })).session.effort).toBe("high");
     expect(w.sessionId).toMatch(/^ses_/);
     expect(d.requests("POST", "/session").at(-1)!.body.permission).toContainEqual({ permission: "claude-ui", pattern: "mode:default", action: "allow" });
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
-    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], model: { providerID: "opencode", modelID: "alpha" } });
+    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], agent: "docs", model: { providerID: "opencode", modelID: "alpha" } });
+    expect(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[w.sessionId]).toMatchObject({ agent: "docs" });
   });
 });

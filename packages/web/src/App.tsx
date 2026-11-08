@@ -12,6 +12,7 @@ import type {
   FsSearchResult,
   ListResult,
   McpListResult,
+  PromptResult,
   RecentProject,
   ArtifactPreviewResult,
   Engine,
@@ -195,6 +196,8 @@ import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type T
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
+/** An error whose message the screen already shows elsewhere (the prompt box adds no line for it). */
+type ShownError = Error & { shown?: boolean };
 /** What the side and bottom panel show: the shown session, or the new-session tab's project (`key` NEW_TAB, no session). */
 type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
@@ -301,6 +304,8 @@ export function App() {
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   // Every Engine with its flags and start modes (session.list); none on an older daemon: claude only. `lastEngine`: Settings sessions.engine, the draft's engine until one is picked.
   const [engines, setEngines] = useState<NonNullable<ListResult["engines"]>>([]);
+  /** The engines of each side (its daemon may allow other modes): a folder of a side reads its entry, else `engines`. */
+  const [sideEngines, setSideEngines] = useState<NonNullable<ListResult["sideEngines"]>>({});
   const [lastEngine, setLastEngine] = useState<Engine>("claude");
   const [openingProject, setOpeningProject] = useState(false);
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
@@ -448,12 +453,19 @@ export function App() {
     }
   }, [sidebarWidth]);
   // Model lists per Engine (ADR 0012): Claude's comes with the connection, another Engine's when a session or draft of it shows.
-  const [modelsBy, setModelsBy] = useState<Partial<Record<Engine, ModelInfo[]>>>({});
-  const modelsRequested = useRef(new Set<Engine>());
-  /** OpenCode read another provider set: its model list is fetched again the next time it shows. */
-  const dropOpenCodeModels = () => (setModelsBy((m) => ({ ...m, opencode: undefined })), modelsRequested.current.delete("opencode"));
+  // Keyed by engine; an OpenCode list of a folder on a side by `opencode@<side>` (that side's OpenCode has its own providers).
+  const [modelsBy, setModelsBy] = useState<Record<string, ModelInfo[] | undefined>>({});
+  const modelsRequested = useRef(new Set<string>());
+  /** OpenCode read another provider set: every OpenCode model list is fetched again the next time it shows. */
+  const dropOpenCodeModels = () => {
+    setModelsBy((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("opencode"))));
+    for (const k of [...modelsRequested.current]) if (k.startsWith("opencode")) modelsRequested.current.delete(k);
+  };
   const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
-  const modelsOf = (engine: Engine) => modelsBy[engine] ?? NO_MODELS;
+  const modelsKey = (engine: Engine, cwd?: string) => (engine !== "claude" && cwd && cwdSides[cwd] ? `${engine}@${cwdSides[cwd]}` : engine);
+  const modelsOf = (engine: Engine, cwd?: string) => modelsBy[modelsKey(engine, cwd)] ?? NO_MODELS;
+  /** The engines a new session in `cwd` offers: its side's, else the hub's. */
+  const enginesOf = (cwd?: string) => (cwd && sideEngines[cwdSides[cwd] ?? ""]) || engines;
   const models = modelsOf("claude");
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
@@ -730,7 +742,7 @@ export function App() {
   async function refreshList() {
     const gen = connGen.current;
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, engines: listedEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
@@ -755,6 +767,7 @@ export function App() {
       setListLoaded(true);
       if (permissionModes) setNewModes(permissionModes);
       if (listedEngines) setEngines(listedEngines);
+      setSideEngines(listedSideEngines ?? {});
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
         for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
@@ -933,10 +946,17 @@ export function App() {
     sentHere.current.add(id);
     turnEnded.current.delete(id);
     setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
-    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
-      setOptimistic((o) => dropPending(o, id, key));
-      throw e;
-    });
+    return client.current!.request<PromptResult | undefined>({ type: "session.prompt", sessionId: id, text, images }).then(
+      (r) => {
+        // The Engine ran the text as its own command (OpenCode /undo): nothing echoes it, the bubble goes.
+        if (r?.local) setOptimistic((o) => dropPending(o, id, key));
+        return r;
+      },
+      (e) => {
+        setOptimistic((o) => dropPending(o, id, key));
+        throw e;
+      },
+    );
   }
 
   /** Queued messages (GH-77): the daemon holds them; like sendPrompt, nothing waits for a reconnect. */
@@ -1818,7 +1838,7 @@ export function App() {
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
       // The daemon drops auto to ask when the new model has no auto support.
-      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(session.engine ?? "claude"), session.model));
+      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(session.engine ?? "claude", session.cwd), session.model));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1834,10 +1854,10 @@ export function App() {
     }
   }
 
-  async function answer(requestId: string, answers: Record<string, string>) {
+  async function answer(requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) {
     setError(undefined);
     try {
-      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers });
+      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers, ...(choices && { choices }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -2091,7 +2111,7 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        models={modelsOf(s.engine ?? "claude")}
+                        models={modelsOf(s.engine ?? "claude", s.cwd)}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
@@ -2969,21 +2989,24 @@ export function App() {
     reveal("files");
   };
   const draftEngine = pick.engine ?? lastEngine;
-  const engineEntry = engines.find((e) => e.engine === draftEngine);
+  const engineEntry = enginesOf(draftProject).find((e) => e.engine === draftEngine);
   // Claude: the start modes follow the model and the daemon config; another Engine: the modes it lists.
-  const modesFor = (engine: Engine, model: string) => engines.find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
+  const modesFor = (engine: Engine, model: string) => enginesOf(draftProject).find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
   const draftModes = modesFor(draftEngine, pick.model);
   // The model list of an Engine is fetched the first time a session or the draft of it shows (Claude's came with the connection).
   const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? (shown.engine ?? "claude") : undefined;
   const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
+  const shownCwd = draftShown ? draftProject : shown?.cwd;
+  const listKey = shownEngine && modelsKey(shownEngine, shownCwd);
   useEffect(() => {
-    if (!shownEngine || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(shownEngine)) return;
-    modelsRequested.current.add(shownEngine);
-    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine }).then(
-      (r) => setModelsBy((m) => ({ ...m, [shownEngine]: r.models })),
-      () => modelsRequested.current.delete(shownEngine),
+    if (!shownEngine || !listKey || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(listKey)) return;
+    modelsRequested.current.add(listKey);
+    // A folder of a side: `cwd` routes the request to that side's OpenCode (its own providers).
+    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine, ...(listKey !== shownEngine && { cwd: shownCwd }) }).then(
+      (r) => setModelsBy((m) => ({ ...m, [listKey]: r.models })),
+      () => modelsRequested.current.delete(listKey),
     );
-  }, [shownEngine, status, shownEngine && modelsBy[shownEngine] === undefined]); // an OpenCode login or logout drops the list: fetched again
+  }, [listKey, status, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -2993,7 +3016,7 @@ export function App() {
       const offered = modesFor(d.engine!, "default");
       return setDraft({ model: "default", effort: "default", engine: d.engine, mode: offered.includes(d.mode) ? d.mode : offered[0] });
     }
-    const list = modelsOf(draftEngine);
+    const list = modelsOf(draftEngine, draftProject);
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(list, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
@@ -3181,7 +3204,7 @@ export function App() {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude"), capabilitiesOf(shown)),
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude", shown.cwd), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
@@ -3198,7 +3221,7 @@ export function App() {
           }
         }
       : undefined,
-    models: shownEngine ? modelsOf(shownEngine) : models,
+    models: shownEngine ? modelsOf(shownEngine, shownCwd) : models,
     canQuickOpen,
     newSession: () => newSession(),
     selectTab: open,
@@ -4034,7 +4057,7 @@ export function App() {
                   onCwd={(c) => (setDraftCwd(c), setWorktreeJob((j) => (j?.error ? undefined : j)))}
                   onNewWorktree={(p) => void newWorktree(p)}
                   worktreeJob={worktreeJob?.project === projectOf(draftProject ?? "", worktrees) ? worktreeJob : undefined}
-                  models={modelsOf(draftEngine)}
+                  models={modelsOf(draftEngine, draftProject)}
                   draft={draft}
                   onDraft={changeDraft}
                   modes={draftModes}
@@ -4848,7 +4871,8 @@ export function NewSession({
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
     return onStart(c, { model, mode, effort, engine: draft.engine }, first).catch((e: RequestError) => {
-      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") setEngineError(e.message);
+      // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
       throw e;
     });
   };
@@ -4893,7 +4917,7 @@ export function NewSession({
           blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
           label={tr("app.main.firstPrompt")}
-          placeholder={cwd ? tr("app.main.askClaudeIn", { place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
+          placeholder={cwd ? tr("app.main.askClaudeIn", { engine: ENGINE_NAME[engine], place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
           autoFocus
           disabled={!cwd}
           inputRef={inputRef}
@@ -5150,7 +5174,7 @@ export function SessionPane({
   onArtifactTab?: (partId: string) => void;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
-  onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  onAnswer: (requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) => void;
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
@@ -5460,7 +5484,7 @@ export function SessionPane({
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
-          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} mode={modePicker} />
+          <QuestionPanel key={question.id} part={question} onAnswer={(a, c) => onAnswer(question.requestId, a, c)} onDismiss={onInterrupt} mode={modePicker} />
         ) : current ? (
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
@@ -5504,7 +5528,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask", { engine: ENGINE_NAME[session.engine ?? "claude"] })) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull", { engine: ENGINE_NAME[session.engine ?? "claude"] })}
             />
           </>
         )}
@@ -5826,7 +5850,7 @@ function PromptBox({
       onBash!(command).catch((e: Error) => {
         restore(t);
         setBash(true);
-        setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
+        if (!(e as ShownError).shown) setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
       });
       edit("");
       setBash(false);
@@ -5873,7 +5897,7 @@ function PromptBox({
       // Back into the prompt box, before anything typed since.
       restore(t);
       setImages((cur) => [...sent, ...cur]);
-      setSendError(tr("app.main.promptNotSent", { message: e.message }));
+      if (!(e as ShownError).shown) setSendError(tr("app.main.promptNotSent", { message: e.message }));
     });
     dropDraft();
     edit("");

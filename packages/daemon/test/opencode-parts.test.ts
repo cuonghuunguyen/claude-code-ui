@@ -77,6 +77,14 @@ describe("OpenCodeMapper (live)", () => {
     expect(m.part({ id: "prt_4", messageID: "msg_tui", type: "text", text: "hidden", synthetic: true })).toEqual([{ type: "user_text", id: "msg_tui", text: "from tui", images: ["data:image/png;base64,AA"] }]);
   });
 
+  it("a compaction marker of a user message is a compaction part (manual or auto), also when it comes before its message", () => {
+    const m = new OpenCodeMapper();
+    m.message({ id: "msg_c1", role: "user" });
+    expect(m.part({ id: "prt_c1", messageID: "msg_c1", type: "compaction", auto: false })).toEqual([{ type: "compaction", id: "prt_c1", trigger: "manual" }]);
+    expect(m.part({ id: "prt_c2", messageID: "msg_c2", type: "compaction", auto: true })).toEqual([]);
+    expect(m.message({ id: "msg_c2", role: "user" })).toEqual([{ type: "compaction", id: "prt_c2", trigger: "auto" }]);
+  });
+
   it("step-finish tokens and cost are summed per turn", () => {
     const m = ready();
     m.part({ id: "prt_s1", messageID: "msg_a", type: "step-finish", tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 5, write: 3 } }, cost: 0.5 });
@@ -101,6 +109,9 @@ describe("permission blocks", () => {
     expect(modeOf(rules)).toBe("default");
     expect(alwaysOf(rules)).toEqual([rule("bash", "ls *"), rule("bash", "cat *")]);
     expect(modeOf([rule("bash", "x")])).toBeUndefined();
+    // bypass also allows outside-folder access and repeated calls; other modes do not.
+    expect(modeBlock("bypassPermissions", [], [])).toEqual(expect.arrayContaining([rule("external_directory", "*"), rule("doom_loop", "*")]));
+    expect(modeBlock("default", [], []).filter((r) => ["external_directory", "doom_loop"].includes(r.permission))).toEqual([]);
     expect(alwaysOf([rule("bash", "x")])).toEqual([]);
     // readOnly: the edit deny comes after the mode's edit rule and before the always marker.
     const ro = modeBlock("bypassPermissions", [], [], { readOnly: true });

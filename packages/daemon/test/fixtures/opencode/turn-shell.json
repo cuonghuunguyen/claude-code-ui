@@ -1,0 +1,236 @@
+{
+ "events": [
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_SHELLUSER",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794086910196
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "The following tool was executed by the user",
+     "synthetic": true,
+     "messageID": "msg_SHELLUSER",
+     "sessionID": "ses_ROOT",
+     "id": "prt_SHELLTEXT"
+    },
+    "time": 1794086910201
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_SHELLASSIST",
+     "parentID": "msg_SHELLUSER",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794086910207
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_shell0001",
+     "state": {
+      "status": "running",
+      "input": {
+       "command": "echo e2e-ok"
+      },
+      "time": {
+       "start": 1794086910300
+      }
+     },
+     "id": "prt_SHELLTOOL",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_SHELLASSIST"
+    },
+    "time": 1794086910300
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_shell0001",
+     "state": {
+      "status": "running",
+      "input": {
+       "command": "echo e2e-ok"
+      },
+      "time": {
+       "start": 1794086910300
+      },
+      "metadata": {
+       "output": ""
+      }
+     },
+     "id": "prt_SHELLTOOL",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_SHELLASSIST"
+    },
+    "time": 1794086910300
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_shell0001",
+     "state": {
+      "status": "running",
+      "input": {
+       "command": "echo e2e-ok"
+      },
+      "time": {
+       "start": 1794086910300
+      },
+      "metadata": {
+       "output": "e2e-ok\n"
+      }
+     },
+     "id": "prt_SHELLTOOL",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_SHELLASSIST"
+    },
+    "time": 1794086910300
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_shell0001",
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo e2e-ok"
+      },
+      "time": {
+       "start": 1794086910300,
+       "end": 1794086910390
+      },
+      "output": "e2e-ok\n",
+      "metadata": {
+       "output": "e2e-ok\n"
+      }
+     },
+     "id": "prt_SHELLTOOL",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_SHELLASSIST"
+    },
+    "time": 1794086910300
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_SHELLASSIST",
+     "parentID": "msg_SHELLUSER",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794086910207,
+      "completed": 1794086910400
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  }
+ ]
+}

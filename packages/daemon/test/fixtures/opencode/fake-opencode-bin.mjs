@@ -3,11 +3,13 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
+// POST /session/:id/summarize plays the next script like a prompt and answers at once.
+// POST /session/:id/shell plays turn-shell.json (a bash command run without a model call) and answers when it is done.
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,6 +22,7 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 if (args[0] !== "serve") (console.error(`fake opencode: unknown command ${args[0]}`), process.exit(2));
+if (process.env.FAKE_OPENCODE_HANG === "1") (log({ type: "start", pid: process.pid, argv: args, hung: true }), setInterval(() => {}, 1e9), await new Promise(() => {}));
 const password = process.env.OPENCODE_SERVER_PASSWORD;
 if (!password) (console.error("fake opencode: OPENCODE_SERVER_PASSWORD is not set"), process.exit(3));
 const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
@@ -32,6 +35,7 @@ let counter = 0;
 const expected = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
 
 const clients = new Set();
+const failNext = new Set();
 const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boolean);
 /** The node waiting for a reply or abort, the asks not answered yet, the sessions that are busy. */
 let current;
@@ -109,6 +113,7 @@ const server = createServer(async (req, res) => {
       const s = sessions.find((x) => x.id === body.sessionId);
       (delete s.revert, updated(s));
     }
+    if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
@@ -116,6 +121,7 @@ const server = createServer(async (req, res) => {
   const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : undefined;
   log({ type: "request", method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), authed, ...(body !== undefined && { body }) });
   if (!authed) return json(401, { error: "unauthorized" });
+  if (failNext.delete(url.pathname)) return json(500, { name: "UnknownError", data: { message: "failed on purpose" } });
   const dir = url.searchParams.get("directory");
   const reply = (key) => {
     const node = current?.on?.[key];
@@ -132,7 +138,7 @@ const server = createServer(async (req, res) => {
     return res.on("close", () => clients.delete(res));
   }
   if (url.pathname === "/config/providers")
-    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
+    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" }, thinker: { name: "Thinker", variants: { none: {}, low: {}, high: {} } } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
   if (url.pathname === "/provider")
     return json(200, { all: PROVIDERS.map((p) => ({ ...p, source: auth[p.id] ? (auth[p.id].type === "api" ? "api" : "custom") : p.source })), connected: [...new Set([...PROVIDERS.filter((p) => ["env", "config"].includes(p.source) && p.id !== "groq").map((p) => p.id), ...Object.keys(auth)])], default: {} });
   if (url.pathname === "/provider/auth") return json(200, AUTH_METHODS);
@@ -169,7 +175,7 @@ const server = createServer(async (req, res) => {
   m3 = /^\/mcp\/([^/]+)\/disconnect$/.exec(url.pathname);
   if (m3 && req.method === "POST") return ((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true);
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
-  if (url.pathname === "/agent") return json(200, [{ name: "build", permission: [] }, { name: "plan", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
+  if (url.pathname === "/agent") return json(200, [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));
   if (url.pathname === "/question") return json(200, asks.filter((a) => a.type === "question.asked").map(({ type, ...a }) => a));
@@ -192,7 +198,7 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/command|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/command|\/summarize|\/shell|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
   if (m && s && m[2] === "/revert" && req.method === "POST") {
     if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
@@ -228,6 +234,18 @@ const server = createServer(async (req, res) => {
     if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     return json(200, {});
   }
+  // Compaction: POST /session/:id/summarize {providerID, modelID} plays the next script (turn-compact.json) and answers at once (the real server answers when the loop ends).
+  if (m && s && m[2] === "/summarize" && req.method === "POST") {
+    const file = scripts.shift();
+    if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, undefined);
+    return json(200, true);
+  }
+  // Bash mode: the canned shell run (turn-shell.json: no model call), answered when the command ended; a busy session is refused.
+  if (m && s && m[2] === "/shell" && req.method === "POST") {
+    if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
+    await play(JSON.parse(readFileSync(new URL("./turn-shell.json", import.meta.url), "utf8")), s.id, dir, body.messageID, "msg_SHELLUSER");
+    return json(200, { info: {}, parts: [] });
+  }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
     // The next prompt removes the reverted messages for good.
     if (s.revert) {
@@ -258,6 +276,7 @@ const server = createServer(async (req, res) => {
     if (body.time) s.time = { ...s.time, ...body.time };
     return json(200, s);
   }
+  if (m && s && m[2] === "/message" && req.method === "GET") await sleep(Number(process.env.FAKE_OPENCODE_MESSAGE_DELAY_MS ?? 0));
   if (m && s && req.method === "GET") return json(200, m[2] ? (data.messages[s.id] ?? []) : s);
   return json(404, { name: "NotFoundError", data: { message: `no route ${req.method} ${url.pathname}` } });
 });

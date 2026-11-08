@@ -116,7 +116,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
-  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
+  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`): no `user_text` echo follows, the client drops its pending bubble.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
   | { type: "session.bash"; sessionId: string; command: string }
@@ -163,8 +163,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
       message?: string;
       updatedInput?: Record<string, unknown>;
     }
-  /** `answers`: question text -> answer. First answer wins, like permission.respond. */
-  | { type: "question.respond"; requestId: string; answers: Record<string, string> }
+  /** `answers`: question text -> answer. First answer wins, like permission.respond. `choices`: question text -> the chosen option labels, then the Other text; optional, an Engine that needs the structure of a multi-select answer (OpenCode) uses it, Claude ignores it. */
+  | { type: "question.respond"; requestId: string; answers: Record<string, string>; choices?: Record<string, string[]> }
   | { type: "models.list"; engine?: Engine; cwd?: string }
   | { type: "session.list" }
   /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
@@ -554,6 +554,8 @@ export const MAX_SEARCH_CHARS = 200;
 
 export type CreateResult = { session: SessionInfo };
 /** `from`: the Aside question's user_text part id: the popup subscribes from it (only the Aside's own messages). */
+/** Reply of `session.prompt`: `local` = the Engine ran the text as one of its own commands and echoes nothing. */
+export type PromptResult = { local?: true };
 export type AsideOpenResult = { session: SessionInfo; title: string; from: string };
 /**
  * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
@@ -610,6 +612,8 @@ export type ListResult = {
   permissionModes: PermissionMode[];
   /** Every Engine of this daemon with its flags and the modes a new session starts with; the new-session tab reads the selected one. Absent (an older daemon): claude only. */
   engines?: { engine: Engine; capabilities: EngineCapabilities; permissionModes: PermissionMode[] }[];
+  /** A hub with sides: `engines` of each ready side, by side id (a side's daemon may allow other modes, e.g. bypass). The new-session tab of a folder of that side reads its entry; absent: use `engines`. */
+  sideEngines?: Record<string, NonNullable<ListResult["engines"]>>;
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
   /**

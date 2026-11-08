@@ -20,7 +20,7 @@ export type Reply =
   | { kind: "deny"; message?: string } // user "No"; no message stops the turn
   | { kind: "interrupt" } // Stop or Esc
   | { kind: "coordinator"; decision: "allow" | "deny"; message: string }
-  | { kind: "answer"; answers: Record<string, string> }
+  | { kind: "answer"; answers: Record<string, string>; choices?: Record<string, string[]> }
   | { kind: "cancel"; message: string };
 
 /** The engine-specific half of a Session: the Session forwards its public calls here and calls the hooks. */
@@ -37,7 +37,8 @@ export interface EngineSession {
   /** The login or account changed: the live runtime is replaced at the end of the running turn. */
   staleLogin: boolean;
 
-  prompt(text: string, images?: string[]): string;
+  /** The message id of the prompt (its `user_text` is emitted); undefined = the Engine ran the text as its own command and echoes nothing. */
+  prompt(text: string, images?: string[]): string | undefined;
   setModel(model: string): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setEffort(effort: Effort): Promise<void>;

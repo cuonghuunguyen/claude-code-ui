@@ -10,6 +10,8 @@ export type OpenCodePart = {
   messageID?: string;
   text?: string;
   synthetic?: boolean;
+  /** `compaction` part: OpenCode compacted by itself (true) or on request (false). */
+  auto?: boolean;
   ignored?: boolean;
   mime?: string;
   url?: string;
@@ -108,7 +110,7 @@ export class OpenCodeMapper {
 
   part(p: OpenCodePart, live = true): Part[] {
     const role = p.messageID ? this.roles.get(p.messageID) : undefined;
-    if ((p.type === "text" || p.type === "file") && !role) {
+    if ((p.type === "text" || p.type === "file" || p.type === "compaction") && !role) {
       this.early.set(p.messageID!, [...(this.early.get(p.messageID!) ?? []), p]);
       return [];
     }
@@ -137,6 +139,8 @@ export class OpenCodeMapper {
   }
 
   private userText(p: OpenCodePart): Part[] {
+    // The marker OpenCode stores when it compacts (`/compact`, or its own auto compaction): the summary follows as an assistant message.
+    if (p.type === "compaction") return [{ type: "compaction", id: p.id, trigger: p.auto ? "auto" : "manual" }];
     const id = p.messageID!;
     if (this.own.has(id) || (p.type !== "text" && p.type !== "file")) return [];
     const parts = this.userParts.get(id) ?? new Map<string, OpenCodePart>();

@@ -1,4 +1,5 @@
 // The OpenCode engine over the daemon's WebSocket: a real daemon, the fake `opencode` binary and its fake server (fixtures/opencode).
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -31,7 +32,7 @@ const until = async (cond: () => boolean) => {
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
-async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object } = {}) {
+async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object; opencode?: object } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));
   const project = join(root, "project");
   const other = join(root, "other");
@@ -62,7 +63,7 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env },
+    opencode: { command: [process.execPath, BIN], env: () => env, ...o.opencode },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -196,6 +197,28 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await d_list(up);
     expect(Object.keys(JSON.parse(readFileSync(join(up.root, "sessions.json"), "utf8")))).not.toContain("ses_gone");
   }, 15_000);
+
+  it("session.list answers in the list wait while OpenCode does not start, with the Claude items and the OpenCode entry of sessions.json kept", async () => {
+    const entry = { ses_gone: { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
+    const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_HANG: "1" }, sessionsJson: entry, opencode: { listWaitMs: 300, startTimeoutMs: 20_000 } });
+    const t = Date.now();
+    const listed = (await d_list(d)).result;
+    expect(Date.now() - t).toBeLessThan(5000);
+    expect(listed.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
+    expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
+  }, 15_000);
+
+  it("the OpenCode server ends with a daemon that is killed (SIGKILL)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));
+    const logFile = join(root, "fake.log");
+    const host = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./fixtures/opencode/serve-host.ts", import.meta.url))], { env: { ...process.env, FAKE_OPENCODE_LOG: logFile }, stdio: ["ignore", "pipe", "inherit"] });
+    cleanups.push(() => host.kill("SIGKILL"));
+    await new Promise<void>((r, reject) => (host.stdout!.on("data", (d) => String(d).includes("up") && r()), host.once("exit", () => reject(new Error("host exited")))));
+    const pid = (JSON.parse(readFileSync(logFile, "utf8").trim().split("\n")[0]!) as { pid: number }).pid;
+    expect(alive(pid)).toBe(true);
+    host.kill("SIGKILL");
+    await until(() => !alive(pid));
+  }, 20_000);
 
   it("opencode.status reports missing, old, stopped and running and never starts the server", async () => {
     const missing = await boot({ path: join(tmpdir(), "no-such-opencode-binary") });

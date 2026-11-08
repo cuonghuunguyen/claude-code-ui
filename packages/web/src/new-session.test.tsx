@@ -468,8 +468,16 @@ it("an opencode_missing create error shows inline under the chips with a button 
   const alert = el.querySelector<HTMLElement>('[data-testid="engine-error"]')!;
   expect(alert.getAttribute("role")).toBe("alert");
   expect(alert.textContent).toContain("OpenCode not found");
+  // Shown once: the prompt box adds no "Prompt not sent" line, and the draft stays.
+  expect(el.textContent!.split("OpenCode not found")).toHaveLength(2);
+  expect(el.textContent).not.toContain("Prompt not sent");
+  expect(box.value).toBe("hi");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
   expect(onOpenOpenCodeSettings).toHaveBeenCalled();
+});
+
+it("the new-session prompt names the draft's engine", async () => {
+  expect((await render({ engine: "opencode" })).box.placeholder).toBe("Ask OpenCode in a…");
 });
 
 it("another create error keeps the old path: no engine error block", async () => {

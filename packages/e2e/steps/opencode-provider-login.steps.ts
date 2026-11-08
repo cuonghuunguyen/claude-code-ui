@@ -182,7 +182,7 @@ Then("the login code field shows an error", async ({ page }) => {
   await expect(t(page, "settings-opencode-oauth-code")).toHaveAttribute("aria-invalid", "true");
 });
 
-// models.dev data comes from the network or OpenCode's cache: offline, the picker only has to open.
+// Needs models.dev data (network or OpenCode's cache): offline this step fails.
 Then("the model picker lists the provider {string}", async ({ page }, name: string) => {
   const picker = t(page, "session-model");
   await expect(picker).toBeVisible({ timeout: 30_000 });
