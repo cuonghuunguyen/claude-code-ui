@@ -828,6 +828,7 @@ export function createDaemon(opts: {
           touched.delete(s.id);
           await s.close().catch(() => {});
         }
+        if (live.some((s) => OPENCODE_ID.test(s.id))) void flushProviders();
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       } });
@@ -1422,6 +1423,8 @@ export function createDaemon(opts: {
       return { code: "delete_failed", message: (e as Error).message };
     } finally {
       deleting.delete(id);
+      // A model refresh held back by this running OpenCode session no longer waits for it.
+      if (OPENCODE_ID.test(id)) void flushProviders();
     }
     caches.delete(id);
     openCodeMeta.delete(id);

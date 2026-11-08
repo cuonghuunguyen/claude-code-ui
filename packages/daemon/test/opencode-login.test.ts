@@ -23,13 +23,13 @@ const until = async (cond: () => boolean, ms = 5000) => {
 const cleanups: (() => void)[] = [];
 afterEach(() => (cleanups.splice(0).forEach((c) => c()), vi.restoreAllMocks()));
 
-async function boot(o: { script?: string[] } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocl-")));
+async function boot(o: { script?: string[]; data?: object; root?: string } = {}) {
+  const root = o.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ocl-")));
   const project = join(root, "project");
-  mkdirSync(project);
+  mkdirSync(project, { recursive: true });
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
-  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {} }));
+  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
   const env = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(",") };
   const http = createDaemon({
     webRoot: root,
@@ -203,6 +203,25 @@ describe("OpenCode provider login", { timeout: 30_000 }, () => {
     await d.ok({ type: "session.interrupt", sessionId: id });
     await until(() => d.calls("POST", "/global/dispose").length === 1, 8000);
     await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
+  });
+
+  it("a model refresh held by a running Aside runs when that Aside is closed", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocl-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const msg = (id: string, info: object) => ({ info: { id, sessionID: "ses_own", ...info }, parts: [] });
+    const row = { id: "ses_own", slug: "own", projectID: "global", directory: project, title: "Owner", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, script: ["bash"], data: { sessions: [row], messages: { ses_own: [msg("msg_u1", { role: "user" }), msg("msg_a1", { role: "assistant", time: { created: 1, completed: 2 } })] } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "run ls" });
+    await d.ok({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0 });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.sessionId === session.id && m.part.type === "permission_request"));
+    await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: KEY });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(d.inbox.some((m) => m.type === "opencode.providersChanged")).toBe(false);
+    await d.ok({ type: "aside.close", sessionId: session.id });
+    await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"), 2000);
   });
 
   it("a loginCancel sent while the provider list is still loading ends the wait", async () => {
