@@ -218,6 +218,7 @@ Feature: OpenCode parity features (GH-658)
   Scenario: The prompt box names the engine of the session
     Given the viewport is 1440x900
     And OpenCode is set up in a scratch project
+    When I choose the engine "Claude"
     Then the prompt box asks "Claude"
     And I capture "placeholder claude draft"
     When I choose the engine "OpenCode"
