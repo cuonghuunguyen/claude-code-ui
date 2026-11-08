@@ -457,7 +457,7 @@ export function createDaemon(opts: {
    * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
    * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
    */
-  const mcpRoutes = new Map<string, { id: string; live?: { transport: StreamableHTTPServerTransport; server: McpServer } }>();
+  const mcpRoutes = new Map<string, { id: string; live?: { transport: StreamableHTTPServerTransport; server: McpServer }; init?: Promise<boolean> }>();
   const dropMcp = (token: string) => {
     void mcpRoutes.get(token)?.live?.server.close().catch(() => {});
     mcpRoutes.delete(token);
@@ -489,7 +489,7 @@ export function createDaemon(opts: {
   async function serveOpenCodeMcp(req: IncomingMessage, res: ServerResponse) {
     // The token before any body read.
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
-    const route = token === undefined ? undefined : mcpRoutes.get(token);
+    const route = token === undefined ? undefined : [...mcpRoutes].find(([t]) => timingSafeEqual(digest(t), digest(token)))?.[1];
     if (!route) return void res.writeHead(401).end();
     let body: unknown;
     if (req.method === "POST") {
@@ -506,14 +506,22 @@ export function createDaemon(opts: {
       }
     }
     if (isInitializeRequest(body)) {
-      // OpenCode connects again (its restart, a dispose): a new MCP session.
-      void route.live?.server.close().catch(() => {});
-      route.live = undefined;
-      const server = orchestration.mcpServerFor(route.id);
-      if (!server) return void res.writeHead(404).end();
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
-      await server.connect(transport);
-      route.live = { transport, server };
+      // One initialize at a time per token: a second one would replace a transport that is still connecting (leak).
+      const prev = route.init;
+      const run = (async () => {
+        await prev?.catch(() => {});
+        // OpenCode connects again (its restart, a dispose): a new MCP session.
+        void route.live?.server.close().catch(() => {});
+        route.live = undefined;
+        const server = orchestration.mcpServerFor(route.id);
+        if (!server) return false;
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+        await server.connect(transport);
+        route.live = { transport, server };
+        return true;
+      })();
+      route.init = run;
+      if (!(await run)) return void res.writeHead(404).end();
     }
     if (!route.live) return void res.writeHead(404).end();
     await route.live.transport.handleRequest(req, res, body);
@@ -2470,9 +2478,13 @@ export function createDaemon(opts: {
             try {
               const at = { directory: owner.cwd };
               const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
-              if (!stored.length) return fail("aside_unavailable", "An aside needs a message in this session first");
+              // After a rewind the cut messages stay stored until the next prompt: the fork ends before the cut.
+              const revert = (await openCode.request<{ revert?: { messageID: string } | null }>(`/session/${owner.id}`, at)).revert?.messageID;
+              const cut = revert ? stored.findIndex((m) => m.info.id === revert) : -1;
+              const kept = cut < 0 ? stored : stored.slice(0, cut);
+              if (!kept.length) return fail("aside_unavailable", "An aside needs a message in this session first");
               // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
-              const messageID = stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id;
+              const messageID = cut < 0 ? stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id : revert;
               forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
               openCodeMeta.set(forkId, { cwd: owner.cwd, title });
               await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });

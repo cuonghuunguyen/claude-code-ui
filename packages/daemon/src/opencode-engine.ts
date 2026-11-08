@@ -5,6 +5,7 @@ import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInf
 import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+import { MAX_WAIT_MS } from "./orchestration.ts";
 import { ascending } from "./opencode-id.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
@@ -281,7 +282,7 @@ class OpenCodeSession implements EngineSession {
       const name = mcpName(this.id);
       const status = await this.server.request<Record<string, { status: string }>>("/mcp", { directory: this.cwd });
       if (status[name]?.status === "connected") return;
-      const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false };
+      const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false, timeout: MAX_WAIT_MS + 60_000 };
       await this.server.request("/mcp", { method: "POST", directory: this.cwd, body: { name, config } });
     })()
       .catch((err) => this.notice("mcp_failed", `Could not attach the orchestration tools to OpenCode: ${(err as Error).message}`))

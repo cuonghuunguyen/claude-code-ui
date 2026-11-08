@@ -583,6 +583,18 @@ describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
     expect(d.requests("POST", "/session/ses_own/fork")[0]!.body).toEqual({ messageID: "msg_a2" });
   });
 
+  it("an Aside after a rewind forks at the revert message and ignores the cut messages", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const msgs = [msg("msg_u1", { role: "user" }), msg("msg_a1", done), msg("msg_u2", { role: "user" }), msg("msg_a2", done)];
+    const d = await boot({ root, script: ["text"], data: { sessions: [{ ...row(project), revert: { messageID: "msg_u2", snapshot: "s" } }], messages: { ses_own: msgs } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    expect(d.requests("POST", "/session/ses_own/fork")[0]!.body).toEqual({ messageID: "msg_u2" });
+  });
+
   it("an owner without messages is refused and nothing is forked", async () => {
     const d = await owned([]);
     expect(await d.request({ type: "aside.open", sessionId: "ses_own", text: "q" })).toMatchObject({ type: "error", code: "aside_unavailable" });
@@ -640,7 +652,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     const s = await d.open();
     const body = await attached(d, s.id);
     const port = (d.http.address() as AddressInfo).port;
-    expect(body).toMatchObject({ name: `orchestration-${s.id.slice(-10)}`, config: { type: "remote", url: `http://127.0.0.1:${port}/opencode-mcp`, oauth: false } });
+    expect(body).toMatchObject({ name: `orchestration-${s.id.slice(-10)}`, config: { type: "remote", url: `http://127.0.0.1:${port}/opencode-mcp`, oauth: false, timeout: 30 * 60_000 + 60_000 } });
     const bearer: string = body.config.headers.authorization;
     expect(bearer).toMatch(/^Bearer .{40,}$/);
     expect(d.requests("POST", "/mcp")[0]!.query).toEqual({ directory: d.project });
