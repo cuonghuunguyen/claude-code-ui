@@ -122,6 +122,7 @@ export function splitLabels(value: string, labels: string[]): string[] {
   return out;
 }
 
+type TurnEnd = { done: Promise<void>; resolve: () => void };
 /** The longest a prompt sent after Stop waits for the aborted turn to end. */
 const TURN_END_WAIT_MS = 10_000;
 /** Commands the daemon itself runs for an OpenCode session (OpenCode's web app has them as session commands, not server commands). */
@@ -156,7 +157,7 @@ class OpenCodeSession implements EngineSession {
   /** A bash mode command (`POST /shell`, no model call) is running as the turn: its end sends no `turn_result`. */
   private shellRun = false;
   /** Settles when the running turn goes idle. */
-  private turnEnd: { done: Promise<void>; resolve: () => void } | undefined;
+  private turnEnd: TurnEnd | undefined;
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
   /** The message OpenCode's revert cuts the conversation at, undefined when none (a prompt clears it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
@@ -204,7 +205,7 @@ class OpenCodeSession implements EngineSession {
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
-    if (this.history.busy) this.turnAt = Date.now();
+    if (this.history.busy) (this.turnAt = Date.now()), this.openTurnEnd();
     this.requests(this.history);
     // Events between the history read and the stream connecting are lost: read again once it is open.
     void this.server.streamReady().then(() => this.resync());
@@ -255,7 +256,7 @@ class OpenCodeSession implements EngineSession {
         void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
-        if (h.busy && state === "idle") (this.turnAt = Date.now()), this.session.setState("running");
+        if (h.busy && state === "idle") (this.turnAt = Date.now(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt just sent may not be busy in OpenCode yet.
         else if (!h.busy && state === "running" && Date.now() - this.sentAt > 3000) this.finish();
       })
@@ -357,8 +358,9 @@ class OpenCodeSession implements EngineSession {
       const next = all.slice(at + 1).find(shown);
       // The newest undone message is redone: the revert point goes away; else it moves to the next undone one.
       if (!next) return void (await this.server.request(`/session/${this.id}/unrevert`, { method: "POST", directory: this.cwd }));
-      this.revertAt = next.info.id;
-      await this.server.request(`/session/${this.id}/revert`, { method: "POST", directory: this.cwd, body: { messageID: next.info.id } });
+      const before = this.revertAt;
+      this.revertAt = next.info.id; // the session.updated of this revert is not an external one
+      await this.server.request(`/session/${this.id}/revert`, { method: "POST", directory: this.cwd, body: { messageID: next.info.id } }).catch((err) => ((this.revertAt = before), Promise.reject(err)));
       await this.resync(); // the messages between the old and the new revert point come back
     } catch (err) {
       say(`/${cmd} failed: ${(err as Error).message}`);
@@ -412,6 +414,7 @@ class OpenCodeSession implements EngineSession {
       // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
       await Promise.all([this.server.streamReady(), this.attach()]);
       if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
+      const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       if (this.stopped) {
         this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
         return this.toIdle();
@@ -419,7 +422,6 @@ class OpenCodeSession implements EngineSession {
       const [providerID, ...rest] = this.model.split("/");
       const agent = this.agent();
       // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
-      const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       if (command) {
         // The turn runs inside this request: no timeout.
         await this.server.request(`/session/${this.id}/command`, {
@@ -444,9 +446,17 @@ class OpenCodeSession implements EngineSession {
     }
   }
 
+  /** A turn is running (started here, found busy at a restore or resync): `turnEnd` settles when it goes idle. */
+  private openTurnEnd() {
+    if (this.turnEnd) return;
+    const end = {} as TurnEnd;
+    end.done = new Promise<void>((r) => (end.resolve = r));
+    this.turnEnd = end;
+  }
+
   private beginTurn() {
-    this.turnEnd = {} as NonNullable<typeof this.turnEnd>;
-    this.turnEnd.done = new Promise<void>((r) => (this.turnEnd!.resolve = r));
+    this.turnEnd = undefined;
+    this.openTurnEnd();
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;

@@ -1206,7 +1206,11 @@ export function createDaemon(opts: {
       }, opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS);
     });
     try {
-      return await Promise.race([readOpenCodeList(cwds, linked, links), late]);
+      const read = readOpenCodeList(cwds, linked, links);
+      const r = await Promise.race([read, late]);
+      // The list that did not wait: clients ask again once OpenCode answered.
+      if (!r.ran && openCodeListError?.endsWith("in time")) void read.then((x) => x.ran && broadcast({ type: "sessions.changed" }));
+      return r;
     } finally {
       clearTimeout(timer);
     }

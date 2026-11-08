@@ -694,6 +694,16 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     expect(r.parts().filter((p) => p.type === "notice")).toEqual([]);
   });
 
+  it("a message sent after Stop in a session restored while busy waits for the aborted turn and starts the next one", async () => {
+    const r = await restored({ busy: true });
+    await Promise.all([r.d.ok({ type: "session.interrupt", sessionId: "ses_rw" }), r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text: "next" })]);
+    await until(() => r.d.requests("POST", "/session/ses_rw/prompt_async").length === 1);
+    // The aborted turn ended (idle), then "next" started a new turn (running again); sent into the aborted loop it would leave the session idle.
+    const states = () => r.parts().filter((p) => p.type === "session_state").map((p) => (p as { state: string }).state);
+    await until(() => states().at(-1) === "running");
+    expect(states()).toContain("idle");
+  });
+
   it("/undo and /redo with nothing to do are notices; with arguments or while a turn runs they are not run", async () => {
     const r = await restored({ revert: "msg_u1" });
     const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
