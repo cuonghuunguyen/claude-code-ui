@@ -195,6 +195,8 @@ import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type T
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
+/** An error whose message the screen already shows elsewhere (the prompt box adds no line for it). */
+type ShownError = Error & { shown?: boolean };
 /** What the side and bottom panel show: the shown session, or the new-session tab's project (`key` NEW_TAB, no session). */
 type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
@@ -4848,7 +4850,8 @@ export function NewSession({
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
     return onStart(c, { model, mode, effort, engine: draft.engine }, first).catch((e: RequestError) => {
-      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") setEngineError(e.message);
+      // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
       throw e;
     });
   };
@@ -4893,7 +4896,7 @@ export function NewSession({
           blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
           label={tr("app.main.firstPrompt")}
-          placeholder={cwd ? tr("app.main.askClaudeIn", { place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
+          placeholder={cwd ? tr("app.main.askClaudeIn", { engine: ENGINE_NAME[engine], place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
           autoFocus
           disabled={!cwd}
           inputRef={inputRef}
@@ -5504,7 +5507,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask", { engine: ENGINE_NAME[session.engine ?? "claude"] })) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull", { engine: ENGINE_NAME[session.engine ?? "claude"] })}
             />
           </>
         )}
@@ -5826,7 +5829,7 @@ function PromptBox({
       onBash!(command).catch((e: Error) => {
         restore(t);
         setBash(true);
-        setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
+        if (!(e as ShownError).shown) setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
       });
       edit("");
       setBash(false);
@@ -5873,7 +5876,7 @@ function PromptBox({
       // Back into the prompt box, before anything typed since.
       restore(t);
       setImages((cur) => [...sent, ...cur]);
-      setSendError(tr("app.main.promptNotSent", { message: e.message }));
+      if (!(e as ShownError).shown) setSendError(tr("app.main.promptNotSent", { message: e.message }));
     });
     dropDraft();
     edit("");

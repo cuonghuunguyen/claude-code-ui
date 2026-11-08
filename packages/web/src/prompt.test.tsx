@@ -437,7 +437,7 @@ it("question dock pages through the questions: Next, Back, Submit sends every an
   await act(async () => button("Next").click());
   await act(async () => option("npm").click());
   await act(async () => button("Submit").click());
-  expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" });
+  expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" }, { "A?": ["pnpm"], "B?": ["npm"] });
 });
 
 it("the context meter sits in the prompt box toolbar once the session reports its usage", async () => {
@@ -780,6 +780,10 @@ it("GH-166: phone: the idle prompt box is one line with a short placeholder; des
     const idle = await render();
     expect(idle.box.rows).toBe(1);
     expect(idle.box.placeholder).toBe("Ask Claude…");
+    unmount();
+    unmount();
+    const oc = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], engine: "opencode" } });
+    expect(oc.box.placeholder).toBe("Ask OpenCode…");
     unmount();
     const busy = await render({}, { ...emptySession(), state: "running" });
     expect(busy.box.placeholder).toBe("Claude is working…");
