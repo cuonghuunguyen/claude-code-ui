@@ -165,7 +165,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
     }
   /** `answers`: question text -> answer. First answer wins, like permission.respond. */
   | { type: "question.respond"; requestId: string; answers: Record<string, string> }
-  | { type: "models.list"; engine?: Engine }
+  | { type: "models.list"; engine?: Engine; cwd?: string }
   | { type: "session.list" }
   /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
   | { type: "session.ids" }
