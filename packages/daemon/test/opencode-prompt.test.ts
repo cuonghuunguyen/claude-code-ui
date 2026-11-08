@@ -279,6 +279,35 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(bodies[2]).not.toHaveProperty("variant");
   });
 
+  it("bash mode runs the command through OpenCode's shell as a Bash card without a model call, user message or turn result; during a turn it is queued", async () => {
+    const d = await boot({ script: ["bash"] });
+    const s = await d.open();
+    await d.ok({ type: "session.bash", sessionId: s.id, command: "echo e2e-ok" });
+    await until(() => !!s.find("tool_result") && s.states().at(-1) === "idle");
+    const shell = d.requests("POST", `/session/${s.id}/shell`);
+    expect(shell).toHaveLength(1);
+    expect(shell[0]!.body).toMatchObject({ command: "echo e2e-ok", agent: "build", messageID: expect.stringMatching(/^msg_/) });
+    expect(shell[0]!.body.model).toBeUndefined();
+    expect(s.find("tool_call")).toMatchObject({ tool: "Bash", input: { command: "echo e2e-ok" }, status: "done" });
+    expect(s.find("tool_result")).toMatchObject({ isError: false, output: expect.stringContaining("e2e-ok") });
+    expect(s.states()).toEqual(["running", "idle"]);
+    expect(s.parts().some((p) => p.type === "user_text" || p.type === "turn_result")).toBe(false);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    // During a turn the command waits in the queue (the shell would refuse a busy session).
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    expect(await d.ok({ type: "session.bash", sessionId: s.id, command: "echo later" })).toHaveProperty("itemId");
+    expect(d.requests("POST", `/session/${s.id}/shell`)).toHaveLength(1);
+  });
+
+  it("a failing shell request is a notice and ends the run idle", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__fail", { path: `/session/${s.id}/shell` });
+    await d.ok({ type: "session.bash", sessionId: s.id, command: "echo x" });
+    await until(() => !!s.last(`${s.id}:shell_failed`) && s.states().at(-1) === "idle");
+  });
+
   it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();

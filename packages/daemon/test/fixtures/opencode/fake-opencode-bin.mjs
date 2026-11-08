@@ -3,6 +3,7 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
+// POST /session/:id/shell plays turn-shell.json (a bash command run without a model call) and answers when it is done.
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
@@ -196,7 +197,7 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/command|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/command|\/shell|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
   if (m && s && m[2] === "/revert" && req.method === "POST") {
     if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
@@ -231,6 +232,12 @@ const server = createServer(async (req, res) => {
     const file = scripts.shift();
     if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     return json(200, {});
+  }
+  // Bash mode: the canned shell run (turn-shell.json: no model call), answered when the command ended; a busy session is refused.
+  if (m && s && m[2] === "/shell" && req.method === "POST") {
+    if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
+    await play(JSON.parse(readFileSync(new URL("./turn-shell.json", import.meta.url), "utf8")), s.id, dir, body.messageID, "msg_SHELLUSER");
+    return json(200, { info: {}, parts: [] });
   }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
     // The next prompt removes the reverted messages for good.

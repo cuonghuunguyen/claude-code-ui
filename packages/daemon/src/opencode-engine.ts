@@ -14,7 +14,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: false };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -146,6 +146,8 @@ class OpenCodeSession implements EngineSession {
   /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
   private leavingPlan = false;
+  /** A bash mode command (`POST /shell`, no model call) is running as the turn: its end sends no `turn_result`. */
+  private shellRun = false;
   /** Settles when the running turn goes idle. */
   private turnEnd: { done: Promise<void>; resolve: () => void } | undefined;
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
@@ -390,7 +392,9 @@ class OpenCodeSession implements EngineSession {
   private finish() {
     if (this.session.currentState() === "idle") return;
     const { usage, cost } = this.mapper.turn();
-    if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
+    const shell = this.shellRun;
+    this.shellRun = false;
+    if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
     void this.emitUsage();
   }
@@ -571,8 +575,31 @@ class OpenCodeSession implements EngineSession {
     void this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission: rules } }).catch((err) => this.notice("persist_failed", `Could not save the rule: ${(err as Error).message}`));
   }
 
-  bash(): void {
-    throw new Error("Shell commands in OpenCode sessions come in a later version");
+  /**
+   * Bash mode (`!`): OpenCode runs `command` in the folder without a model call (`POST /shell`; the request answers when it ends). Its events
+   * come as the Bash card (the mapper's `bash` tool), the turn is the command run, no `turn_result`. Stop = abort.
+   */
+  bash(command: string) {
+    if (!this.session.isLive()) throw new Error(`session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.session.currentState() !== "idle" || this.session.pendingCount()) throw new Error("session is busy: wait for the turn to end");
+    if (this.shellRun) throw new Error("a shell command is already running");
+    const messageID = ascending("msg");
+    this.mapper.own.add(messageID);
+    this.shellRun = true;
+    this.stopped = false;
+    this.sentAt = Infinity;
+    this.beginTurn();
+    this.session.setState("running");
+    const model = this.model.split("/");
+    const done = () => (this.sentAt = Date.now());
+    this.server
+      .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.permissionMode === "plan" ? "plan" : "build", ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
+      .then(done, (err) => {
+        done();
+        this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
+        this.shellRun = false;
+        this.toIdle();
+      });
   }
   subscribed() {}
   beforeStateEvent() {}
@@ -630,7 +657,7 @@ class OpenCodeSession implements EngineSession {
   releaseQuery = () => false;
   externalTurnRunning = () => false;
   untitled = () => false;
-  bashRunning = () => false;
+  bashRunning = () => this.shellRun;
   working = () => false;
   takesQueued = () => this.session.currentState() === "idle" && this.session.pendingCount() === 0;
 }
