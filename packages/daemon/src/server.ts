@@ -637,7 +637,9 @@ export function createDaemon(opts: {
       const results = await Promise.allSettled(live.map((s) => timed(s.reloadPlugins())));
       const failed = live.filter((s, i) => results[i]!.status === "rejected" && (console.error(`session ${s.id}: reloadPlugins failed:`, (results[i] as PromiseRejectedResult).reason), true)).map((s) => s.id);
       const errorCount = results.reduce((n, r) => n + (r.status === "fulfilled" ? (r.value ?? 0) : 0), 0);
-      return { reloaded: live.length - failed.length, failed, errorCount };
+      // A session counts as reloaded only when reloadPlugins() resolved to a number (OpenCode and a Claude session without a live query resolve undefined).
+      const reloaded = results.filter((r) => r.status === "fulfilled" && r.value !== undefined).length;
+      return { reloaded, failed, errorCount };
     },
     restart: (id) => {
       const s = sessions.get(id);

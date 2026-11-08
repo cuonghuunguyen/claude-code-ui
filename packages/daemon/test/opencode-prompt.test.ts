@@ -99,6 +99,12 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
 }
 
 describe("OpenCode prompting", { timeout: 30_000 }, () => {
+  it("plugins.reload counts no OpenCode session as reloaded", async () => {
+    const d = await boot();
+    await d.open();
+    expect(await d.ok({ type: "plugins.reload", cwd: d.project })).toEqual({ reloaded: 0, failed: [], errorCount: 0 });
+  });
+
   it("a prompt streams reasoning and text, ends with a turn result and sends the message id, agent, text and image", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
