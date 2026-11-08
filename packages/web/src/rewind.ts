@@ -8,5 +8,5 @@ export function rewindOptions(p: RewindPreview): { mode: RewindMode; label: stri
     ...(code && p.conversation ? [{ mode: "both" as const, label: t("session.rewind.both") }] : []),
     ...(p.conversation ? [{ mode: "conversation" as const, label: t("session.rewind.conversation") }] : []),
     ...(code ? [{ mode: "code" as const, label: t("session.rewind.code") }] : []),
-  ];
+  ].filter((o) => !p.modes || p.modes.includes(o.mode));
 }

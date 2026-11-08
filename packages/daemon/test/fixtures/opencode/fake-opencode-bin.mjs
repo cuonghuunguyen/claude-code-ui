@@ -3,7 +3,8 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
-// Test routes (no auth): POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
+// Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
+// Test routes (no auth): POST /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -39,6 +40,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (directory, payload) => {
   for (const c of clients) c.write(`data: ${JSON.stringify({ directory, payload })}\n\n`);
 };
+const updated = (s, directory) => send(directory, { type: "session.updated", properties: { sessionID: s.id, info: s } });
 const readBody = (req) =>
   new Promise((r) => {
     let t = "";
@@ -95,6 +97,10 @@ const server = createServer(async (req, res) => {
         send(body.directory, e);
       }
     if (url.pathname === "/__oauth") for (const [id, done] of waiting) (waiting.delete(id), done(body.result));
+    if (url.pathname === "/__unrevert") {
+      const s = sessions.find((x) => x.id === body.sessionId);
+      (delete s.revert, updated(s));
+    }
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
@@ -170,9 +176,30 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort|\/revert|\/unrevert)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
+  if (m && s && m[2] === "/revert" && req.method === "POST") {
+    if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
+    s.revert = { messageID: body.messageID, snapshot: "snap", diff: "" };
+    send(dir, { type: "session.diff", properties: { sessionID: s.id, diff: [] } });
+    updated(s, dir);
+    return json(200, s);
+  }
+  if (m && s && m[2] === "/unrevert" && req.method === "POST") {
+    delete s.revert;
+    updated(s, dir);
+    return json(200, s);
+  }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
+    // The next prompt removes the reverted messages for good.
+    if (s.revert) {
+      const list = data.messages[s.id] ?? [];
+      const at = list.findIndex((x) => x.info.id === s.revert.messageID);
+      for (const x of at < 0 ? [] : list.slice(at)) send(dir, { type: "message.removed", properties: { sessionID: s.id, messageID: x.info.id } });
+      if (at >= 0) data.messages[s.id] = list.slice(0, at);
+      delete s.revert;
+      updated(s, dir);
+    }
     const file = scripts.shift();
     if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     res.writeHead(204);

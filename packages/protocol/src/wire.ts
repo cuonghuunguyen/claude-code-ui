@@ -738,7 +738,7 @@ export type RecentProject = { cwd: string; sessionCount: number; lastActivity: n
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };
 /** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
-export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
+export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean; /** The modes the engine offers; absent = all the preview allows. */ modes?: RewindMode[] };
 /** Paths relative to the searched cwd, best first; folders end with `/`. */
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };

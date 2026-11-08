@@ -437,3 +437,61 @@ describe("OpenCode restore", { timeout: 30_000 }, () => {
   });
 });
 
+
+describe("OpenCode rewind", { timeout: 30_000 }, () => {
+  const diff = (file: string, additions: number, deletions: number) => ({ file, additions, deletions });
+  const user = (id: string, text: string, diffs: object[] = []) => ({ info: { id, role: "user", sessionID: "ses_rw", agent: "build", summary: { diffs } }, parts: [{ id: `${id}_p`, sessionID: "ses_rw", messageID: id, type: "text", text }] });
+  const messages = [user("msg_u1", "one"), user("msg_u2", "two", [diff("a.ts", 2, 1)]), user("msg_u3", "three", [diff("a.ts", 1, 0), diff("b.ts", 3, 0)]), user("msg_u4", "four")];
+  const row = (project: string, extra: object = {}) => ({ id: "ses_rw", slug: "rw", projectID: "global", directory: project, title: "Rewind", version: "1.18.34", time: { created: 1, updated: 2 }, ...extra });
+  /** A stored OpenCode session, subscribed. */
+  async function restored(o: { revert?: string; busy?: boolean } = {}) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const d = await boot({ root, data: { sessions: [row(project, o.revert ? { revert: { messageID: o.revert, snapshot: "s" } } : {})], messages: { ses_rw: messages }, busy: o.busy ? ["ses_rw"] : [] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_rw", sinceSeq: 0, paged: true });
+    const parts = () => d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === "ses_rw").map((m) => m.part);
+    return { d, sub, parts, preview: (id: string) => d.ok({ type: "session.rewindPreview", sessionId: "ses_rw", userMessageId: id }), rewind: (id: string, mode: string) => d.request({ type: "session.rewind", sessionId: "ses_rw", userMessageId: id, mode }) };
+  }
+
+  it("the preview sums the files of the message's turn and every later one; modes are both with files, conversation without", async () => {
+    const r = await restored();
+    expect(await r.preview("msg_u2")).toEqual({ filesChanged: ["a.ts", "b.ts"], insertions: 6, deletions: 1, conversation: true, modes: ["both"] });
+    expect(await r.preview("msg_u4")).toEqual({ filesChanged: [], insertions: 0, deletions: 0, conversation: true, modes: ["conversation"] });
+  });
+
+  it("rewind posts the revert, emits the rewind part and refuses a mode the preview does not offer", async () => {
+    const r = await restored();
+    expect(await r.rewind("msg_u2", "conversation")).toMatchObject({ type: "error", code: "rewind_failed" });
+    expect(await r.rewind("msg_u4", "code")).toMatchObject({ type: "error", code: "rewind_failed" });
+    expect(r.d.requests("POST", "/session/ses_rw/revert")).toHaveLength(0);
+    expect(await r.rewind("msg_u2", "both")).toMatchObject({ type: "reply" });
+    expect(r.d.requests("POST", "/session/ses_rw/revert")[0]).toMatchObject({ body: { messageID: "msg_u2" }, query: { directory: r.d.project } });
+    await until(() => r.parts().some((p) => p.type === "rewind"));
+    // The session.updated of our own revert adds no second rewind part.
+    await new Promise((x) => setTimeout(x, 150));
+    expect(r.parts().filter((p) => p.type === "rewind")).toMatchObject([{ userMessageId: "msg_u2" }]);
+  });
+
+  it("rewind is refused while a turn runs", async () => {
+    const r = await restored({ busy: true });
+    expect(await r.rewind("msg_u2", "both")).toMatchObject({ type: "error", code: "rewind_failed", message: "Stop the turn first" });
+    expect(r.d.requests("POST", "/session/ses_rw/revert")).toHaveLength(0);
+  });
+
+  it("a restored reverted session hides the cut messages", async () => {
+    const r = await restored({ revert: "msg_u3" });
+    expect(r.sub.snapshot.page.parts.map((p: any) => p.id)).toEqual(["msg_u1", "msg_u2"]);
+  });
+
+  it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {
+    const r = await restored();
+    await r.d.fake("/__emit", { events: [{ type: "session.updated", properties: { sessionID: "ses_rw", info: { id: "ses_rw", revert: { messageID: "msg_u3" } } } }] });
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
+    const before = r.parts().length;
+    await r.d.fake("/__unrevert", { sessionId: "ses_rw" });
+    await until(() => r.parts().length > before && r.parts().filter((p) => p.id === "msg_u3").length > 1);
+  });
+});

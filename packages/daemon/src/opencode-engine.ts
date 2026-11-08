@@ -1,6 +1,7 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
-import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question } from "@claude-ui/protocol";
+import { randomUUID } from "node:crypto";
+import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview } from "@claude-ui/protocol";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { ascending } from "./opencode-id.ts";
@@ -11,7 +12,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: false, fork: false, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: false, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -52,20 +53,23 @@ type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: str
 type Payload = { type: string; properties: Record<string, any> };
 
 /** What `begin()` and `resync()` read of a session: stored messages (and those of its subagents), busy state, pending requests of the folder. */
-export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
+export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string): Promise<OpenCodeHistory> {
   const at = { directory: cwd };
-  const [messages, row, status, permissions, questions] = await Promise.all([
+  const [all, row, status, permissions, questions] = await Promise.all([
     server.request<OpenCodeMessage[]>(`/session/${id}/message`, at),
-    server.request<{ permission?: Rule[] }>(`/session/${id}`, at).catch(() => ({}) as { permission?: Rule[] }),
+    server.request<{ permission?: Rule[]; revert?: { messageID: string } | null }>(`/session/${id}`, at).catch(() => ({}) as { permission?: Rule[]; revert?: null }),
     server.request<Record<string, Status>>("/session/status", at).catch(() => ({}) as Record<string, Status>),
     server.request<PermissionAsked[]>("/permission", at).catch(() => []),
     server.request<QuestionAsked[]>("/question", at).catch(() => []),
   ]);
+  const revert = row.revert?.messageID;
+  const cut = revert ? all.findIndex((m) => m.info.id === revert) : -1;
+  const messages = cut < 0 ? all : all.slice(0, cut);
   const childIds = messages.flatMap((m) => m.parts.map((p) => p.state?.metadata?.sessionId).filter((c): c is string => typeof c === "string"));
   const children = Object.fromEntries(await mapLimit(childIds, 4, async (c) => [c, await server.request<OpenCodeMessage[]>(`/session/${c}/message`, at).catch(() => [])] as const));
-  return { messages, children, busy: status[id]?.type === "busy", permission: row.permission ?? [], permissions, questions };
+  return { messages, children, busy: status[id]?.type === "busy", revert, permission: row.permission ?? [], permissions, questions };
 }
 
 /** The models of the connected providers (`GET /config/providers`): Default, then every provider's models under the provider name. */
@@ -113,6 +117,8 @@ class OpenCodeSession implements EngineSession {
   private sentAt = 0;
   private leavingPlan = false;
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
+  /** The message OpenCode's revert cuts the conversation at, undefined when none (a prompt clears it: OpenCode removes the cut messages then). */
+  private revertAt: string | undefined;
   private usage: { tokens: NonNullable<OpenCodeMessage["info"]["tokens"]>; providerID: string; modelID: string } | undefined;
 
   constructor(
@@ -129,6 +135,7 @@ class OpenCodeSession implements EngineSession {
     // A new session got its block with `POST /session`.
     this.written = history ? modeOf(history.permission) : this.permissionMode;
     this.always = history ? alwaysOf(history.permission) : [];
+    this.revertAt = history?.revert;
   }
 
   private get server() {
@@ -155,6 +162,8 @@ class OpenCodeSession implements EngineSession {
 
   /** Emits stored history (also after a stream reconnect: part ids are stable, a re-emit replaces). */
   private apply(h: OpenCodeHistory) {
+    // A revert or unrevert missed as an event (stream drop): parts of an unrevert are re-emitted below, a revert drops them.
+    if (h.revert !== this.revertAt && (this.revertAt = h.revert)) this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert! });
     for (const part of openCodeParts(h.messages, h.children, this.mapper)) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m.info);
     void this.emitUsage();
@@ -234,6 +243,7 @@ class OpenCodeSession implements EngineSession {
     const steer = this.session.currentState() !== "idle";
     const messageID = ascending("msg");
     this.mapper.own.add(messageID);
+    this.revertAt = undefined;
     this.session.emit({ type: "user_text", id: messageID, text, images });
     if (!steer) {
       this.stopped = false;
@@ -340,8 +350,14 @@ class OpenCodeSession implements EngineSession {
         this.failed = true;
         return this.notice("error", p.error?.data?.message ?? p.error?.name ?? "OpenCode reported an error");
       }
-      case "session.updated":
-        return root && typeof p.info?.title === "string" ? this.engine.onTitle?.(this.id, p.info.title) : undefined;
+      case "session.updated": {
+        if (!root) return;
+        const revert: string | undefined = p.info?.revert?.messageID;
+        // Reverted elsewhere (OpenCode's /undo): cut like our own rewind. Unreverted elsewhere (/redo): read the restored messages again.
+        if (revert && revert !== this.revertAt) (this.revertAt = revert, this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: revert }));
+        else if (!revert && this.revertAt) void this.resync();
+        return typeof p.info?.title === "string" ? this.engine.onTitle?.(this.id, p.info.title) : undefined;
+      }
     }
   }
   private emitAll(parts: ReturnType<OpenCodeMapper["part"]>) {
@@ -450,8 +466,32 @@ class OpenCodeSession implements EngineSession {
   backgroundShell = async () => false;
   stopShell = async () => false;
   shellOutput = async () => undefined;
-  previewRewind = async () => ({ filesChanged: [], insertions: 0, deletions: 0, conversation: false });
-  rewind = async () => {};
+
+  /** The stored messages and what a revert to before the user message `id` covers: the files its turn and every later turn changed. */
+  private async rewindPlan(id: string) {
+    const all = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+    const at = all.findIndex((m) => m.info.id === id && m.info.role === "user");
+    if (at < 0) throw new Error("unknown message");
+    const diffs = all.slice(at).flatMap((m) => (m.info.role === "user" ? (m.info.summary?.diffs ?? []) : []));
+    const filesChanged = [...new Set(diffs.map((d) => d.file))];
+    // The revert restores files and conversation together (no variant of either), so only `both`, or `conversation` when no file changed.
+    const preview: RewindPreview = { filesChanged, insertions: diffs.reduce((n, d) => n + d.additions, 0), deletions: diffs.reduce((n, d) => n + d.deletions, 0), conversation: true, modes: filesChanged.length ? ["both"] : ["conversation"] };
+    return { all, at, preview };
+  }
+  previewRewind = async (id: string) => (await this.rewindPlan(id)).preview;
+  /** OpenCode revert to before the user message `id`; the messages stay stored, the mark hides them until the next prompt removes them. */
+  rewind = async (id: string, mode: RewindMode) => {
+    if (this.session.currentState() !== "idle") throw new Error("Stop the turn first");
+    const { all, at, preview } = await this.rewindPlan(id);
+    if (!preview.modes!.includes(mode)) throw new Error(`OpenCode rewinds ${preview.modes![0] === "both" ? "code and conversation together" : "the conversation only"}`);
+    const before = this.revertAt;
+    this.revertAt = id; // the session.updated of this revert is not an external one
+    await this.server.request(`/session/${this.id}/revert`, { method: "POST", directory: this.cwd, body: { messageID: id } }).catch((err) => ((this.revertAt = before), Promise.reject(err)));
+    this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: id });
+    this.usage = undefined;
+    for (const m of all.slice(0, at)) this.noteUsage(m.info);
+    void this.emitUsage();
+  };
   sync = async () => {};
   close = async () => this.engine.remove(this);
   activity = () => ({ received: 0, at: 0, progress: 0 });
