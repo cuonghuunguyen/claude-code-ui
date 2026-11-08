@@ -7,7 +7,7 @@
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,6 +20,7 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 if (args[0] !== "serve") (console.error(`fake opencode: unknown command ${args[0]}`), process.exit(2));
+if (process.env.FAKE_OPENCODE_HANG === "1") (log({ type: "start", pid: process.pid, argv: args, hung: true }), setInterval(() => {}, 1e9), await new Promise(() => {}));
 const password = process.env.OPENCODE_SERVER_PASSWORD;
 if (!password) (console.error("fake opencode: OPENCODE_SERVER_PASSWORD is not set"), process.exit(3));
 const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";

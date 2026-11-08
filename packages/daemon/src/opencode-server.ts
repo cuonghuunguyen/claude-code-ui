@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
-import { killProcessTree } from "./git-runner.ts";
+import { SERVE_WATCHER } from "./tailscale.ts";
 
 export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed";
 /** A non-2xx answer: `status` and the parsed `body` let callers map OpenCode's error `name`. */
@@ -81,7 +81,9 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let lastError: string | undefined;
   let stderr = "";
   let stopRequested = false;
-  const killSync = () => child?.pid !== undefined && killProcessTree(child.pid);
+  // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
+  // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
+  const killSync = () => child?.stdin?.destroy();
 
   const argv = () => {
     const path = o.path();
@@ -120,20 +122,15 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     // A start that fails counts as a quick exit, once (the exit event may count it too).
     let counted = false;
     const count = () => !counted && ((counted = true), fastExits.push(startedAt));
-    // Own process group (POSIX): the tree is killed through the PID, never by name.
-    const proc = spawn(cmd[0]!, [...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"], {
+    const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, cmd[0]!, ...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"], {
       env: { ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     child = proc;
-    // Last resort when the daemon dies without its close hook.
-    process.on("exit", killSync);
     const exited = new Promise<never>((_, reject) => {
       proc.once("error", (err) => reject(failed(err.message)));
       proc.once("exit", (code, signal) => {
-        process.off("exit", killSync);
         if (child === proc) (child = undefined), (up = undefined);
         if (!stopRequested && now() - startedAt < FAST_MS) count();
         else if (!stopRequested) fastExits = [];
@@ -264,8 +261,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     up = undefined;
     if (proc?.pid === undefined || proc.exitCode !== null || proc.signalCode !== null) return;
     const gone = new Promise<void>((r) => proc.once("exit", () => r()));
-    killProcessTree(proc.pid);
+    proc.stdin?.end();
+    // The watcher normally ends the server at once; a SIGTERM makes it do the same when stdin did not.
+    const timer = setTimeout(() => proc.kill("SIGTERM"), 2000);
     await gone;
+    clearTimeout(timer);
   };
 
   return {

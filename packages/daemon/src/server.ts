@@ -95,6 +95,8 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 const CLEARED = /^\/(clear|reset|new)$/;
 /** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
 export const MODEL_LIST_WAIT_MS = 2000;
+/** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
+const OPENCODE_LIST_WAIT_MS = 3000;
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -327,7 +329,7 @@ export function createDaemon(opts: {
   /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
   secrets?: Secrets;
   /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
-  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv };
+  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
   /** Test seam (GH-447): the fetch of the Jira client. */
   jiraFetch?: typeof fetch;
   /** Test seam (GH-164): delays of auto-continue.ts. */
@@ -1189,8 +1191,26 @@ export function createDaemon(opts: {
    * `ran`: the listing answered for every folder (an entry missing from it is gone); a failing OpenCode lists none and never fails the Claude list.
    */
   async function listOpenCode(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
+    const none = () => ({ items: [] as SessionListItem[], ids: new Set<string>(), ran: false });
+    if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return none();
+    // Not answering within the wait: no OpenCode items and no prune (`ran` false); the start goes on and the next list has them. The late result is dropped.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<ReturnType<typeof none>>((resolve) => {
+      timer = setTimeout(() => {
+        const text = "OpenCode did not answer the session list in time";
+        if (text !== openCodeListError) console.error(`listing OpenCode sessions failed: ${text}`);
+        openCodeListError = text;
+        resolve(none());
+      }, opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS);
+    });
+    try {
+      return await Promise.race([readOpenCodeList(cwds, linked, links), late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function readOpenCodeList(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
     const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
-    if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return out;
     try {
       const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd })] as const);
       openCodeListError = undefined;
