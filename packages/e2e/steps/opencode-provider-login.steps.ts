@@ -187,8 +187,7 @@ Then("the model picker lists the provider {string}", async ({ page }, name: stri
   const picker = t(page, "session-model");
   await expect(picker).toBeVisible({ timeout: 30_000 });
   await picker.click();
-  await expect(page.getByRole("listbox")).toBeVisible();
-  // The acceptance run is online (models.dev): the refreshed list has the provider's models.
-  await expect(page.getByRole("listbox")).toContainText(name, { timeout: 15_000 });
+  // The engine selector's listbox may still be mounted: pick the model list by its content.
+  await expect(page.getByRole("listbox").filter({ hasText: name })).toBeVisible({ timeout: 15_000 });
   await page.keyboard.press("Escape");
 });
