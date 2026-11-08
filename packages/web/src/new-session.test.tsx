@@ -275,9 +275,9 @@ it("the project chip opens with ArrowDown and Escape returns focus to it", async
 
 it("/ on the new-session tab lists the project's commands once they arrive, only the dialog commands before; a project change asks again", async () => {
   const lists: Record<string, ((c: { name: string; description: string; argumentHint: string }[]) => void)> = {};
-  const onCommands = vi.fn((cwd: string) => new Promise<{ name: string; description: string; argumentHint: string }[]>((r) => (lists[cwd] = r)));
+  const onCommands = vi.fn((cwd: string, _engine?: string) => new Promise<{ name: string; description: string; argumentHint: string }[]>((r) => (lists[cwd] = r)));
   const { el, box, rerender } = await render({ onCommands, onDialog: () => {} });
-  expect(onCommands).toHaveBeenCalledWith("/p/a");
+  expect(onCommands).toHaveBeenCalledWith("/p/a", "claude");
   const rows = () => [...el.querySelectorAll('[role="listbox"] [role=option]')].map((o) => o.textContent ?? "");
   await type(box, "/");
   expect(rows().some((r) => r.includes("/mcp"))).toBe(true);
@@ -285,8 +285,14 @@ it("/ on the new-session tab lists the project's commands once they arrive, only
   await act(async () => lists["/p/a"]!([{ name: "review", description: "", argumentHint: "" }]));
   expect(rows().some((r) => r.includes("/review"))).toBe(true);
   await rerender({ cwd: "/p/b" });
-  expect(onCommands).toHaveBeenLastCalledWith("/p/b");
+  expect(onCommands).toHaveBeenLastCalledWith("/p/b", "claude");
   expect(rows().some((r) => r.includes("/review"))).toBe(false);
+});
+
+it("the new-session tab asks for the commands of the draft's engine", async () => {
+  const onCommands = vi.fn(async () => []);
+  await render({ onCommands, engine: "opencode" });
+  expect(onCommands).toHaveBeenCalledWith("/p/a", "opencode");
 });
 
 it("the new-session tab asks for the commands again when the project's config changed", async () => {

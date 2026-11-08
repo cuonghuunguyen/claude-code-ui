@@ -350,6 +350,32 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(1);
   });
 
+  it("slash commands: the session lists GET /command, session.commands answers for a draft; /name args runs POST /command, other /x is a plain prompt, a failure is a notice and idle", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["init", "review", "fail"]);
+    expect(s.find("commands")!.commands[0]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[1]).toMatchObject({ description: "", argumentHint: "" });
+    expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
+
+    await s.prompt("/review main");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    const sent = d.requests("POST", `/session/${s.id}/command`);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body).toMatchObject({ command: "review", arguments: "main", agent: "build", messageID: expect.stringMatching(/^msg_/), parts: [] });
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p: any) => p.text)).toEqual(["/review main"]);
+
+    await s.prompt("/fail");
+    await until(() => !!s.find("notice", (n) => n.id.endsWith("prompt_failed")));
+    expect(s.states().at(-1)).toBe("idle");
+
+    await s.prompt("/unknown x");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.parts[0].text).toBe("/unknown x");
+  });
+
   it("context usage: after a turn the last completed assistant message's tokens over the model's window; a restored session has it before any prompt", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();

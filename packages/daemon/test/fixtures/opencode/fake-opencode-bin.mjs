@@ -3,6 +3,7 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
+// GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
@@ -153,6 +154,7 @@ const server = createServer(async (req, res) => {
     const result = await new Promise((r) => (waiting.set(id, r), res.on("close", () => waiting.get(id) === r && waiting.delete(id))));
     return result === "success" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "failed" } });
   }
+  if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
   if (url.pathname === "/agent") return json(200, [{ name: "build", permission: [] }, { name: "plan", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));
@@ -176,7 +178,7 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/command|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
   if (m && s && m[2] === "/revert" && req.method === "POST") {
     if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
@@ -204,6 +206,13 @@ const server = createServer(async (req, res) => {
     delete s.revert;
     updated(s, dir);
     return json(200, s);
+  }
+  // Slash commands: a command plays the next script like a prompt and answers at once (the real server answers when the turn ends); `fail` fails it.
+  if (m && s && m[2] === "/command" && req.method === "POST") {
+    if (body.command === "fail") return json(500, { name: "UnknownError", data: { message: "command failed" } });
+    const file = scripts.shift();
+    if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
+    return json(200, {});
   }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
     // The next prompt removes the reverted messages for good.

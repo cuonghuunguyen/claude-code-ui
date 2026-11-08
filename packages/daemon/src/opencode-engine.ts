@@ -1,7 +1,7 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
-import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview } from "@claude-ui/protocol";
+import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -13,7 +13,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -121,6 +121,8 @@ class OpenCodeSession implements EngineSession {
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
   /** The message OpenCode's revert cuts the conversation at, undefined when none (a prompt clears it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
+  /** Names of the commands last listed: `/name` of one of them runs it. */
+  private commandNames = new Set<string>();
   private usage: { tokens: NonNullable<OpenCodeMessage["info"]["tokens"]>; providerID: string; modelID: string } | undefined;
 
   constructor(
@@ -153,6 +155,7 @@ class OpenCodeSession implements EngineSession {
 
   begin() {
     this.engine.add(this);
+    void this.emitCommands();
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
@@ -169,6 +172,13 @@ class OpenCodeSession implements EngineSession {
     for (const part of openCodeParts(h.messages, h.children, this.mapper)) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m.info);
     void this.emitUsage();
+  }
+
+  private async emitCommands() {
+    const commands = await this.engine.commands(this.cwd).catch(() => undefined);
+    if (!commands) return;
+    this.commandNames = new Set(commands.map((c) => c.name));
+    this.session.emit({ type: "commands", id: "commands", commands });
   }
 
   private noteUsage(info: OpenCodeMessage["info"]) {
@@ -196,6 +206,7 @@ class OpenCodeSession implements EngineSession {
     return (this.resyncing ??= loadOpenCodeHistory(this.server, this.id, this.cwd)
       .then((h) => {
         this.apply(h);
+        void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
         if (h.busy && state === "idle") (this.turnAt = Date.now()), this.session.setState("running");
@@ -253,14 +264,15 @@ class OpenCodeSession implements EngineSession {
       this.beginTurn();
       this.session.setState("running");
     }
-    void this.send(messageID, text, images).catch((err) => {
+    const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    void this.send(messageID, text, images, cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
       if (!steer) this.session.setState("idle");
     });
     return messageID;
   }
 
-  private async send(messageID: string, text: string, images: string[]) {
+  private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
     // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
     await this.server.streamReady();
     if (this.written !== this.permissionMode) await this.writeBlock(this.permissionMode);
@@ -269,6 +281,18 @@ class OpenCodeSession implements EngineSession {
       return this.session.setState("idle");
     }
     const [providerID, ...rest] = this.model.split("/");
+    const agent = this.permissionMode === "plan" ? "plan" : "build";
+    if (command) {
+      // The turn runs inside this request: no timeout.
+      await this.server.request(`/session/${this.id}/command`, {
+        method: "POST",
+        directory: this.cwd,
+        timeoutMs: 0,
+        body: { messageID, command: command.name, arguments: command.args, agent, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+      });
+      this.sentAt = Date.now();
+      return;
+    }
     const parts = [
       ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
       ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
@@ -276,7 +300,7 @@ class OpenCodeSession implements EngineSession {
     await this.server.request(`/session/${this.id}/prompt_async`, {
       method: "POST",
       directory: this.cwd,
-      body: { messageID, parts, agent: this.permissionMode === "plan" ? "plan" : "build", ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+      body: { messageID, parts, agent, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
     });
     this.sentAt = Date.now();
   }
@@ -535,7 +559,7 @@ class OpenCodeEngineImpl implements Engine {
         const sid: string | undefined = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id;
         if (sid) for (const o of this.sessions) if (o.owns(sid)) o.event(payload);
       },
-      resync: () => this.sessions.forEach((o) => void o.resync()),
+      resync: () => (this.commandLists.clear(), this.sessions.forEach((o) => void o.resync())),
     });
   }
   remove(s: OpenCodeSession) {
@@ -558,6 +582,18 @@ class OpenCodeEngineImpl implements Engine {
       .then((r) => new Map(r.providers.flatMap((p) => Object.entries(p.models).flatMap(([id, m]) => (m.limit?.context ? [[`${p.id}/${id}`, m.limit.context] as const] : [])))))
       .catch(() => ((this.limits = undefined), new Map<string, number>()));
     return (await this.limits).get(`${providerID}/${modelID}`);
+  }
+  private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
+  /** `GET /command` of a folder (built-ins, project and user commands, MCP prompts, skills), cached 60 s; dropped when the server restarts. */
+  commands(cwd: string): Promise<SlashCommand[]> {
+    const hit = this.commandLists.get(cwd);
+    if (hit && Date.now() - hit.at < 60_000) return hit.list;
+    const list = this.server
+      .request<{ name: string; description?: string; hints?: string[] }[]>("/command", { directory: cwd })
+      .then((l) => l.map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") })));
+    this.commandLists.set(cwd, { at: Date.now(), list });
+    list.catch(() => this.commandLists.delete(cwd));
+    return list;
   }
   dropLimits = () => (this.limits = undefined);
 

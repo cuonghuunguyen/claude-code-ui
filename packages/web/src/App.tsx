@@ -4044,7 +4044,7 @@ export function App() {
                   onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
-                  onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}
+                  onCommands={(cwd, engine) => client.current!.request<CommandsResult>({ type: "session.commands", cwd, engine }).then((r) => r.commands)}
                   onStart={createSession}
                   onDialog={openDialog}
                   inputRef={newPrompt}
@@ -4827,7 +4827,7 @@ export function NewSession({
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Commands and skills of a project for the `/` menu (no session exists yet). */
-  onCommands: (cwd: string) => Promise<SlashCommand[]>;
+  onCommands: (cwd: string, engine: Engine) => Promise<SlashCommand[]>;
   /** Changes on any config.changed (a user-wide change shows in every project): the commands are asked again. */
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
@@ -4863,10 +4863,10 @@ export function NewSession({
   useEffect(() => {
     if (!cwd || !connected) return setCommands([]);
     let stale = false;
-    onCommands(cwd).then((c) => !stale && setCommands(c), () => {});
+    onCommands(cwd, engine).then((c) => !stale && setCommands(c), () => {});
     return () => void (stale = true);
-  }, [cwd, connected, commandsRev]);
-  useEffect(() => setCommands([]), [cwd]);
+  }, [cwd, connected, commandsRev, engine]);
+  useEffect(() => setCommands([]), [cwd, engine]);
 
   return (
     <div className="flex w-full max-w-[720px] flex-col items-center gap-4">

@@ -1965,7 +1965,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
-            return reply({ commands: await commandsOf(cwd) });
+            return reply({ commands: await (msg.engine === "opencode" ? openCodeEngine.commands(cwd) : commandsOf(cwd)) });
           } catch (e) {
             return fail("commands_failed", (e as Error).message);
           }
