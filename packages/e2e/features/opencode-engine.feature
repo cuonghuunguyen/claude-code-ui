@@ -25,7 +25,7 @@ Feature: OpenCode engine (GH-655)
     Then I capture "selector open dark"
     When I pick the engine "OpenCode" in the open selector
     And I send the first prompt "Hello OpenCode"
-    Then the first prompt is refused with a message about a later version
+    Then I see my prompt in the transcript
     And the OpenCode session is tagged in its sidebar row
     And the page has no horizontal scroll
     And I capture "sidebar tag dark"

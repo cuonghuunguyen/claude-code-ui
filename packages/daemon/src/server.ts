@@ -30,9 +30,8 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeEngine } from "./opencode-engine.ts";
+import { createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
 import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
-import type { OpenCodeMessage } from "./opencode-parts.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
@@ -450,6 +449,14 @@ export function createDaemon(opts: {
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  const openCodeEngine = createOpenCodeEngine(openCode, {
+    onTitle: (id, title) => {
+      const m = openCodeMeta.get(id);
+      if (!m || m.title === title) return;
+      openCodeMeta.set(id, { ...m, title });
+      broadcast({ type: "sessions.changed" });
+    },
+  });
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
   /** Settings `sessions.engine`: the Engine of the last created session. */
   const rememberEngine = (engine: EngineName) => {
@@ -1202,13 +1209,13 @@ export function createDaemon(opts: {
     const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd }).catch(() => undefined);
     const cwd = row && allowed(known?.cwd ?? row.directory);
     if (!row || !cwd || isRemoving(cwd)) return undefined;
-    const messages = await openCode.request<OpenCodeMessage[]>(`/session/${id}/message`, { directory: cwd });
+    const history = await loadOpenCodeHistory(openCode, id, cwd);
     openCodeMeta.set(id, { cwd, title: row.title });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
     const effort = EFFORTS.includes(saved?.effort as never) ? (saved!.effort as SessionSettings["effort"]) : undefined;
     const model = isModel(saved?.model) ? saved.model : undefined;
-    return track(Session.restore(id, cwd, messages as never, openCodeSessionOpts({ model, permissionMode, effort })));
+    return track(Session.restore(id, cwd, history as never, openCodeSessionOpts({ model, permissionMode, effort })));
   }
 
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
@@ -1846,15 +1853,15 @@ export function createDaemon(opts: {
           if (msg.engine === "opencode") {
             // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
             let row: OpenCodeSessionRow;
+            const mode = OPENCODE_MODES.find((m) => m === appSettings.get().sessions.defaultMode) ?? "default";
             try {
-              row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: {} });
+              row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(mode, cwd) } });
             } catch (err) {
               const e = openCodeFail(err);
               return fail(e.code, e.message);
             }
             if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
-            const mode = appSettings.get().sessions.defaultMode;
-            const s = track(new Session(cwd, openCodeSessionOpts({ model: msg.model, permissionMode: OPENCODE_MODES.includes(mode) ? mode : "default" }), { id: row.id }));
+            const s = track(new Session(cwd, openCodeSessionOpts({ model: msg.model, permissionMode: mode }), { id: row.id }));
             openCodeMeta.set(s.id, { cwd, title: row.title });
             addProject(cwd);
             rememberEngine("opencode");
@@ -2162,7 +2169,7 @@ export function createDaemon(opts: {
         }
         case "models.list": {
           try {
-            return reply({ models: await modelList() });
+            return reply({ models: msg.engine === "opencode" ? await openCodeModels(openCode) : await modelList() });
           } catch (e) {
             return fail("models_failed", (e as Error).message);
           }
@@ -3140,7 +3147,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), void openCode.stop(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

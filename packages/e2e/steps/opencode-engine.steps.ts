@@ -105,17 +105,12 @@ When("I choose the engine {string}", async ({ page }, name: string) => {
   await expect(chip(page)).toContainText(name);
 });
 
-Then("the first prompt is refused with a message about a later version", async ({ page }) => {
-  await expect(page.getByText(/later version/i).first()).toBeVisible({ timeout: 30_000 });
-});
-
 Then("the OpenCode session is tagged in its sidebar row", async ({ page }) => {
   await openDrawer(page);
   await expect(sidebarRow(page).first().getByTestId("engine-tag")).toHaveText("OpenCode");
   await expect(sidebarRow(page).first().getByTestId("engine-tag")).toBeVisible();
 });
 
-// The refused first prompt keeps the draft tab (the session exists and is listed); the header shows once the row is opened.
 When("I open the first session row", async ({ page }) => {
   await openDrawer(page);
   await sidebarRow(page).first().click();

@@ -73,12 +73,14 @@ let reconnect: () => void = () => {};
 let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
 let slept: (m: unknown) => void = () => {};
+let planUsage: (u: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void; onSlept?: (m: unknown) => void }) => {
     emit = opts.onEvent;
     slept = opts.onSlept ?? (() => {});
+    planUsage = (opts as { onPlanUsage?: (u: unknown) => void }).onPlanUsage ?? (() => {});
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
@@ -6679,4 +6681,18 @@ describe("recommendations hooks (GH-518)", () => {
       }
     });
   });
+});
+
+it("the plan meter shows for a Claude session and hides while the shown session's engine has no plan usage", async () => {
+  const usage = { plan: "Max", windows: [], status: "allowed" };
+  await act(async () => planUsage(usage));
+  expect(el.querySelector('[data-testid="plan-meter"]')).not.toBeNull();
+  const noPlan = { ...session, engine: "opencode", capabilities: { permissionModes: ["default"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false } };
+  const restore = await remount({ "session.list": { sessions: [noPlan], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: noPlan } });
+  try {
+    await act(async () => planUsage(usage));
+    expect(el.querySelector('[data-testid="plan-meter"]')).toBeNull();
+  } finally {
+    restore();
+  }
 });

@@ -48,7 +48,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { capabilitiesOf, ENGINES, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -57,6 +57,7 @@ import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
 import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
@@ -267,6 +268,8 @@ function usePageFocused() {
   return focused;
 }
 
+const NO_MODELS: ModelInfo[] = [];
+
 export function App() {
   const tr = useT();
   const [list, setList] = useState<SessionListItem[]>([]);
@@ -444,7 +447,12 @@ export function App() {
       // Storage blocked: the width lasts until the page reloads.
     }
   }, [sidebarWidth]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  // Model lists per Engine (ADR 0012): Claude's comes with the connection, another Engine's when a session or draft of it shows.
+  const [modelsBy, setModelsBy] = useState<Partial<Record<Engine, ModelInfo[]>>>({});
+  const modelsRequested = useRef(new Set<Engine>());
+  const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
+  const modelsOf = (engine: Engine) => modelsBy[engine] ?? NO_MODELS;
+  const models = modelsOf("claude");
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
   /** Open Aside popups (docs/spec.md "Aside"), the top one last; `asideFocused`: the one Esc applies to. */
@@ -1426,6 +1434,7 @@ export function App() {
         setStale(undefined);
         // A transient page failure (a side restarting) is retried after a reconnect.
         failedPage.current.clear();
+        modelsRequested.current.clear();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),
@@ -1806,7 +1815,7 @@ export function App() {
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
       // The daemon drops auto to ask when the new model has no auto support.
-      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(models, session.model));
+      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(session.engine ?? "claude"), session.model));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -2079,7 +2088,7 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        models={models}
+                        models={modelsOf(s.engine ?? "claude")}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
@@ -2120,7 +2129,7 @@ export function App() {
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
                         onShells={() => openShells(s.id)}
-                        onAside={(q) => openAside(s.id, q)}
+                        onAside={capabilitiesOf(s).fork ? (q) => openAside(s.id, q) : undefined}
                         signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
@@ -2961,6 +2970,17 @@ export function App() {
   // Claude: the start modes follow the model and the daemon config; another Engine: the modes it lists.
   const modesFor = (engine: Engine, model: string) => engines.find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
   const draftModes = modesFor(draftEngine, pick.model);
+  // The model list of an Engine is fetched the first time a session or the draft of it shows (Claude's came with the connection).
+  const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? (shown.engine ?? "claude") : undefined;
+  const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
+  useEffect(() => {
+    if (!shownEngine || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(shownEngine)) return;
+    modelsRequested.current.add(shownEngine);
+    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine }).then(
+      (r) => setModelsBy((m) => ({ ...m, [shownEngine]: r.models })),
+      () => modelsRequested.current.delete(shownEngine),
+    );
+  }, [shownEngine, status]);
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -2970,8 +2990,9 @@ export function App() {
       const offered = modesFor(d.engine!, "default");
       return setDraft({ model: "default", effort: "default", engine: d.engine, mode: offered.includes(d.mode) ? d.mode : offered[0] });
     }
-    const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);
-    if (lost) setToast(autoUnavailable(models, d.model));
+    const list = modelsOf(draftEngine);
+    const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
+    if (lost) setToast(autoUnavailable(list, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
   };
   // The new-session tab's mode comes from the Claude settings of its project, read again each time the tab is shown.
@@ -3157,7 +3178,7 @@ export function App() {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models, capabilitiesOf(shown)),
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude"), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
@@ -3174,7 +3195,7 @@ export function App() {
           }
         }
       : undefined,
-    models,
+    models: shownEngine ? modelsOf(shownEngine) : models,
     canQuickOpen,
     newSession: () => newSession(),
     selectTab: open,
@@ -3632,7 +3653,7 @@ export function App() {
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
-          {plan && status !== "unauthorized" && <PlanMeter usage={plan} switcher={{ accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
+          {plan && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={plan} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
             <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
@@ -4010,7 +4031,7 @@ export function App() {
                   onCwd={(c) => (setDraftCwd(c), setWorktreeJob((j) => (j?.error ? undefined : j)))}
                   onNewWorktree={(p) => void newWorktree(p)}
                   worktreeJob={worktreeJob?.project === projectOf(draftProject ?? "", worktrees) ? worktreeJob : undefined}
-                  models={models}
+                  models={modelsOf(draftEngine)}
                   draft={draft}
                   onDraft={changeDraft}
                   modes={draftModes}
@@ -4732,6 +4753,19 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
   );
 }
 
+/** A control the session's Engine lacks: muted and aria-disabled (still focusable), the reason in a tooltip on hover, focus and tap. */
+function UnsupportedAction({ label, reason, children }: { label: string; reason: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <TooltipProvider>
+      <Tooltip open={open} onOpenChange={setOpen}>
+        <TooltipTrigger render={<MessageAction className="cursor-default pointer-coarse:size-11 opacity-50" label={label} aria-disabled onClick={() => setOpen(true)} />}>{children}</TooltipTrigger>
+        <TooltipContent data-testid="engine-unsupported">{reason}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /** The new-session tab's card. Hidden, not unmounted, while another tab is active: it keeps its draft, images, model, mode and effort. */
 export function NewSessionTab({ active, ...props }: { active: boolean } & ComponentProps<typeof NewSession>) {
   return (
@@ -5332,15 +5366,21 @@ export function SessionPane({
                     <CopyAction text={stripPasted(item.part.text)} />
                     <QuoteAction text={splitUploads(stripPasted(item.part.text)).text} />
                     {/* No tooltip prop: its trigger renders a button around this button. */}
-                    <MessageAction
-                      className="pointer-coarse:size-11"
-                      title={tr("app.prompt.rewind")}
-                      label={tr("app.prompt.rewindLabel")}
-                      disabled={turnRunning}
-                      onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
-                    >
-                      <RotateCcwIcon />
-                    </MessageAction>
+                    {capabilitiesOf(session).rewind ? (
+                      <MessageAction
+                        className="pointer-coarse:size-11"
+                        title={tr("app.prompt.rewind")}
+                        label={tr("app.prompt.rewindLabel")}
+                        disabled={turnRunning}
+                        onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
+                      >
+                        <RotateCcwIcon />
+                      </MessageAction>
+                    ) : (
+                      <UnsupportedAction label={tr("app.prompt.rewindLabel")} reason={tr("engine.unsupported")}>
+                        <RotateCcwIcon />
+                      </UnsupportedAction>
+                    )}
                   </>
                 }
               >
@@ -5461,7 +5501,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
             />
           </>
         )}
@@ -5766,10 +5806,13 @@ function PromptBox({
     setSendError(undefined);
   }, [cwd]);
   // While a turn runs and queueing is available, Enter and the send button follow the Sending setting and Alt+Enter does the other one.
-  const sendMode = useSendMode();
+  // An Engine without steering: a message sent while a turn runs can only queue.
+  const noSteer = caps?.steering === false;
+  const sendSetting = useSendMode();
+  const sendMode = noSteer ? "queue" : sendSetting;
   const running = state === "running" || state === "needs_input";
   const enterHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "queue" : "send";
-  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "send" : "queue";
+  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" && !noSteer ? "send" : "queue";
   const send = (given = text, how: "send" | "queue" = enterHow) => {
     // Each pasted text goes as the CLI's pasted_content block at its token (GH-441); the bash and dialog paths never hold one.
     const t = bash ? given : expandPastes(given, pastes, pasteTag ?? pasteTagId());

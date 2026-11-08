@@ -141,10 +141,12 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
                 <InputDiff tool={part.tool} input={updatedInput ?? part.input} />
               </div>
             )}
-            <Button type="button" variant="ghost" size="sm" className="self-end max-md:h-11 pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
-              {editing ? <FileDiffIcon /> : <PencilIcon />}
-              {editing ? t("session.permission.showDiff") : t("session.permission.editContent")}
-            </Button>
+            {!part.noEdit && (
+              <Button type="button" variant="ghost" size="sm" className="self-end max-md:h-11 pointer-coarse:h-11" aria-pressed={editing} onClick={() => setEditing(!editing)}>
+                {editing ? <FileDiffIcon /> : <PencilIcon />}
+                {editing ? t("session.permission.showDiff") : t("session.permission.editContent")}
+              </Button>
+            )}
           </>
         )}
         {/* Like Claude Code: "Allow always" applies every SDK suggestion (e.g. the Bash rule plus its directory). */}
