@@ -6,7 +6,7 @@ import { gotoLine } from "@codemirror/search";
 import { keymap, type KeyBinding } from "@codemirror/view";
 import { selectLine } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
-import { type FsMediaResult, type GitBlameResult, type GitRepo } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type FsMediaResult, type GitBlameResult, type GitRepo } from "@claude-ui/protocol";
 import { canOpenSide, externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
@@ -465,8 +465,8 @@ export function FilesPanel({
                         </>
                       )}
                       {external &&
-                        externalEntries({ isDir: false, editors: external.editors }).map((x) => (
-                          <ContextMenu.Item key={x.id} className={ITEM} data-testid={`editor-tab-menu-${x.testId}`} onClick={() => external.run(p, x.how, cwd)}>
+                        externalEntries({ isDir: false, editors: external.editors, local: !side || side === LOCAL_SIDE }).map((x) => (
+                          <ContextMenu.Item key={x.id} className={ITEM} data-testid={`editor-tab-menu-${x.testId}`} title={x.title} onClick={() => external.run(p, x.how, cwd)}>
                             {x.label}
                           </ContextMenu.Item>
                         ))}

@@ -86,7 +86,7 @@ export function RollbackDialog({ client, cwd, exact, repoName, paths, onClose, o
 }
 
 /** One item of a row menu section. */
-export type RowMenuItem = { label: string; testId: string; disabled?: boolean; run: () => void };
+export type RowMenuItem = { label: string; title?: string; testId: string; disabled?: boolean; run: () => void };
 
 /** Right click, long press or Shift+F10 on `children` (one row) offers Add to prompt (`onMention`), its `sections` (GH-612: open, copy path, open in app) and, when `enabled`, Rollback… for its paths; `children` becomes the trigger element. */
 export function RollbackMenu({ children, enabled, onRollback, onMention, className, sections = [] }: { children: ReactElement; enabled: boolean; onRollback: () => void; onMention?: () => void; className?: string; sections?: RowMenuItem[][] }) {
@@ -109,7 +109,7 @@ export function RollbackMenu({ children, enabled, onRollback, onMention, classNa
               <div key={i} role="none">
                 {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                 {g.map((x) => (
-                  <ContextMenu.Item key={x.testId} className={ITEM} disabled={x.disabled} onClick={x.run} data-testid={x.testId}>
+                  <ContextMenu.Item key={x.testId} className={ITEM} disabled={x.disabled} onClick={x.run} data-testid={x.testId} title={x.title}>
                     {x.label}
                   </ContextMenu.Item>
                 ))}

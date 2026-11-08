@@ -992,7 +992,7 @@ export function FileTree({
             data-testid="tree-menu"
             finalFocus={() => (movedFocus.current ? false : (rowEl(root.current, menuTarget.kind === "root" ? tabPath : menuTarget.entry.path) ?? true))}
           >
-            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab, !!clip, external ? externalEntries({ isDir: menuTarget.kind !== "file", editors: external.editors }) : []).map((section, i) => (
+            {treeMenuSections(menuTarget, MAC, !!onViewer, !!onShowGraph, !!onOpenTab, !!clip, external ? externalEntries({ isDir: menuTarget.kind !== "file", editors: external.editors, local: side === LOCAL_SIDE }) : []).map((section, i) => (
                 <div key={i} role="none">
                   {i > 0 && <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />}
                   {section.map((x) => (
@@ -1002,6 +1002,7 @@ export function FileTree({
                       disabled={x.disabled}
                       aria-keyshortcuts={x.keys}
                       data-testid={x.testId}
+                      title={x.title}
                       onClick={() => run(x.id, menuTarget)}
                     >
                       <span className="truncate">{x.label}</span>

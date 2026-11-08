@@ -136,3 +136,8 @@ it("GH-612 a file tab gets the open-in-app section after its file section, and n
   expect(ids({ ...all, pane: { label: "File", item: "file" }, external })).toContainEqual(["ext:reveal"]);
   expect(ids({ ...all, pane: { label: "Files" }, external }).flat()).not.toContain("ext:reveal");
 });
+
+it("GH-646 the full label of an open-in-app entry reaches the tab menu as its title", () => {
+  const external = [{ id: "ext:custom" as const, how: "custom" as const, label: "Open in A Long Name", title: "Open in A Long Name", testId: "ext-menu-custom" }];
+  expect(tabMenuSections({ ...all, pane: { label: "File", item: "file" }, external }).flat().find((e) => e.id === "ext:custom")?.title).toBe("Open in A Long Name");
+});

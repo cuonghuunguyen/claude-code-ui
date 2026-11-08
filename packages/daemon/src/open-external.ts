@@ -6,7 +6,7 @@ import { runOpener } from "./ctl/commands.ts";
 import { shellEnv } from "./terminals.ts";
 import { winQuote } from "./update.ts";
 
-export type OpenWith = "reveal" | "default" | EditorId;
+export type OpenWith = "reveal" | "default" | "custom" | EditorId;
 export interface OpenCommand {
   cmd: string;
   args: string[];
@@ -23,25 +23,46 @@ export const EDITORS: Record<EditorId, { label: string; cli: string; apps: strin
   cursor: { label: "Cursor", cli: "cursor", apps: ["Cursor.app"] },
   idea: { label: "IntelliJ IDEA", cli: "idea", apps: ["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app", "IntelliJ IDEA CE.app"] },
 };
-export const isOpenWith = (w: unknown): w is OpenWith => w === "reveal" || w === "default" || (typeof w === "string" && Object.hasOwn(EDITORS, w));
+export const isOpenWith = (w: unknown): w is OpenWith => w === "reveal" || w === "default" || w === "custom" || (typeof w === "string" && Object.hasOwn(EDITORS, w));
 
 /** A path that cmd.exe would expand (`%VAR%`) inside the .cmd launcher: refused, so nothing expands. */
 export const WIN_UNSAFE = /%/;
+
+/** `name` as a file: an absolute path as is, else the first PATH entry that has it (PATHEXT on Windows, unless `name` has an extension). */
+export function findOnPath(o: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; exists: (p: string) => boolean }, name: string): string | undefined {
+  const win = o.platform === "win32";
+  const { join, delimiter, isAbsolute } = win ? win32 : posix;
+  const exts = win && !/\.[^\\/.]+$/.test(name) ? (o.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";").filter(Boolean) : [""];
+  if (isAbsolute(name)) return exts.map((x) => name + x).find(o.exists);
+  return (o.env.PATH ?? o.env.Path ?? "").split(delimiter).filter(Boolean).flatMap((d) => exts.map((x) => join(d, name + x))).find(o.exists);
+}
+
+/** The user's editor command for `path`: `{path}` and `{root}` are replaced in the arguments; with none, the paths are appended as for the built-in editors. The program is never passed through a shell (Windows .cmd: cmd.exe with every argument quoted). */
+export function customCommand(argv: string[], path: string, root: string, isDir: boolean, platform: NodeJS.Platform, find: (name: string) => string | undefined): OpenCommand {
+  const prog = argv[0] ? find(argv[0]) : undefined;
+  if (!prog) throw Object.assign(new Error(`Editor command not found${argv[0] ? `: ${argv[0]}` : ""}. Check Settings › Open in app.`), { code: "editor_missing" });
+  // One pass: a file name that contains "{root}" is not replaced again.
+  const sub = (a: string) => a.replace(/\{(path|root)\}/g, (_, k: string) => (k === "path" ? path : root));
+  const args = argv.slice(1).map(sub);
+  if (args.every((a, i) => a === argv[i + 1])) args.push(...(isDir ? [path] : [root, path]));
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(prog)) {
+    if ([path, root].some((t) => WIN_UNSAFE.test(t))) throw new Error("unsupported character in the path: %");
+    return { cmd: "cmd.exe", args: ["/d", "/s", "/c", `"${[prog, ...args].map(winQuote).join(" ")}"`], verbatim: true };
+  }
+  return { cmd: prog, args };
+}
 
 /**
  * The editors installed here: the CLI on PATH (PATHEXT on Windows), else on macOS the app bundle in /Applications or ~/Applications
  * (a daemon started by the launcher shortcut has a GUI PATH without /usr/local/bin and /opt/homebrew/bin).
  */
 export function detectEditors(o: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; exists: (p: string) => boolean; home: string }): Map<EditorId, Launcher> {
-  const win = o.platform === "win32";
-  const { join, delimiter } = win ? win32 : posix;
-  const dirs = (o.env.PATH ?? o.env.Path ?? "").split(delimiter).filter(Boolean);
-  const exts = win ? (o.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";").filter(Boolean) : [""];
   const found = new Map<EditorId, Launcher>();
   for (const [id, e] of Object.entries(EDITORS) as [EditorId, (typeof EDITORS)[EditorId]][]) {
-    const cli = dirs.flatMap((d) => exts.map((x) => join(d, e.cli + x))).find(o.exists);
+    const cli = findOnPath(o, e.cli);
     if (cli) found.set(id, { cli });
     else if (o.platform === "darwin") {
+      const { join } = posix;
       const app = ["/Applications", join(o.home, "Applications")].flatMap((d) => e.apps.map((a) => join(d, a))).find(o.exists);
       if (app) found.set(id, { app });
     }
@@ -50,7 +71,7 @@ export function detectEditors(o: { platform: NodeJS.Platform; env: NodeJS.Proces
 }
 
 /** The command for `path` (canonical, inside `root`); throws for a path the platform cannot pass safely. `wslPath`: its Windows form, set by a daemon in WSL (reveal and default go to Windows Explorer). */
-export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: string, root: string, isDir: boolean, launcher?: Launcher, wslPath?: string): OpenCommand {
+export function openCommand(platform: NodeJS.Platform, how: Exclude<OpenWith, "custom">, path: string, root: string, isDir: boolean, launcher?: Launcher, wslPath?: string): OpenCommand {
   const win = platform === "win32";
   if (how === "reveal") {
     if (wslPath) return { cmd: "explorer.exe", args: ["/select," + wslPath], ignoreExit: true };
