@@ -105,6 +105,8 @@ export function splitLabels(value: string, labels: string[]): string[] {
   return out;
 }
 
+/** The longest a prompt sent after Stop waits for the aborted turn to end. */
+const TURN_END_WAIT_MS = 10_000;
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {
@@ -127,6 +129,8 @@ class OpenCodeSession implements EngineSession {
   /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
   private leavingPlan = false;
+  /** Settles when the running turn goes idle. */
+  private turnEnd: { done: Promise<void>; resolve: () => void } | undefined;
   /** Tokens and model of the last completed assistant message of this session (its context window use). */
   /** The message OpenCode's revert cuts the conversation at, undefined when none (a prompt clears it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
@@ -290,14 +294,23 @@ class OpenCodeSession implements EngineSession {
   }
 
   prompt(text: string, images: string[] = []): string {
-    // Steering: while a turn runs the message joins it and the model sees it at the next step (OpenCode loop); the turn still ends at one session.idle.
-    const steer = this.session.currentState() !== "idle";
+    // Stop was pressed and the aborted turn still runs: a joining prompt would be lost with the loop, so it starts the next turn when this one has ended.
+    const afterStop = this.stopped && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
     this.mapper.own.add(messageID);
     this.revertAt = undefined;
     this.session.emit({ type: "user_text", id: messageID, text, images });
+    const start = () => this.start(messageID, text, images);
+    if (!afterStop) start();
+    else void Promise.race([this.turnEnd?.done, new Promise((r) => setTimeout(r, TURN_END_WAIT_MS))]).then(start);
+    return messageID;
+  }
+
+  /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
+  private start(messageID: string, text: string, images: string[]) {
+    const steer = this.session.currentState() !== "idle";
+    this.stopped = false;
     if (!steer) {
-      this.stopped = false;
       this.sentAt = Infinity;
       this.beginTurn();
       this.session.setState("running");
@@ -305,9 +318,8 @@ class OpenCodeSession implements EngineSession {
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     void this.send(messageID, text, images, !steer && cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
-      if (!steer) this.session.setState("idle");
+      if (!steer) this.toIdle();
     });
-    return messageID;
   }
 
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
@@ -318,7 +330,7 @@ class OpenCodeSession implements EngineSession {
       if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
       if (this.stopped) {
         this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-        return this.session.setState("idle");
+        return this.toIdle();
       }
       const [providerID, ...rest] = this.model.split("/");
       const agent = this.permissionMode === "plan" ? "plan" : "build";
@@ -347,6 +359,8 @@ class OpenCodeSession implements EngineSession {
   }
 
   private beginTurn() {
+    this.turnEnd = {} as NonNullable<typeof this.turnEnd>;
+    this.turnEnd.done = new Promise<void>((r) => (this.turnEnd!.resolve = r));
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
@@ -358,8 +372,15 @@ class OpenCodeSession implements EngineSession {
     if (this.session.currentState() === "idle") return;
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
-    this.session.setState("idle");
+    this.toIdle();
     void this.emitUsage();
+  }
+
+  /** The turn is over: idle, and a prompt waiting for the end of an aborted turn goes on. */
+  private toIdle() {
+    this.session.setState("idle");
+    this.turnEnd?.resolve();
+    this.turnEnd = undefined;
   }
 
   async interrupt() {

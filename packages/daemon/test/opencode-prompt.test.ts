@@ -228,6 +228,19 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", `/session/${s.id}/abort`)).toHaveLength(2);
   });
 
+  it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
+    const d = await boot({ script: ["abort", "text"] });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await Promise.all([d.ok({ type: "session.interrupt", sessionId: s.id }), s.prompt("say DONE")]);
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2 && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body).toMatchObject({ messageID: s.parts().find((p) => p.type === "user_text" && p.text === "say DONE")!.id });
+    expect(s.parts().filter((p) => p.type === "user_text" && p.text === "say DONE")).toHaveLength(1);
+    expect(s.find("turn_interrupted")).toBeTruthy();
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
   it("models.list for OpenCode groups the models by provider; a chosen model reaches the prompt as providerID and modelID", async () => {
     const d = await boot({ script: ["text"] });
     const models = (await d.ok({ type: "models.list", engine: "opencode" })).models;
@@ -269,7 +282,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const s = await d.open();
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "bypassPermissions" });
     const block = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as { permission: string; action: string }[];
-    expect(block.filter((r) => r.action === "allow" && r.permission !== "claude-ui").map((r) => r.permission)).toEqual(["bash", "edit", "webfetch", "websearch"]);
+    expect(block.filter((r) => r.action === "allow" && r.permission !== "claude-ui").map((r) => r.permission)).toEqual(["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"]);
   });
 
   it("a restored session shows the history with Claude card names and message ids, a busy turn as running, and the pending permission of the folder", async () => {
