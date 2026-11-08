@@ -175,7 +175,7 @@ it("OAuth auto: the tab opens before the request, gets the URL, the wait view ca
   expect(a.getAttribute("target")).toBe("_blank");
   await click(q("settings-opencode-login-cancel"));
   expect(calls.at(-1)).toEqual({ type: "opencode.loginCancel", provider: "fake" });
-  await act(async () => finishRejects(Object.assign(new Error("Login cancelled"), { code: "cancelled" })));
+  await act(async () => (finishRejects(Object.assign(new Error("Login cancelled"), { code: "cancelled" })), await new Promise((r) => setTimeout(r, 200))));
   expect(q("settings-opencode-providers-message")!.textContent).toBe("Login cancelled");
   expect(q("settings-opencode-oauth-wait")).toBeNull();
   expect(q("settings-opencode-login-error")).toBeNull();
@@ -211,7 +211,7 @@ it("OAuth code: a wrong code shows an error under the field and can be retried",
   expect(calls.at(-1)).toEqual({ type: "opencode.loginFinish", provider: "fake", method: 1, code: "bad" });
   expect(q("settings-opencode-form-error")).toBeNull();
   expect(el.textContent).toContain("Login was not completed. Try again.");
-  expect(q("settings-opencode-oauth-code")).not.toBeNull();
+  expect(q("settings-opencode-oauth-code")!.getAttribute("aria-invalid")).toBe("true");
   await type("settings-opencode-oauth-code", "good");
   await click(q("settings-opencode-login-submit"));
   expect(q("settings-opencode-providers-message")!.textContent).toBe("Connected to Fake");

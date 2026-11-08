@@ -82,9 +82,10 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
       (r) => mine === attempt.current && done(r, id, name),
       (e: Error & { code?: string }) => {
         if (mine !== attempt.current || e.code === "cancelled") return;
+        // A wrong code is an error of the code field and can be retried in place; a failed browser login starts over.
+        if (withCode) return setFail({ field: "code", text: split(e, fields).text });
         setFail(split(e, fields));
-        // A wrong code can be retried in place; a failed browser login starts over.
-        if (!withCode) setPhase({ kind: "idle" });
+        setPhase({ kind: "idle" });
       },
     );
   };
@@ -93,7 +94,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
     if (!provider || !m || phase.kind === "busy") return;
     const bad = check();
     if (bad) return setFail(bad);
-    setFail(undefined);
+    setFail(undefined), setNote(undefined);
     // Opened inside the click: a tab opened after the await is blocked as a popup.
     const tab = m.type === "oauth" ? window.open("", "_blank") : null;
     if (tab) tab.opener = null;
@@ -115,7 +116,9 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
     if (!provider) return;
     attempt.current++;
     void request({ type: "opencode.loginCancel", provider: provider.id }).catch(() => {});
-    setPhase({ kind: "idle" }), setFail(undefined), setNote({ text: t("settings.opencode.providers.cancelled") });
+    setFail(undefined), setNote({ text: t("settings.opencode.providers.cancelled") });
+    // The Connect button takes Cancel's place: swapped at once, the same click lands on it (seen in Chromium) and starts a new login.
+    setTimeout(() => setPhase({ kind: "idle" }), 150);
   };
   const doLogout = () => {
     const p = logout!;

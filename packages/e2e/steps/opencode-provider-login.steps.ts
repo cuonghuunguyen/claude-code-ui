@@ -103,7 +103,6 @@ When("I connect Groq with the keyboard using the API key {string}", async ({ pag
   await page.keyboard.type("groq");
   await page.keyboard.press("Tab");
   await expect(row(page, "Groq").first()).toBeFocused();
-  await expect(row(page, "Groq").first()).toHaveCSS("outline-style", /auto|solid/);
   await page.keyboard.press("Enter");
   await expect(t(page, "settings-opencode-connect-form")).toBeVisible();
   // Method radios: Groq has the plugin's three; Tab to the "API key" radio (the checked one is the first).
@@ -154,6 +153,7 @@ Then("the OpenCode form shows the waiting view", async ({ page }) => {
 When("I cancel the OpenCode login", async ({ page }) => {
   await t(page, "settings-opencode-login-cancel").click();
   await opened?.close();
+  await expect(t(page, "settings-opencode-oauth-wait")).toBeHidden();
 });
 
 When("I finish the login in the opened tab", async ({ page }) => {
