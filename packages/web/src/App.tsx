@@ -2980,7 +2980,7 @@ export function App() {
       (r) => setModelsBy((m) => ({ ...m, [shownEngine]: r.models })),
       () => modelsRequested.current.delete(shownEngine),
     );
-  }, [shownEngine, status]);
+  }, [shownEngine, status, shownEngine && modelsBy[shownEngine] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -4413,7 +4413,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={() => (setModelsBy((m) => ({ ...m, opencode: undefined })), modelsRequested.current.delete("opencode"))} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}

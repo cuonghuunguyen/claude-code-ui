@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
+import { OpenCodeProviders } from "./opencode-providers.tsx";
 
 /** Empty (look up on PATH) or absolute: POSIX `/…`, Windows `C:\…` or `\\…`. */
 const validPath = (p: string) => p === "" || /^(\/|[A-Za-z]:\\|\\\\)/.test(p);
 
-export function OpenCodeSection({ opencode, saving, save, request }: { opencode: Settings["opencode"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void>; request: <T>(m: Request) => Promise<T> }) {
+export function OpenCodeSection({ opencode, saving, save, request, onProviders }: { opencode: Settings["opencode"]; saving: boolean; save: (patch: SettingsPatch) => Promise<void>; request: <T>(m: Request) => Promise<T>; /** The provider set changed (login, logout): model lists of OpenCode are stale. */ onProviders?: () => void }) {
   const t = useT();
   const [draft, setDraft] = useState<string>();
   const [invalid, setInvalid] = useState(false);
@@ -63,6 +64,7 @@ export function OpenCodeSection({ opencode, saving, save, request }: { opencode:
           {t("settings.opencode.check")}
         </Button>
       </div>
+      <OpenCodeProviders status={status} request={request} onProviders={onProviders ?? (() => {})} />
     </section>
   );
 }
