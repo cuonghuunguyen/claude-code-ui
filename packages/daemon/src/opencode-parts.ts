@@ -40,6 +40,9 @@ const RENAME: Record<string, [string, Record<string, string>]> = {
 };
 
 export function mapTool(name: string, input: Record<string, unknown> = {}): { tool: string; input: Record<string, unknown> } {
+  // A session's orchestration MCP tool (`orchestration-<last 10 of its id>_<tool>`, opencode-engine.ts mcpName) shows as Claude's.
+  const orch = /^orchestration-[\w-]{10}_(\w+)$/.exec(name);
+  if (orch) return { tool: `mcp__orchestration__${orch[1]}`, input };
   const rule = RENAME[name];
   if (!rule) return { tool: name, input };
   const mapped = Object.fromEntries(Object.entries(input).map(([k, v]) => [rule[1][k] ?? k, v]));

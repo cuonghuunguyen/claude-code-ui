@@ -4,9 +4,10 @@
 import { statSync } from "node:fs";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { EFFORTS, ORCHESTRATION_NOTICE, type Event, type ModelInfo, type Part, type PermissionMode, type Settings, type Worktree } from "@claude-ui/protocol";
+import { EFFORTS, ENGINES, ORCHESTRATION_NOTICE, type Engine, type Event, type ModelInfo, type Part, type PermissionMode, type Settings, type Worktree } from "@claude-ui/protocol";
 import { basename } from "node:path";
 import { WorktreeError, type CreateWorktreeOptions } from "./git.ts";
+import { OPENCODE_MODES } from "./opencode-engine.ts";
 import type { Tier } from "./risk-tier.ts";
 import type { Session, SessionSettings } from "./session.ts";
 import type { Link, SessionSettingsStore } from "./session-settings.ts";
@@ -120,8 +121,8 @@ export type OrchestrationDeps = {
   sessions: Map<string, Session>;
   /** A live session or one restored from its transcript. */
   find: (id: string) => Promise<Session | undefined>;
-  /** A new session in `cwd` (tracked, its project added). */
-  create: (cwd: string, s: Partial<SessionSettings>) => Session;
+  /** A new session of `engine` in `cwd` (tracked, its project added). */
+  create: (cwd: string, s: Partial<SessionSettings>, engine: Engine) => Promise<Session>;
   /** Sends a prompt as session.prompt does (Steering while a turn runs); the reason when it cannot. */
   prompt: (s: Session, text: string, stillWanted?: () => boolean) => Promise<string | undefined>;
   /** The canonical path when it is an existing path inside the daemon's roots. */
@@ -142,6 +143,8 @@ export type OrchestrationDeps = {
   heldElsewhere: (id: string) => boolean;
   /** The daemon's loaded model list (models.list). */
   models: () => ModelInfo[];
+  /** The models of OpenCode's connected providers (`provider/model`); an OpenCode worker's model must be one of them. */
+  openCodeModels?: () => Promise<ModelInfo[]>;
   /** The note of a daemon that runs older code than is on disk (build-info.ts); worker_start and worker_list carry it as daemonNote. */
   buildNote?: () => string | undefined;
   /** Deletes a session as the web app's Remove does (session.delete); the error when it cannot. A worker whose transcript is gone is just unlisted. Never touches a worktree or branch. */
@@ -238,6 +241,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const carded = new Set<string>();
   const unknownModel = (m: string | undefined) => m !== undefined && deps.models().length > 0 && !modelRow(m);
   const coordMode = (id: string): PermissionMode => deps.sessions.get(id)?.info().permissionMode ?? "default";
+  /** The worker's Engine: `given`, else the coordinator's own. */
+  const engineOf = (id: string, given: unknown): Engine => ((ENGINES as readonly unknown[]).includes(given) ? (given as Engine) : (deps.sessions.get(id)?.info().engine ?? "claude"));
   const workers = (coordinator: string) =>
     deps.links.entries().flatMap(([id, l]) => (l.coordinatorId === coordinator && l.name ? [{ id, name: l.name, cwd: l.cwd, port: l.port }] : []));
   /** Hops along coordinatorId from `id` to its root coordinator (0 = not a worker). A missing link ends the walk; capped against cycles. */
@@ -624,7 +629,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     return [
       def(
         "worker_start",
-        "Start a worker: a new Claude Code session that runs `prompt` as its first turn. One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
+        "Start a worker: a new session that runs `prompt` as its first turn. `engine`: claude or opencode (absent = your own engine); OpenCode workers take `model` as provider/model and no `agent` or `effort`. One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
         {
           name,
           cwd: z.string().min(1).max(4096).optional(),
@@ -639,6 +644,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           mode: z.enum(MODES).optional(),
           effort: z.enum(EFFORTS as [string, ...string[]]).optional(),
           keepOpen: z.boolean().optional(),
+          engine: z.enum(ENGINES).optional(),
         },
         async (a) => {
           let coordinator = cur();
@@ -653,18 +659,25 @@ export function createOrchestration(deps: OrchestrationDeps) {
           // The cheap checks first (no git, no CLI); repeated below after the awaits, where a parallel call may have taken the place.
           if (workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
           checkLimits(coordinator);
+          const engine = engineOf(coordinator, a.engine);
+          const openCode = engine === "opencode";
+          // shortcut: OpenCode agents (GET /agent) are not offered; follow-up.
+          if (openCode && a.agent) throw new ToolError("agent is Claude only: OpenCode workers take no agent.");
           const t = await target(a);
           const agent = a.agent ? await resolveAgent(a.agent, targetDir(t)) : undefined;
+          const ocModels = openCode ? await (deps.openCodeModels?.() ?? Promise.resolve([])).catch((e: Error) => Promise.reject(new ToolError(`OpenCode models could not be read: ${e.message}`))) : undefined;
           coordinator = cur(); // a /clear during the awaits moved the tree: check and reserve under the current ID
           const key = `${coordinator}\0${a.name}`;
           if (reserved.has(key) || workers(coordinator).some((w) => w.name === a.name)) throw new ToolError(`A worker named ${a.name} exists already.`);
           checkLimits(coordinator);
-          const model = normModel(a.model);
-          const known = deps.models();
-          if (unknownModel(model)) throw new ToolError(`Unknown model ${a.model}. Valid values: ${known.map((r) => r.value).join(", ")}.`);
+          const model = openCode ? a.model : normModel(a.model);
+          const known = ocModels ?? deps.models();
+          if (ocModels ? model !== undefined && !ocModels.some((r) => r.value === model) : unknownModel(model)) throw new ToolError(`Unknown model ${a.model}. Valid values: ${known.map((r) => r.value).join(", ")}.`);
           const cm = coordMode(coordinator);
           const req = requestedMode(a.mode);
-          const { mode, note } = workerMode(cm, req.mode, !!modelRow(model)?.supportsAutoMode, known.length > 0, req.fromSetting);
+          // OpenCode has no auto mode.
+          const { mode, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, known.length > 0, req.fromSetting);
+          if (openCode && !OPENCODE_MODES.includes(mode)) throw new ToolError(`OpenCode workers run in ${OPENCODE_MODES.join(", ")}: pass mode.`);
           // A rule for worker_start skips the card: a mode above the coordinator's passes only with the user's card.
           const approved = carded.delete(`${key}\0${mode}`);
           if ((RANK[mode] ?? 0) > (RANK[cm] ?? 0) && !approved)
@@ -674,8 +687,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
           let s: Session | undefined;
           let branch: string | undefined;
           let cwd: string | undefined;
-          const link = (dir: string) => {
-            s = deps.create(dir, { model, permissionMode: mode, effort: a.effort as SessionSettings["effort"] | undefined });
+          const link = async (dir: string) => {
+            s = await deps.create(dir, { model, permissionMode: mode, ...(!openCode && { effort: a.effort as SessionSettings["effort"] | undefined }) }, engine);
             try {
               deps.links.set(s.id, { coordinatorId: cur(), name: a.name, cwd: dir, port: deps.port(), ...(agent && { agent }), ...(a.keepOpen && { keepOpen: true as const }) });
             } catch (e) {
@@ -694,7 +707,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           };
           try {
             if (t.kind === "new") branch = (await deps.createWorktree(t.projectPath, { name: t.branch, branch: t.branch, base: t.base, onCreated: (r) => link(r.path) })).branch;
-            else link(t.cwd);
+            else await link(t.cwd);
           } catch (e) {
             if (e instanceof WorktreeError) throw new ToolError(`Worktree not created: ${e.message}`);
             throw e;
@@ -713,7 +726,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           }
           const daemonNote = deps.buildNote?.();
           const where = t.kind === "new" ? { project: t.project, worktree: basename(cwd!) } : { ...(t.entry && { project: t.entry.project }), ...(t.entry && !t.entry.main && { worktree: t.entry.worktree }) };
-          return { name: a.name, sessionId: s!.id, cwd, ...where, ...(branch && { branch }), ...(agent && { agent }), mode, ...(a.keepOpen && { keepOpen: true }), ...(note && { modeNote: note }), ...(daemonNote && { daemonNote }) };
+          return { name: a.name, sessionId: s!.id, engine, cwd, ...where, ...(branch && { branch }), ...(agent && { agent }), mode, ...(a.keepOpen && { keepOpen: true }), ...(note && { modeNote: note }), ...(openCode && a.effort && { effortNote: "OpenCode workers have no effort setting: effort is ignored" }), ...(daemonNote && { daemonNote }) };
         },
       ),
       def(
@@ -1001,6 +1014,12 @@ export function createOrchestration(deps: OrchestrationDeps) {
       bindings.set(id, binding);
       return { [SERVER]: createSdkMcpServer({ name: SERVER, version: "1.0.0", instructions: INSTRUCTIONS, tools: tools(binding) }) };
     },
+    /** A new MCP server instance for session `id`'s OpenCode route (one per MCP client session), on the binding `mcpServers(id)` made; undefined while orchestration is off or no binding exists. */
+    mcpServerFor(id: string) {
+      const binding = bindings.get(id);
+      if (!binding || !deps.settings().enabled) return undefined;
+      return createSdkMcpServer({ name: SERVER, version: "1.0.0", instructions: INSTRUCTIONS, tools: tools(binding) }).instance;
+    },
     /**
      * A /clear handed the live query of session `from` to the new session `to` (docs/spec.md Orchestration "/clear"). The
      * coordinator role moves: workers' links (persisted), the server's binding, queued events, waiters, notices and the user's
@@ -1072,10 +1091,12 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (input.mode !== undefined && !given) return undefined;
       const req = requestedMode(given);
       const cm = coordMode(sessionId);
-      const model = normModel(typeof input.model === "string" ? input.model : undefined);
+      // OpenCode workers: the handler checks the model against OpenCode's list; no auto.
+      const openCode = engineOf(sessionId, input.engine) === "opencode";
+      const model = openCode ? undefined : normModel(typeof input.model === "string" ? input.model : undefined);
       const name = typeof input.name === "string" ? input.name : "?";
       if (unknownModel(model)) return Promise.resolve({ input, title: `Start worker ${name}: unknown model ${model}, the call will fail` });
-      const { mode, wanted, note } = workerMode(cm, req.mode, !!modelRow(model)?.supportsAutoMode, deps.models().length > 0, req.fromSetting);
+      const { mode, wanted, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, openCode || deps.models().length > 0, req.fromSetting);
       // Async: the target lookup reads the worktree list (git, stamped cache). A lookup error says the call will fail; a shape error leaves the title bare (the handler refuses it).
       return (async () => {
         let where = "";
@@ -1087,7 +1108,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         }
         const chain = linkOf(sessionId)?.coordinatorId ? chainOf(sessionId) : [];
         const as = typeof input.agent === "string" ? ` as ${input.agent}` : "";
-        const title = `Start worker ${name}${as} in ${mode} mode${note ? ` (${note})` : ""}${where}${chain.length ? `, started by worker ${chain.join(" › ")}` : ""}`;
+        const title = `Start ${openCode ? "OpenCode " : ""}worker ${name}${as} in ${mode} mode${note ? ` (${note})` : ""}${where}${chain.length ? `, started by worker ${chain.join(" › ")}` : ""}`;
         return { input: (MODES as readonly string[]).includes(wanted) ? { ...input, mode: wanted } : input, title, onAllow: () => void carded.add(`${resolve(sessionId)}\0${name}\0${mode}`) };
       })();
     },

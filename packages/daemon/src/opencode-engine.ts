@@ -2,7 +2,7 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
-import { ASIDE_NO_EDIT } from "./aside.ts";
+import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { ascending } from "./opencode-id.ts";
@@ -20,6 +20,10 @@ const MARK = "claude-ui";
 const marker = (pattern: string): Rule => ({ permission: MARK, pattern, action: "allow" });
 const star = (permission: string, action: Rule["action"]): Rule => ({ permission, pattern: "*", action });
 const ANSWERED = "Answered in OpenCode";
+/** The name of a session's orchestration MCP server in OpenCode; its tool keys are `<name>_<tool>` (fit OpenCode's tool name limit). */
+export const mcpName = (id: string) => `orchestration-${id.slice(-10)}`;
+const WORKER_START = "mcp__orchestration__worker_start";
+const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 
 /**
  * The rules a permission mode appends to a session (OpenCode evaluates last match wins; rules cannot be removed through the API, so a mode
@@ -27,15 +31,17 @@ const ANSWERED = "Answered in OpenCode";
  * "always allow" rules start. `planEdit`: the `plan` agent's own `edit` rules, so earlier edit rules no longer win.
  * shortcut: every mode change appends one block; fine for hundreds of switches.
  */
-export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false } = {}): Rule[] {
+export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false, mcp }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
     mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : mode === "plan" ? [star("bash", "ask"), ...asks, ...planEdit]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
+  // Orchestration MCP servers are attached per folder: hide every session's tools but the own ones; worker_start asks (the user's gate on new workers).
+  const orchestration = [star("orchestration-*", "deny"), ...(mcp ? [star(`${mcp}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [star(`${mcp}_worker_start`, "ask")])] : [])];
   // A read-only Aside: the last matching rule hides edit, write and apply_patch, whatever the mode allows.
-  return [marker(`mode:${mode}`), ...rules, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
+  return [marker(`mode:${mode}`), ...rules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
 }
 const lastMarker = (rules: readonly Rule[], test: (pattern: string) => boolean) => rules.map((r) => r.permission === MARK && test(r.pattern)).lastIndexOf(true);
 /** The "always allow" rules of a session: the ones after the last `always` marker. */
@@ -43,6 +49,8 @@ export const alwaysOf = (rules: readonly Rule[]): Rule[] => {
   const i = lastMarker(rules, (p) => p === "always");
   return i < 0 ? [] : rules.slice(i + 1).filter((r) => r.permission !== MARK);
 };
+/** The rules of the last block (all rules when there is none). */
+const lastBlock = (rules: readonly Rule[]) => rules.slice(Math.max(lastMarker(rules, (p) => p.startsWith("mode:")), 0));
 /** The mode of the last block, undefined for a session without one. */
 export const modeOf = (rules: readonly Rule[]): PermissionMode | undefined => {
   const i = lastMarker(rules, (p) => p.startsWith("mode:"));
@@ -124,6 +132,10 @@ class OpenCodeSession implements EngineSession {
   /** Names of the commands last listed: `/name` of one of them runs it. */
   private commandNames = new Set<string>();
   private usage: { tokens: NonNullable<OpenCodeMessage["info"]["tokens"]>; providerID: string; modelID: string } | undefined;
+  /** The orchestration MCP server is attached (orchestration on, no unkept Aside); `writtenMcp`: the last block written allows its tools. */
+  private mcpOn = false;
+  private writtenMcp: boolean;
+  private attaching: Promise<void> | undefined;
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -140,6 +152,7 @@ class OpenCodeSession implements EngineSession {
     this.written = history ? modeOf(history.permission) : this.permissionMode;
     this.always = history ? alwaysOf(history.permission) : [];
     this.revertAt = history?.revert;
+    this.writtenMcp = !!history && lastBlock(history.permission).some((r) => r.permission === `${mcpName(session.id)}_*` && r.action === "allow");
   }
 
   private get server() {
@@ -156,6 +169,7 @@ class OpenCodeSession implements EngineSession {
   begin() {
     this.engine.add(this);
     void this.emitCommands();
+    void this.attach();
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
@@ -246,9 +260,32 @@ class OpenCodeSession implements EngineSession {
   }
 
   private async writeBlock(mode: PermissionMode) {
-    const permission = modeBlock(mode, this.always, mode === "plan" ? await this.engine.planEdit(this.cwd) : [], { readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)) });
+    const mcp = this.mcpOn;
+    const permission = modeBlock(mode, this.always, mode === "plan" ? await this.engine.planEdit(this.cwd) : [], { readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
+    this.writtenMcp = mcp;
+  }
+
+  /**
+   * Attaches this session's orchestration MCP server to OpenCode (its folder's instance) unless it is connected: at begin and before each
+   * prompt, so a restart or dispose of OpenCode (which drops it) is repaired by the next prompt. Only while orchestration is on and the
+   * session is no unkept Aside; `mcpServers` binds the tools to this session, as at a Claude query start.
+   */
+  private attach(): Promise<void> {
+    return (this.attaching ??= (async () => {
+      const route = this.engine.mcp;
+      const url = route?.url();
+      this.mcpOn = !!url && !this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t)) && this.opts.mcpServers?.(this.id) !== undefined;
+      if (!this.mcpOn) return;
+      const name = mcpName(this.id);
+      const status = await this.server.request<Record<string, { status: string }>>("/mcp", { directory: this.cwd });
+      if (status[name]?.status === "connected") return;
+      const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false };
+      await this.server.request("/mcp", { method: "POST", directory: this.cwd, body: { name, config } });
+    })()
+      .catch((err) => this.notice("mcp_failed", `Could not attach the orchestration tools to OpenCode: ${(err as Error).message}`))
+      .finally(() => (this.attaching = undefined)));
   }
 
   prompt(text: string, images: string[] = []): string {
@@ -274,8 +311,8 @@ class OpenCodeSession implements EngineSession {
 
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
     // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
-    await this.server.streamReady();
-    if (this.written !== this.permissionMode) await this.writeBlock(this.permissionMode);
+    await Promise.all([this.server.streamReady(), this.attach()]);
+    if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
     if (this.stopped) {
       this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
       return this.session.setState("idle");
@@ -391,35 +428,44 @@ class OpenCodeSession implements EngineSession {
   }
 
   private askPermission(e: PermissionAsked) {
-    if (this.session.pendingRequest(e.id)) return;
+    // `reqs` without a pending request: the worker_start card is being made.
+    if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
     const call = e.tool?.callID ? this.mapper.call(e.tool.callID) : undefined;
     const mapped = call?.type === "tool_call" ? call : undefined;
     // The ask can come before the call has its input (the call is still pending): the permission's own metadata then names it (bash: the command).
     const fallback = mapTool(e.permission, e.metadata);
     const tool = mapped?.tool ?? fallback.tool;
     const edit = e.permission === "edit" && !!e.always?.includes("*");
+    // worker_start: no "always" rule, the card is the user's only gate on new workers (as for Claude).
+    const start = tool === WORKER_START;
     const suggestions: PermissionUpdate[] = edit
       ? [{ type: "setMode", mode: "acceptEdits", destination: "session" }]
-      : e.always?.length
+      : e.always?.length && !start
         ? [{ type: "addRules", rules: e.always.map((ruleContent) => ({ toolName: tool, ruleContent })), behavior: "allow", destination: "session" }]
         : [];
-    this.reqs.set(e.id, { kind: "permission", permission: e.permission, always: edit ? undefined : e.always, callId: e.tool?.callID });
-    this.session.request({
-      part: {
-        type: "permission_request",
-        id: e.id,
-        requestId: e.id,
-        toolUseId: e.tool?.callID ?? e.id,
-        tool,
-        input: mapped && Object.keys(mapped.input as object).length ? mapped.input : { ...(!mapped && { patterns: e.patterns ?? [] }), ...fallback.input },
-        ...(!mapped && { title: `OpenCode asks to use ${e.permission}: ${(e.patterns ?? []).join(", ")}` }),
-        noEdit: true,
-        suggestions,
-        settled: false,
-        at: Date.now(),
-      },
-      reply: (r) => this.answerPermission(e.id, r),
-    });
+    this.reqs.set(e.id, { kind: "permission", permission: e.permission, always: edit || start ? undefined : e.always, callId: e.tool?.callID });
+    const input: Record<string, unknown> = mapped && Object.keys(mapped.input as object).length ? (mapped.input as Record<string, unknown>) : { ...(!mapped && { patterns: e.patterns ?? [] }), ...fallback.input };
+    const part = {
+      type: "permission_request" as const,
+      id: e.id,
+      requestId: e.id,
+      toolUseId: e.tool?.callID ?? e.id,
+      tool,
+      input,
+      ...(!mapped && { title: `OpenCode asks to use ${e.permission}: ${(e.patterns ?? []).join(", ")}` }),
+      noEdit: true as const,
+      suggestions,
+      settled: false,
+      at: Date.now(),
+    };
+    const reply = (r: Reply) => this.answerPermission(e.id, r);
+    if (!start) return this.session.request({ part, reply });
+    // Over a limit: no card, the call runs and the tool repeats the refusal (orchestration.ts preflight).
+    if (this.opts.preflight?.(this.id, tool, input, ORCHESTRATION) !== undefined) return (this.reqs.delete(e.id), this.post(`/permission/${e.id}/reply`, { reply: "once" }));
+    // shortcut: noEdit, so the card's input (the inherited mode pinned) is not sent; the handler reads the coordinator's mode when it runs.
+    void Promise.resolve(this.opts.permissionCard?.(this.id, tool, input, ORCHESTRATION))
+      .catch(() => undefined)
+      .then((card) => this.reqs.has(e.id) && this.session.request({ part: { ...part, ...(card && { title: card.title }) }, onAllow: card?.onAllow, reply }));
   }
 
   private askQuestion(e: QuestionAsked) {
@@ -525,7 +571,11 @@ class OpenCodeSession implements EngineSession {
     void this.emitUsage();
   };
   sync = async () => {};
-  close = async () => this.engine.remove(this);
+  close = async () => {
+    this.engine.remove(this);
+    this.engine.mcp?.drop(this.id);
+    if (this.mcpOn && this.server.running()) await this.server.request(`/mcp/${mcpName(this.id)}/disconnect`, { method: "POST", directory: this.cwd }).catch(() => {});
+  };
   activity = () => ({ received: 0, at: 0, progress: 0 });
   live = () => this.server.running();
   reloadPlugins = async () => undefined;
@@ -549,6 +599,7 @@ class OpenCodeEngineImpl implements Engine {
   constructor(
     readonly server: OpenCodeServer,
     readonly onTitle?: (id: string, title: string) => void,
+    readonly mcp?: OpenCodeMcpRoute,
   ) {}
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_MODES });
@@ -607,5 +658,7 @@ class OpenCodeEngineImpl implements Engine {
   block = async (mode: PermissionMode, cwd: string): Promise<Rule[]> => modeBlock(mode, [], mode === "plan" ? await this.planEdit(cwd) : []);
 }
 
+/** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */
+export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string) => string; drop: (id: string) => void };
 export type OpenCodeEngine = OpenCodeEngineImpl;
-export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle);
+export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp);
