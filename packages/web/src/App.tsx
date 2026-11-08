@@ -450,6 +450,8 @@ export function App() {
   // Model lists per Engine (ADR 0012): Claude's comes with the connection, another Engine's when a session or draft of it shows.
   const [modelsBy, setModelsBy] = useState<Partial<Record<Engine, ModelInfo[]>>>({});
   const modelsRequested = useRef(new Set<Engine>());
+  /** OpenCode read another provider set: its model list is fetched again the next time it shows. */
+  const dropOpenCodeModels = () => (setModelsBy((m) => ({ ...m, opencode: undefined })), modelsRequested.current.delete("opencode"));
   const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
   const modelsOf = (engine: Engine) => modelsBy[engine] ?? NO_MODELS;
   const models = modelsOf("claude");
@@ -1412,6 +1414,7 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
+      onOpenCodeProviders: dropOpenCodeModels,
       onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
@@ -2980,7 +2983,7 @@ export function App() {
       (r) => setModelsBy((m) => ({ ...m, [shownEngine]: r.models })),
       () => modelsRequested.current.delete(shownEngine),
     );
-  }, [shownEngine, status]);
+  }, [shownEngine, status, shownEngine && modelsBy[shownEngine] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -4413,7 +4416,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}

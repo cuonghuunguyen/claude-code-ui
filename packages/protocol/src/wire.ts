@@ -85,6 +85,16 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
   /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
   | { type: "opencode.status" }
+  /** Providers of the OpenCode server with their login methods (starts the server). Reply OpenCodeProvidersResult. */
+  | { type: "opencode.providers" }
+  /** `api` method: stores `key` (`inputs` = the method's prompt values), reply OpenCodeProvidersResult. `oauth` method: reply OpenCodeLoginStart. `method` = index in the provider's `methods`. The daemon never logs or keeps `key`. */
+  | { type: "opencode.login"; provider: string; method: number; key?: string; inputs?: Record<string, string> }
+  /** Ends an OAuth login: waits for the browser (`auto`) or sends `code`. Reply OpenCodeProvidersResult; error `cancelled` after opencode.loginCancel. */
+  | { type: "opencode.loginFinish"; provider: string; method: number; code?: string }
+  /** Stops the daemon's wait of a pending OAuth login; reply `{}`. */
+  | { type: "opencode.loginCancel"; provider: string }
+  /** Removes the saved login of a provider; reply OpenCodeProvidersResult. */
+  | { type: "opencode.logout"; provider: string }
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
@@ -504,6 +514,8 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
+  /** To every connection when OpenCode read a changed provider set (after a login or logout): its model list is stale. */
+  | { type: "opencode.providersChanged" }
   /** To every connection of this daemon after `settings.set`. */
   | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; claudeAccounts?: ClaudeAccountInfo[] }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
@@ -552,6 +564,14 @@ export type SubscribeResult = { logEpoch: string; seq: number; session: SessionI
 export type SetModelResult = { session: SessionInfo };
 /** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */
 export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; path?: string; message?: string };
+export type OpenCodeAuthPrompt = { type: "text"; key: string; message: string; placeholder?: string; when?: { key: string; op: "eq" | "neq"; value: string } } | { type: "select"; key: string; message: string; options: { label: string; value: string; hint?: string }[]; when?: { key: string; op: "eq" | "neq"; value: string } };
+export type OpenCodeAuthMethod = { type: "api" | "oauth"; label: string; prompts?: OpenCodeAuthPrompt[] };
+/** `source`: where the connection comes from; only `api` and `custom` (OAuth, plugin) can be logged out. */
+export type OpenCodeProvider = { id: string; name: string; connected: boolean; source?: "env" | "config" | "custom" | "api"; methods: OpenCodeAuthMethod[] };
+/** opencode.providers, and the login and logout requests that end with a changed list. */
+export type OpenCodeProvidersResult = { providers: OpenCodeProvider[] };
+/** opencode.login with an OAuth method: open `url`; `auto` = OpenCode finishes by itself, `code` = the user pastes a code. */
+export type OpenCodeLoginStart = { url: string; mode: "auto" | "code"; instructions: string };
 /** session.defaultMode. */
 export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
