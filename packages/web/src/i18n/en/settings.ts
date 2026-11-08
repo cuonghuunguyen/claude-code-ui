@@ -32,7 +32,6 @@ export default {
   "settings.group.sides": "Sides",
   "settings.opencode.path.label": "OpenCode binary path",
   "settings.opencode.path.hint": "Empty: find `opencode` on PATH",
-  "settings.opencode.path.error": "Enter an absolute path (/…, C:\\… or \\\\…) or leave it empty",
   "settings.opencode.checking": "Checking OpenCode…",
   "settings.opencode.running": "OpenCode {version} · running",
   "settings.opencode.stopped": "OpenCode {version} · not running",

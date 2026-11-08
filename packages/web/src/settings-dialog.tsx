@@ -875,7 +875,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     return () => void (live = false);
   }, [open, changed]);
 
-  const save = async (patch: SettingsPatch, field?: string, rethrow = false) => {
+  const save = async (patch: SettingsPatch, field?: string, rethrow = false, quiet = false) => {
     setSaving(true);
     try {
       const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
@@ -887,7 +887,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
-      setError((e as Error).message);
+      if (!quiet) setError((e as Error).message);
       if (rethrow) throw e;
     } finally {
       setSaving(false);

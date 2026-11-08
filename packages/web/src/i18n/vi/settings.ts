@@ -34,7 +34,6 @@ export default {
   "settings.group.sides": "Môi trường",
   "settings.opencode.path.label": "Đường dẫn file chạy OpenCode",
   "settings.opencode.path.hint": "Để trống: tìm `opencode` trong PATH",
-  "settings.opencode.path.error": "Nhập đường dẫn tuyệt đối (/…, C:\\… hoặc \\\\…) hoặc để trống",
   "settings.opencode.checking": "Đang kiểm tra OpenCode…",
   "settings.opencode.running": "OpenCode {version} · đang chạy",
   "settings.opencode.stopped": "OpenCode {version} · chưa chạy",
