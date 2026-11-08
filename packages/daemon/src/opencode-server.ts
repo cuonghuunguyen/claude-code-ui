@@ -311,7 +311,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         method: r.method ?? "GET",
         headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
         body: r.body === undefined ? undefined : JSON.stringify(r.body),
-        signal: r.signal ? AbortSignal.any([r.signal, AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        // `timeoutMs: 0` = no timeout (a command answers when its turn ends).
+        signal: AbortSignal.any([...(r.signal ? [r.signal] : []), ...(r.timeoutMs === 0 ? [] : [AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS)])]),
       });
       const text = await res.text();
       if (!res.ok) {

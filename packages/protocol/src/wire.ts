@@ -37,8 +37,10 @@ export type EngineCapabilities = {
   planMeter: boolean;
   account: boolean;
   contextUsage: boolean;
+  /** Bash mode (`!`): shell commands run in the session cwd. */
+  shell: boolean;
 };
-export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true };
+export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
 /** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
 export const capabilitiesOf = (s: { capabilities?: EngineCapabilities }) => s.capabilities ?? ALL_CAPABILITIES;
 /** The modes offered now, of `modes` (the Engine's own): auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
@@ -98,7 +100,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
-  | { type: "session.commands"; cwd: string }
+  | { type: "session.commands"; cwd: string; engine?: Engine }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   /** `background`: follow only (unread markers); it does not keep the session's CLI from the idle close (docs/spec.md "Idle close"). */
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string }
@@ -163,7 +165,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
     }
   /** `answers`: question text -> answer. First answer wins, like permission.respond. */
   | { type: "question.respond"; requestId: string; answers: Record<string, string> }
-  | { type: "models.list"; engine?: Engine }
+  | { type: "models.list"; engine?: Engine; cwd?: string }
   | { type: "session.list" }
   /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
   | { type: "session.ids" }
@@ -738,7 +740,7 @@ export type RecentProject = { cwd: string; sessionCount: number; lastActivity: n
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };
 /** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
-export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
+export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean; /** The modes the engine offers; absent = all the preview allows. */ modes?: RewindMode[] };
 /** Paths relative to the searched cwd, best first; folders end with `/`. */
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };

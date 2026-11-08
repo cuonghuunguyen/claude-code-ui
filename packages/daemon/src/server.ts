@@ -4,10 +4,13 @@ import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lsta
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -450,6 +453,15 @@ export function createDaemon(opts: {
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  /**
+   * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
+   * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
+   */
+  const mcpRoutes = new Map<string, { id: string; live?: { transport: StreamableHTTPServerTransport; server: McpServer }; init?: Promise<boolean> }>();
+  const dropMcp = (token: string) => {
+    void mcpRoutes.get(token)?.live?.server.close().catch(() => {});
+    mcpRoutes.delete(token);
+  };
   const openCodeEngine = createOpenCodeEngine(openCode, {
     onTitle: (id, title) => {
       const m = openCodeMeta.get(id);
@@ -457,7 +469,63 @@ export function createDaemon(opts: {
       openCodeMeta.set(id, { ...m, title });
       broadcast({ type: "sessions.changed" });
     },
+    mcp: {
+      // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
+      url: () => {
+        const a = http.address();
+        return a && typeof a === "object" ? `http://127.0.0.1:${a.port}/opencode-mcp` : undefined;
+      },
+      token: (id) => {
+        for (const [t, r] of mcpRoutes) if (r.id === id) return t;
+        const t = randomBytes(32).toString("base64url");
+        mcpRoutes.set(t, { id });
+        return t;
+      },
+      drop: (id) => {
+        for (const [t, r] of mcpRoutes) if (r.id === id) dropMcp(t);
+      },
+    },
   });
+  async function serveOpenCodeMcp(req: IncomingMessage, res: ServerResponse) {
+    // The token before any body read.
+    const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
+    const route = token === undefined ? undefined : [...mcpRoutes].find(([t]) => timingSafeEqual(digest(t), digest(token)))?.[1];
+    if (!route) return void res.writeHead(401).end();
+    let body: unknown;
+    if (req.method === "POST") {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const c of req as AsyncIterable<Buffer>) {
+        if ((size += c.length) > 4 << 20) return void res.writeHead(413).end();
+        chunks.push(c);
+      }
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return void res.writeHead(400).end();
+      }
+    }
+    if (isInitializeRequest(body)) {
+      // One initialize at a time per token: a second one would replace a transport that is still connecting (leak).
+      const prev = route.init;
+      const run = (async () => {
+        await prev?.catch(() => {});
+        // OpenCode connects again (its restart, a dispose): a new MCP session.
+        void route.live?.server.close().catch(() => {});
+        route.live = undefined;
+        const server = orchestration.mcpServerFor(route.id);
+        if (!server) return false;
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+        await server.connect(transport);
+        route.live = { transport, server };
+        return true;
+      })();
+      route.init = run;
+      if (!(await run)) return void res.writeHead(404).end();
+    }
+    if (!route.live) return void res.writeHead(404).end();
+    await route.live.transport.handleRequest(req, res, body);
+  }
   /** One OAuth wait (`opencode.loginFinish`) per provider; a cancel or a new login aborts it. */
   const oauthWaits = new Map<string, AbortController>();
   /** Login and logout change OpenCode's provider set; `POST /global/dispose` makes its instances read it, but cancels running turns: it waits for idle. */
@@ -467,10 +535,19 @@ export function createDaemon(opts: {
     if (!providersStale || openCodeBusy() || !openCode.running()) return;
     providersStale = false;
     // Clients drop their OpenCode model list only after OpenCode read the new providers.
-    await openCode.request("/global/dispose", { method: "POST" }).then(() => broadcast({ type: "opencode.providersChanged" }), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
+    await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
+  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode }): Promise<Session | undefined> {
+    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
+    if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
+    openCodeMeta.set(s.id, { cwd, title: row.title });
+    addProject(cwd);
+    return s;
+  }
   /** Settings `sessions.engine`: the Engine of the last created session. */
   const rememberEngine = (engine: EngineName) => {
     if (appSettings.get().sessions.engine === engine) return;
@@ -701,7 +778,7 @@ export function createDaemon(opts: {
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
-    const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
+    const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); return o.onCreated?.(r); } });
     markRepoStale(cwd);
     broadcast({ type: "sessions.changed" });
     return r;
@@ -988,9 +1065,10 @@ export function createDaemon(opts: {
     settings: () => appSettings.get().orchestration,
     sessions,
     find: findSession,
-    create: (cwd, initial) => {
+    create: async (cwd, initial, engine) => {
       if (isRemoving(cwd)) throw new Error("This worktree is being removed");
-      const s = track(new Session(cwd, sessionOpts(initial)));
+      const s = engine === "opencode" ? await createOpenCodeSession(cwd, { model: initial.model, permissionMode: initial.permissionMode ?? "default" }) : track(new Session(cwd, sessionOpts(initial)));
+      if (!s) throw new Error("This worktree is being removed");
       addProject(cwd);
       // worker_start writes the link right after this call (no await): the refresh lists the worker with it.
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
@@ -1010,6 +1088,7 @@ export function createDaemon(opts: {
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
+    openCodeModels: () => openCodeModels(openCode),
     remove: async (id) => {
       const err = await deleteSessionById(id);
       if (err?.code !== "unknown_session") return err;
@@ -1282,6 +1361,11 @@ export function createDaemon(opts: {
   /** Working directory and transcript of a listed session (live or inside the roots); undefined when unknown. */
   async function locate(id: string) {
     const live = sessions.get(id);
+    // OpenCode: the folder it was listed, created or opened in; its store is OpenCode's.
+    if (typeof id === "string" && OPENCODE_ID.test(id)) {
+      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      return cwd && allowed(cwd) ? { cwd, live, transcript: false } : undefined;
+    }
     if (!live && (typeof id !== "string" || !UUID.test(id))) return undefined;
     const info = await history.getSessionInfo(id).catch(() => undefined);
     const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
@@ -1310,13 +1394,15 @@ export function createDaemon(opts: {
     touched.delete(id);
     try {
       await at.live?.close();
-      if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
+      if (OPENCODE_ID.test(id)) await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
+      else if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
     } catch (e) {
       return { code: "delete_failed", message: (e as Error).message };
     } finally {
       deleting.delete(id);
     }
     caches.delete(id);
+    openCodeMeta.delete(id);
     // The folder of a session whose CLI a /clear heir still uses stays with the heir.
     if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
@@ -1589,6 +1675,7 @@ export function createDaemon(opts: {
   const http = createServer((req, res) => {
     let path: string;
     const rawPath = (req.url ?? "/").split("?")[0] ?? "";
+    if (rawPath === "/opencode-mcp") return void serveOpenCodeMcp(req, res).catch((err) => (console.error("opencode-mcp failed:", (err as Error).message), res.headersSent || res.writeHead(500), res.end()));
     if (rawPath.startsWith("/media/")) {
       const m = /^\/media\/([0-9a-f]{32})\/[^/]*$/.exec(rawPath);
       return m ? serveMedia(req, res, m[1]!) : void res.writeHead(404).end();
@@ -1865,18 +1952,14 @@ export function createDaemon(opts: {
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
           if (msg.engine === "opencode") {
             // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
-            let row: OpenCodeSessionRow;
-            const mode = OPENCODE_MODES.find((m) => m === appSettings.get().sessions.defaultMode) ?? "default";
+            let s: Session | undefined;
             try {
-              row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(mode, cwd) } });
+              s = await createOpenCodeSession(cwd, { model: msg.model, permissionMode: OPENCODE_MODES.find((m) => m === appSettings.get().sessions.defaultMode) ?? "default" });
             } catch (err) {
               const e = openCodeFail(err);
               return fail(e.code, e.message);
             }
-            if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
-            const s = track(new Session(cwd, openCodeSessionOpts({ model: msg.model, permissionMode: mode }), { id: row.id }));
-            openCodeMeta.set(s.id, { cwd, title: row.title });
-            addProject(cwd);
+            if (!s) return fail("worktree_removing", "This worktree is being removed");
             rememberEngine("opencode");
             return reply({ session: s.info() });
           }
@@ -1958,7 +2041,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
-            return reply({ commands: await commandsOf(cwd) });
+            return reply({ commands: await (msg.engine === "opencode" ? openCodeEngine.commands(cwd) : commandsOf(cwd)) });
           } catch (e) {
             return fail("commands_failed", (e as Error).message);
           }
@@ -2360,7 +2443,6 @@ export function createDaemon(opts: {
         }
         case "session.rename":
         case "session.archive": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
           // 200: the web title input's maxLength.
           if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
@@ -2368,7 +2450,11 @@ export function createDaemon(opts: {
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
           try {
-            if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
+            if (OPENCODE_ID.test(msg.sessionId)) {
+              // Archive: `time.archived` set; 0 clears it (null is accepted but keeps it, verified on 1.18.35).
+              await openCode.request(`/session/${msg.sessionId}`, { method: "PATCH", directory: at.cwd, body: msg.type === "session.rename" ? { title } : { time: { archived: msg.archived ? Date.now() : 0 } } });
+              if (msg.type === "session.rename") openCodeMeta.set(msg.sessionId, { cwd: at.cwd, title });
+            } else if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
             else await history.tagSession(msg.sessionId, msg.archived ? ARCHIVED_TAG : null, { dir: at.cwd });
           } catch (e) {
             // A session with no prompt yet has no transcript to write to.
@@ -2378,17 +2464,44 @@ export function createDaemon(opts: {
           return reply({});
         }
         case "session.delete": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const err = await deleteSessionById(msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
         case "aside.open": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "text must be a non-empty string");
           const owner = await find(msg.sessionId);
           if (!owner) return;
           const text = msg.text.trim();
           const title = text.split("\n")[0]!.trim().slice(0, 80);
+          if (OPENCODE_ID.test(owner.id)) {
+            let forkId: string | undefined;
+            try {
+              const at = { directory: owner.cwd };
+              const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
+              // After a rewind the cut messages stay stored until the next prompt: the fork ends before the cut.
+              const revert = (await openCode.request<{ revert?: { messageID: string } | null }>(`/session/${owner.id}`, at)).revert?.messageID;
+              const cut = revert ? stored.findIndex((m) => m.info.id === revert) : -1;
+              const kept = cut < 0 ? stored : stored.slice(0, cut);
+              if (!kept.length) return fail("aside_unavailable", "An aside needs a message in this session first");
+              // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
+              const messageID = cut < 0 ? stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id : revert;
+              forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
+              openCodeMeta.set(forkId, { cwd: owner.cwd, title });
+              await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });
+              const oi = owner.info();
+              saveSettings(() => settings.set(forkId!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
+              const s = await findSession(forkId);
+              if (!s) throw new Error("the fork could not be restored");
+              const from = s.prompt(text);
+              return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
+            } catch (e) {
+              if (forkId) {
+                const err = await deleteSessionById(forkId, true).catch(() => undefined);
+                if (err) saveSettings(() => settings.delete([forkId!]));
+              }
+              return fail("aside_failed", (e as Error).message);
+            }
+          }
           let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
           try {
             if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
@@ -3215,7 +3328,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

@@ -187,12 +187,6 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await until(() => !alive(pid));
   });
 
-  it("rename, archive, delete and aside of an OpenCode session answer not_supported", async () => {
-    const d = await boot({ engine: "opencode" });
-    for (const msg of [{ type: "session.rename", title: "x" }, { type: "session.archive", archived: true }, { type: "session.delete" }, { type: "aside.open", text: "x" }])
-      expect(await d.request({ ...msg, sessionId: "ses_hist" })).toMatchObject({ type: "error", code: "not_supported" });
-  });
-
   it("an OpenCode entry of sessions.json survives a list while OpenCode is not reachable, and goes when OpenCode answered without it", async () => {
     const entry = { "ses_gone": { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
     const down = await boot({ engine: "opencode", path: join(tmpdir(), "no-such-opencode-binary"), sessionsJson: entry });

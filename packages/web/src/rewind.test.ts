@@ -16,4 +16,9 @@ describe("rewindOptions", () => {
     expect(rewindOptions(preview(["/r/a.ts"], false)).map((o) => o.mode)).toEqual(["code"]);
     expect(rewindOptions(preview([], false))).toEqual([]);
   });
+
+  it("offers only the modes the engine lists", () => {
+    expect(rewindOptions({ ...preview(["/r/a.ts"], true), modes: ["both"] }).map((o) => o.mode)).toEqual(["both"]);
+    expect(rewindOptions({ ...preview([], true), modes: ["conversation"] }).map((o) => o.mode)).toEqual(["conversation"]);
+  });
 });

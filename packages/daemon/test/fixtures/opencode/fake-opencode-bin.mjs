@@ -3,7 +3,10 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
-// Test routes (no auth): POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
+// GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
+// MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
+// Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -39,6 +42,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (directory, payload) => {
   for (const c of clients) c.write(`data: ${JSON.stringify({ directory, payload })}\n\n`);
 };
+const updated = (s, directory) => send(directory, { type: "session.updated", properties: { sessionID: s.id, info: s } });
 const readBody = (req) =>
   new Promise((r) => {
     let t = "";
@@ -63,6 +67,7 @@ const AUTH_METHODS = {
   ],
 };
 const waiting = new Map(); // provider -> resolve of an auto callback
+const mcp = {}; // directory -> MCP server name -> {status}
 let pendingOauth = {}; // provider -> method index of the last authorize
 
 /** Plays a node's events one by one; an abort (or another turn) ends the playback. */
@@ -95,6 +100,15 @@ const server = createServer(async (req, res) => {
         send(body.directory, e);
       }
     if (url.pathname === "/__oauth") for (const [id, done] of waiting) (waiting.delete(id), done(body.result));
+    if (url.pathname === "/__revert") {
+      const s = sessions.find((x) => x.id === body.sessionId);
+      s.revert = { messageID: body.messageID };
+      updated(s);
+    }
+    if (url.pathname === "/__unrevert") {
+      const s = sessions.find((x) => x.id === body.sessionId);
+      (delete s.revert, updated(s));
+    }
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
@@ -118,7 +132,7 @@ const server = createServer(async (req, res) => {
     return res.on("close", () => clients.delete(res));
   }
   if (url.pathname === "/config/providers")
-    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle" }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
+    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
   if (url.pathname === "/provider")
     return json(200, { all: PROVIDERS.map((p) => ({ ...p, source: auth[p.id] ? (auth[p.id].type === "api" ? "api" : "custom") : p.source })), connected: [...new Set([...PROVIDERS.filter((p) => ["env", "config"].includes(p.source) && p.id !== "groq").map((p) => p.id), ...Object.keys(auth)])], default: {} });
   if (url.pathname === "/provider/auth") return json(200, AUTH_METHODS);
@@ -147,6 +161,14 @@ const server = createServer(async (req, res) => {
     const result = await new Promise((r) => (waiting.set(id, r), res.on("close", () => waiting.get(id) === r && waiting.delete(id))));
     return result === "success" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "failed" } });
   }
+  if (url.pathname === "/mcp") {
+    const map = (mcp[dir ?? ""] ??= {});
+    if (req.method === "POST") map[body.name] = { status: "connected" };
+    return json(200, map);
+  }
+  m3 = /^\/mcp\/([^/]+)\/disconnect$/.exec(url.pathname);
+  if (m3 && req.method === "POST") return ((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true);
+  if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
   if (url.pathname === "/agent") return json(200, [{ name: "build", permission: [] }, { name: "plan", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));
@@ -170,24 +192,70 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/command|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
+  if (m && s && m[2] === "/revert" && req.method === "POST") {
+    if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
+    s.revert = { messageID: body.messageID, snapshot: "snap", diff: "" };
+    send(dir, { type: "session.diff", properties: { sessionID: s.id, diff: [] } });
+    updated(s, dir);
+    return json(200, s);
+  }
+  // Fork: a copy with new ids of the messages before `messageID` (all when absent); the permission is not copied.
+  if (m && s && m[2] === "/fork" && req.method === "POST") {
+    const now = Date.now();
+    const f = { id: `ses_fake${String(++counter).padStart(4, "0")}`, slug: `fake-${counter}`, projectID: "global", directory: s.directory, title: `${s.title} (fork #1)`, version: "1.18.34", time: { created: now, updated: now } };
+    const list = data.messages[s.id] ?? [];
+    const at = body.messageID ? list.findIndex((x) => x.info.id === body.messageID) : -1;
+    sessions.push(f);
+    data.messages[f.id] = (at < 0 ? list : list.slice(0, at)).map((x, i) => ({ ...x, info: { ...x.info, id: `${x.info.id}_f${counter}`, sessionID: f.id } }));
+    return json(200, f);
+  }
+  if (m && s && !m[2] && req.method === "DELETE") {
+    sessions.splice(sessions.indexOf(s), 1);
+    delete data.messages[s.id];
+    return json(200, true);
+  }
+  if (m && s && m[2] === "/unrevert" && req.method === "POST") {
+    delete s.revert;
+    updated(s, dir);
+    return json(200, s);
+  }
+  // Slash commands: a command plays the next script like a prompt and answers at once (the real server answers when the turn ends); `fail` fails it.
+  if (m && s && m[2] === "/command" && req.method === "POST") {
+    if (body.command === "fail") return json(500, { name: "UnknownError", data: { message: "command failed" } });
+    const file = scripts.shift();
+    if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
+    return json(200, {});
+  }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
+    // The next prompt removes the reverted messages for good.
+    if (s.revert) {
+      const list = data.messages[s.id] ?? [];
+      const at = list.findIndex((x) => x.info.id === s.revert.messageID);
+      for (const x of at < 0 ? [] : list.slice(at)) send(dir, { type: "message.removed", properties: { sessionID: s.id, messageID: x.info.id } });
+      if (at >= 0) data.messages[s.id] = list.slice(0, at);
+      delete s.revert;
+      updated(s, dir);
+    }
     const file = scripts.shift();
     if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     res.writeHead(204);
     return res.end();
   }
-  if (m && s && m[2] === "/abort" && req.method === "POST") {
+  if (m && m[2] === "/abort" && req.method === "POST") {
     generation++;
     asks = [];
-    busy.delete(s.id);
+    busy.delete(m[1]);
     const events = current?.abort ?? [{ type: "session.error", properties: { sessionID: "ses_ROOT", error: { name: "MessageAbortedError", data: { message: "Aborted" } } } }, { type: "session.status", properties: { sessionID: "ses_ROOT", status: { type: "idle" } } }, { type: "session.idle", properties: { sessionID: "ses_ROOT" } }];
-    for (const e of JSON.parse(JSON.stringify(events).replaceAll("ses_ROOT", s.id))) send(dir, e);
+    for (const e of JSON.parse(JSON.stringify(events).replaceAll("ses_ROOT", m[1]))) send(dir, e);
     return json(200, true);
   }
   if (m && s && !m[2] && req.method === "PATCH") {
     s.permission = [...(s.permission ?? []), ...(body.permission ?? [])];
+    if (body.title === "fail-title") return json(500, { name: "UnknownError", data: { message: "title refused" } });
+    if (body.title) s.title = body.title;
+    if (body.time) s.time = { ...s.time, ...body.time };
     return json(200, s);
   }
   if (m && s && req.method === "GET") return json(200, m[2] ? (data.messages[s.id] ?? []) : s);

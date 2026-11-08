@@ -102,6 +102,16 @@ describe("permission blocks", () => {
     expect(alwaysOf(rules)).toEqual([rule("bash", "ls *"), rule("bash", "cat *")]);
     expect(modeOf([rule("bash", "x")])).toBeUndefined();
     expect(alwaysOf([rule("bash", "x")])).toEqual([]);
+    // readOnly: the edit deny comes after the mode's edit rule and before the always marker.
+    const ro = modeBlock("bypassPermissions", [], [], { readOnly: true });
+    expect(ro.slice(-2)).toEqual([rule("edit", "*", "deny"), rule("claude-ui", "always")]);
+  });
+
+  it("orchestration rules: every block hides all orchestration servers; an attached one allows its own tools and asks for worker_start except in bypass", () => {
+    expect(modeBlock("default", [], [])).toContainEqual(rule("orchestration-*", "*", "deny"));
+    expect(modeBlock("default", [], [], { mcp: "orchestration-abcdefghij" }).slice(-4, -1)).toEqual([rule("orchestration-*", "*", "deny"), rule("orchestration-abcdefghij_*", "*"), rule("orchestration-abcdefghij_worker_start", "*", "ask")]);
+    expect(modeBlock("bypassPermissions", [], [], { mcp: "orchestration-abcdefghij" }).slice(-3, -1)).toEqual([rule("orchestration-*", "*", "deny"), rule("orchestration-abcdefghij_*", "*")]);
+    expect(mapTool("orchestration-abcdefghij_worker_list", { tree: true })).toEqual({ tool: "mcp__orchestration__worker_list", input: { tree: true } });
   });
 });
 

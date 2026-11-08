@@ -127,22 +127,16 @@ Feature: OpenCode prompting (GH-656)
     And the effort chooser is absent
     And I capture "modes"
 
-  Scenario Outline: Rewind and Ask aside are disabled with a reason at <width>x<height>
+  Scenario Outline: Rewind and Ask aside are enabled at <width>x<height>
     Given the viewport is <width>x<height>
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     When I send the first prompt "Reply with exactly: OK"
     And the turn has finished
-    Then the rewind button is disabled
-    When I click the rewind button
-    Then the unsupported reason shows
+    Then the rewind button is enabled
+    And the palette row "Ask aside" is enabled
     And the page has no horizontal scroll
-    And I capture "rewind light"
-    When I switch the theme mode to "dark"
-    And I click the rewind button
-    Then the unsupported reason shows
-    And I capture "rewind dark"
-    And the palette row "Ask aside" is disabled with a reason
+    And I capture "rewind enabled"
 
     Examples:
       | width | height |

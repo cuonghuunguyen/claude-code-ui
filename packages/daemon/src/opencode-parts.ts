@@ -20,7 +20,7 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };
@@ -40,6 +40,9 @@ const RENAME: Record<string, [string, Record<string, string>]> = {
 };
 
 export function mapTool(name: string, input: Record<string, unknown> = {}): { tool: string; input: Record<string, unknown> } {
+  // A session's orchestration MCP tool (`orchestration-<last 10 of its id>_<tool>`, opencode-engine.ts mcpName) shows as Claude's.
+  const orch = /^orchestration-[\w-]{10}_(\w+)$/.exec(name);
+  if (orch) return { tool: `mcp__orchestration__${orch[1]}`, input };
   const rule = RENAME[name];
   if (!rule) return { tool: name, input };
   const mapped = Object.fromEntries(Object.entries(input).map(([k, v]) => [rule[1][k] ?? k, v]));
@@ -77,6 +80,8 @@ export class OpenCodeMapper {
 
   /** The call id of a child session, undefined for the root session. */
   parentOf = (sessionId: string | undefined) => (sessionId ? this.children.get(sessionId) : undefined);
+  /** The child session of a task call. */
+  childOf = (callId: string) => [...this.children].find(([, c]) => c === callId)?.[0];
   isChild = (sessionId: string) => this.children.has(sessionId);
   /** The mapped call of a tool call id (Claude card name and input). */
   call = (callId: string) => this.calls.get(callId);
