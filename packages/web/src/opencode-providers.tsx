@@ -21,7 +21,7 @@ const split = (e: Error, fields: string[]): Fail => {
   return m && fields.includes(m[1]!) ? { field: m[1], text: m[2]! } : { text: e.message };
 };
 
-export function OpenCodeProviders({ status, request, onProviders }: { status: OpenCodeStatus | undefined; request: <T>(m: Request) => Promise<T>; onProviders: () => void }) {
+export function OpenCodeProviders({ status, request, onProviders, onLoaded }: { status: OpenCodeStatus | undefined; request: <T>(m: Request) => Promise<T>; onProviders: () => void; /** The first list loaded: the server is running now (status line). */ onLoaded?: () => void }) {
   const t = useT();
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -40,12 +40,17 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
   const [fail, setFail] = useState<Fail>();
   const [focus, setFocus] = useState<string>();
   const attempt = useRef(0);
+  const heading = useRef<HTMLHeadingElement>(null);
 
   const apply = (r: OpenCodeProvidersResult) => (setProviders(r.providers), setLoadError(undefined), onProviders());
-  const load = () => (setLoading(true), setLoadError(undefined), request<OpenCodeProvidersResult>({ type: "opencode.providers" }).then((r) => setProviders(r.providers), (e: Error) => setLoadError(e.message)).finally(() => setLoading(false)));
+  const load = () => (setLoading(true), setLoadError(undefined), request<OpenCodeProvidersResult>({ type: "opencode.providers" }).then((r) => (setProviders(r.providers), onLoaded?.()), (e: Error) => setLoadError(e.message)).finally(() => setLoading(false)));
   useEffect(() => {
     if (status?.state === "running" && !providers) void load();
   }, [status?.state]);
+  // The row that opened the form unmounts with focus on it: focus moves to the form heading.
+  useEffect(() => {
+    if (formId) heading.current?.focus();
+  }, [formId]);
   // Focus after a login or logout lands in the list.
   useEffect(() => {
     if (focus === undefined) return;
@@ -66,7 +71,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
   };
   const pick = (i: number) => (setMethod(i), setValues(initial(provider!.methods[i]!)), setKey(""), setFail(undefined));
   const close = () => (attempt.current++, setFormId(undefined), setKey(""), setCode(""), setPhase({ kind: "idle" }), setFail(undefined));
-  const done = (r: OpenCodeProvidersResult, id: string, name: string) => (apply(r), close(), setNote({ text: t("settings.opencode.providers.connectedTo", { name }) }), setFocus(id));
+  const done = (r: OpenCodeProvidersResult, id: string, name: string) => (apply(r), close(), setQuery(""), setNote({ text: t("settings.opencode.providers.connectedTo", { name }) }), setFocus(id));
 
   /** The error of a field the user can fix, else of the form. */
   const check = (): Fail | undefined => {
@@ -217,7 +222,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
           data-testid="settings-opencode-connect-form"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <h5 className="min-w-0 flex-1 font-medium text-sm">{t("settings.opencode.providers.connectTo", { name: provider.name })}</h5>
+            <h5 ref={heading} tabIndex={-1} className="min-w-0 flex-1 font-medium text-sm outline-none">{t("settings.opencode.providers.connectTo", { name: provider.name })}</h5>
             <Button type="button" variant="ghost" size="sm" onClick={() => (close(), setTimeout(() => search.current?.focus()))} className="max-md:h-11">
               {t("settings.opencode.providers.back")}
             </Button>

@@ -36,8 +36,9 @@ export function connect(opts: {
   onPlanUsage?: (u: PlanUsage | null) => void;
   /** A config write (e.g. an MCP server added) in a project: an open config dialog of it refreshes. */
   onConfigChanged?: (m: Extract<ServerMessage, { type: "config.changed" }>) => void;
-  /** Another client changed the app settings. */
+  /** OpenCode read a changed provider set (login, logout): its model list is stale. */
   onOpenCodeProviders?: () => void;
+  /** Another client changed the app settings. */
   onSettingsChanged?: (m: Extract<ServerMessage, { type: "settings_changed" }>) => void;
   /** A newer claude-ui and the update under way (update.tsx). */
   onUpdate?: (m: Extract<ServerMessage, { type: "update_available" | "update_state" }>) => void;

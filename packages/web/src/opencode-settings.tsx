@@ -64,7 +64,7 @@ export function OpenCodeSection({ opencode, saving, save, request, onProviders }
           {t("settings.opencode.check")}
         </Button>
       </div>
-      <OpenCodeProviders status={status} request={request} onProviders={onProviders ?? (() => {})} />
+      <OpenCodeProviders status={status} request={request} onProviders={onProviders ?? (() => {})} onLoaded={() => void check()} />
     </section>
   );
 }

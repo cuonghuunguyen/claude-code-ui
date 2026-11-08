@@ -56,11 +56,14 @@ it("with no connected provider the empty state names the free models and its but
 });
 
 it("a stopped server loads nothing until Show providers; missing hides the block", async () => {
-  const { calls } = await render(list(), { state: "stopped", version: "1" });
+  const onLoaded = vi.fn();
+  const calls: any[] = [];
+  await act(async () => root.render(<OpenCodeProviders status={{ state: "stopped", version: "1" }} request={(async (m: any) => (calls.push(m), { providers: base })) as never} onProviders={() => {}} onLoaded={onLoaded} />));
   expect(calls).toEqual([]);
   expect(q("settings-opencode-providers")!.textContent).toContain("OpenCode is not running.");
   await click(q("settings-opencode-providers-load"));
   expect(calls).toEqual([{ type: "opencode.providers" }]);
+  expect(onLoaded).toHaveBeenCalledTimes(1);
   expect(all("settings-opencode-connect-row").length).toBeGreaterThan(0);
   act(() => root.unmount());
   root = createRoot(el);
@@ -81,7 +84,9 @@ it("API key: blur empty and a key with a space show an error under the field; su
   let done!: (v: unknown) => void;
   const onProviders = vi.fn();
   const { calls } = await render(async (m) => (m.type === "opencode.providers" ? { providers: base } : new Promise((r) => (done = r))), undefined, onProviders);
+  await type("settings-opencode-connect-search", "gro");
   await click(row("groq"));
+  expect(document.activeElement).toBe(el.querySelector("h5"));
   expect(q("settings-opencode-key")!.getAttribute("type")).toBe("password");
   expect(q("settings-opencode-key")!.getAttribute("autocomplete")).toBe("off");
   await blur("settings-opencode-key");
@@ -102,6 +107,7 @@ it("API key: blur empty and a key with a space show an error under the field; su
   expect(q("settings-opencode-providers-message")!.getAttribute("role")).toBe("status");
   const r = all("settings-opencode-provider-row").find((x) => x.dataset.providerId === "groq")!;
   expect(r.querySelector('[data-testid="settings-opencode-provider-status"]')!.textContent).toBe("Connected · API key");
+  expect((q("settings-opencode-connect-search") as HTMLInputElement).value).toBe("");
   expect(document.activeElement).toBe(r.querySelector('[data-testid="settings-opencode-logout"]'));
   expect(q("settings-opencode-key")).toBeNull();
   expect(onProviders).toHaveBeenCalledTimes(1);

@@ -133,5 +133,5 @@ Feature: OpenCode provider login (GH-657)
     And I connect Groq with the API key "sk-throwaway-not-real"
     And I close Settings
     And I choose the engine "OpenCode"
-    Then the model picker lists the provider "Groq" when OpenCode has its models
+    Then the model picker lists the provider "Groq"
     And I capture "model picker"

@@ -451,7 +451,7 @@ export function App() {
   const [modelsBy, setModelsBy] = useState<Partial<Record<Engine, ModelInfo[]>>>({});
   const modelsRequested = useRef(new Set<Engine>());
   /** OpenCode read another provider set: its model list is fetched again the next time it shows. */
-  const dropOpenCodeModels = () => (setModelsBy((m) => ({ ...m, opencode: undefined })), modelsRequested.current.delete("opencode"))
+  const dropOpenCodeModels = () => (setModelsBy((m) => ({ ...m, opencode: undefined })), modelsRequested.current.delete("opencode"));
   const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
   const modelsOf = (engine: Engine) => modelsBy[engine] ?? NO_MODELS;
   const models = modelsOf("claude");

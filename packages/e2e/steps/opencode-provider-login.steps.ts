@@ -106,9 +106,14 @@ When("I connect Groq with the keyboard using the API key {string}", async ({ pag
   await expect(row(page, "Groq").first()).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(t(page, "settings-opencode-connect-form")).toBeVisible();
-  // Method radios: Groq has the plugin's three; Tab to the "API key" radio (the checked one is the first).
-  await page.getByLabel("API key", { exact: true }).first().focus();
-  await page.keyboard.press("Space");
+  // Focus moved to the form heading: Tab to Back, Tab to the method radios (the checked first one), arrow to "API key", Tab to the key field.
+  await expect(t(page, "settings-opencode-connect-form").getByRole("heading")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(t(page, "settings-opencode-method").first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByLabel("API key", { exact: true })).toBeChecked();
   await page.keyboard.press("Tab");
   await expect(t(page, "settings-opencode-key")).toBeFocused();
   await page.keyboard.type(key);
@@ -178,12 +183,12 @@ Then("the login code field shows an error", async ({ page }) => {
 });
 
 // models.dev data comes from the network or OpenCode's cache: offline, the picker only has to open.
-Then("the model picker lists the provider {string} when OpenCode has its models", async ({ page }, name: string, ) => {
+Then("the model picker lists the provider {string}", async ({ page }, name: string) => {
   const picker = t(page, "session-model");
   await expect(picker).toBeVisible({ timeout: 30_000 });
   await picker.click();
   await expect(page.getByRole("listbox")).toBeVisible();
-  await expect(page.getByRole("listbox")).toContainText(name, { timeout: 15_000 }).catch(() => test_note(`no ${name} group: models.dev data not available`));
+  // The acceptance run is online (models.dev): the refreshed list has the provider's models.
+  await expect(page.getByRole("listbox")).toContainText(name, { timeout: 15_000 });
   await page.keyboard.press("Escape");
 });
-const test_note = (m: string) => console.warn(m);
