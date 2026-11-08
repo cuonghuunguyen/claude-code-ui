@@ -124,6 +124,13 @@ export function splitLabels(value: string, labels: string[]): string[] {
 
 /** The longest a prompt sent after Stop waits for the aborted turn to end. */
 const TURN_END_WAIT_MS = 10_000;
+/** Commands the daemon itself runs for an OpenCode session (OpenCode's web app has them as session commands, not server commands). */
+const LOCAL_COMMANDS: SlashCommand[] = [
+  { name: "compact", description: "Summarize the conversation to free context", argumentHint: "" },
+  { name: "undo", description: "Undo the last message and its file changes", argumentHint: "" },
+  { name: "redo", description: "Redo the last undone message", argumentHint: "" },
+];
+const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {
@@ -215,7 +222,8 @@ class OpenCodeSession implements EngineSession {
   private async emitCommands() {
     const commands = await this.engine.commands(this.cwd).catch(() => undefined);
     if (!commands) return;
-    this.commandNames = new Set(commands.map((c) => c.name));
+    // /compact, /undo and /redo are ours: with arguments they are a plain prompt, never a server command.
+    this.commandNames = new Set(commands.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
     this.session.emit({ type: "commands", id: "commands", commands });
   }
 
@@ -312,7 +320,12 @@ class OpenCodeSession implements EngineSession {
       .finally(() => (this.attaching = undefined)));
   }
 
-  prompt(text: string, images: string[] = []): string {
+  prompt(text: string, images: string[] = []): string | undefined {
+    const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
+    if (local) {
+      void this.runLocal(local as "compact" | "undo" | "redo");
+      return undefined;
+    }
     // Stop was pressed and the aborted turn still runs: a joining prompt would be lost with the loop, so it starts the next turn when this one has ended.
     const afterStop = this.stopped && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
@@ -323,6 +336,55 @@ class OpenCodeSession implements EngineSession {
     if (!afterStop) start();
     else void Promise.race([this.turnEnd?.done, new Promise((r) => setTimeout(r, TURN_END_WAIT_MS))]).then(start);
     return messageID;
+  }
+
+  /** `/compact`, `/undo` and `/redo` (nothing is echoed): only while idle; a running turn is not steered with them. */
+  private async runLocal(cmd: "compact" | "undo" | "redo") {
+    const say = (text: string) => this.notice(`local:${ascending("msg")}`, text);
+    if (this.session.currentState() !== "idle" || this.session.pendingCount()) return say("Stop the turn first");
+    try {
+      if (cmd === "compact") return await this.compact(say);
+      // User messages that show in the timeline (not a shell run's or a compaction's).
+      const all = await this.server.request<OpenCodeMessage[]>(`/session/${this.id}/message`, { directory: this.cwd });
+      const shown = (m: OpenCodeMessage) => m.info.role === "user" && m.parts.some((p) => (p.type === "text" && !p.synthetic && !p.ignored) || (p.type === "file" && p.mime?.startsWith("image/")));
+      const at = this.revertAt ? all.findIndex((m) => m.info.id === this.revertAt) : -1;
+      if (cmd === "undo") {
+        const target = all.slice(0, at < 0 ? all.length : at).filter(shown).at(-1);
+        if (!target) return say("Nothing to undo");
+        return await this.rewind(target.info.id, (await this.previewRewind(target.info.id)).modes![0]!);
+      }
+      if (at < 0) return say("Nothing to redo");
+      const next = all.slice(at + 1).find(shown);
+      // The newest undone message is redone: the revert point goes away; else it moves to the next undone one.
+      if (!next) return void (await this.server.request(`/session/${this.id}/unrevert`, { method: "POST", directory: this.cwd }));
+      this.revertAt = next.info.id;
+      await this.server.request(`/session/${this.id}/revert`, { method: "POST", directory: this.cwd, body: { messageID: next.info.id } });
+      await this.resync(); // the messages between the old and the new revert point come back
+    } catch (err) {
+      say(`/${cmd} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** `/compact`: OpenCode summarizes the conversation (a turn: the compaction marker, the summary as an assistant message). */
+  private async compact(say: (text: string) => void) {
+    const [providerID, ...rest] = this.model.split("/");
+    const picked = this.model !== "default" && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : (this.usage ?? (await this.engine.defaultModel()));
+    if (!picked) return say("Choose a model first");
+    this.revertAt = undefined; // the summary removes the cut messages
+    this.stopped = false;
+    this.sentAt = Infinity;
+    this.beginTurn();
+    this.session.setState("running");
+    this.server
+      .request(`/session/${this.id}/summarize`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { providerID: picked.providerID, modelID: picked.modelID } })
+      .then(
+        () => (this.sentAt = Date.now()),
+        (err) => {
+          this.sentAt = Date.now();
+          say(`/compact failed: ${(err as Error).message}`);
+          this.toIdle();
+        },
+      );
   }
 
   /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
@@ -714,6 +776,11 @@ class OpenCodeEngineImpl implements Engine {
   async contextLimit(providerID: string, modelID: string): Promise<number | undefined> {
     return (await this.providerList()).providers.find((p) => p.id === providerID)?.models[modelID]?.limit?.context;
   }
+  /** The model OpenCode runs by default (`default` of `GET /config/providers`). */
+  async defaultModel(): Promise<{ providerID: string; modelID: string } | undefined> {
+    const d = defaultOf(await this.providerList());
+    return d && { providerID: d.p.id, modelID: d.id };
+  }
   /** The effort levels of a session model (`default` = the default model of OpenCode); none when it has no reasoning variants. */
   async effortLevels(model: string): Promise<EffortLevel[]> {
     const r = await this.providerList();
@@ -727,7 +794,7 @@ class OpenCodeEngineImpl implements Engine {
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     const list = this.server
       .request<{ name: string; description?: string; hints?: string[] }[]>("/command", { directory: cwd })
-      .then((l) => l.map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") })));
+      .then((l) => [...LOCAL_COMMANDS, ...l.filter((c) => !LOCAL_NAMES.includes(c.name)).map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") }))]);
     this.commandLists.set(cwd, { at: Date.now(), list });
     list.catch(() => this.commandLists.delete(cwd));
     return list;

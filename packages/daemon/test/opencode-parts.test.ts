@@ -77,6 +77,14 @@ describe("OpenCodeMapper (live)", () => {
     expect(m.part({ id: "prt_4", messageID: "msg_tui", type: "text", text: "hidden", synthetic: true })).toEqual([{ type: "user_text", id: "msg_tui", text: "from tui", images: ["data:image/png;base64,AA"] }]);
   });
 
+  it("a compaction marker of a user message is a compaction part (manual or auto), also when it comes before its message", () => {
+    const m = new OpenCodeMapper();
+    m.message({ id: "msg_c1", role: "user" });
+    expect(m.part({ id: "prt_c1", messageID: "msg_c1", type: "compaction", auto: false })).toEqual([{ type: "compaction", id: "prt_c1", trigger: "manual" }]);
+    expect(m.part({ id: "prt_c2", messageID: "msg_c2", type: "compaction", auto: true })).toEqual([]);
+    expect(m.message({ id: "msg_c2", role: "user" })).toEqual([{ type: "compaction", id: "prt_c2", trigger: "auto" }]);
+  });
+
   it("step-finish tokens and cost are summed per turn", () => {
     const m = ready();
     m.part({ id: "prt_s1", messageID: "msg_a", type: "step-finish", tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 5, write: 3 } }, cost: 0.5 });

@@ -12,6 +12,7 @@ import type {
   FsSearchResult,
   ListResult,
   McpListResult,
+  PromptResult,
   RecentProject,
   ArtifactPreviewResult,
   Engine,
@@ -945,10 +946,17 @@ export function App() {
     sentHere.current.add(id);
     turnEnded.current.delete(id);
     setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
-    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
-      setOptimistic((o) => dropPending(o, id, key));
-      throw e;
-    });
+    return client.current!.request<PromptResult | undefined>({ type: "session.prompt", sessionId: id, text, images }).then(
+      (r) => {
+        // The Engine ran the text as its own command (OpenCode /undo): nothing echoes it, the bubble goes.
+        if (r?.local) setOptimistic((o) => dropPending(o, id, key));
+        return r;
+      },
+      (e) => {
+        setOptimistic((o) => dropPending(o, id, key));
+        throw e;
+      },
+    );
   }
 
   /** Queued messages (GH-77): the daemon holds them; like sendPrompt, nothing waits for a reconnect. */

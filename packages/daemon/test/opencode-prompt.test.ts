@@ -279,6 +279,33 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(bodies[2]).not.toHaveProperty("variant");
   });
 
+  it("/compact summarizes with the default model: compaction marker, summary text, turn result; while a turn runs it is refused with a notice", async () => {
+    const d = await boot({ script: ["compact", "bash"] });
+    const s = await d.open();
+    expect(await s.prompt("/compact")).toEqual({ local: true });
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(d.requests("POST", `/session/${s.id}/summarize`).map((r) => r.body)).toEqual([{ providerID: "opencode", modelID: "big-pickle" }]);
+    expect(s.find("compaction")).toMatchObject({ trigger: "manual" });
+    expect(s.find("assistant_text")).toMatchObject({ text: expect.stringContaining("Summary") });
+    expect(s.parts().some((p) => p.type === "user_text")).toBe(false);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    await s.prompt("/compact");
+    await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
+    expect(d.requests("POST", `/session/${s.id}/summarize`)).toHaveLength(1);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["run ls"]);
+  });
+
+  it("/compact uses the chosen model", async () => {
+    const d = await boot({ script: ["compact"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await s.prompt("/compact");
+    await until(() => !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/summarize`)[0]!.body).toEqual({ providerID: "acme", modelID: "x/y" });
+  });
+
   it("bash mode runs the command through OpenCode's shell as a Bash card without a model call, user message or turn result; during a turn it is queued", async () => {
     const d = await boot({ script: ["bash"] });
     const s = await d.open();
@@ -479,9 +506,9 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("commands"));
-    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["init", "review", "fail"]);
-    expect(s.find("commands")!.commands[0]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
-    expect(s.find("commands")!.commands[1]).toMatchObject({ description: "", argumentHint: "" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "init", "review", "fail"]);
+    expect(s.find("commands")!.commands[3]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[4]).toMatchObject({ description: "", argumentHint: "" });
     expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
 
     await s.prompt("/review main");
@@ -640,6 +667,51 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
   it("a restored reverted session hides the cut messages", async () => {
     const r = await restored({ revert: "msg_u3" });
     expect(r.sub.snapshot.page.parts.map((p: any) => p.id)).toEqual(["msg_u1", "msg_u2"]);
+  });
+
+  it("/undo, /undo, /redo and /redo walk the revert point; each is local: no echo, no prompt, reply local", async () => {
+    const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4"));
+    const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
+    const reverts = () => r.d.requests("POST", "/session/ses_rw/revert").map((q) => q.body.messageID);
+    expect(await run("/undo")).toEqual({ local: true });
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u4"));
+    expect(reverts()).toEqual(["msg_u4"]);
+    await run("/undo");
+    await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
+    expect(reverts()).toEqual(["msg_u4", "msg_u3"]);
+    // Redo moves the revert point to the next undone message: the messages before it are read again.
+    const shown = () => r.parts().filter((p) => p.id === "msg_u3").length;
+    const before = shown();
+    await run("/redo");
+    await until(() => reverts().length === 3 && shown() > before);
+    expect(reverts()[2]).toBe("msg_u4");
+    // The last undone message is redone with unrevert.
+    await run("/redo");
+    await until(() => r.d.requests("POST", "/session/ses_rw/unrevert").length === 1);
+    expect(r.parts().filter((p) => p.type === "user_text" && p.text.startsWith("/"))).toEqual([]);
+    expect(r.d.requests("POST", "/session/ses_rw/prompt_async")).toHaveLength(0);
+    expect(r.parts().filter((p) => p.type === "notice")).toEqual([]);
+  });
+
+  it("/undo and /redo with nothing to do are notices; with arguments or while a turn runs they are not run", async () => {
+    const r = await restored({ revert: "msg_u1" });
+    const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
+    const notices = () => r.parts().filter((p) => p.type === "notice").map((p) => (p as { text: string }).text);
+    await run("/undo");
+    await until(() => notices().includes("Nothing to undo"));
+    const busy = await restored({ busy: true });
+    await busy.d.ok({ type: "session.prompt", sessionId: "ses_rw", text: "/undo" });
+    await until(() => busy.parts().some((p) => p.type === "notice" && p.text === "Stop the turn first"));
+    expect(busy.d.requests("POST", "/session/ses_rw/revert")).toHaveLength(0);
+  });
+
+  it("the commands list has /compact, /undo and /redo first, before the server's", async () => {
+    const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "commands"));
+    const names = (r.parts().filter((p) => p.type === "commands").at(-1) as { commands: { name: string }[] }).commands.map((c) => c.name);
+    expect(names.slice(0, 3)).toEqual(["compact", "undo", "redo"]);
+    expect(names).toContain("review");
   });
 
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {

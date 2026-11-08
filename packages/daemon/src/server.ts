@@ -10,7 +10,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -1029,7 +1029,7 @@ export function createDaemon(opts: {
   }
 
   /** session.prompt's checks and send; the reason when the prompt is not taken. `images`: checked with imageBlock(). */
-  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean): Promise<{ code: string; message: string } | undefined> {
+  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean, out?: PromptResult): Promise<{ code: string; message: string } | undefined> {
     const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
     if (!s.isLive()) return notLive();
     // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
@@ -1041,7 +1041,7 @@ export function createDaemon(opts: {
     if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
     if (s.bashRunning()) return { code: "bash_running", message: "A shell command is running in this session; stop it first" };
     try {
-      s.prompt(text, images);
+      if (s.prompt(text, images) === undefined && out) out.local = true;
     } catch (err) {
       return { code: "prompt_failed", message: (err as Error).message };
     }
@@ -2164,10 +2164,11 @@ export function createDaemon(opts: {
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
-          const err = await sendPrompt(s, msg.text, images);
+          const out: PromptResult = {};
+          const err = await sendPrompt(s, msg.text, images, undefined, out);
           // A refused prompt keeps a usage-limit pause.
           if (!err) queue.release(s.id);
-          return err ? fail(err.code, err.message) : reply({});
+          return err ? fail(err.code, err.message) : reply(out);
         }
         case "session.enqueue": {
           const s = await find(msg.sessionId);
@@ -2521,7 +2522,7 @@ export function createDaemon(opts: {
               saveSettings(() => settings.set(forkId!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
               const s = await findSession(forkId);
               if (!s) throw new Error("the fork could not be restored");
-              const from = s.prompt(text);
+              const from = s.prompt(text) ?? "";
               return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
             } catch (e) {
               if (forkId) {
@@ -2549,7 +2550,7 @@ export function createDaemon(opts: {
             saveSettings(() => settings.set(id!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
             const s = await findSession(id);
             if (!s) throw new Error("the fork could not be restored");
-            const from = s.prompt(text);
+            const from = s.prompt(text) ?? "";
             return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
           } catch (e) {
             if (id) {
