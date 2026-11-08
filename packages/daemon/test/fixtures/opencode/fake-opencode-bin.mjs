@@ -46,6 +46,25 @@ const readBody = (req) =>
     req.on("end", () => r(t ? JSON.parse(t) : {}));
   });
 
+// Provider login: `auth` is the credential store (provider id -> {type, ...}); an OAuth login waits for POST /__oauth {result}.
+const auth = {};
+const PROVIDERS = [
+  { id: "opencode", name: "OpenCode", source: "custom", env: [], models: { "big-pickle": { name: "Big Pickle", cost: { input: 0 } } } },
+  { id: "groq", name: "Groq", source: "env", env: ["GROQ_API_KEY"], models: { llama: { name: "Llama", cost: { input: 1 } } } },
+  { id: "envprov", name: "Env Provider", source: "env", env: ["ENVPROV_KEY"], models: {} },
+  { id: "cfgprov", name: "Config Provider", source: "config", env: [], models: {} },
+  { id: "fakeprov", name: "Fake Provider", source: "custom", env: [], models: {} },
+];
+const AUTH_METHODS = {
+  fakeprov: [
+    { type: "oauth", label: "Fake browser login" },
+    { type: "oauth", label: "Fake code login", prompts: [{ type: "text", key: "team", message: "Team name" }] },
+    { type: "api", label: "API key", prompts: [{ type: "text", key: "region", message: "Region" }] },
+  ],
+};
+const waiting = new Map(); // provider -> resolve of an auto callback
+let pendingOauth = {}; // provider -> method index of the last authorize
+
 /** Plays a node's events one by one; an abort (or another turn) ends the playback. */
 async function play(node, sessionId, directory, messageID, recorded) {
   const mine = ++generation;
@@ -75,11 +94,12 @@ const server = createServer(async (req, res) => {
         if (e.type === "session.status") e.properties.status.type === "idle" ? busy.delete(e.properties.sessionID) : busy.add(e.properties.sessionID);
         send(body.directory, e);
       }
+    if (url.pathname === "/__oauth") for (const [id, done] of waiting) (waiting.delete(id), done(body.result));
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
   const authed = req.headers.authorization === expected;
-  const body = req.method === "POST" || req.method === "PATCH" ? await readBody(req) : undefined;
+  const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : undefined;
   log({ type: "request", method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), authed, ...(body !== undefined && { body }) });
   if (!authed) return json(401, { error: "unauthorized" });
   const dir = url.searchParams.get("directory");
@@ -99,6 +119,34 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/config/providers")
     return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle" }, alpha: { name: "Alpha" } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
+  if (url.pathname === "/provider")
+    return json(200, { all: PROVIDERS.map((p) => ({ ...p, source: auth[p.id] ? (auth[p.id].type === "api" ? "api" : "custom") : p.source })), connected: [...new Set([...PROVIDERS.filter((p) => ["env", "config"].includes(p.source) && p.id !== "groq").map((p) => p.id), ...Object.keys(auth)])], default: {} });
+  if (url.pathname === "/provider/auth") return json(200, AUTH_METHODS);
+  let m3 = /^\/auth\/([^/]+)$/.exec(url.pathname);
+  if (m3 && req.method === "PUT") return ((auth[m3[1]] = body), json(200, true));
+  if (m3 && req.method === "DELETE") return (delete auth[m3[1]], json(200, true));
+  if (url.pathname === "/global/dispose" && req.method === "POST") return json(200, true);
+  m3 = /^\/provider\/([^/]+)\/oauth\/(authorize|callback)$/.exec(url.pathname);
+  if (m3 && req.method === "POST") {
+    const [, id, step] = m3;
+    const method = AUTH_METHODS[id]?.[body.method];
+    if (!method) return json(500, { name: "UnknownError", data: { message: "no auth plugin" } });
+    if (method.type !== "oauth") return json(200, null);
+    const code = body.method === 1;
+    if (step === "authorize") {
+      if (code && body.inputs?.team === "bad") return json(400, { name: "ProviderAuthValidationFailed", data: { field: "team", message: "Team is not valid" } });
+      pendingOauth[id] = body.method;
+      return json(200, { url: `http://127.0.0.1/fake-login?provider=${id}`, method: code ? "code" : "auto", instructions: code ? "Paste the code" : "Code: ABCD-1234" });
+    }
+    if (pendingOauth[id] !== body.method) return json(400, { name: "ProviderAuthOauthMissing", data: { message: "no pending login" } });
+    const ok = (type) => ((auth[id] = { type }), json(200, true));
+    if (code) {
+      if (!body.code) return json(400, { name: "ProviderAuthOauthCodeMissing", data: { message: "code" } });
+      return body.code === "good" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "bad code" } });
+    }
+    const result = await new Promise((r) => (waiting.set(id, r), res.on("close", () => waiting.get(id) === r && waiting.delete(id))));
+    return result === "success" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "failed" } });
+  }
   if (url.pathname === "/agent") return json(200, [{ name: "build", permission: [] }, { name: "plan", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));

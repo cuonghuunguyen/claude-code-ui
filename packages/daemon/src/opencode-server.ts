@@ -7,6 +7,16 @@ import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { killProcessTree } from "./git-runner.ts";
 
 export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed";
+/** A non-2xx answer: `status` and the parsed `body` let callers map OpenCode's error `name`. */
+export class OpenCodeHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(message);
+  }
+}
 /** A start problem the user can act on; `code` goes to the wire as the error code. */
 export class OpenCodeError extends Error {
   constructor(
@@ -293,7 +303,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       }
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
-    async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown } = {}): Promise<T> {
+    async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
       const up = await ensure();
       const url = new URL(path, `${up.url}/`);
       if (r.directory) url.searchParams.set("directory", r.directory);
@@ -301,10 +311,17 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         method: r.method ?? "GET",
         headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
         body: r.body === undefined ? undefined : JSON.stringify(r.body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: r.signal ? AbortSignal.any([r.signal, AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS),
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(`OpenCode ${r.method ?? "GET"} ${path} answered ${res.status}: ${text.slice(0, 300)}`);
+      if (!res.ok) {
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {}
+        // The path only, never the request body: a login body holds the key.
+        throw new OpenCodeHttpError(`OpenCode ${r.method ?? "GET"} ${path} answered ${res.status}: ${text.slice(0, 300)}`, res.status, body);
+      }
       return (text ? JSON.parse(text) : undefined) as T;
     },
   };
