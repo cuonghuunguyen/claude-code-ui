@@ -31,7 +31,9 @@ Then("the OpenCode providers block offers {string}", async ({ page }, label: str
 });
 
 When("I show the OpenCode providers", async ({ page }) => {
+  // The status answers a moment after the section shows: the block is either the button or, with a running server, already the list.
   const load = t(page, "settings-opencode-providers-load");
+  await expect(load.or(t(page, "settings-opencode-connect-search"))).toBeVisible();
   if (await load.isVisible()) await load.click();
   await expect(t(page, "settings-opencode-connect-search")).toBeVisible({ timeout: 60_000 });
 });
