@@ -542,7 +542,7 @@ export function createDaemon(opts: {
   const refreshProviders = () => ((providersStale = true), flushProviders());
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
   /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
-  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode }): Promise<Session | undefined> {
+  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
     const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
     if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
@@ -1072,7 +1072,7 @@ export function createDaemon(opts: {
     find: findSession,
     create: async (cwd, initial, engine) => {
       if (isRemoving(cwd)) throw new Error("This worktree is being removed");
-      const s = engine === "opencode" ? await createOpenCodeSession(cwd, { model: initial.model, permissionMode: initial.permissionMode ?? "default" }) : track(new Session(cwd, sessionOpts(initial)));
+      const s = engine === "opencode" ? await createOpenCodeSession(cwd, { model: initial.model, permissionMode: initial.permissionMode ?? "default", effort: initial.effort }) : track(new Session(cwd, sessionOpts(initial)));
       if (!s) throw new Error("This worktree is being removed");
       addProject(cwd);
       // worker_start writes the link right after this call (no await): the refresh lists the worker with it.

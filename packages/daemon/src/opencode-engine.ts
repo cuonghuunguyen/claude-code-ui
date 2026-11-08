@@ -1,7 +1,7 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
-import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -14,7 +14,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: false };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: false };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -83,14 +83,28 @@ export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cw
   return { messages, children, busy: status[id]?.type === "busy", revert, permission: row.permission ?? [], permissions, questions };
 }
 
-/** The models of the connected providers (`GET /config/providers`): Default, then every provider's models under the provider name. */
-export async function openCodeModels(server: OpenCodeServer): Promise<ModelInfo[]> {
-  const r = await server.request<{ providers: { id: string; name: string; models: Record<string, { name: string }> }[]; default?: Record<string, string> }>("/config/providers");
-  const [defProvider, defModel] = Object.entries(r.default ?? {})[0] ?? [];
-  const p = r.providers.find((x) => x.id === defProvider);
-  const name = p && defModel ? `Default (${p.name} ${p.models[defModel]?.name ?? defModel})` : "Default";
-  return [{ value: "default", displayName: name, description: "" }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name })))];
+/** `GET /config/providers`: the connected providers with their models (`variants`: the model's reasoning variants by name) and the default model per provider. */
+type ProviderList = { providers: { id: string; name: string; models: Record<string, { name: string; limit?: { context?: number }; variants?: Record<string, unknown> }> }[]; default?: Record<string, string> };
+const EFFORT_ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+/** The effort levels of a model: its variant names that are effort levels (`none`, `minimal` are not), in effort order. */
+const levelsOf = (m?: { variants?: Record<string, unknown> }) => EFFORT_ORDER.filter((l) => l in (m?.variants ?? {}));
+const defaultOf = (r: ProviderList) => {
+  const [provider, model] = Object.entries(r.default ?? {})[0] ?? [];
+  const p = r.providers.find((x) => x.id === provider);
+  return p && model ? { p, id: model, m: p.models[model] } : undefined;
+};
+/** Default, then every provider's models under the provider name; a model with reasoning variants offers them as effort levels. */
+export function modelsFrom(r: ProviderList): ModelInfo[] {
+  const effort = (m?: { variants?: Record<string, unknown> }) => {
+    const levels = levelsOf(m);
+    return levels.length ? { supportsEffort: true, supportedEffortLevels: levels } : {};
+  };
+  const def = defaultOf(r);
+  const name = def ? `Default (${def.p.name} ${def.m?.name ?? def.id})` : "Default";
+  return [{ value: "default", displayName: name, description: "", ...effort(def?.m) }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name, ...effort(m) })))];
 }
+/** The models of the connected providers (`GET /config/providers`). */
+export const openCodeModels = (server: OpenCodeServer): Promise<ModelInfo[]> => server.request<ProviderList>("/config/providers").then(modelsFrom);
 
 /**
  * A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text.
@@ -337,13 +351,15 @@ class OpenCodeSession implements EngineSession {
       }
       const [providerID, ...rest] = this.model.split("/");
       const agent = this.permissionMode === "plan" ? "plan" : "build";
+      // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
+      const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       if (command) {
         // The turn runs inside this request: no timeout.
         await this.server.request(`/session/${this.id}/command`, {
           method: "POST",
           directory: this.cwd,
           timeoutMs: 0,
-          body: { messageID, command: command.name, arguments: command.args, agent, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+          body: { messageID, command: command.name, arguments: command.args, agent, ...variant, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
         });
         return;
       }
@@ -354,7 +370,7 @@ class OpenCodeSession implements EngineSession {
       await this.server.request(`/session/${this.id}/prompt_async`, {
         method: "POST",
         directory: this.cwd,
-        body: { messageID, parts, agent, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+        body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
       });
     } finally {
       this.sentAt = Date.now();
@@ -625,7 +641,7 @@ class OpenCodeEngineImpl implements Engine {
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
   private plan: Promise<Rule[]> | undefined;
-  private limits: Promise<Map<string, number>> | undefined;
+  private providers: Promise<ProviderList> | undefined;
 
   constructor(
     readonly server: OpenCodeServer,
@@ -663,13 +679,19 @@ class OpenCodeEngineImpl implements Engine {
       .catch((err) => ((this.plan = undefined), Promise.reject(err))));
   }
 
-  /** Context window of `provider/model` from `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); undefined when unknown. */
+  /** `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); empty when it fails (read again next time). */
+  private providerList(): Promise<ProviderList> {
+    return (this.providers ??= this.server.request<ProviderList>("/config/providers").catch(() => ((this.providers = undefined), { providers: [] })));
+  }
+  /** Context window of `provider/model`; undefined when unknown. */
   async contextLimit(providerID: string, modelID: string): Promise<number | undefined> {
-    this.limits ??= this.server
-      .request<{ providers: { id: string; models: Record<string, { limit?: { context?: number } }> }[] }>("/config/providers")
-      .then((r) => new Map(r.providers.flatMap((p) => Object.entries(p.models).flatMap(([id, m]) => (m.limit?.context ? [[`${p.id}/${id}`, m.limit.context] as const] : [])))))
-      .catch(() => ((this.limits = undefined), new Map<string, number>()));
-    return (await this.limits).get(`${providerID}/${modelID}`);
+    return (await this.providerList()).providers.find((p) => p.id === providerID)?.models[modelID]?.limit?.context;
+  }
+  /** The effort levels of a session model (`default` = the default model of OpenCode); none when it has no reasoning variants. */
+  async effortLevels(model: string): Promise<EffortLevel[]> {
+    const r = await this.providerList();
+    const [provider, ...rest] = model.split("/");
+    return levelsOf(model === "default" ? defaultOf(r)?.m : r.providers.find((p) => p.id === provider)?.models[rest.join("/")]);
   }
   private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
   /** `GET /command` of a folder (built-ins, project and user commands, MCP prompts, skills), cached 60 s; dropped when the server restarts. */
@@ -683,7 +705,7 @@ class OpenCodeEngineImpl implements Engine {
     list.catch(() => this.commandLists.delete(cwd));
     return list;
   }
-  dropLimits = () => (this.limits = undefined);
+  dropLimits = () => (this.providers = undefined);
 
   /** The rules `POST /session` gets for a new session in `mode`. */
   block = async (mode: PermissionMode, cwd: string): Promise<Rule[]> => modeBlock(mode, [], mode === "plan" ? await this.planEdit(cwd) : []);

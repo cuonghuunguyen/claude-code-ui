@@ -629,7 +629,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     return [
       def(
         "worker_start",
-        "Start a worker: a new session that runs `prompt` as its first turn. `engine`: claude or opencode (absent = your own engine); OpenCode workers take `model` as provider/model and no `agent` or `effort`. One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
+        "Start a worker: a new session that runs `prompt` as its first turn. `engine`: claude or opencode (absent = your own engine); OpenCode workers take `model` as provider/model and no `agent`. One target: `worktree` (existing worktree of an added project, folder name or path; add `project` if ambiguous), `project` (main checkout; name or path), `project` + `branch` (new branch and worktree) with optional `base` (default: origin's default branch), or `cwd` (directory in the allowed roots). `agent`: agent type (plugin agents as plugin:agent); an explicit `model` wins. `mode`: absent = Settings worker mode, or your own mode when that is coordinator; else default, acceptEdits, plan, auto (without model support: default, see `modeNote`). `keepOpen`: keep the CLI after each turn. The user approves this call. worker_close keeps the worktree and branch.",
         {
           name,
           cwd: z.string().min(1).max(4096).optional(),
@@ -688,7 +688,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           let branch: string | undefined;
           let cwd: string | undefined;
           const link = async (dir: string) => {
-            s = await deps.create(dir, { model, permissionMode: mode, ...(!openCode && { effort: a.effort as SessionSettings["effort"] | undefined }) }, engine);
+            s = await deps.create(dir, { model, permissionMode: mode, effort: a.effort as SessionSettings["effort"] | undefined }, engine);
             try {
               deps.links.set(s.id, { coordinatorId: cur(), name: a.name, cwd: dir, port: deps.port(), ...(agent && { agent }), ...(a.keepOpen && { keepOpen: true as const }) });
             } catch (e) {
@@ -726,7 +726,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           }
           const daemonNote = deps.buildNote?.();
           const where = t.kind === "new" ? { project: t.project, worktree: basename(cwd!) } : { ...(t.entry && { project: t.entry.project }), ...(t.entry && !t.entry.main && { worktree: t.entry.worktree }) };
-          return { name: a.name, sessionId: s!.id, engine, cwd, ...where, ...(branch && { branch }), ...(agent && { agent }), mode, ...(a.keepOpen && { keepOpen: true }), ...(note && { modeNote: note }), ...(openCode && a.effort && { effortNote: "OpenCode workers have no effort setting: effort is ignored" }), ...(daemonNote && { daemonNote }) };
+          return { name: a.name, sessionId: s!.id, engine, cwd, ...where, ...(branch && { branch }), ...(agent && { agent }), mode, ...(a.keepOpen && { keepOpen: true }), ...(note && { modeNote: note }), ...(daemonNote && { daemonNote }) };
         },
       ),
       def(

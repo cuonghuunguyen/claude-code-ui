@@ -254,6 +254,31 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.model).toEqual({ providerID: "acme", modelID: "x/y" });
   });
 
+  it("effort: models with reasoning variants list them as effort levels; the prompt carries the variant only when the model has it", async () => {
+    const d = await boot({ script: ["text", "text", "text"] });
+    const models = (await d.ok({ type: "models.list", engine: "opencode" })).models;
+    expect(models.find((m: any) => m.value === "opencode/thinker")).toMatchObject({ supportsEffort: true, supportedEffortLevels: ["low", "high"] });
+    expect(models.find((m: any) => m.value === "acme/x/y")).not.toHaveProperty("supportsEffort");
+    expect(models[0]).not.toHaveProperty("supportsEffort");
+    const s = await d.open();
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    const turns = async (n: number) => until(() => s.parts().filter((p) => p.type === "turn_result").length === n);
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "opencode/thinker" });
+    await s.prompt("one");
+    await turns(1);
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "medium" });
+    await s.prompt("two");
+    await turns(2);
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    await s.prompt("three");
+    await turns(3);
+    const bodies = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(bodies[0]).toMatchObject({ variant: "high" });
+    expect(bodies[1]).not.toHaveProperty("variant");
+    expect(bodies[2]).not.toHaveProperty("variant");
+  });
+
   it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
@@ -590,6 +615,7 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
 
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {
     const r = await restored();
+    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4")); // the read after the stream connected is done
     await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
     const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
@@ -798,10 +824,12 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
       const r = (await d.http.orchestration.tools(coord).find((t) => t.name === "worker_start")!.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
       return r.isError ? { error: r.content[0]!.text } : JSON.parse(r.content[0]!.text);
     };
-    expect(await call({ name: "bad", cwd: d.project, prompt: "p", engine: "opencode", model: "nope/x" })).toEqual({ error: expect.stringContaining("Valid values: default, opencode/big-pickle, opencode/alpha, acme/x/y") });
+    expect(await call({ name: "bad", cwd: d.project, prompt: "p", engine: "opencode", model: "nope/x" })).toEqual({ error: expect.stringContaining("Valid values: default, opencode/big-pickle, opencode/alpha, opencode/thinker, acme/x/y") });
     expect(await call({ name: "agt", cwd: d.project, prompt: "p", engine: "opencode", agent: "Explore" })).toEqual({ error: expect.stringContaining("agent is Claude only") });
     const w = await call({ name: "oc", cwd: d.project, prompt: "go", engine: "opencode", model: "opencode/alpha", effort: "high" });
-    expect(w).toMatchObject({ name: "oc", engine: "opencode", mode: "default", effortNote: expect.any(String) });
+    expect(w).toMatchObject({ name: "oc", engine: "opencode", mode: "default" });
+    expect(w).not.toHaveProperty("effortNote");
+    expect((await d.ok({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 })).session.effort).toBe("high");
     expect(w.sessionId).toMatch(/^ses_/);
     expect(d.requests("POST", "/session").at(-1)!.body.permission).toContainEqual({ permission: "claude-ui", pattern: "mode:default", action: "allow" });
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
