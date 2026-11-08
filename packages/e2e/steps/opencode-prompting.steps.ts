@@ -100,10 +100,13 @@ Then("the rewind button is disabled", async ({ page }) => {
 When("I click the rewind button", async ({ page }) => {
   await userMessage(page).hover();
   await rewind(page).click({ force: true }); // aria-disabled, not disabled: the click opens the reason
-  await rewind(page).hover(); // the tooltip closes after a click; hovering keeps it open for the capture
+  await page.mouse.move(700, 500); // the tooltip closes after a click; a fresh hover keeps it open for the capture
+  await rewind(page).hover();
 });
 
 Then("the unsupported reason shows", async ({ page }) => {
+  await expect(page.getByTestId("engine-unsupported")).toBeVisible();
+  await page.waitForTimeout(800); // still open after the capture's own wait
   await expect(page.getByTestId("engine-unsupported")).toBeVisible();
 });
 
