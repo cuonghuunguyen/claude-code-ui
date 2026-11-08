@@ -231,3 +231,15 @@ it("Log out asks first: Cancel sends nothing, confirm sends opencode.logout and 
   expect(q("settings-opencode-providers-empty")).not.toBeNull();
   expect(onProviders).toHaveBeenCalledTimes(1);
 });
+
+it("a slow first load shows a loading line with a spinner, then the list", async () => {
+  let done!: (v: unknown) => void;
+  await render(() => new Promise((r) => (done = r)), { state: "stopped", version: "1" });
+  await click(q("settings-opencode-providers-load"));
+  expect(q("settings-opencode-providers-loading")!.getAttribute("role")).toBe("status");
+  expect(q("settings-opencode-providers-loading")!.querySelector("svg.animate-spin")).not.toBeNull();
+  expect(q("settings-opencode-providers-load")).toBeNull();
+  await act(async () => done({ providers: base }));
+  expect(q("settings-opencode-providers-loading")).toBeNull();
+  expect(q("settings-opencode-connect-search")).not.toBeNull();
+});

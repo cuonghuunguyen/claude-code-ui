@@ -14,7 +14,10 @@ Feature: OpenCode provider login (GH-657)
     When I click "Connect a provider" in the OpenCode providers
     Then the provider search is focused
     And I capture "providers empty light"
-    When I switch the theme mode to "dark"
+    When I close Settings
+    And I switch the theme mode to "dark"
+    And I open Settings › OpenCode
+    And I show the OpenCode providers
     Then I capture "providers empty dark"
 
   Scenario Outline: API key validation inline, then login at <width>x<height>
@@ -30,7 +33,14 @@ Feature: OpenCode provider login (GH-657)
     Then the API key field shows the error "An API key has no spaces"
     And the page has no horizontal scroll
     And I capture "key error light"
-    When I switch the theme mode to "dark"
+    When I close Settings
+    And I switch the theme mode to "dark"
+    And I open Settings › OpenCode
+    And I show the OpenCode providers
+    And I search the OpenCode providers for "groq"
+    And I open the provider row "Groq"
+    And I pick the login method "API key"
+    And I type the API key "sk test" and leave the field
     Then I capture "key error dark"
     When I type the API key "sk-throwaway-not-real" and connect
     Then the provider "Groq" is connected with the status "Connected · API key"

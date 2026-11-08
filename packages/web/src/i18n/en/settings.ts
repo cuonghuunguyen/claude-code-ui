@@ -41,6 +41,7 @@ export default {
   "settings.opencode.failed": "OpenCode failed to start",
   "settings.opencode.check": "Check again",
   "settings.opencode.providers.title": "Providers",
+  "settings.opencode.providers.loading": "Loading providers… the first time can take half a minute.",
   "settings.opencode.providers.notRunning": "OpenCode is not running.",
   "settings.opencode.providers.show": "Show providers",
   "settings.opencode.providers.retry": "Try again",

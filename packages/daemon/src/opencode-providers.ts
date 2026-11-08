@@ -19,8 +19,11 @@ export function mergeProviders(raw: { all: RawProvider[]; connected: string[] },
     .sort((a, b) => Number(b.connected) - Number(a.connected) || rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 
+/** The first `GET /provider` of a run fetches models.dev (21 s measured, 7 MB); later ones answer in well under a second. */
+const LIST_TIMEOUT_MS = 60_000;
+
 export async function listProviders(server: OpenCodeServer): Promise<OpenCodeProvider[]> {
-  const [raw, auth] = await Promise.all([server.request<{ all: RawProvider[]; connected: string[] }>("/provider", { timeoutMs: 10_000 }), server.request<Record<string, OpenCodeAuthMethod[]>>("/provider/auth", { timeoutMs: 10_000 })]);
+  const [raw, auth] = await Promise.all([server.request<{ all: RawProvider[]; connected: string[] }>("/provider", { timeoutMs: LIST_TIMEOUT_MS }), server.request<Record<string, OpenCodeAuthMethod[]>>("/provider/auth", { timeoutMs: LIST_TIMEOUT_MS })]);
   return mergeProviders(raw, auth);
 }
 

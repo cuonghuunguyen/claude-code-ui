@@ -27,6 +27,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
   const search = useRef<HTMLInputElement>(null);
   const [providers, setProviders] = useState<OpenCodeProvider[]>();
   const [loadError, setLoadError] = useState<string>();
+  const [loading, setLoading] = useState(false);
   const [note, setNote] = useState<{ text: string; error?: boolean }>();
   const [query, setQuery] = useState("");
   const [formId, setFormId] = useState<string>();
@@ -41,7 +42,7 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
   const attempt = useRef(0);
 
   const apply = (r: OpenCodeProvidersResult) => (setProviders(r.providers), setLoadError(undefined), onProviders());
-  const load = () => request<OpenCodeProvidersResult>({ type: "opencode.providers" }).then((r) => (setProviders(r.providers), setLoadError(undefined)), (e: Error) => setLoadError(e.message));
+  const load = () => (setLoading(true), setLoadError(undefined), request<OpenCodeProvidersResult>({ type: "opencode.providers" }).then((r) => setProviders(r.providers), (e: Error) => setLoadError(e.message)).finally(() => setLoading(false)));
   useEffect(() => {
     if (status?.state === "running" && !providers) void load();
   }, [status?.state]);
@@ -141,7 +142,13 @@ export function OpenCodeProviders({ status, request, onProviders }: { status: Op
           {note.text}
         </p>
       )}
-      {!providers && status.state === "stopped" && !loadError && (
+      {loading && (
+        <p role="status" className="flex items-center gap-2 text-muted-foreground text-sm" data-testid="settings-opencode-providers-loading">
+          <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          {t("settings.opencode.providers.loading")}
+        </p>
+      )}
+      {!providers && !loading && status.state === "stopped" && !loadError && (
         <div className="flex flex-wrap items-center gap-2">
           <p className="min-w-0 flex-1 text-sm text-muted-foreground">{t("settings.opencode.providers.notRunning")}</p>
           <Button variant="secondary" size="sm" onClick={() => void load()} className="max-md:h-11" data-testid="settings-opencode-providers-load">
