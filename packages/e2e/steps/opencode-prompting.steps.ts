@@ -84,7 +84,7 @@ When("I open the mode chooser", async ({ page }) => {
 });
 
 Then("the mode chooser offers exactly {string}", async ({ page }, list: string) => {
-  const names = (await page.getByRole("option").allTextContents()).map((s) => s.trim());
+  const names = (await page.getByRole("listbox").filter({ hasText: "Plan mode" }).getByRole("option").allTextContents()).map((s) => s.trim());
   expect(names).toEqual(list.split(", "));
 });
 
