@@ -8,7 +8,7 @@ import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
 import { nameSelection, opErrorText, treeMenuSections, type TreeCommand, type TreeMenuEntry, type TreeTarget } from "./file-tree-menu.ts";
-import { externalEntries, externalHow, isExternalId, useOpenExternal } from "./open-external-menu.ts";
+import { canOpenSide, externalEntries, externalHow, isExternalId, useOpenExternal } from "./open-external-menu.ts";
 import { createLimiter, gitRows } from "./git-changes.ts";
 import { PasteClashDialog, type ClashAsk } from "./paste-clash-dialog.tsx";
 import { treeClipboard } from "./tree-clipboard.ts";
@@ -281,7 +281,7 @@ export function FileTree({
   const windows = isWinPath(cwd);
   /** GH-612: open in an app; a side's files are not on this machine. */
   const openExt = useOpenExternal();
-  const external = side === LOCAL_SIDE ? openExt : undefined;
+  const external = canOpenSide(side) ? openExt : undefined;
   // Copy, cut, paste, drag and drop (GH-555).
   const [clip, setClip] = useState(treeClipboard.get());
   const [clash, setClash] = useState<ClashAsk>();

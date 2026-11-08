@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { externalEntries, externalHow, isExternalId } from "./open-external-menu.ts";
+import { canOpenSide, externalEntries, externalHow, isExternalId } from "./open-external-menu.ts";
 import { treeMenuSections } from "./file-tree-menu.ts";
 
 const editors = [{ id: "code" as const, label: "VS Code" }, { id: "idea" as const, label: "IntelliJ IDEA" }];
@@ -28,5 +28,12 @@ describe("treeMenuSections with the section", () => {
     expect(ids(treeMenuSections(f, false, true, false, true, false, ext))[3]).toEqual(["ext:reveal", "ext:default"]);
     expect(treeMenuSections(f, false)).toHaveLength(4);
     expect(ids(treeMenuSections({ kind: "root" }, false, true, false, true, false, ext))[2]).toEqual(["ext:reveal", "ext:default"]);
+  });
+});
+
+describe("canOpenSide", () => {
+  it("this machine and WSL sides only", () => {
+    expect(["local", "wsl:Ubuntu"].map(canOpenSide)).toEqual([true, true]);
+    expect(["docker:dev", "ssh:box"].map(canOpenSide)).toEqual([false, false]);
   });
 });

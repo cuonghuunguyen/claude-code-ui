@@ -46,7 +46,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -180,7 +180,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
-import { OpenExternalContext, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
+import { OpenExternalContext, canOpenSide, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -1339,7 +1339,7 @@ export function App() {
 
   /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
   const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
-    ? { editors: appEditors, isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
+    ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
     : undefined;
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */

@@ -1306,7 +1306,7 @@ function Tab({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup ref={popup} finalFocus={finalFocus} className={POPUP}>
-            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: kindLabel(t.kind), item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" }, external: openExt && t.kind === "file" && t.cwd && openExt.isLocal(t.cwd) ? externalEntries({ isDir: false, editors: openExt.editors }) : undefined })
+            {tabMenuSections({ session: id !== NEW_TAB, pane: t.kind ? { label: kindLabel(t.kind), item: t.kind === "file" || t.kind === "artifact" ? t.kind : undefined } : undefined, pinned: session || t.kind ? pinned : undefined, first: moveFirst, last: moveLast, canOthers, canRight, canAll, canReopen, hasCwd: !!t.cwd, dock: canSplit !== undefined, split: canSplit === undefined ? undefined : { can: canSplit, whole: t.kind === "graph" }, external: openExt && t.kind === "file" && t.cwd && openExt.canOpen(t.cwd) ? externalEntries({ isDir: false, editors: openExt.editors }) : undefined })
               // Without onCommand: Move and Close tab only.
               .map((sec) => sec.filter((x) => onCommand || x.id === "close" || x.id.startsWith("move")))
               .filter((sec) => sec.length)

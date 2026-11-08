@@ -1372,6 +1372,8 @@ export function createRouter(opts: {
   local: (msg: ClientMessage) => Promise<void>;
   localCall: LocalCall;
   isLocalSession: (id: string) => Promise<boolean>;
+  /** The browser runs on this machine: only then fs.openExternal goes on to a WSL side. Absent: no. */
+  sameHost?: boolean;
   /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
   /** Longest wait for one media piece from a side (default MEDIA_PIECE_TIMEOUT_MS). */
   mediaTimeoutMs?: number;
@@ -1706,6 +1708,11 @@ export function createRouter(opts: {
         const id = await target(msg);
         if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) return opts.local(msg);
+        if (kindOf(id) === "wsl") {
+          if (!opts.sameHost) return send({ type: "error", reqId: msg.reqId, code: "not_local", message: "Open in an app only works from a browser on the daemon machine" });
+          const { side: _side, ...rest } = msg;
+          return forward(id, rest as ClientMessage);
+        }
         return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Opening in an app is not available for files in ${kindName(id)}` });
       }
       case "artifact.preview": {

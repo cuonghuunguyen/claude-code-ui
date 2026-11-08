@@ -49,10 +49,11 @@ export function detectEditors(o: { platform: NodeJS.Platform; env: NodeJS.Proces
   return found;
 }
 
-/** The command for `path` (canonical, inside `root`); throws for a path the platform cannot pass safely. */
-export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: string, root: string, isDir: boolean, launcher?: Launcher): OpenCommand {
+/** The command for `path` (canonical, inside `root`); throws for a path the platform cannot pass safely. `wslPath`: its Windows form, set by a daemon in WSL (reveal and default go to Windows Explorer). */
+export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: string, root: string, isDir: boolean, launcher?: Launcher, wslPath?: string): OpenCommand {
   const win = platform === "win32";
   if (how === "reveal") {
+    if (wslPath) return { cmd: "explorer.exe", args: ["/select," + wslPath], ignoreExit: true };
     if (platform === "darwin") return { cmd: "open", args: ["-R", path] };
     if (win) return { cmd: "explorer.exe", args: [`/select,"${path}"`], verbatim: true, ignoreExit: true };
     // shortcut: no item selection on Linux, upgrade with org.freedesktop.FileManager1.ShowItems when asked.
@@ -60,6 +61,7 @@ export function openCommand(platform: NodeJS.Platform, how: OpenWith, path: stri
   }
   if (how === "default") {
     if (isDir) throw new Error("a folder has no default app");
+    if (wslPath) return { cmd: "explorer.exe", args: [wslPath], ignoreExit: true };
     return platform === "darwin" ? { cmd: "open", args: [path] } : win ? { cmd: "explorer.exe", args: [`"${path}"`], verbatim: true, ignoreExit: true } : { cmd: "xdg-open", args: [path] };
   }
   if (!launcher) throw new Error(`${EDITORS[how].label} is not installed`);

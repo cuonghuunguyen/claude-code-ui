@@ -1,6 +1,6 @@
 // GH-612: "Reveal in file manager / Open in editor / Open with default app" entries of the file context menus, as data.
 import { createContext, useContext } from "react";
-import type { EditorId } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type EditorId } from "@claude-ui/protocol";
 import { t } from "./i18n.ts";
 
 export type ExternalHow = "reveal" | "default" | EditorId;
@@ -8,7 +8,9 @@ export type ExternalId = `ext:${ExternalHow}`;
 export type ExternalEntry = { id: ExternalId; how: ExternalHow; label: string; disabled?: boolean; testId: string };
 export type EditorInfo = { id: EditorId; label: string };
 /** `run` asks the daemon to open `path` (a session folder `cwd` holds it); absent from the context: the browser is not on the daemon machine or the daemon is older. */
-export type OpenExternal = { editors: EditorInfo[]; run: (path: string, how: ExternalHow, cwd: string) => void; /** The session folder is on this machine (not a side). */ isLocal: (cwd: string) => boolean };
+export type OpenExternal = { editors: EditorInfo[]; run: (path: string, how: ExternalHow, cwd: string) => void; /** The session folder is on this machine or in a WSL side (a Docker or SSH side cannot open it). */ canOpen: (cwd: string) => boolean };
+/** The side id of a path: this machine or a WSL distro (its daemon starts the app on the same Windows desktop). */
+export const canOpenSide = (side: string) => side === LOCAL_SIDE || side.startsWith("wsl:");
 export const OpenExternalContext = createContext<OpenExternal | undefined>(undefined);
 export const useOpenExternal = () => useContext(OpenExternalContext);
 
