@@ -2,6 +2,7 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview } from "@claude-ui/protocol";
+import { ASIDE_NO_EDIT } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { ascending } from "./opencode-id.ts";
@@ -12,7 +13,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: false, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: false, rewind: true, fork: true, steering: true, slashCommands: false, planMeter: false, account: false, contextUsage: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 const MARK = "claude-ui";
@@ -26,14 +27,15 @@ const ANSWERED = "Answered in OpenCode";
  * "always allow" rules start. `planEdit`: the `plan` agent's own `edit` rules, so earlier edit rules no longer win.
  * shortcut: every mode change appends one block; fine for hundreds of switches.
  */
-export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[]): Rule[] {
+export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
     mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : mode === "plan" ? [star("bash", "ask"), ...asks, ...planEdit]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
-  return [marker(`mode:${mode}`), ...rules, marker("always"), ...always];
+  // A read-only Aside: the last matching rule hides edit, write and apply_patch, whatever the mode allows.
+  return [marker(`mode:${mode}`), ...rules, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
 }
 const lastMarker = (rules: readonly Rule[], test: (pattern: string) => boolean) => rules.map((r) => r.permission === MARK && test(r.pattern)).lastIndexOf(true);
 /** The "always allow" rules of a session: the ones after the last `always` marker. */
@@ -233,7 +235,7 @@ class OpenCodeSession implements EngineSession {
   }
 
   private async writeBlock(mode: PermissionMode) {
-    const permission = modeBlock(mode, this.always, mode === "plan" ? await this.engine.planEdit(this.cwd) : []);
+    const permission = modeBlock(mode, this.always, mode === "plan" ? await this.engine.planEdit(this.cwd) : [], { readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
   }

@@ -3,7 +3,7 @@
 // Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
-// Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
+// Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams.
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line).
 import { createServer } from "node:http";
@@ -176,7 +176,7 @@ const server = createServer(async (req, res) => {
     sessions.push(s);
     return json(200, s);
   }
-  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort|\/revert|\/unrevert)?$/.exec(url.pathname);
+  const m = /^\/session\/([^/]+)(\/message|\/prompt_async|\/abort|\/revert|\/unrevert|\/fork)?$/.exec(url.pathname);
   const s = m && sessions.find((x) => x.id === m[1]);
   if (m && s && m[2] === "/revert" && req.method === "POST") {
     if (busy.has(s.id)) return json(400, { name: "SessionBusyError", data: { message: "busy" } });
@@ -184,6 +184,21 @@ const server = createServer(async (req, res) => {
     send(dir, { type: "session.diff", properties: { sessionID: s.id, diff: [] } });
     updated(s, dir);
     return json(200, s);
+  }
+  // Fork: a copy with new ids of the messages before `messageID` (all when absent); the permission is not copied.
+  if (m && s && m[2] === "/fork" && req.method === "POST") {
+    const now = Date.now();
+    const f = { id: `ses_fake${String(++counter).padStart(4, "0")}`, slug: `fake-${counter}`, projectID: "global", directory: s.directory, title: `${s.title} (fork #1)`, version: "1.18.34", time: { created: now, updated: now } };
+    const list = data.messages[s.id] ?? [];
+    const at = body.messageID ? list.findIndex((x) => x.info.id === body.messageID) : -1;
+    sessions.push(f);
+    data.messages[f.id] = (at < 0 ? list : list.slice(0, at)).map((x, i) => ({ ...x, info: { ...x.info, id: `${x.info.id}_f${counter}`, sessionID: f.id } }));
+    return json(200, f);
+  }
+  if (m && s && !m[2] && req.method === "DELETE") {
+    sessions.splice(sessions.indexOf(s), 1);
+    delete data.messages[s.id];
+    return json(200, true);
   }
   if (m && s && m[2] === "/unrevert" && req.method === "POST") {
     delete s.revert;
@@ -215,6 +230,9 @@ const server = createServer(async (req, res) => {
   }
   if (m && s && !m[2] && req.method === "PATCH") {
     s.permission = [...(s.permission ?? []), ...(body.permission ?? [])];
+    if (body.title === "fail-title") return json(500, { name: "UnknownError", data: { message: "title refused" } });
+    if (body.title) s.title = body.title;
+    if (body.time) s.time = { ...s.time, ...body.time };
     return json(200, s);
   }
   if (m && s && req.method === "GET") return json(200, m[2] ? (data.messages[s.id] ?? []) : s);

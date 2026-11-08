@@ -495,3 +495,75 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
     await until(() => r.parts().length > before && r.parts().filter((p) => p.id === "msg_u3").length > 1);
   });
 });
+
+describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
+  const row = (project: string, id = "ses_own") => ({ id, slug: id, projectID: "global", directory: project, title: "Owner", version: "1.18.34", time: { created: 1, updated: 2 } });
+  const msg = (id: string, info: object) => ({ info: { id, sessionID: "ses_own", ...info }, parts: [] });
+  const done = { role: "assistant", time: { created: 1, completed: 2 } };
+  const link = (d: Boot, id: string) => JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[id];
+  async function owned(messages: object[]) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const d = await boot({ root, script: ["text"], data: { sessions: [row(project)], messages: { ses_own: messages } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    return d;
+  }
+
+  it("an Aside forks the whole history, titles the fork, writes a block that denies edit and prompts it; closing deletes it", async () => {
+    const d = await owned([msg("msg_u1", { role: "user" }), msg("msg_a1", done)]);
+    const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "what is this?\nmore" });
+    expect(d.requests("POST", "/session/ses_own/fork")[0]!.body).toEqual({});
+    expect(d.requests("PATCH", `/session/${session.id}`)[0]!.body).toEqual({ title: "what is this?" });
+    await until(() => d.requests("POST", `/session/${session.id}/prompt_async`).length === 1);
+    const block = d.requests("PATCH", `/session/${session.id}`).flatMap((r) => r.body.permission ?? []);
+    expect(block).toContainEqual({ permission: "edit", pattern: "*", action: "deny" });
+    expect(d.requests("PATCH", `/session/${session.id}`).findIndex((r) => r.body.permission)).toBeGreaterThan(-1);
+    expect(link(d, session.id)).toMatchObject({ ownerId: "ses_own", readOnly: true });
+    await d.ok({ type: "aside.close", sessionId: session.id });
+    expect(d.requests("DELETE", `/session/${session.id}`)).toHaveLength(1);
+    expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+  });
+
+  it("a running owner turn is forked before its unfinished assistant message", async () => {
+    const d = await owned([msg("msg_u1", { role: "user" }), msg("msg_a1", done), msg("msg_u2", { role: "user" }), msg("msg_a2", { role: "assistant", time: { created: 3 } })]);
+    await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    expect(d.requests("POST", "/session/ses_own/fork")[0]!.body).toEqual({ messageID: "msg_a2" });
+  });
+
+  it("an owner without messages is refused and nothing is forked", async () => {
+    const d = await owned([]);
+    expect(await d.request({ type: "aside.open", sessionId: "ses_own", text: "q" })).toMatchObject({ type: "error", code: "aside_unavailable" });
+    expect(d.requests("POST", "/session/ses_own/fork")).toHaveLength(0);
+  });
+
+  it("a failure after the fork deletes the fork", async () => {
+    const d = await owned([msg("msg_u1", { role: "user" })]);
+    expect(await d.request({ type: "aside.open", sessionId: "ses_own", text: "fail-title" })).toMatchObject({ type: "error", code: "aside_failed" });
+    const forked = d.requests("POST", "/session/ses_own/fork").length;
+    expect(forked).toBe(1);
+    expect(d.requests("DELETE", /^\/session\/ses_fake/)).toHaveLength(1);
+  });
+
+  it("Keep as session drops the link", async () => {
+    const d = await owned([msg("msg_u1", { role: "user" })]);
+    const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    await d.ok({ type: "aside.keep", sessionId: session.id });
+    expect(link(d, session.id).ownerId).toBeUndefined();
+  });
+
+  it("rename, archive, unarchive and delete go to OpenCode", async () => {
+    const d = await owned([msg("msg_u1", { role: "user" })]);
+    await d.ok({ type: "session.rename", sessionId: "ses_own", title: " New name " });
+    expect(d.requests("PATCH", "/session/ses_own")[0]!.body).toEqual({ title: "New name" });
+    await d.ok({ type: "session.archive", sessionId: "ses_own", archived: true });
+    expect(d.requests("PATCH", "/session/ses_own")[1]!.body.time.archived).toBeGreaterThan(0);
+    expect((await d.ok({ type: "session.list" })).sessions[0]).toMatchObject({ title: "New name", archived: true });
+    await d.ok({ type: "session.archive", sessionId: "ses_own", archived: false });
+    expect(d.requests("PATCH", "/session/ses_own")[2]!.body).toEqual({ time: { archived: 0 } });
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/session/ses_own")).toHaveLength(1);
+    expect((await d.ok({ type: "session.list" })).sessions).toEqual([]);
+  });
+});

@@ -1282,6 +1282,11 @@ export function createDaemon(opts: {
   /** Working directory and transcript of a listed session (live or inside the roots); undefined when unknown. */
   async function locate(id: string) {
     const live = sessions.get(id);
+    // OpenCode: the folder it was listed, created or opened in; its store is OpenCode's.
+    if (typeof id === "string" && OPENCODE_ID.test(id)) {
+      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      return cwd && allowed(cwd) ? { cwd, live, transcript: false } : undefined;
+    }
     if (!live && (typeof id !== "string" || !UUID.test(id))) return undefined;
     const info = await history.getSessionInfo(id).catch(() => undefined);
     const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
@@ -1310,13 +1315,15 @@ export function createDaemon(opts: {
     touched.delete(id);
     try {
       await at.live?.close();
-      if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
+      if (OPENCODE_ID.test(id)) await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
+      else if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
     } catch (e) {
       return { code: "delete_failed", message: (e as Error).message };
     } finally {
       deleting.delete(id);
     }
     caches.delete(id);
+    openCodeMeta.delete(id);
     // The folder of a session whose CLI a /clear heir still uses stays with the heir.
     if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
@@ -2360,7 +2367,6 @@ export function createDaemon(opts: {
         }
         case "session.rename":
         case "session.archive": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
           // 200: the web title input's maxLength.
           if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
@@ -2368,7 +2374,11 @@ export function createDaemon(opts: {
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
           try {
-            if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
+            if (OPENCODE_ID.test(msg.sessionId)) {
+              // Archive: `time.archived` set; 0 clears it (null is accepted but keeps it, verified on 1.18.35).
+              await openCode.request(`/session/${msg.sessionId}`, { method: "PATCH", directory: at.cwd, body: msg.type === "session.rename" ? { title } : { time: { archived: msg.archived ? Date.now() : 0 } } });
+              if (msg.type === "session.rename") openCodeMeta.set(msg.sessionId, { cwd: at.cwd, title });
+            } else if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
             else await history.tagSession(msg.sessionId, msg.archived ? ARCHIVED_TAG : null, { dir: at.cwd });
           } catch (e) {
             // A session with no prompt yet has no transcript to write to.
@@ -2378,17 +2388,40 @@ export function createDaemon(opts: {
           return reply({});
         }
         case "session.delete": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           const err = await deleteSessionById(msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
         case "aside.open": {
-          if (typeof msg.sessionId === "string" && OPENCODE_ID.test(msg.sessionId)) return fail("not_supported", "Not available for OpenCode sessions yet");
           if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "text must be a non-empty string");
           const owner = await find(msg.sessionId);
           if (!owner) return;
           const text = msg.text.trim();
           const title = text.split("\n")[0]!.trim().slice(0, 80);
+          if (OPENCODE_ID.test(owner.id)) {
+            let forkId: string | undefined;
+            try {
+              const at = { directory: owner.cwd };
+              const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
+              if (!stored.length) return fail("aside_unavailable", "An aside needs a message in this session first");
+              // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
+              const messageID = stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id;
+              forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
+              openCodeMeta.set(forkId, { cwd: owner.cwd, title });
+              await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });
+              const oi = owner.info();
+              saveSettings(() => settings.set(forkId!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
+              const s = await findSession(forkId);
+              if (!s) throw new Error("the fork could not be restored");
+              const from = s.prompt(text);
+              return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
+            } catch (e) {
+              if (forkId) {
+                const err = await deleteSessionById(forkId, true).catch(() => undefined);
+                if (err) saveSettings(() => settings.delete([forkId!]));
+              }
+              return fail("aside_failed", (e as Error).message);
+            }
+          }
           let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
           try {
             if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
