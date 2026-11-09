@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
@@ -31,6 +31,9 @@ Given("OpenCode is set up in a scratch project", async ({ page, project, $test, 
   $test.skip(!BIN(), "E2E_OPENCODE_BIN is not set: point it at a real opencode binary (1.18 or newer) to run the OpenCode engine scenarios");
   const run = runDir();
   mkdirSync(join(run, "opencode-data"), { recursive: true });
+  // The run's OpenCode state is shared by its scenarios: a server stopped with an earlier scenario's daemon can leave its lock (a folder with a
+  // heartbeat), and the next server waits about a minute for it to go stale. No OpenCode of this run is running here.
+  rmSync(join(run, "opencode-state", "opencode", "locks"), { recursive: true, force: true });
   own = await startDaemon(run, 2000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: opencodeEnv(run) });
   await openApp(page, own);
   // The binary path is a Settings value, set like a user does.

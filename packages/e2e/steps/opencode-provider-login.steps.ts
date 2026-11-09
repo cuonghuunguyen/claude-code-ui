@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
@@ -18,6 +18,13 @@ Given("OpenCode has the fake login plugin and no saved login", async ({ $test })
   mkdirSync(dir, { recursive: true });
   copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "../support/fake-opencode-auth.js"), join(dir, "fake-opencode-auth.js"));
   rmSync(join(run, "opencode-data", "opencode", "auth.json"), { force: true });
+  // The run's config is shared by its scenarios: an earlier OpenCode session left OpenCode as the new-session Engine, whose tab starts the server,
+  // so "Show providers" (stopped server) never shows. Back to Claude before the scenario's daemon starts.
+  const file = join(configHome(run), "claude-ui", "settings.json");
+  if (existsSync(file)) {
+    const s = JSON.parse(readFileSync(file, "utf8"));
+    if (s.sessions?.engine) writeFileSync(file, JSON.stringify({ ...s, sessions: { ...s.sessions, engine: "claude" } }));
+  }
 });
 
 When("I open Settings › OpenCode", async ({ page }) => {
