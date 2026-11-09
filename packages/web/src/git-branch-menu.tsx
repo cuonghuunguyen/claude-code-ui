@@ -1,6 +1,6 @@
-// Branch menu of the Graph tab (docs/spec.md "Layout"): right click, long press or Shift+F10 on a ref chip or a row offers Push,
-// Force push and Pull of the local branches there, each behind a dialog that shows the exact git command; Fetch is always last.
-import { cloneElement, useRef, useState, type ReactElement } from "react";
+// Context menu of the Graph tab (docs/spec.md "Layout"): right click, long press or Shift+F10 on a branch chip offers that branch's actions
+// (shared with the branch popup), on a row the commit's actions; each destructive one behind a dialog that shows the exact git command.
+import { cloneElement, useEffect, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import type { GitBranchInfo, GitBranchResult, GitCommitMenu } from "@claude-ui/protocol";
 import { CommitItems, ResetDialog, type CommitActionRequest } from "./git-commit-menu.tsx";
@@ -14,14 +14,12 @@ type Client = ReturnType<typeof connect>;
 export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true } | { type: "git.merge" | "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true } | CommitActionRequest | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true } | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true };
 export type Kind = "push" | "force" | "pull" | "merge" | "rebase";
 type Done = string | ((r: OpReply) => string);
-type Entry = { ref: string; info?: GitBranchInfo; error?: string; remote?: boolean };
 /** A checkout or create the daemon refused with `local_changes`: Smart checkout resends it with `smart`. */
 type Smart = { msg: Extract<RemoteRequest, { smart?: boolean }>; done: Done; running: string; target: string; message: string };
 type OnRun = (msg: RemoteRequest, done: Done, running: string, onFail?: (e: RequestError) => boolean) => void;
 
 /** "<text> of <repo>" while the repository is named (the Graph shows the repository selector), else the text. */
 export const ofRepo = (text: string, repoName?: string) => (repoName ? t("sidebar.git.ofRepo", { text, repo: repoName }) : text);
-const MAX_TARGETS = 5;
 const name = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
 const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 /** Display form of an argv: arguments with spaces quoted. */
@@ -32,132 +30,37 @@ const ownerSentence = (i: GitBranchInfo) => (i.checkedOut === "here" ? "" : ` ${
 const short7 = (h?: string) => (h ?? "").slice(0, 7);
 const commits = (count: number) => t("sidebar.git.commits", { count });
 
-/**
- * `children`: the element that gets the context menu (the commit list or the details refs). The target is the chip under the
- * pointer, else the local branches of the row under it, else `fallback()` (keyboard: the selected commit's).
- */
-export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, fallback, hash, newBranchOnly, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: OnRun; fallback: () => string[]; /** The keyboard's commit (the selected row); absent: no commit section without a row under the pointer. */ hash?: () => string | undefined; /** The commit only names New branch (the details pane): no commit section. */ newBranchOnly?: boolean; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+type Target = { ref?: string; hash?: string };
+const isBranch = (r: string) => r.startsWith("refs/heads/") || (r.startsWith("refs/remotes/") && !r.endsWith("/HEAD"));
+/** What a press landed on: a branch chip (`data-ref`), else the commit row (`data-hash`). `hash` "" = a press on no row. */
+const targetOf = (el: Element): Target => {
+  const ref = el.closest<HTMLElement>("[data-ref]")?.dataset.ref;
+  return { ref: ref && isBranch(ref) ? ref : undefined, hash: el.closest<HTMLElement>("[data-hash]")?.dataset.hash };
+};
+
+/** Dialogs and runners of the branch actions, shared by the context menu and the branch popup. Render `dialogs` once. */
+export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRun }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: OnRun }) {
   const t = useT();
   const of = (text: string) => ofRepo(text, repoName);
-  const [entries, setEntries] = useState<Entry[]>([]);
   const [dialog, setDialog] = useState<{ kind: Kind; info: GitBranchInfo }>();
-  const [fresh, setFresh] = useState(false);
+  const [fresh, setFresh] = useState<{ at?: string; label?: string }>();
   const [smart, setSmart] = useState<Smart>();
-  const gen = useRef(0);
-  // What a press (mouse, pen or touch) landed on, kept until the menu closes. A long press on touch opens the menu from
-  // `touchstart` + a timer (Base UI) and fires no `contextmenu` event, so the target cannot be taken from that event only.
-  const pressed = useRef<string[] | undefined>(undefined);
-  const loaded = useRef(false);
-  // The commit menu: the hash of the row under the press ("" = a press on no row), kept like `pressed`.
-  const [commit, setCommit] = useState<string>();
   const [reset, setReset] = useState<GitCommitMenu>();
-  const pressedHash = useRef<string | undefined>(undefined);
-  const hashOf = (t: Element) => t.closest<HTMLElement>("[data-hash]")?.dataset.hash;
-  const targetsOf = (t: Element): string[] | undefined => {
-    const chip = t.closest<HTMLElement>("[data-ref]");
-    const row = t.closest<HTMLElement>("[data-local-refs]");
-    return chip ? [chip.dataset.ref!] : row ? (row.dataset.localRefs ?? "").split("\n") : undefined;
-  };
-  const load = (refs: string[], hash: string | undefined) => {
-    loaded.current = true;
-    setCommit(hash);
-    const all = [...new Set(refs)].filter((r) => r.startsWith("refs/heads/") || (r.startsWith("refs/remotes/") && !r.endsWith("/HEAD")));
-    const targets = all.slice(0, MAX_TARGETS);
-    const id = ++gen.current;
-    setEntries(targets.map((ref) => ({ ref, remote: ref.startsWith("refs/remotes/") || undefined })));
-    for (const ref of targets.filter((r) => r.startsWith("refs/heads/"))) {
-      client.request<GitBranchResult>({ type: "git.branch", cwd, ...(exact && { exact: true as const }), ref }).then(
-        (r) => id === gen.current && setEntries((p) => p.map((x) => (x.ref === ref ? { ref, info: r.branch ?? undefined, error: r.branch ? undefined : t("sidebar.git.notRepo") } : x))),
-        (err: RequestError) => id === gen.current && setEntries((p) => p.map((x) => (x.ref === ref ? { ref, error: err.message || t("sidebar.git.failed") } : x))),
-      );
-    }
-  };
-  // A press on no chip and no row (empty list space) is a press with no target: not the selected row.
-  const press = (e: React.SyntheticEvent) => {
-    pressed.current = targetsOf(e.target as Element) ?? [];
-    pressedHash.current = hashOf(e.target as Element) ?? "";
-  };
-  // The keyboard (Shift+F10, the menu key) has no pointer target: the selected row's branches.
-  const key = () => {
-    pressed.current = undefined;
-    pressedHash.current = undefined;
-  };
-  // The `contextmenu` event (right click, Shift+F10) knows its target best: chip, row, else the keyboard's selection.
-  const open = (e: React.MouseEvent) => {
-    const refs = targetsOf(e.target as Element) ?? pressed.current ?? fallback();
-    pressed.current = refs;
-    load(refs, hashOf(e.target as Element) ?? pressedHash.current ?? hash?.());
-  };
-  const onOpenChange = (o: boolean) => {
-    if (o && !loaded.current) load(pressed.current ?? fallback(), pressedHash.current ?? hash?.());
-    if (!o) {
-      loaded.current = false;
-      pressed.current = undefined;
-      pressedHash.current = undefined;
-    }
-  };
+  const ex = exact ? { exact: true as const } : {};
+  const stopped = (r: OpReply) => !!r.written?.operation;
   /** Checkout and create run at once; a `local_changes` refusal opens the Smart checkout dialog instead of a result line. */
   const send = (msg: Extract<RemoteRequest, { smart?: boolean }>, done: Done, running: string, target: string) =>
     onRun(msg, done, running, (e) => e.code === "local_changes" && (setSmart({ msg, done, running, target, message: e.message }), true));
   const checkout = (ref: string) => {
     const x = name(ref);
-    const stopped = (r: OpReply) => !!r.written?.operation;
-    send({ type: "git.checkout", cwd, ...(exact && { exact: true as const }), ref }, (r) => of(t(stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.checkedOut", { target: x })), t("sidebar.git.checkingOut", { target: of(x) }), x);
+    send({ type: "git.checkout", cwd, ...ex, ref }, (r) => of(t(stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.checkedOut", { target: x })), t("sidebar.git.checkingOut", { target: of(x) }), x);
   };
-  const many = entries.length > 1;
-  return (
+  const dialogs = (
     <>
-      <ContextMenu.Root onOpenChange={onOpenChange}>
-        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open, onPointerDownCapture: press, onTouchStartCapture: press, onKeyDownCapture: key })} />
-        <ContextMenu.Portal>
-          <ContextMenu.Positioner className="z-50">
-            <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-1rem)]")} data-testid="branch-menu">
-              {commit && !newBranchOnly && (
-                <>
-                  <CommitItems key={commit} client={client} cwd={cwd} exact={exact} repoName={repoName} hash={commit} busy={busy} onRun={onRun} onReset={setReset} />
-                  <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-                </>
-              )}
-              {entries.map((en) => (
-                <div key={en.ref} role="group" aria-label={name(en.ref)}>
-                  <div className="px-2 pt-1 text-muted-foreground text-xs" data-testid="branch-menu-head">
-                    {(many || en.remote || (en.info && note(en.info))) && <div className="truncate font-medium">{name(en.ref)}</div>}
-                    {en.info && note(en.info) && <div>{note(en.info)}</div>}
-                  </div>
-                  {en.remote && (
-                    <ContextMenu.Item className={cn(ITEM, "max-md:min-h-11")} disabled={busy} onClick={() => checkout(en.ref)} data-testid="branch-checkout-remote">
-                      {t("sidebar.git.checkoutRemote")}
-                    </ContextMenu.Item>
-                  )}
-                  {!en.remote && !en.info && (
-                    <ContextMenu.Item className={ITEM} disabled>
-                      {en.error ?? t("sidebar.git.loading")}
-                    </ContextMenu.Item>
-                  )}
-                  {en.info && <Actions info={en.info} busy={busy} onPick={(kind) => setDialog({ kind, info: en.info! })} onCheckout={() => checkout(en.ref)} />}
-                </div>
-              ))}
-              {entries.length === 0 && (
-                <ContextMenu.Item className={ITEM} disabled data-testid="branch-none">
-                  {t("sidebar.git.noLocal")}
-                </ContextMenu.Item>
-              )}
-              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-              <ContextMenu.Item className={cn(ITEM, "max-md:min-h-11")} disabled={busy} onClick={() => setFresh(true)} data-testid="branch-new">
-                {commit ? t("sidebar.git.newBranchFrom", { from: short7(commit) }) : t("sidebar.git.newBranchHead")}
-              </ContextMenu.Item>
-              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-              <ContextMenu.Item className={ITEM} disabled={busy} onClick={() => onRun({ type: "git.fetch", cwd, ...(exact && { exact: true as const }) }, of(t("sidebar.git.fetched")), `${of(t("sidebar.git.fetching"))}…`)} data-testid="branch-fetch">
-                {t("sidebar.git.fetchAll")}
-              </ContextMenu.Item>
-            </ContextMenu.Popup>
-          </ContextMenu.Positioner>
-        </ContextMenu.Portal>
-      </ContextMenu.Root>
-      {fresh && <NewBranchDialog from={commit} onCancel={() => setFresh(false)} onCreate={(n, co) => {
-        setFresh(false);
-        const stopped = (r: OpReply) => !!r.written?.operation;
-        send({ type: "git.branchCreate", cwd, ...(exact && { exact: true as const }), name: n, ...(commit && { at: commit }), checkout: co }, (r) => of(t(co ? (stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.createdCheckedOut") : "sidebar.git.created", { target: n })), t("sidebar.git.creating", { target: of(n) }), n);
+      {fresh && <NewBranchDialog from={fresh.label ?? ""} onCancel={() => setFresh(undefined)} onCreate={(n, co) => {
+        const { at } = fresh;
+        setFresh(undefined);
+        send({ type: "git.branchCreate", cwd, ...ex, name: n, ...(at && { at }), checkout: co }, (r) => of(t(co ? (stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.createdCheckedOut") : "sidebar.git.created", { target: n })), t("sidebar.git.creating", { target: of(n) }), n);
       }} />}
       <ConfirmDialog
         open={!!smart}
@@ -179,6 +82,150 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
       <BranchDialog dialog={dialog} cwd={cwd} exact={exact} repoName={repoName} onRun={onRun} onClose={() => setDialog(undefined)} />
       <ResetDialog client={client} cwd={cwd} exact={exact} repoName={repoName} target={reset} onRun={onRun} onClose={() => setReset(undefined)} />
     </>
+  );
+  return { busy, checkout, pick: (kind: Kind, info: GitBranchInfo) => setDialog({ kind, info }), newBranch: (at?: string, label?: string) => setFresh({ at, label }), reset: setReset, dialogs };
+}
+export type BranchHost = ReturnType<typeof useBranchHost>;
+
+/**
+ * `children`: the element that gets the context menu (the commit list or the details refs). A press on a branch chip opens
+ * that branch's actions (the popup's submenu); a press on a row (or a tag or HEAD chip) opens the commit's actions.
+ * Keyboard (Shift+F10): the selected row's commit.
+ */
+export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, hash, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: OnRun; /** The keyboard's commit (the selected row). */ hash?: () => string | undefined; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+  const t = useT();
+  const host = useBranchHost({ client, cwd, exact, repoName, busy, onRun });
+  const [target, setTarget] = useState<Target>({});
+  // What a press (mouse, pen or touch) landed on, kept until the menu closes. A long press on touch opens the menu from
+  // `touchstart` + a timer (Base UI) and fires no `contextmenu` event, so the target cannot be taken from that event only.
+  const pressed = useRef<Target | undefined>(undefined);
+  const loaded = useRef(false);
+  // A press on no chip and no row (empty list space) is a press with no target: not the selected row.
+  const press = (e: React.SyntheticEvent) => void (pressed.current = (({ ref, hash }) => ({ ref, hash: hash ?? "" }))(targetOf(e.target as Element)));
+  const key = () => void (pressed.current = undefined);
+  const load = (x: Target) => (loaded.current = true, setTarget(x));
+  // The `contextmenu` event (right click, Shift+F10) knows its target best: chip, row, else the press, else the keyboard's selection.
+  const open = (e: React.MouseEvent) => {
+    const x = targetOf(e.target as Element);
+    load(x.ref || x.hash ? x : (pressed.current ?? { hash: hash?.() }));
+  };
+  const onOpenChange = (o: boolean) => {
+    if (o && !loaded.current) load(pressed.current ?? { hash: hash?.() });
+    if (!o) {
+      loaded.current = false;
+      pressed.current = undefined;
+    }
+  };
+  const commit = target.hash || undefined;
+  return (
+    <>
+      <ContextMenu.Root onOpenChange={onOpenChange}>
+        <ContextMenu.Trigger render={cloneElement(children, { onContextMenuCapture: open, onPointerDownCapture: press, onTouchStartCapture: press, onKeyDownCapture: key })} />
+        <ContextMenu.Portal>
+          <ContextMenu.Positioner className="z-50">
+            <ContextMenu.Popup className={cn(POPUP, "max-w-[calc(100vw-1rem)]")} data-testid="branch-menu">
+              {target.ref ? (
+                <BranchActions key={target.ref} client={client} cwd={cwd} exact={exact} gitRef={target.ref} host={host} Item={CtxItem} Sep={CtxSep} />
+              ) : commit ? (
+                <>
+                  <CommitItems key={commit} client={client} cwd={cwd} exact={exact} repoName={repoName} hash={commit} busy={busy} onRun={onRun} onReset={host.reset} />
+                  <CtxSep />
+                  <CtxItem className="max-md:min-h-11" disabled={busy} onClick={() => host.newBranch(commit, short7(commit))} data-testid="branch-new">
+                    {t("sidebar.git.newBranch")}
+                  </CtxItem>
+                </>
+              ) : (
+                <ContextMenu.Item className={ITEM} disabled data-testid="branch-none">
+                  {t("sidebar.git.noLocal")}
+                </ContextMenu.Item>
+              )}
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+      {host.dialogs}
+    </>
+  );
+}
+
+/** One item of a branch action list: the context menu's or the popup's own item component. */
+export type MenuItem = ComponentType<{ className?: string; disabled?: boolean; onClick?: () => void; title?: string; "data-testid"?: string; children?: ReactNode }>;
+const CtxItem: MenuItem = ({ className, ...p }) => <ContextMenu.Item className={cn(ITEM, className)} {...p} />;
+const CtxSep = () => <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />;
+
+/** `git.branch` of a local branch `ref`: `info` once loaded, else `error`. A remote or an unknown ref reads nothing. */
+function useBranchInfo(client: Client, cwd: string, exact: boolean, ref: string) {
+  const t = useT();
+  const [s, setS] = useState<{ info?: GitBranchInfo; error?: string }>({});
+  useEffect(() => {
+    setS({});
+    if (!ref.startsWith("refs/heads/")) return;
+    let live = true;
+    client.request<GitBranchResult>({ type: "git.branch", cwd, ...(exact && { exact: true as const }), ref }).then(
+      (r) => live && setS(r.branch ? { info: r.branch } : { error: t("sidebar.git.notRepo") }),
+      (err: RequestError) => live && setS({ error: err.message || t("sidebar.git.failed") }),
+    );
+    return () => void (live = false);
+  }, [client, cwd, exact, ref]);
+  return s;
+}
+
+/**
+ * The actions of one branch `gitRef` (full name), the same in the commit list's chip menu and the branch popup's submenu.
+ * What can never work is absent (the current branch has no Checkout, Merge or Rebase); a temporary block is disabled with its reason.
+ */
+export function BranchActions({ client, cwd, exact = false, gitRef, host, Item, Sep }: { client: Client; cwd: string; exact?: boolean; gitRef: string; host: BranchHost; Item: MenuItem; Sep: ComponentType }) {
+  const t = useT();
+  const { info, error } = useBranchInfo(client, cwd, exact, gitRef);
+  const { busy } = host;
+  const remote = gitRef.startsWith("refs/remotes/");
+  const x = name(gitRef);
+  const cur = info?.headRef ? name(info.headRef) : "HEAD";
+  const row = (kind: Kind, label: string, argv: string[] | undefined, why: string | undefined, id: string, danger = false) => (
+    <Item className={cn("h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11", danger && "text-destructive")} disabled={busy || !argv} onClick={() => host.pick(kind, info!)} title={!argv ? why : undefined} data-testid={id}>
+      <span>{label}</span>
+      {!argv && why && <span className="text-muted-foreground text-xs">{why}</span>}
+    </Item>
+  );
+  const here = info?.checkedOut === "here";
+  return (
+    <div role="group" aria-label={x}>
+      <div className="px-2 pt-1 text-muted-foreground text-xs" data-testid="branch-menu-head">
+        <div className="truncate font-medium">{x}</div>
+        {info && note(info) && <div>{note(info)}</div>}
+      </div>
+      {remote && (
+        <Item className="max-md:min-h-11" disabled={busy} onClick={() => host.checkout(gitRef)} data-testid="branch-checkout-remote">
+          {t("sidebar.git.checkoutRemote")}
+        </Item>
+      )}
+      {!remote && !info && (
+        <Item disabled>{error ?? t("sidebar.git.loading")}</Item>
+      )}
+      {info && (
+        <>
+          {!here && (
+            <Item className="max-md:min-h-11" disabled={busy} onClick={() => host.checkout(gitRef)} data-testid="branch-checkout">
+              {t("sidebar.git.checkout")}
+            </Item>
+          )}
+          {row("push", t("sidebar.git.push"), info.push, info.why?.push, "branch-push")}
+          {row("force", t("sidebar.git.forcePushMenu"), info.forcePush, info.why?.forcePush, "branch-force-push", true)}
+          {row("pull", t("sidebar.git.pull"), info.pull, info.why?.pull, "branch-pull")}
+          {!here && (
+            <>
+              <Sep />
+              {row("merge", t("sidebar.git.mergeMenu", { current: cur }), info.merge, info.why?.merge, "branch-merge")}
+              {row("rebase", t("sidebar.git.rebaseMenu", { current: cur, branch: x }), info.rebase, info.why?.rebase, "branch-rebase")}
+            </>
+          )}
+        </>
+      )}
+      <Sep />
+      <Item className="max-md:min-h-11" disabled={busy} onClick={() => host.newBranch(gitRef, x)} data-testid="branch-new">
+        {t("sidebar.git.newBranchFrom", { from: x })}
+      </Item>
+    </div>
   );
 }
 
@@ -241,44 +288,18 @@ export function BranchDialog({ dialog, cwd, exact = false, repoName, onRun, onCl
 }
 
 /** Name field and "Check out" box; mounted only while open, so each open starts blank. */
-function NewBranchDialog({ from, onCancel, onCreate }: { from?: string; onCancel: () => void; onCreate: (name: string, checkout: boolean) => void }) {
+function NewBranchDialog({ from, onCancel, onCreate }: { from: string; onCancel: () => void; onCreate: (name: string, checkout: boolean) => void }) {
   const t = useT();
   const [n, setN] = useState("");
   const [co, setCo] = useState(true);
   const go = () => n.trim() && onCreate(n.trim(), co);
   return (
-    <ConfirmDialog open title={t("sidebar.git.newBranchTitle")} description={from ? t("sidebar.git.newBranchText", { from: short7(from) }) : t("sidebar.git.newBranchTextHead")} confirm={t("sidebar.git.newBranchCreate")} confirmDisabled={!n.trim()} onConfirm={go} onCancel={onCancel} testId="git-new-branch">
+    <ConfirmDialog open title={t("sidebar.git.newBranchTitle")} description={t("sidebar.git.newBranchText", { from })} confirm={t("sidebar.git.newBranchCreate")} confirmDisabled={!n.trim()} onConfirm={go} onCancel={onCancel} testId="git-new-branch">
       <input autoFocus aria-label={t("sidebar.git.newBranchName")} placeholder={t("sidebar.git.newBranchName")} value={n} onChange={(e) => setN(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), go())} className="h-9 rounded-md border bg-transparent px-2 text-sm max-md:h-11 focus-visible:outline-2 focus-visible:outline-ring" data-testid="git-new-branch-name" />
       <label className="flex items-center gap-2 text-sm max-md:min-h-11">
         <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={co} onChange={(e) => setCo(e.target.checked)} data-testid="git-new-branch-checkout" />
         {t("sidebar.git.newBranchCheckout")}
       </label>
     </ConfirmDialog>
-  );
-}
-
-function Actions({ info, busy, onPick, onCheckout }: { info: GitBranchInfo; busy: boolean; onPick: (k: Kind) => void; onCheckout: () => void }) {
-  const t = useT();
-  const cur = info.headRef ? name(info.headRef) : "HEAD";
-  const row = (kind: Kind, label: string, argv: string[] | undefined, why: string | undefined, id: string, danger = false) => (
-    <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11", danger && "text-destructive")} disabled={busy || !argv} onClick={() => onPick(kind)} title={!argv ? why : undefined} data-testid={id}>
-      <span>{label}</span>
-      {!argv && why && <span className="text-muted-foreground text-xs">{why}</span>}
-    </ContextMenu.Item>
-  );
-  const here = info.checkedOut === "here";
-  return (
-    <>
-      <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11")} disabled={busy || here} onClick={onCheckout} data-testid="branch-checkout">
-        <span>{t("sidebar.git.checkout")}</span>
-        {here && <span className="text-muted-foreground text-xs">{t("sidebar.git.checkoutCurrent")}</span>}
-      </ContextMenu.Item>
-      {row("push", t("sidebar.git.push"), info.push, info.why?.push, "branch-push")}
-      {row("force", t("sidebar.git.forcePushMenu"), info.forcePush, info.why?.forcePush, "branch-force-push", true)}
-      {row("pull", t("sidebar.git.pull"), info.pull, info.why?.pull, "branch-pull")}
-      <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-      {row("merge", t("sidebar.git.mergeMenu", { current: cur }), info.merge, info.why?.merge, "branch-merge")}
-      {row("rebase", t("sidebar.git.rebaseMenu", { current: cur, branch: name(info.ref) }), info.rebase, info.why?.rebase, "branch-rebase")}
-    </>
   );
 }
