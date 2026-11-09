@@ -76,7 +76,7 @@ import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
-import { GHOST, ModePicker, modesOf, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
+import { GHOST, ModePicker, modesOf, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
@@ -461,14 +461,32 @@ export function App() {
   // Keyed by engine; an OpenCode list of a folder on a side by `opencode@<side>` (that side's OpenCode has its own providers).
   const [modelsBy, setModelsBy] = useState<Record<string, ModelInfo[] | undefined>>({});
   const modelsRequested = useRef(new Set<string>());
+  // Why a list failed to load (GH-679), per list key, and a counter that makes the fetch effect run again for a Retry.
+  const [modelsErr, setModelsErr] = useState<Record<string, string>>({});
+  const [modelsRetry, setModelsRetry] = useState(0);
   /** OpenCode read another provider set: every OpenCode model list is fetched again the next time it shows. */
   const dropOpenCodeModels = () => {
     setModelsBy((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("opencode"))));
     for (const k of [...modelsRequested.current]) if (k.startsWith("opencode")) modelsRequested.current.delete(k);
+    setModelsErr((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith("opencode"))));
   };
   const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
   const modelsKey = (engine: Engine, cwd?: string) => (engine !== "claude" && cwd && cwdSides[cwd] ? `${engine}@${cwdSides[cwd]}` : engine);
   const modelsOf = (engine: Engine, cwd?: string) => modelsBy[modelsKey(engine, cwd)] ?? NO_MODELS;
+  /** The model picker's footer of an OpenCode list: a link to its providers, and the load error with Retry. Claude's has none. */
+  const modelFooterProps = (engine: Engine, cwd?: string) => {
+    const f = modelFooterOf(engine, cwd); // flat for the memo'd session pane (functions are stabilized, objects are not)
+    return { modelsError: f?.error, onModelsRetry: f?.onRetry, onModelsConnect: f?.onConnect };
+  };
+  const modelFooterOf = (engine: Engine, cwd?: string): ModelFooterProps | undefined => {
+    if (engine === "claude") return undefined;
+    const key = modelsKey(engine, cwd);
+    return {
+      error: modelsErr[key],
+      onRetry: () => (setModelsErr(({ [key]: _, ...rest }) => rest), modelsRequested.current.delete(key), setModelsRetry((n) => n + 1)),
+      onConnect: () => openSettingsGroup("opencode"),
+    };
+  };
   /** The engines a new session in `cwd` offers: its side's, else the hub's. */
   const enginesOf = (cwd?: string) => (cwd && sideEngines[cwdSides[cwd] ?? ""]) || engines;
   const models = modelsOf("claude");
@@ -2143,6 +2161,7 @@ export function App() {
                         view={v}
                         pending={pend}
                         models={modelsOf(s.engine ?? "claude", s.cwd)}
+                        {...modelFooterProps(s.engine ?? "claude", s.cwd)}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
@@ -3049,11 +3068,12 @@ export function App() {
     if (!shownEngine || !listKey || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(listKey)) return;
     modelsRequested.current.add(listKey);
     // A folder of a side: `cwd` routes the request to that side's OpenCode (its own providers).
-    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine, ...(listKey !== shownEngine && { cwd: shownCwd }) }).then(
-      (r) => setModelsBy((m) => ({ ...m, [listKey]: r.models })),
-      () => modelsRequested.current.delete(listKey),
+    // The folder's own OpenCode instance lists its models (project providers), on this machine and on a side.
+    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine, ...(shownCwd && { cwd: shownCwd }) }).then(
+      (r) => (setModelsBy((m) => ({ ...m, [listKey]: r.models })), setModelsErr(({ [listKey]: _, ...rest }) => rest)),
+      (e: Error) => (modelsRequested.current.delete(listKey), e.message !== "disconnected" && setModelsErr((m) => ({ ...m, [listKey]: e.message }))),
     );
-  }, [listKey, status, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
+  }, [listKey, status, modelsRetry, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -4106,6 +4126,7 @@ export function App() {
                   onNewWorktree={(p) => void newWorktree(p)}
                   worktreeJob={worktreeJob?.project === projectOf(draftProject ?? "", worktrees) ? worktreeJob : undefined}
                   models={modelsOf(draftEngine, draftProject)}
+                  modelFooter={modelFooterOf(draftEngine, draftProject)}
                   draft={draft}
                   onDraft={changeDraft}
                   modes={draftModes}
@@ -4885,6 +4906,7 @@ export function NewSession({
   modes,
   caps,
   onOpenOpenCodeSettings,
+  modelFooter,
   onOpenProject,
   onUpload,
   onSearch,
@@ -4914,6 +4936,8 @@ export function NewSession({
   caps?: EngineCapabilities;
   /** The inline OpenCode error's button. */
   onOpenOpenCodeSettings?: () => void;
+  /** The model picker's footer (OpenCode): link to its providers, and a failed list with Retry. */
+  modelFooter?: ModelFooterProps;
   onOpenProject: () => void;
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
@@ -4969,6 +4993,7 @@ export function NewSession({
           commands={commands}
           onDialog={cwd ? onDialog : undefined}
           models={models}
+          modelFooter={modelFooter}
           model={model}
           onModel={(m) => onDraft({ ...draft, model: m })}
           effort={effort}
@@ -5155,6 +5180,9 @@ export function SessionPane({
   view,
   pending,
   models,
+  modelsError,
+  onModelsRetry,
+  onModelsConnect,
   onModel,
   onMode,
   onEffort,
@@ -5225,6 +5253,10 @@ export function SessionPane({
   /** Optimistic prompts not yet echoed (GH-133). */
   pending?: Pending[];
   models: ModelInfo[];
+  /** OpenCode's model list failed to load: the picker footer shows it with Retry; Connect opens Settings › OpenCode. Flat: the pane is memo'd. */
+  modelsError?: string;
+  onModelsRetry?: () => void;
+  onModelsConnect?: () => void;
   onModel: (model: string) => void;
   onMode: (mode: PermissionMode) => void;
   onEffort: (effort: Effort) => void;
@@ -5640,6 +5672,7 @@ export function SessionPane({
               onDialog={onDialog}
               onAside={onAside}
               models={models}
+              modelFooter={modelsError !== undefined || onModelsConnect ? { error: modelsError, onRetry: () => onModelsRetry?.(), onConnect: () => onModelsConnect?.() } : undefined}
               model={view.model ?? session.model}
               onModel={onModel}
               effort={view.effort ?? session.effort}
@@ -5701,6 +5734,7 @@ function PromptBox({
   cwd,
   commands,
   models,
+  modelFooter,
   model,
   onModel,
   effort,
@@ -5754,6 +5788,8 @@ function PromptBox({
   modes: PermissionMode[];
   /** The session's Engine flags; none (new-session draft) = all. */
   caps?: EngineCapabilities;
+  /** The model picker's footer (OpenCode). */
+  modelFooter?: ModelFooterProps;
   onMode: (mode: PermissionMode) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
@@ -6309,6 +6345,7 @@ function PromptBox({
       />
       <PromptToolbar
         models={models}
+        modelFooter={modelFooter}
         caps={caps}
         model={model}
         onModel={onModel}

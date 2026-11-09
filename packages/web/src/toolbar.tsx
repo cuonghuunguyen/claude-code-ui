@@ -1,6 +1,6 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlugIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
@@ -10,6 +10,7 @@ import { ALL_CAPABILITIES, permissionModesFor, type ContextUsage, type Effort, t
 import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
@@ -83,8 +84,11 @@ export function Chooser<T extends string>({
   icon,
   testId,
   className = "",
+  footer,
 }: {
   label: string;
+  /** Below the groups, not an option (GH-679: the model picker's link to the providers); gets a function that closes the popup. */
+  footer?: (close: () => void) => ReactNode;
   value: T;
   items: ChooserItem<T>[];
   onChange: (v: T) => void;
@@ -98,11 +102,14 @@ export function Chooser<T extends string>({
   // Typeahead on a closed trigger commits with reason "none", like the reset below; it is told apart by the key press
   // on the trigger in the same task (Base UI matches synchronously in its keydown handler).
   const typed = useRef(false);
+  const [open, setOpen] = useState(false);
   return (
     // Only the user's pick or typeahead: when the items change and drop the value for a render, Base UI resets to the value
     // the picker mounted with (reason "none", no key), e.g. Don't ask after a model switch left Auto mode (GH-46).
     <Select
       items={items}
+      open={open}
+      onOpenChange={setOpen}
       value={value}
       onValueChange={(v, { reason }) => (reason === "item-press" || (reason === "none" && typed.current)) && v !== null && v !== value && onChange(v as T)}
     >
@@ -137,8 +144,34 @@ export function Chooser<T extends string>({
             </SelectGroup>
           );
         })}
+        {footer && <div className="mt-0.5 border-t pt-0.5">{footer(() => setOpen(false))}</div>}
       </SelectContent>
     </Select>
+  );
+}
+
+/** What the model picker of an OpenCode list adds below the models (GH-679). */
+export type ModelFooterProps = { error?: string; onRetry: () => void; onConnect: () => void };
+
+/** The picker footer: why the list failed (with Retry), and the way to connect a provider, which closes the picker. */
+export function ModelFooter({ error, onRetry, onConnect, close }: ModelFooterProps & { close: () => void }) {
+  const t = useT();
+  const row = "h-7 w-full cursor-pointer justify-start gap-2 rounded-sm px-3 text-sm font-normal text-muted-foreground pointer-coarse:h-11";
+  return (
+    <div className="flex flex-col">
+      {error !== undefined && (
+        <div className="flex items-center gap-2 px-3 py-1">
+          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">{t("app.toolbar.modelsFailed", { message: error })}</p>
+          <Button type="button" variant="ghost" size="sm" data-testid="models-retry" className="h-7 shrink-0 pointer-coarse:h-11" onClick={onRetry}>
+            {t("app.toolbar.modelsRetry")}
+          </Button>
+        </div>
+      )}
+      <Button type="button" variant="ghost" size="sm" data-testid="models-connect" className={row} onClick={() => (close(), onConnect())}>
+        <PlugIcon aria-hidden className="size-4" />
+        {t("app.toolbar.modelsConnect")}
+      </Button>
+    </div>
   );
 }
 
@@ -162,6 +195,8 @@ export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortc
 
 export function PromptToolbar(props: {
   models: ModelInfo[];
+  /** OpenCode's model list: a footer in the model picker with the link to its providers and, after a failed load, the error with Retry (GH-679). */
+  modelFooter?: ModelFooterProps;
   /** The session's Engine flags; none (new-session draft) = all. */
   caps?: EngineCapabilities;
   model: string;
@@ -242,11 +277,11 @@ export function PromptToolbar(props: {
           }}
         />
         {phone ? (
-          <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelItems={modelItems} />
+          <SettingsChip {...props} models={models} modelFooter={props.modelFooter} efforts={efforts} effort={effort} modelItems={modelItems} />
         ) : (
           <>
             <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} />
-            <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
+            <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" footer={props.modelFooter && ((close) => <ModelFooter {...props.modelFooter!} close={close} />)} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
           </>
         )}
@@ -266,7 +301,8 @@ function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { e
 }
 
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
-function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems }: {
+function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, modelFooter }: {
+  modelFooter?: ModelFooterProps;
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
   efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[];
 }) {
@@ -291,7 +327,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
             className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
-            <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
+            <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} footer={modelFooter && ((close) => <ModelFooter {...modelFooter} close={close} />)} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}
           </Popover.Popup>
         </Popover.Positioner>

@@ -1501,3 +1501,96 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 });
+
+describe("OpenCode model list: provider reads are never cut off and a broken provider state is repaired (GH-679)", { timeout: 40_000 }, () => {
+  const models = (d: Boot, cwd?: string) => d.request({ type: "models.list", engine: "opencode", ...(cwd && { cwd }) });
+  const values = (r: Awaited<ReturnType<typeof models>>) => (r.type === "reply" ? (r.result.models as { value: string; group?: string }[]) : []);
+  const providerReads = (d: Boot) => d.requests("GET", "/config/providers");
+  /** The fake's start markers: one per OpenCode process. */
+  const starts = (d: Boot) => d.log().filter((l) => l.type === "start").length;
+
+  it("models.list waits for a slow provider load (4 s): nothing is cut off, later reads answer and no instance is disposed", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_PROVIDERS_MS: "4000" } });
+    const r = await models(d);
+    expect(values(r).map((m) => m.value)).toEqual(expect.arrayContaining(["default", "opencode/big-pickle", "acme/x/y"]));
+    expect(values(await models(d)).length).toBeGreaterThan(2);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("models.list reads the given folder's OpenCode instance; a folder outside the roots is refused", async () => {
+    const d = await boot();
+    const local = join(d.root, "with-local-provider");
+    mkdirSync(local);
+    const r = await models(d, realpathSync(local));
+    expect(values(r).find((m) => m.value === "local/m")).toMatchObject({ group: "Local" });
+    expect(providerReads(d).at(-1)!.query.directory).toBe(realpathSync(local));
+    expect(await models(d, join(tmpdir(), "elsewhere-gh679"))).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+  });
+
+  it("a folder whose provider state is broken is reloaded once and the list comes back", async () => {
+    const d = await boot();
+    await models(d); // starts the fake OpenCode
+    await d.fake("/__break_providers", { directory: d.project });
+    expect(values(await models(d, d.project)).map((m) => m.value)).toContain("opencode/big-pickle");
+    expect(d.requests("POST", "/instance/dispose").map((r) => r.query.directory)).toEqual([d.project]);
+    await models(d, d.project);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+  });
+
+  it("a broken folder with a running OpenCode turn is not disposed: models.list fails with the error and keeps the turn", async () => {
+    const d = await boot({ script: ["question"] });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    await d.fake("/__break_providers", { directory: d.project });
+    expect(await models(d, d.project)).toMatchObject({ type: "error", code: "models_failed", message: expect.stringMatching(/provider list is broken.*no OpenCode turn runs/) });
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    expect(s.states().at(-1)).not.toBe("idle");
+  });
+
+  it("a server-wide broken provider state restarts OpenCode's server when no OpenCode session is busy; the list comes back", async () => {
+    const d = await boot();
+    await models(d);
+    await d.fake("/__break_providers", { global: true });
+    expect(starts(d)).toBe(1);
+    expect(values(await models(d, d.project)).map((m) => m.value)).toContain("opencode/big-pickle");
+    expect(starts(d)).toBe(2);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+  });
+
+  it("a server-wide broken provider state with a busy OpenCode session does not restart the server", async () => {
+    const d = await boot({ script: ["question"] });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    await d.fake("/__break_providers", { global: true });
+    const r = await models(d);
+    expect(r).toMatchObject({ type: "error", code: "models_failed", message: expect.stringMatching(/provider list is broken.*no OpenCode turn runs/) });
+    expect(starts(d)).toBe(1);
+  });
+
+  it("after a login the list is read again for every folder", async () => {
+    const d = await boot();
+    const other = join(d.root, "other");
+    mkdirSync(other);
+    await models(d, d.project);
+    await models(d, realpathSync(other));
+    await models(d, d.project);
+    expect(providerReads(d)).toHaveLength(2);
+    await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: "k" });
+    await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
+    await models(d, d.project);
+    await models(d, realpathSync(other));
+    expect(providerReads(d)).toHaveLength(4);
+  });
+
+  it("context usage after a slow provider load (4 s): the context_usage part arrives and the folder is not broken", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_PROVIDERS_MS: "4000" } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("context_usage"), 12_000);
+    expect(providerReads(d).at(-1)!.query.directory).toBe(d.project);
+    expect(values(await models(d, d.project)).length).toBeGreaterThan(2);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+});

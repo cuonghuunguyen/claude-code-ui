@@ -24,6 +24,8 @@ const claude = { engine: "claude", capabilities: ALL_CAPABILITIES, permissionMod
 let list: Record<string, unknown> = {};
 let settings: Record<string, unknown> = {};
 let opts: { onOpenCodeProviders?: () => void; onPlanUsage?: (u: unknown) => void } = {};
+/** Error messages the next OpenCode `models.list` replies reject with, in order. */
+const modelFailures: string[] = [];
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
@@ -38,7 +40,11 @@ vi.mock("./client.ts", async (orig) => ({
         if (m.type === "session.list") return list;
         if (m.type === "settings.get") return { settings };
         if (m.type === "session.subscribe") return { logEpoch: "e1", seq: 0, session: (list.sessions as SessionListItem[]).find((s) => s.id === m.sessionId) };
-        if (m.type === "models.list") return { models: [{ value: "default", displayName: "Default", description: "" }] };
+        if (m.type === "models.list") {
+          const failure = (m as { engine?: string }).engine === "opencode" ? modelFailures.shift() : undefined;
+          if (failure) throw new Error(failure);
+          return { models: [{ value: "default", displayName: "Default", description: "" }, ...((m as { engine?: string }).engine === "opencode" ? [{ value: "opencode/big-pickle", displayName: "Big Pickle", description: "", group: "OpenCode" }] : [])] };
+        }
         return {};
       },
       onFsChanged: () => () => {},
@@ -65,6 +71,7 @@ const open = (title: string) => act(async () => (document.querySelector<HTMLElem
 const modelRequests = () => sent.filter((m) => m.type === "models.list" && m.engine === "opencode");
 beforeEach(() => {
   sent.length = 0;
+  modelFailures.length = 0;
   localStorage.clear();
   document.hasFocus = () => true;
   settings = { orchestration: {}, labels: { projects: {}, sides: {} }, sessions: { engine: "claude" } };
@@ -89,7 +96,7 @@ it("an OpenCode session asks for its models once and again after a provider chan
   await mount("");
   await open("OpenCode chat");
   await settle();
-  expect(modelRequests()).toEqual([{ type: "models.list", engine: "opencode" }]);
+  expect(modelRequests()).toEqual([{ type: "models.list", engine: "opencode", cwd: "/p/demo" }]);
   await act(async () => opts.onPlanUsage!({ plan: "pro", windows: [{ kind: "session", label: "Session", percent: 10, active: true }], status: "allowed" }));
   expect(el.querySelector('[data-testid="plan-meter"]')).toBeNull();
   await act(async () => opts.onOpenCodeProviders!());
@@ -102,4 +109,47 @@ it("an OpenCode session asks for its models once and again after a provider chan
   await settle();
   await act(async () => opts.onPlanUsage!({ plan: "pro", windows: [{ kind: "session", label: "Session", percent: 10, active: true }], status: "allowed" }));
   expect(el.querySelector('[data-testid="plan-meter"]')).not.toBeNull();
+});
+
+const pickerOpen = async () => {
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="session-model"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await settle();
+};
+
+it("a failed OpenCode model list shows the error and Retry in the model picker; Retry asks again and shows the list (GH-679)", async () => {
+  modelFailures.push("models_failed: OpenCode GET /config/providers answered 499");
+  await mount("");
+  await open("OpenCode chat");
+  await settle();
+  await pickerOpen();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Models could not be loaded");
+  expect(modelRequests()).toHaveLength(1);
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="models-retry"]')!.click());
+  await settle();
+  expect(modelRequests()).toHaveLength(2);
+  await pickerOpen();
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  expect(document.body.textContent).toContain("Big Pickle");
+  expect(document.body.textContent).toContain("OpenCode");
+});
+
+it("the OpenCode model picker links to Settings › OpenCode; a Claude session's picker has no link (GH-679)", async () => {
+  await mount("");
+  await open("OpenCode chat");
+  await settle();
+  await pickerOpen();
+  const connect = document.querySelector<HTMLElement>('[data-testid="models-connect"]')!;
+  expect(connect.textContent).toContain("Connect a provider");
+  await act(async () => connect.click());
+  await settle();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(document.querySelector('[data-testid="session-model"]')!.getAttribute("aria-expanded")).toBe("false");
+  act(() => root.unmount());
+  el.remove();
+  document.body.innerHTML = "";
+  await mount("");
+  await open("Claude chat");
+  await settle();
+  await pickerOpen();
+  expect(document.querySelector('[data-testid="models-connect"]')).toBeNull();
 });

@@ -34,7 +34,7 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
+import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
 import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -148,6 +148,7 @@ type History = {
   forkSession?: typeof forkSession;
 };
 
+const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloaded when no OpenCode turn runs: press Retry then.";
 /** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
 const ARCHIVED_TAG = "archived";
 
@@ -545,6 +546,18 @@ export function createDaemon(opts: {
     providersStale = false;
     // Clients drop their OpenCode model list only after OpenCode read the new providers.
     await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
+  }
+  /** OpenCode's model list; a server-wide broken provider state (499 after the folder repair) restarts OpenCode's server when no OpenCode session is busy (nothing else clears it). */
+  async function openCodeModelsRepaired(cwd?: string): Promise<ModelInfo[]> {
+    try {
+      return await openCodeModels(openCodeEngine, cwd);
+    } catch (err) {
+      if (!brokenState(err)) throw err;
+      if (openCodeBusy()) throw new Error(PROVIDERS_BROKEN_BUSY);
+      await openCode.reset(); // the next request starts it again; open sessions resync on the new event stream
+      openCodeEngine.dropLimits();
+      return openCodeModels(openCodeEngine, cwd);
+    }
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
@@ -1222,7 +1235,7 @@ export function createDaemon(opts: {
     openCodeAgents: async (cwd) => (await openCode.request<{ name: string; mode?: string; hidden?: boolean }[]>("/agent", { directory: cwd, timeoutMs: 0 })).filter((a) => !a.hidden && a.mode !== "subagent").map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
-    openCodeModels: () => openCodeModels(openCode),
+    openCodeModels: () => openCodeModels(openCodeEngine),
     remove: async (id) => {
       const err = await deleteSessionById(id);
       if (err?.code !== "unknown_session") return err;
@@ -2512,7 +2525,10 @@ export function createDaemon(opts: {
         }
         case "models.list": {
           try {
-            return reply({ models: msg.engine === "opencode" ? await openCodeModels(openCode) : await modelList() });
+            if (msg.engine !== "opencode") return reply({ models: await modelList() });
+            const cwd = msg.cwd === undefined ? undefined : allowed(msg.cwd);
+            if (msg.cwd !== undefined && !cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+            return reply({ models: await openCodeModelsRepaired(cwd) });
           } catch (e) {
             return fail("models_failed", (e as Error).message);
           }
