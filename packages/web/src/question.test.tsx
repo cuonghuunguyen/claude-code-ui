@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Event, Part, Question } from "@claude-ui/protocol";
-import { answerText, QuestionMarker, QuestionPanel } from "./question.tsx";
+import { answerList, answerText, QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, emptySession, pendingQuestion, type QuestionRequest } from "./store.ts";
 
 const manager: Question = {
@@ -22,6 +22,14 @@ const request = (over: Partial<QuestionRequest> = {}): QuestionRequest => ({
   questions: [manager, features],
   settled: false,
   ...over,
+});
+
+describe("answerList", () => {
+  it("lists the chosen labels in option order, then the Other text; a label holding the separator stays one entry", () => {
+    const q: Question = { ...features, options: [{ label: "pnpm", description: "" }, { label: "npm, yarn", description: "" }] };
+    expect(answerList(q, { chosen: ["npm, yarn", "pnpm"], other: " bun " })).toEqual(["pnpm", "npm, yarn", "bun"]);
+    expect(answerList(manager, { chosen: [], other: " " })).toEqual([]);
+  });
 });
 
 describe("answerText", () => {

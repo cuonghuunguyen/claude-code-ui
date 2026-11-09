@@ -1,0 +1,175 @@
+{
+ "events": [
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_COMPACTUSER",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794086910196
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "compaction",
+     "auto": false,
+     "messageID": "msg_COMPACTUSER",
+     "sessionID": "ses_ROOT",
+     "id": "prt_COMPACTMARK"
+    },
+    "time": 1794086910201
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_COMPACTASSIST",
+     "parentID": "msg_COMPACTUSER",
+     "role": "assistant",
+     "mode": "compaction",
+     "agent": "compaction",
+     "summary": true,
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794086910207
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Summary: the user listed the files of the project.",
+     "time": {
+      "start": 1794086910800,
+      "end": 1794086910900
+     },
+     "messageID": "msg_COMPACTASSIST",
+     "sessionID": "ses_ROOT",
+     "id": "prt_COMPACTSUM"
+    },
+    "time": 1794086910900
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_COMPACTFIN",
+     "reason": "stop",
+     "messageID": "msg_COMPACTASSIST",
+     "sessionID": "ses_ROOT",
+     "type": "step-finish",
+     "tokens": {
+      "total": 120,
+      "input": 80,
+      "output": 40,
+      "reasoning": 0,
+      "cache": {
+       "write": 0,
+       "read": 0
+      }
+     },
+     "cost": 0
+    },
+    "time": 1794086910950
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_COMPACTASSIST",
+     "parentID": "msg_COMPACTUSER",
+     "role": "assistant",
+     "mode": "compaction",
+     "agent": "compaction",
+     "summary": true,
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "total": 120,
+      "input": 80,
+      "output": 40,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794086910207,
+      "completed": 1794086911000
+     },
+     "sessionID": "ses_ROOT",
+     "finish": "stop"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  }
+ ]
+}

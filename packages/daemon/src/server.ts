@@ -4,10 +4,13 @@ import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lsta
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, createAdapter, EFFORTS, type AsideOpenResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -31,12 +34,17 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
+import { createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
+import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
+import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
+import { briefPrompt, checkSet, find as findMark, total as marksTotal, upsert as upsertMark } from "./back-marks.ts";
+import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-reminders.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
@@ -46,7 +54,7 @@ import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } fro
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
-import { EDITORS, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
+import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
@@ -90,6 +98,8 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 const CLEARED = /^\/(clear|reset|new)$/;
 /** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
 export const MODEL_LIST_WAIT_MS = 2000;
+/** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
+const OPENCODE_LIST_WAIT_MS = 3000;
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -119,6 +129,9 @@ const IDLE_CHECK_MS = 60_000;
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
 
+/** An OpenCode session id: it reaches a request path, so only this shape does. */
+const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
+type OpenCodeSessionRow = { id: string; directory: string; title: string; time: { created: number; updated: number; archived?: number } };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type History = {
@@ -318,6 +331,8 @@ export function createDaemon(opts: {
   historyDir?: string;
   /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
   secrets?: Secrets;
+  /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
+  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
   /** Test seam (GH-447): the fetch of the Jira client. */
   jiraFetch?: typeof fetch;
   /** Test seam (GH-164): delays of auto-continue.ts. */
@@ -348,11 +363,15 @@ export function createDaemon(opts: {
   /** GH-523: the sleep inhibitor (keep-awake.ts); none: no keep awake (a side, tests). */
   keepAwake?: KeepAwake;
   /** GH-612: fs.openExternal. `run` starts the OS command, `editors` lists the installed editors; none (a side, tests without it): the request and the editor list are absent. */
-  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher> };
+  openExternal?: { run: (c: OpenCommand) => Promise<void>; editors: () => Map<EditorId, Launcher>; /** A daemon in WSL: the Windows form of a path (`wslpath -w`); it opens reveal and default in Windows and trusts its attached Hubs. */ winPath?: (path: string) => Promise<string> };
   /** GH-518: sleep detection (Hub only; a Side runs on the Hub's machine). `everyMs` and `now` are test seams. */
   watchSleep?: { everyMs?: number; now?: () => number };
   /** GH-523: this daemon's own sessions start or stop running (a side reports it to its hub). */
   onRunning?: (running: boolean) => void;
+  /** GH-622: a Hub started by another Hub's attach (a Side): it keeps no Back marks (they are the Hub's settings) and runs no reminders; back.* is refused there. */
+  attached?: boolean;
+  /** Test seam (GH-622): the reminder tick (default 30 s) and clock. */
+  backReminders?: { everyMs?: number; now?: () => number };
   /** Whether this daemon runs older code than is on disk (build-info.ts): worker_start and worker_list report it, a new connection shows it. */
   buildInfo?: { version?: string; stale(): string | undefined };
   /** Test seam (GH-272): the performance monitor (default: a real one, on unless the `performance.monitor` setting is off). */
@@ -438,6 +457,115 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
+  const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...opts.opencode });
+  /** Directory and title of each OpenCode session this daemon listed, created or opened. */
+  const openCodeMeta = new Map<string, { cwd: string; title: string }>();
+  const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  /**
+   * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
+   * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
+   */
+  const mcpRoutes = new Map<string, { id: string; live?: { transport: StreamableHTTPServerTransport; server: McpServer }; init?: Promise<boolean> }>();
+  const dropMcp = (token: string) => {
+    void mcpRoutes.get(token)?.live?.server.close().catch(() => {});
+    mcpRoutes.delete(token);
+  };
+  const openCodeEngine = createOpenCodeEngine(openCode, {
+    onTitle: (id, title) => {
+      const m = openCodeMeta.get(id);
+      if (!m || m.title === title) return;
+      openCodeMeta.set(id, { ...m, title });
+      broadcast({ type: "sessions.changed" });
+    },
+    mcp: {
+      // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
+      url: () => {
+        const a = http.address();
+        return a && typeof a === "object" ? `http://127.0.0.1:${a.port}/opencode-mcp` : undefined;
+      },
+      token: (id) => {
+        for (const [t, r] of mcpRoutes) if (r.id === id) return t;
+        const t = randomBytes(32).toString("base64url");
+        mcpRoutes.set(t, { id });
+        return t;
+      },
+      drop: (id) => {
+        for (const [t, r] of mcpRoutes) if (r.id === id) dropMcp(t);
+      },
+    },
+  });
+  async function serveOpenCodeMcp(req: IncomingMessage, res: ServerResponse) {
+    // The token before any body read.
+    const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
+    const route = token === undefined ? undefined : [...mcpRoutes].find(([t]) => timingSafeEqual(digest(t), digest(token)))?.[1];
+    if (!route) return void res.writeHead(401).end();
+    let body: unknown;
+    if (req.method === "POST") {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const c of req as AsyncIterable<Buffer>) {
+        if ((size += c.length) > 4 << 20) return void res.writeHead(413).end();
+        chunks.push(c);
+      }
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return void res.writeHead(400).end();
+      }
+    }
+    if (isInitializeRequest(body)) {
+      // One initialize at a time per token: a second one would replace a transport that is still connecting (leak).
+      const prev = route.init;
+      const run = (async () => {
+        await prev?.catch(() => {});
+        // OpenCode connects again (its restart, a dispose): a new MCP session.
+        void route.live?.server.close().catch(() => {});
+        route.live = undefined;
+        const server = orchestration.mcpServerFor(route.id);
+        if (!server) return false;
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+        await server.connect(transport);
+        route.live = { transport, server };
+        return true;
+      })();
+      route.init = run;
+      if (!(await run)) return void res.writeHead(404).end();
+    }
+    if (!route.live) return void res.writeHead(404).end();
+    await route.live.transport.handleRequest(req, res, body);
+  }
+  /** One OAuth wait (`opencode.loginFinish`) per provider; a cancel or a new login aborts it. */
+  const oauthWaits = new Map<string, AbortController>();
+  /** Login and logout change OpenCode's provider set; `POST /global/dispose` makes its instances read it, but cancels running turns: it waits for idle. */
+  let providersStale = false;
+  const openCodeBusy = () => [...sessions.values()].some((s) => OPENCODE_ID.test(s.id) && (s.currentState() !== "idle" || s.pendingCount() > 0));
+  async function flushProviders() {
+    if (!providersStale || openCodeBusy() || !openCode.running()) return;
+    providersStale = false;
+    // Clients drop their OpenCode model list only after OpenCode read the new providers.
+    await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
+  }
+  const refreshProviders = () => ((providersStale = true), flushProviders());
+  const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
+  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
+    if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
+    openCodeMeta.set(s.id, { cwd, title: row.title });
+    addProject(cwd);
+    return s;
+  }
+  /** Settings `sessions.engine`: the Engine of the last created session. */
+  const rememberEngine = (engine: EngineName) => {
+    if (appSettings.get().sessions.engine === engine) return;
+    try {
+      broadcastSettings(appSettings.set({ sessions: { engine } }));
+    } catch (err) {
+      console.error("saving the last engine failed:", err);
+    }
+  };
   /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
   const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
@@ -514,11 +642,13 @@ export function createDaemon(opts: {
     cli: opts.cli ?? runCli,
     // Plugins are user- or project-wide: every live query reloads, as the extension reloads every open session.
     reload: async () => {
-      const live = [...sessions.values()].filter((s) => s.liveQuery());
+      const live = [...sessions.values()].filter((s) => s.live());
       const results = await Promise.allSettled(live.map((s) => timed(s.reloadPlugins())));
       const failed = live.filter((s, i) => results[i]!.status === "rejected" && (console.error(`session ${s.id}: reloadPlugins failed:`, (results[i] as PromiseRejectedResult).reason), true)).map((s) => s.id);
       const errorCount = results.reduce((n, r) => n + (r.status === "fulfilled" ? (r.value ?? 0) : 0), 0);
-      return { reloaded: live.length - failed.length, failed, errorCount };
+      // A session counts as reloaded only when reloadPlugins() resolved to a number (OpenCode and a Claude session without a live query resolve undefined).
+      const reloaded = results.filter((r) => r.status === "fulfilled" && r.value !== undefined).length;
+      return { reloaded, failed, errorCount };
     },
     restart: (id) => {
       const s = sessions.get(id);
@@ -659,7 +789,7 @@ export function createDaemon(opts: {
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
-    const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); o.onCreated?.(r); } });
+    const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); return o.onCreated?.(r); } });
     markRepoStale(cwd);
     broadcast({ type: "sessions.changed" });
     return r;
@@ -705,6 +835,7 @@ export function createDaemon(opts: {
           touched.delete(s.id);
           await s.close().catch(() => {});
         }
+        if (live.some((s) => OPENCODE_ID.test(s.id))) void flushProviders();
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       } });
@@ -731,7 +862,7 @@ export function createDaemon(opts: {
   const sleepWatch = opts.watchSleep && createSleepWatch({ now: opts.watchSleep.now, running: () => localWas || !!opts.sides?.anyRunning(), onSleep: (s) => ((slept = s), broadcast({ type: "daemon_slept", ...s })) });
   const sleepTimer = sleepWatch && setInterval(sleepWatch.check, opts.watchSleep!.everyMs ?? SLEEP_CHECK_MS);
   sleepTimer?.unref();
-  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...opts.openExternal.editors().keys()].map((id) => ({ id, label: EDITORS[id].label })) }) });
+  const daemonInfo = () => ({ host: opts.host ?? osHostname(), ...(opts.buildInfo?.version && { version: opts.buildInfo.version }), ...(opts.desktopForcedOff && { desktopForcedOff: true as const }), ...(usesOauthToken(process.env) && { claudeEnvToken: true as const }), ...(opts.keepAwake && { keepAwake: opts.keepAwake.status() }), ...(opts.shortcut && { shortcut: { installed: opts.shortcut.installed() } }), ...(opts.openExternal && { editors: [...[...opts.openExternal.editors().keys()].map((id) => ({ id: id as EditorId | "custom", label: EDITORS[id].label })), ...(appSettings.get().editor.command ? [{ id: "custom" as const, label: editorLabel(appSettings.get().editor) }] : [])] }) });
   /** Session a connection shows while its tab is focused and visible. */
   const focused = new Map<Conn, string>();
   /** Sessions a connection's page shows in-app notification cards for (GH-158): its one channel, so no push or desktop notification goes out for them. */
@@ -886,6 +1017,125 @@ export function createDaemon(opts: {
     show: (id, items, held) => sessions.get(id)?.setQueue(items, held),
   });
 
+  // ---- GH-622 "I'll be back": Back marks, the brief turn and reminders (docs/spec.md "I'll be back") ----
+  /** The brief turn running per session (started by the tag line of its prompt): the mark's part id and the last assistant text so far. */
+  const briefs = new Map<string, { partId: string; at: number; text?: string }>();
+  /** Changes one mark under the settings file's change() and tells every browser; false when the mark is gone (Done). */
+  function editMark(sessionId: string, partId: string, fn: (m: BackMark) => void): boolean {
+    let found = false;
+    try {
+      appSettings.changeMarks((marks) => {
+        const m = findMark(marks, sessionId, partId);
+        if (!m) return;
+        found = true;
+        fn(m);
+      });
+    } catch (err) {
+      console.error("saving back marks failed:", err);
+    }
+    if (found) broadcastSettings();
+    return found;
+  }
+  // `at`: the mark's time when the brief turn started; a mark removed and made again meanwhile is another mark, the old turn's end must not touch it.
+  const briefFailed = (sessionId: string, partId: string, why: string, at?: number) =>
+    editMark(sessionId, partId, (m) => void (m.at === (at ?? m.at) && ((m.briefState = "failed"), (m.briefError = why.slice(0, 200)))));
+  /** The brief of a finished turn replaces the old one; an empty answer is a failure. */
+  const briefDone = (sessionId: string, partId: string, text: string | undefined, at: number) => {
+    const t = text?.trim().slice(0, BACK_BRIEF_MAX);
+    if (!t) return briefFailed(sessionId, partId, "The brief was empty", at);
+    editMark(sessionId, partId, (m) => void (m.at === at && ((m.brief = { text: t, at: Date.now() }), delete m.briefState, delete m.briefError)));
+  };
+  /** Sends the brief turn of a mark now (an idle session) or queues it behind the running turn and the queued items. */
+  async function startBrief(s: Session, partId: string, refresh: boolean) {
+    const mark = findMark(appSettings.get().back.marks, s.id, partId);
+    if (!mark) return;
+    const text = briefPrompt(partId, mark.title, refresh);
+    // Always through the queue: it sends at once when the session takes a prompt, and it honours a usage-limit pause and a scheduled auto-continue (a direct send would bypass both).
+    editMark(s.id, partId, (m) => ((m.briefState = "queued"), delete m.briefError));
+    const r = queue.enqueue(s.id, { text, images: [], brief: partId });
+    if (typeof r !== "string") return void briefFailed(s.id, partId, r.message);
+    // A closed or errored session: the queue shows its pause (the panel says why) instead of a brief that stays queued without a reason.
+    queue.setNotLive(s.id, !s.isLive());
+  }
+  /** Follows a session's events for its brief turn: starts at the tagged prompt, takes the last assistant text, ends at the result. */
+  function observeBrief(s: Session, e: { part: { type: string } }) {
+    const part = e.part as { type: string; text?: string; streaming?: boolean; isError?: boolean; state?: string };
+    const cap = briefs.get(s.id);
+    if (part.type === "user_text") {
+      const tag = BACK_TAG.exec((part.text ?? "").split("\n")[0] ?? "");
+      const partId = tag?.[1];
+      // Another prompt (a steer) during the brief turn: its text would become the brief.
+      if (!partId && cap) (briefs.delete(s.id), briefFailed(s.id, cap.partId, "Another message arrived during the brief", cap.at));
+      if (!partId) return;
+      const m = findMark(appSettings.get().back.marks, s.id, partId);
+      if (!m || (m.briefState !== "queued" && m.briefState !== "running")) return;
+      briefs.set(s.id, { partId, at: m.at });
+      if (m.briefState === "queued") editMark(s.id, partId, (x) => (x.briefState = "running"));
+    } else if (!cap) return;
+    else if (part.type === "assistant_text") cap.text = part.text;
+    else if (part.type === "turn_result") {
+      briefs.delete(s.id);
+      if (part.isError) briefFailed(s.id, cap.partId, "The brief turn failed", cap.at);
+      else briefDone(s.id, cap.partId, cap.text, cap.at);
+    } else if (part.type === "turn_interrupted") (briefs.delete(s.id), briefFailed(s.id, cap.partId, "The brief turn was stopped", cap.at));
+    else if (part.type === "session_state" && (part.state === "error" || part.state === "closed")) (briefs.delete(s.id), briefFailed(s.id, cap.partId, part.state === "error" ? "The session stopped with an error" : "The session closed", cap.at));
+  }
+  /** A brief item the user deleted from the queue (or Done removed): the mark says so. */
+  const briefDropped = (sessionId: string, item: { brief?: string } | undefined) => item?.brief && briefFailed(sessionId, item.brief, "Removed from queue");
+  /** Done or a deleted session: the queued brief leaves the queue. A running brief turn goes on; its answer is dropped (the mark is gone). */
+  const dropQueuedBrief = (sessionId: string, partId: string) => {
+    const item = queue.items(sessionId).find((i) => i.brief === partId);
+    if (item) queue.take(sessionId, item.id);
+  };
+  // A restart ends every queued or running brief (the queue lives in memory): the mark shows the fallback.
+  if (!opts.attached) {
+    const stuck = Object.entries(appSettings.get().back.marks).flatMap(([id, l]) => l.filter((m) => m.briefState === "queued" || m.briefState === "running").map((m) => [id, m.partId] as const));
+    if (stuck.length) {
+      try {
+        appSettings.changeMarks((marks) => stuck.forEach(([id, p]) => {
+          const m = findMark(marks, id, p);
+          if (m) (m.briefState = "failed"), (m.briefError = "Interrupted by a restart");
+        }));
+      } catch (err) {
+        console.error("saving back marks failed:", err);
+      }
+    }
+  }
+  const clock = opts.backReminders?.now ?? Date.now;
+  const hhmm = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const nextLine = (m: BackMark) => /^Next:\s*(.+)$/im.exec(m.brief?.text ?? "")?.[1]?.trim();
+  /** remindedAt first (a crash then loses the notification, never sends it twice), then one push (grouped for several) for the sessions no page covers with an in-app card. */
+  async function fireBack(items: Due[]) {
+    const now = clock();
+    const fired = new Set<string>();
+    appSettings.changeMarks((marks) => {
+      for (const { sessionId, mark } of items) {
+        const m = findMark(marks, sessionId, mark.partId);
+        if (m && m.remindedAt === undefined) (m.remindedAt = now), fired.add(`${sessionId}\0${m.partId}`);
+      }
+    });
+    broadcastSettings();
+    const send: Due[] = [];
+    for (const it of items) {
+      if (!fired.has(`${it.sessionId}\0${it.mark.partId}`)) continue;
+      const info = await history.getSessionInfo(it.sessionId).catch(() => undefined);
+      if (info?.tag === ARCHIVED_TAG) continue;
+      // The quiet rule: a page in front shows the in-app card (one event, one channel).
+      if ([...covered.values()].some((c) => c.has(it.sessionId)) || [...focused.values()].includes(it.sessionId)) continue;
+      send.push(it);
+    }
+    if (!send.length || !opts.push) return;
+    const late = (m: BackMark) => (now - (m.remindAt ?? now) > 2 * BACK_TICK_MS ? ` (was due ${hhmm(m.remindAt!)})` : "");
+    if (send.length === 1) {
+      const { sessionId, mark } = send[0]!;
+      await opts.push.send({ sessionId, title: `Come back: ${await pushTitleOf(sessionId)}`, body: `${mark.note || nextLine(mark) || mark.title}${late(mark)}`, tag: `back-${mark.partId}`, backPart: mark.partId });
+      return;
+    }
+    const titles = [...new Set(await Promise.all(send.map((i) => pushTitleOf(i.sessionId))))];
+    await opts.push.send({ sessionId: send[0]!.sessionId, title: `${send.length} replies to come back to`, body: `${titles.slice(0, 2).join(", ")}${titles.length > 2 ? ", …" : ""}`, tag: "back" });
+  }
+  const backReminders = opts.attached ? undefined : createBackReminders({ marks: () => appSettings.get().back.marks, fire: fireBack, now: clock, everyMs: opts.backReminders?.everyMs });
+
   function track(s: Session) {
     sessions.set(s.id, s);
     s.subscribe(Infinity, (e) => {
@@ -895,17 +1145,18 @@ export function createDaemon(opts: {
         if (t === "session_state") (queue.setNotLive(s.id, !s.isLive()), syncRunning());
         queue.kick(s.id);
         // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
-        if (t === "session_state" && (e.part as { state?: string }).state === "idle") markWorktreeStale(s.cwd);
+        if (t === "session_state" && (e.part as { state?: string }).state === "idle") (markWorktreeStale(s.cwd), OPENCODE_ID.test(s.id) && void flushProviders());
       }
     });
     s.subscribe(Infinity, notifier.observe);
+    s.subscribe(Infinity, (e) => observeBrief(s, e));
     s.subscribe(Infinity, (e) => orchestration.observe(s, e));
     s.subscribe(Infinity, () => touched.set(s.id, Date.now()));
     return s;
   }
 
   /** session.prompt's checks and send; the reason when the prompt is not taken. `images`: checked with imageBlock(). */
-  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean): Promise<{ code: string; message: string } | undefined> {
+  async function sendPrompt(s: Session, text: string, images: string[] = [], stillWanted?: () => boolean, out?: PromptResult): Promise<{ code: string; message: string } | undefined> {
     const notLive = () => ({ code: "session_not_live", message: `session ${s.id} is ${s.info().state}` });
     if (!s.isLive()) return notLive();
     // Sync before prompt: the prompt continues after the terminal CLI's turns (a running turn is steered as is).
@@ -917,7 +1168,7 @@ export function createDaemon(opts: {
     if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
     if (s.bashRunning()) return { code: "bash_running", message: "A shell command is running in this session; stop it first" };
     try {
-      s.prompt(text, images);
+      if (s.prompt(text, images) === undefined && out) out.local = true;
     } catch (err) {
       return { code: "prompt_failed", message: (err as Error).message };
     }
@@ -946,9 +1197,10 @@ export function createDaemon(opts: {
     settings: () => appSettings.get().orchestration,
     sessions,
     find: findSession,
-    create: (cwd, initial) => {
+    create: async (cwd, initial, engine) => {
       if (isRemoving(cwd)) throw new Error("This worktree is being removed");
-      const s = track(new Session(cwd, sessionOpts(initial)));
+      const s = engine === "opencode" ? await createOpenCodeSession(cwd, { model: initial.model, permissionMode: initial.permissionMode ?? "default", effort: initial.effort }) : track(new Session(cwd, sessionOpts(initial)));
+      if (!s) throw new Error("This worktree is being removed");
       addProject(cwd);
       // worker_start writes the link right after this call (no await): the refresh lists the worker with it.
       queueMicrotask(() => broadcast({ type: "sessions.changed" }));
@@ -966,8 +1218,10 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
+    openCodeAgents: async (cwd) => (await openCode.request<{ name: string; mode?: string; hidden?: boolean }[]>("/agent", { directory: cwd })).filter((a) => !a.hidden && a.mode !== "subagent").map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
+    openCodeModels: () => openCodeModels(openCode),
     remove: async (id) => {
       const err = await deleteSessionById(id);
       if (err?.code !== "unknown_session") return err;
@@ -1030,6 +1284,7 @@ export function createDaemon(opts: {
   /** A session's title as list() gives it: the SDK summary, a cleared session's first prompt, "New session" without transcript. */
   async function titleOf(s: Session) {
     if (s.untitled()) return "New session";
+    if (OPENCODE_ID.test(s.id)) return openCodeMeta.get(s.id)?.title ?? "New session";
     const info = await history.getSessionInfo(s.id).catch(() => undefined);
     if (!info) return "New session";
     return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
@@ -1052,8 +1307,63 @@ export function createDaemon(opts: {
     const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!allowed(cwd)), ok.get(cwd)!));
     const ids = new Set((await transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId));
     for (const id of sessions.keys()) ids.add(id);
+    for (const id of openCodeMeta.keys()) ids.add(id);
     for (const id of deleting) ids.delete(id);
     return [...ids];
+  }
+
+  /** The error text of the last failed OpenCode listing: logged once per change, not on every list. */
+  let openCodeListError: string | undefined;
+  /**
+   * OpenCode sessions of `cwds` (docs/spec.md "OpenCode engine"). Only when the server runs or the last created session was OpenCode's, so a Claude-only
+   * user never starts it. shortcut: a user whose last engine is Claude sees OpenCode-TUI sessions only after the server started in this daemon run.
+   * `ran`: the listing answered for every folder (an entry missing from it is gone); a failing OpenCode lists none and never fails the Claude list.
+   */
+  async function listOpenCode(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
+    const none = () => ({ items: [] as SessionListItem[], ids: new Set<string>(), ran: false });
+    if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return none();
+    // Not answering within the wait: no OpenCode items and no prune (`ran` false); the start goes on and the next list has them. The late result is dropped.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<ReturnType<typeof none>>((resolve) => {
+      timer = setTimeout(() => {
+        const text = "OpenCode did not answer the session list in time";
+        if (text !== openCodeListError) console.error(`listing OpenCode sessions failed: ${text}`);
+        openCodeListError = text;
+        resolve(none());
+      }, opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS);
+    });
+    try {
+      const read = readOpenCodeList(cwds, linked, links);
+      const r = await Promise.race([read, late]);
+      // The list that did not wait: clients ask again once OpenCode answered.
+      if (!r.ran && openCodeListError?.endsWith("in time")) void read.then((x) => x.ran && broadcast({ type: "sessions.changed" }));
+      return r;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function readOpenCodeList(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
+    const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
+    try {
+      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd })] as const);
+      openCodeListError = undefined;
+      out.ran = true;
+      for (const [cwd, list] of rows)
+        for (const row of list) {
+          const loaded = sessions.get(row.id);
+          const saved = linked.get(row.id);
+          const mode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
+          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: "opencode" as const };
+          openCodeMeta.set(row.id, { cwd, title: row.title });
+          out.ids.add(row.id);
+          out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
+        }
+    } catch (err) {
+      const text = (err as Error).message;
+      if (text !== openCodeListError) console.error("listing OpenCode sessions failed:", text);
+      openCodeListError = text;
+    }
+    return out;
   }
 
   async function listNow(): Promise<ListResult> {
@@ -1072,9 +1382,7 @@ export function createDaemon(opts: {
       const l = linked.get(id);
       return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
     };
-    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
     const known = new Set(all.map((t) => t.sessionId));
-    saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id)));
     // One realpath per distinct cwd per list, not two per transcript: each is a blocking call (slow on Windows), and hundreds of
     // transcripts share a few dozen cwds.
     const canonical = new Map<string, string | undefined>();
@@ -1084,13 +1392,13 @@ export function createDaemon(opts: {
       // An Aside is not a session of the list until Keep as session.
       if (!t.cwd || !allowedCwd(t.cwd) || linked.get(t.sessionId)?.ownerId) continue;
       const loaded = sessions.get(t.sessionId);
-      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [] };
+      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: ALL_CAPABILITIES, engine: "claude" as const };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.liveQuery() && { live: false as const }), ...links(t.sessionId) });
+      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.live() && { live: false as const }), ...links(t.sessionId) });
     }
     // Sessions of this run that have no transcript yet (no prompt sent).
     for (const s of sessions.values())
-      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.liveQuery() && { live: false as const }), ...links(s.id) });
+      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -1113,13 +1421,24 @@ export function createDaemon(opts: {
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
     // Sessions of a project's worktrees show under the project (outside the roots there are none: `listed` has only allowed cwds).
     const shown = new Set([...open, ...worktreePaths]);
-    const topIds = new Set(listed.filter((s) => shown.has(trim(s.cwd))).map((s) => s.id));
+    const oc = await listOpenCode([...shown], linked, links);
+    const byId = new Map(listed.map((s) => [s.id, s]));
+    for (const s of oc.items) byId.set(s.id, s);
+    const all2 = [...byId.values()];
+    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
+    // An OpenCode entry stays unless this list asked OpenCode and it did not return the session.
+    saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id) || (OPENCODE_ID.test(id) && !(oc.ran && !oc.ids.has(id)))));
+    const topIds = new Set(all2.filter((s) => shown.has(trim(s.cwd))).map((s) => s.id));
     return {
+      engines: [
+        { engine: "claude", capabilities: ALL_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }) },
+        { engine: "opencode", capabilities: OPENCODE_CAPABILITIES, permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }) },
+      ],
       projects: open,
       recentProjects: projects.recent(listed).filter((r) => !shown.has(r.cwd)),
       worktrees,
       // A worker of a listed coordinator shows under it, also when the user removed the worker's project.
-      sessions: listed.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
+      sessions: all2.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
       permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }),
     };
   }
@@ -1130,15 +1449,37 @@ export function createDaemon(opts: {
     return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
   };
 
+  /** An OpenCode session rebuilt from its stored messages. Its folder: the one listed or created, else asked of OpenCode. */
+  async function restoreOpenCode(id: string): Promise<Session | undefined> {
+    const known = openCodeMeta.get(id);
+    // shortcut: a session of a folder not seen yet is found only when OpenCode answers `GET /session/{id}` without a directory (unverified against a real server).
+    const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd }).catch(() => undefined);
+    const cwd = row && allowed(known?.cwd ?? row.directory);
+    if (!row || !cwd || isRemoving(cwd)) return undefined;
+    const history = await loadOpenCodeHistory(openCode, id, cwd);
+    openCodeMeta.set(id, { cwd, title: row.title });
+    const saved = settings.get(id);
+    const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
+    const effort = EFFORTS.includes(saved?.effort as never) ? (saved!.effort as SessionSettings["effort"]) : undefined;
+    const model = isModel(saved?.model) ? saved.model : undefined;
+    return track(Session.restore(id, cwd, history as never, openCodeSessionOpts({ model, permissionMode, effort })));
+  }
+
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   function findSession(id: string): Promise<Session | undefined> {
     // Its transcript still exists until the delete ends; a restore now would bring the session back.
     if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
     if (live) return Promise.resolve(live);
-    // The ID becomes a transcript file name; only a UUID may reach the SDK.
-    if (typeof id !== "string" || !UUID.test(id)) return Promise.resolve(undefined);
+    // The ID becomes a transcript file name or a request path; only a UUID may reach the SDK, only `ses_…` OpenCode.
+    if (typeof id !== "string" || (!UUID.test(id) && !OPENCODE_ID.test(id))) return Promise.resolve(undefined);
     let p = restoring.get(id);
+    if (!p && OPENCODE_ID.test(id)) {
+      p = restoreOpenCode(id)
+        .catch((err) => void console.error(`restoring session ${id} failed:`, err))
+        .finally(() => restoring.delete(id));
+      restoring.set(id, p);
+    }
     if (!p) {
       p = (async () => {
         const info = await history.getSessionInfo(id);
@@ -1175,6 +1516,11 @@ export function createDaemon(opts: {
   /** Working directory and transcript of a listed session (live or inside the roots); undefined when unknown. */
   async function locate(id: string) {
     const live = sessions.get(id);
+    // OpenCode: the folder it was listed, created or opened in; its store is OpenCode's.
+    if (typeof id === "string" && OPENCODE_ID.test(id)) {
+      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      return cwd && allowed(cwd) ? { cwd, live, transcript: false } : undefined;
+    }
     if (!live && (typeof id !== "string" || !UUID.test(id))) return undefined;
     const info = await history.getSessionInfo(id).catch(() => undefined);
     const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
@@ -1203,16 +1549,29 @@ export function createDaemon(opts: {
     touched.delete(id);
     try {
       await at.live?.close();
-      if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
+      if (OPENCODE_ID.test(id)) await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
+      else if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
     } catch (e) {
       return { code: "delete_failed", message: (e as Error).message };
     } finally {
       deleting.delete(id);
+      // A model refresh held back by this running OpenCode session no longer waits for it.
+      if (OPENCODE_ID.test(id)) void flushProviders();
     }
     caches.delete(id);
+    openCodeMeta.delete(id);
     // The folder of a session whose CLI a /clear heir still uses stays with the heir.
     if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
+    briefs.delete(id);
+    if (appSettings.get().back.marks[id]) {
+      try {
+        appSettings.changeMarks((marks) => void delete marks[id]);
+        broadcastSettings();
+      } catch (e) {
+        console.error(`session ${id}: removing its back marks failed:`, e);
+      }
+    }
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
   }
@@ -1482,6 +1841,7 @@ export function createDaemon(opts: {
   const http = createServer((req, res) => {
     let path: string;
     const rawPath = (req.url ?? "/").split("?")[0] ?? "";
+    if (rawPath === "/opencode-mcp") return void serveOpenCodeMcp(req, res).catch((err) => (console.error("opencode-mcp failed:", (err as Error).message), res.headersSent || res.writeHead(500), res.end()));
     if (rawPath.startsWith("/media/")) {
       const m = /^\/media\/([0-9a-f]{32})\/[^/]*$/.exec(rawPath);
       return m ? serveMedia(req, res, m[1]!) : void res.writeHead(404).end();
@@ -1556,7 +1916,9 @@ export function createDaemon(opts: {
   http.on("close", () => clearInterval(pinger));
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
-    const sameHost = sameMachine(req);
+    const sameBrowser = sameMachine(req);
+    // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011).
+    const sameHost = sameBrowser || (virtual.has(ws) && !!opts.openExternal?.winPath);
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
@@ -1755,9 +2117,23 @@ export function createDaemon(opts: {
           if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
             return fail("bad_cwd", `not a directory: ${msg.cwd}`);
           if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
+          if (msg.engine !== undefined && !(ENGINES as readonly unknown[]).includes(msg.engine)) return fail("bad_request", `engine must be one of ${ENGINES.join(", ")}`);
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
+          if (msg.engine === "opencode") {
+            // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
+            let s: Session | undefined;
+            try {
+              s = await createOpenCodeSession(cwd, { model: msg.model, permissionMode: OPENCODE_MODES.find((m) => m === appSettings.get().sessions.defaultMode) ?? "default" });
+            } catch (err) {
+              const e = openCodeFail(err);
+              return fail(e.code, e.message);
+            }
+            if (!s) return fail("worktree_removing", "This worktree is being removed");
+            rememberEngine("opencode");
+            return reply({ session: s.info() });
+          }
           await modelList().catch(() => {});
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
@@ -1766,7 +2142,65 @@ export function createDaemon(opts: {
           if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
           const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
+          rememberEngine("claude");
           return reply({ session: s.info() });
+        }
+        case "opencode.status":
+          return reply(await openCode.status());
+        case "opencode.providers":
+        case "opencode.login":
+        case "opencode.loginFinish":
+        case "opencode.loginCancel":
+        case "opencode.logout": {
+          // Credentials pass straight to OpenCode: never logged, never in an error text.
+          const provider = "provider" in msg && typeof msg.provider === "string" ? msg.provider : "";
+          const field = (m: string) => fail("invalid_input", m);
+          let wait: AbortController | undefined;
+          const cleanWait = () => wait && oauthWaits.get(provider) === wait && oauthWaits.delete(provider);
+          try {
+            if (msg.type === "opencode.loginCancel") return (oauthWaits.get(provider)?.abort(), oauthWaits.delete(provider), reply({}));
+            // Registered before the slow list: a loginCancel in that window must reach this wait.
+            wait = msg.type === "opencode.loginFinish" ? new AbortController() : undefined;
+            if (wait) (oauthWaits.get(provider)?.abort(), oauthWaits.set(provider, wait));
+            const providers = await listProviders(openCode).catch((err) => (cleanWait(), Promise.reject(err)));
+            if (wait?.signal.aborted) return fail("cancelled", "Login cancelled");
+            if (msg.type === "opencode.providers") return reply({ providers });
+            if (msg.type === "opencode.logout") {
+              if (!providers.some((p) => p.id === provider)) return field("provider: Unknown provider");
+              await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "DELETE" });
+              await refreshProviders();
+              return reply({ providers: await listProviders(openCode) });
+            }
+            const api = msg.type === "opencode.login" && providers.find((p) => p.id === provider)?.methods[msg.method as number]?.type === "api";
+            const c = checkLogin(msg, providers, api ? "api" : "oauth");
+            if ("error" in c) return (cleanWait(), field(c.error));
+            const base = `/provider/${encodeURIComponent(provider)}/oauth`;
+            if (msg.type === "opencode.login" && api) {
+              await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "PUT", body: { type: "api", key: c.key, ...(c.inputs && Object.keys(c.inputs).length && { metadata: c.inputs }) } });
+              await refreshProviders();
+              return reply({ providers: await listProviders(openCode) });
+            }
+            if (msg.type === "opencode.login") {
+              oauthWaits.get(provider)?.abort();
+              const r = await openCode.request<{ url: string; method: "auto" | "code"; instructions?: string } | null>(`${base}/authorize`, { method: "POST", body: { method: msg.method, ...(c.inputs && { inputs: c.inputs }) } });
+              if (!r?.url) return fail("login_failed", "OpenCode gave no login page for this method.");
+              return reply({ url: r.url, mode: r.method, instructions: r.instructions ?? "" });
+            }
+            const ctl = wait!;
+            try {
+              await openCode.request(`${base}/callback`, { method: "POST", body: { method: msg.method, ...(typeof msg.code === "string" && msg.code && { code: msg.code }) }, timeoutMs: 15 * 60_000, signal: ctl.signal });
+            } catch (err) {
+              if (ctl.signal.aborted) return fail("cancelled", "Login cancelled");
+              throw err;
+            } finally {
+              if (oauthWaits.get(provider) === ctl) oauthWaits.delete(provider);
+            }
+            await refreshProviders();
+            return reply({ providers: await listProviders(openCode) });
+          } catch (err) {
+            if (err instanceof OpenCodeError) return fail(err.code, err.message);
+            return fail("login_failed", loginError(err));
+          }
         }
         case "session.defaultMode": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
@@ -1778,7 +2212,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
-            return reply({ commands: await commandsOf(cwd) });
+            return reply({ commands: await (msg.engine === "opencode" ? openCodeEngine.commands(cwd) : commandsOf(cwd)) });
           } catch (e) {
             return fail("commands_failed", (e as Error).message);
           }
@@ -1876,10 +2310,11 @@ export function createDaemon(opts: {
           if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
             return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
           if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
-          const err = await sendPrompt(s, msg.text, images);
+          const out: PromptResult = {};
+          const err = await sendPrompt(s, msg.text, images, undefined, out);
           // A refused prompt keeps a usage-limit pause.
           if (!err) queue.release(s.id);
-          return err ? fail(err.code, err.message) : reply({});
+          return err ? fail(err.code, err.message) : reply(out);
         }
         case "session.enqueue": {
           const s = await find(msg.sessionId);
@@ -1897,12 +2332,16 @@ export function createDaemon(opts: {
           const s = sessions.get(msg.sessionId);
           if (!s) return fail("unknown_item", "queued message not found (already sent?)");
           const item = queue.take(s.id, msg.itemId);
+          briefDropped(s.id, item);
           return item ? reply({ text: item.text, images: item.images, ...(item.bash && { bash: true }) }) : fail("unknown_item", "queued message not found (already sent?)");
         }
         case "session.sendQueued": {
           const s = sessions.get(msg.sessionId);
           if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
-          const bash = queue.items(s.id).find((i) => i.id === msg.itemId)?.bash;
+          const queued = queue.items(s.id).find((i) => i.id === msg.itemId);
+          const bash = queued?.bash;
+          // A brief turn never steers into a running turn: Send now only while the session takes a prompt.
+          if (queued?.brief && !s.takesQueued()) return fail("session_busy", "The brief waits for the current turn to end");
           const err = await queue.sendNow(s.id, msg.itemId);
           // A refused Send now (any reason) leaves a scheduled auto-continue alone.
           if (err) return fail(err.code, err.message);
@@ -1952,7 +2391,7 @@ export function createDaemon(opts: {
           if (msg.type === "session.setPermissionMode" && settings.get(s.id)?.readOnly) {
             saveSettings(() => settings.set(s.id, { readOnly: undefined }, ["readOnly"]));
             // shortcut: while a turn runs the edits stay off until its CLI ends (idle close, restart); restart at turn end if users ask.
-            if (s.info().state === "idle" && s.liveQuery()) s.restartQuery();
+            if (s.info().state === "idle" && s.live()) s.restartQuery();
           }
           return reply({ session: s.info() });
         }
@@ -2052,12 +2491,16 @@ export function createDaemon(opts: {
           const { answers } = msg;
           if (typeof msg.requestId !== "string" || typeof answers !== "object" || !answers || Object.values(answers).some((v) => typeof v !== "string"))
             return fail("bad_request", "requestId and answers (question text -> string) required");
-          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers));
+          const { choices } = msg;
+          // Each list is the chosen labels and the Other text: bounded like the answers a user can type.
+          if (choices !== undefined && (typeof choices !== "object" || !choices || Array.isArray(choices) || Object.values(choices).some((l) => !Array.isArray(l) || l.length > 50 || l.some((v) => typeof v !== "string" || v.length > 10_000))))
+            return fail("bad_request", "choices must map a question text to at most 50 strings");
+          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers, undefined, choices));
           return reply({ settled });
         }
         case "models.list": {
           try {
-            return reply({ models: await modelList() });
+            return reply({ models: msg.engine === "opencode" ? await openCodeModels(openCode) : await modelList() });
           } catch (e) {
             return fail("models_failed", (e as Error).message);
           }
@@ -2152,11 +2595,15 @@ export function createDaemon(opts: {
           }
         }
         case "settings.set": {
+          // The command runs on the daemon machine's desktop: a remote browser must not plant it for the local user's next click.
+          if (msg.patch?.editor !== undefined && !sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
           try {
             const picked = msg.patch?.claude?.account;
             if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
             const before = appSettings.get().claude.account;
+            const openCodePath = appSettings.get().opencode.path;
             const settings = appSettings.set(msg.patch);
+            if (settings.opencode.path !== openCodePath) void openCode.reset();
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
             const urlPatched = msg.patch?.jira?.url !== undefined;
@@ -2176,6 +2623,56 @@ export function createDaemon(opts: {
             return fail("bad_settings", (err as Error).message);
           }
         }
+        case "back.set":
+        case "back.done":
+        case "back.brief": {
+          if (opts.attached) return fail("back_unsupported", "Back marks are kept by the Hub; mark this reply on the Hub");
+          if (typeof msg.sessionId !== "string" || typeof msg.partId !== "string") return fail("bad_request", "sessionId and partId must be strings");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          const marks = appSettings.get().back.marks;
+          if (msg.type === "back.done") {
+            // Existing mark or not: Done is idempotent. A queued brief leaves the queue; a running one ends into nothing.
+            dropQueuedBrief(s.id, msg.partId);
+            try {
+              appSettings.changeMarks((m) => {
+                const list = m[s.id]?.filter((x) => x.partId !== msg.partId);
+                if (list?.length) m[s.id] = list;
+                else delete m[s.id];
+              });
+            } catch (e) {
+              return fail("save_failed", (e as Error).message);
+            }
+            broadcastSettings();
+            return reply({});
+          }
+          if (msg.type === "back.brief") {
+            const m = findMark(marks, s.id, msg.partId);
+            if (!m) return fail("unknown_mark", "no such mark");
+            if (m.briefState === "queued" || m.briefState === "running") return fail("brief_busy", "a brief is already being written");
+            await startBrief(s, msg.partId, !!m.brief);
+            return reply({});
+          }
+          const bad = checkSet(msg);
+          if (bad) return fail("bad_request", bad);
+          const exists = !!findMark(marks, s.id, msg.partId);
+          if (!exists && marksTotal(marks) >= BACK_MARKS_MAX) return fail("too_many_marks", `at most ${BACK_MARKS_MAX} marks`);
+          let isNew = false;
+          try {
+            appSettings.changeMarks((m) => {
+              const list = (m[s.id] ??= []);
+              const r = upsertMark(list, msg as { partId: string; title: string }, clock());
+              isNew = r.isNew;
+              // In the same write: the first settings_changed already shows the pending brief, not the fallback.
+              if (isNew) r.mark.briefState = "queued";
+            });
+          } catch (e) {
+            return fail("save_failed", (e as Error).message);
+          }
+          broadcastSettings();
+          if (isNew) void startBrief(s, msg.partId, false).catch((e) => briefFailed(s.id, msg.partId, (e as Error).message));
+          return reply({});
+        }
         case "session.rename":
         case "session.archive": {
           const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
@@ -2185,7 +2682,11 @@ export function createDaemon(opts: {
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
           try {
-            if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
+            if (OPENCODE_ID.test(msg.sessionId)) {
+              // Archive: `time.archived` set; 0 clears it (null is accepted but keeps it, verified on 1.18.35).
+              await openCode.request(`/session/${msg.sessionId}`, { method: "PATCH", directory: at.cwd, body: msg.type === "session.rename" ? { title } : { time: { archived: msg.archived ? Date.now() : 0 } } });
+              if (msg.type === "session.rename") openCodeMeta.set(msg.sessionId, { cwd: at.cwd, title });
+            } else if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
             else await history.tagSession(msg.sessionId, msg.archived ? ARCHIVED_TAG : null, { dir: at.cwd });
           } catch (e) {
             // A session with no prompt yet has no transcript to write to.
@@ -2204,6 +2705,35 @@ export function createDaemon(opts: {
           if (!owner) return;
           const text = msg.text.trim();
           const title = text.split("\n")[0]!.trim().slice(0, 80);
+          if (OPENCODE_ID.test(owner.id)) {
+            let forkId: string | undefined;
+            try {
+              const at = { directory: owner.cwd };
+              const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
+              // After a rewind the cut messages stay stored until the next prompt: the fork ends before the cut.
+              const revert = (await openCode.request<{ revert?: { messageID: string } | null }>(`/session/${owner.id}`, at)).revert?.messageID;
+              const cut = revert ? stored.findIndex((m) => m.info.id === revert) : -1;
+              const kept = cut < 0 ? stored : stored.slice(0, cut);
+              if (!kept.length) return fail("aside_unavailable", "An aside needs a message in this session first");
+              // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
+              const messageID = cut < 0 ? stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id : revert;
+              forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
+              openCodeMeta.set(forkId, { cwd: owner.cwd, title });
+              await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });
+              const oi = owner.info();
+              saveSettings(() => settings.set(forkId!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
+              const s = await findSession(forkId);
+              if (!s) throw new Error("the fork could not be restored");
+              const from = s.prompt(text) ?? "";
+              return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
+            } catch (e) {
+              if (forkId) {
+                const err = await deleteSessionById(forkId, true).catch(() => undefined);
+                if (err) saveSettings(() => settings.delete([forkId!]));
+              }
+              return fail("aside_failed", (e as Error).message);
+            }
+          }
           let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
           try {
             if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
@@ -2222,7 +2752,7 @@ export function createDaemon(opts: {
             saveSettings(() => settings.set(id!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
             const s = await findSession(id);
             if (!s) throw new Error("the fork could not be restored");
-            const from = s.prompt(text);
+            const from = s.prompt(text) ?? "";
             return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
           } catch (e) {
             if (id) {
@@ -2743,9 +3273,21 @@ export function createDaemon(opts: {
           try {
             const isDir = statSync(target).isDirectory();
             if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
+            if (msg.with === "custom") {
+              // From the hub's own settings, never from the message.
+              const argv = parseEditorCommand(appSettings.get().editor.command);
+              const env = process.env;
+              try {
+                await opts.openExternal.run(customCommand(argv, target, root, isDir, process.platform, (n) => findOnPath({ platform: process.platform, env, exists: existsSync }, n)));
+              } catch (err) {
+                return fail((err as { code?: string }).code === "editor_missing" ? "editor_missing" : "open_failed", (err as Error).message);
+              }
+              return reply({});
+            }
             const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
             if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
-            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher));
+            const wslPath = msg.with === "reveal" || msg.with === "default" ? await opts.openExternal.winPath?.(target) : undefined;
+            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher, wslPath));
             return reply({});
           } catch (err) {
             return fail("open_failed", (err as Error).message);
@@ -2941,7 +3483,7 @@ export function createDaemon(opts: {
           // The session's running query when it runs in that project; otherwise the project's config query.
           const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
           try {
-            const live = s?.cwd === cwd ? s.liveQuery() : undefined;
+            const live = s?.cwd === cwd ? s.claudeQuery() : undefined;
             const r = msg.type.startsWith("skills.") ? await config.skills(msg as SkillsRequest, cwd, live) : await config.mcp(msg as McpRequest, cwd, live);
             if (msg.type === "skills.setState") commandCache.clear();
             return reply(r);
@@ -2999,6 +3541,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
       });
@@ -3036,7 +3579,7 @@ export function createDaemon(opts: {
               );
               continue;
             }
-            if (!holds.get(s.id) && s.liveQuery() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery()) {
+            if (!holds.get(s.id) && s.live() && now - (touched.get(s.id) ?? 0) >= idleCloseMs && !orchestration.waitingOnWorkers(s.id) && s.releaseQuery()) {
               console.log(`session ${s.id}: idle ${Math.round(idleCloseMs / 60_000)} min without a tab, CLI closed`);
               orchestration.released(s.id);
             }
@@ -3053,7 +3596,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), opts.keepAwake?.close(), orchestration.shutdown(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

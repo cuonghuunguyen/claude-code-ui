@@ -1,0 +1,260 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1794087225986
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     },
+     "summary": {
+      "diffs": []
+     },
+     "id": "msg_1b7ee8a82001ozGd634nyI8jFS",
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7eebd72001s5CS5w9G62oymr",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794087239026
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Write a 600 word essay about rivers. No tools.",
+     "messageID": "msg_1b7eebd72001s5CS5w9G62oymr",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1b7eebd72002QXHNZzpjwY3gr0"
+    },
+    "time": 1794087239027
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7eebd760016x1xEZrLS6nqPn",
+     "parentID": "msg_1b7eebd72001s5CS5w9G62oymr",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087239030
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1794087239026
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     },
+     "id": "msg_1b7eebd72001s5CS5w9G62oymr",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7eec46c001iKoHACY1iXyOlg",
+     "messageID": "msg_1b7eebd760016x1xEZrLS6nqPn",
+     "sessionID": "ses_ROOT",
+     "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+     "type": "step-start"
+    },
+    "time": 1794087240812
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7eec46e001zeYV1BeakUr1Ix",
+     "messageID": "msg_1b7eebd760016x1xEZrLS6nqPn",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "",
+     "time": {
+      "start": 1794087240814
+     }
+    },
+    "time": 1794087240814
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_1b7eebd760016x1xEZrLS6nqPn",
+    "partID": "prt_1b7eec46e001zeYV1BeakUr1Ix",
+    "field": "text",
+    "delta": "The"
+   }
+  }
+ ],
+ "abort": [
+  {
+   "type": "session.error",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "error": {
+     "name": "MessageAbortedError",
+     "data": {
+      "message": "Aborted"
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7eec76e0017CAd2BlW9P2f3T",
+     "messageID": "msg_1b7eebd760016x1xEZrLS6nqPn",
+     "sessionID": "ses_ROOT",
+     "type": "text",
+     "text": "# Rivers\n\nA river begins quietly, often as something easy to miss: a seep of meltwater beneath a boulder, a thread of rain gathered in a mountain hollow, a spring no wider than a dinner plate. From these small origins it gathers momentum, drawing in tribut",
+     "time": {
+      "start": 1794087241582,
+      "end": 1794087242331
+     }
+    },
+    "time": 1794087242331
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7eebd760016x1xEZrLS6nqPn",
+     "parentID": "msg_1b7eebd72001s5CS5w9G62oymr",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087239030,
+      "completed": 1794087242332
+     },
+     "sessionID": "ses_ROOT",
+     "error": {
+      "name": "MessageAbortedError",
+      "data": {
+       "message": "Aborted"
+      }
+     }
+    }
+   }
+  }
+ ]
+}

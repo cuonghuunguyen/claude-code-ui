@@ -157,6 +157,12 @@ describe("edit before accept", () => {
     }
   });
 
+  it("noEdit hides Edit content and keeps the diff", () => {
+    const html = renderToStaticMarkup(<PermissionPanel part={{ ...edit, noEdit: true }} onRespond={() => {}} />);
+    expect(html).toContain('data-testid="edit-diff"');
+    expect(html).not.toContain("Edit content");
+  });
+
   it("Edit content swaps the diff for the editable content; Show diff swaps back and keeps the draft", () => {
     const el = document.createElement("div");
     document.body.append(el);

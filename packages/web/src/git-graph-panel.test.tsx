@@ -320,7 +320,7 @@ it("the branch select has a HEAD entry (with the current branch) that asks for r
   await act(async () => trigger.click());
   await flush();
   const items = [...document.querySelectorAll<HTMLElement>("[role=option]")].filter((o) => !o.closest("[data-testid=commit-list]"));
-  expect(items.map((o) => o.textContent)).toEqual(["All branches", "HEAD (main)", "main", "origin/main"]);
+  expect(items.map((o) => o.textContent)).toEqual(["All branches", "HEAD (main)", "main"]);
   await act(async () => items[1]!.click());
   await flush();
   expect(c.sent.filter((m) => m.type === "git.log").at(-1)).toMatchObject({ ref: "HEAD", skip: 0 });
@@ -380,7 +380,7 @@ it("a detached HEAD chip offers no Push or Pull, only Fetch", async () => {
   await mount(c);
   await menuAt([...el.querySelectorAll("[data-testid=commit-ref]")].find((x) => x.textContent === "HEAD")!);
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "New branch from 0000000…", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["New Branch…"]);
 });
 
 it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
@@ -808,14 +808,15 @@ it("right click on a local branch chip offers Push, Force push and Pull; a remot
   await mount(c);
   await menuAt(chip("refs/heads/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
-  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
-  expect(items().filter((i) => i.dataset.testid !== "branch-checkout").every((i) => !i.hasAttribute("data-disabled"))).toBe(true);
+  // The current branch ("here"): no Checkout, Merge or Rebase; no Fetch (the toolbar has it).
+  expect(itemTexts()).toEqual(["Push", "Force push…", "Pull", "New branch from main…"]);
+  expect(items().every((i) => !i.hasAttribute("data-disabled"))).toBe(true);
   await closeMenu();
   c.sent.length = 0;
   await menuAt(chip("refs/remotes/origin/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
   expect(byId("branch-push")).toBeNull();
-  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from 0000000…", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from origin/main…"]);
   expect(byId("branch-none")).toBeNull();
 });
 
@@ -837,19 +838,20 @@ it("a long press on a branch chip with touch (no contextmenu event) opens the fu
   await mount(c);
   await longPress(chip("refs/heads/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
-  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull", "Fetch all remotes"]));
+  expect(itemTexts()).toEqual(["Push", "Force push…", "Pull", "New branch from main…"]);
 });
 
-it("a long press on a row with touch targets the row's local branches; on a remote chip only Fetch", async () => {
+it("a long press on a row with touch opens the commit menu; on a remote chip the branch's", async () => {
   const c = fake(withRefs());
   await mount(c);
   await longPress(rowEls()[1]!);
-  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/feat"]);
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(2)]);
   await closeMenu();
   c.sent.length = 0;
   await longPress(chip("refs/remotes/origin/main"));
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from 0000000…", "Fetch all remotes"]);
+  expect(itemTexts()).toEqual(["Checkout as new local branch", "New branch from origin/main…"]);
 });
 
 it("the group header keeps the branch name and the ownership note on separate lines", async () => {
@@ -861,17 +863,18 @@ it("the group header keeps the branch name and the ownership note on separate li
   expect([...head.children].map((x) => x.textContent)).toEqual(["main", "not checked out here"]);
 });
 
-it("a row right click targets its local branches; Shift+F10 on the list targets the selected row", async () => {
+it("a row right click opens its commit menu; Shift+F10 on the list the selected row's", async () => {
   const c = fake(withRefs());
   await mount(c);
   await menuAt(rowEls()[1]!);
-  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/feat"]);
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
+  expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(2)]);
   await closeMenu();
   c.sent.length = 0;
   await select(0);
   await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
   await menuAt(list());
-  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
+  expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(3)]);
 });
 
 it("a right click or long press on empty list space does not target the selected row", async () => {
@@ -881,12 +884,12 @@ it("a right click or long press on empty list space does not target the selected
   c.sent.length = 0;
   await act(async () => void list().dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true })));
   await menuAt(list());
-  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "New branch from HEAD…", "Fetch all remotes"]);
+  expect(c.sent.filter((m) => m.type === "git.commitMenu")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here"]);
   await closeMenu();
   await longPress(list());
-  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["No local branch here", "New branch from HEAD…", "Fetch all remotes"]);
+  expect(c.sent.filter((m) => m.type === "git.commitMenu")).toEqual([]);
+  expect(itemTexts()).toEqual(["No local branch here"]);
 });
 
 it("Force push asks first: the dialog shows the exact command; Cancel runs nothing; Confirm sends git.push with the lease and reloads fresh", async () => {
@@ -931,6 +934,7 @@ it("Push and Pull confirm with the exact command too; Pull sends git.pull", asyn
 it("Merge and Rebase name HEAD's branch, show the exact command and send the hashes the menu showed; a stop on conflicts says so", async () => {
   const c = fake(withRefs());
   await mount(c);
+  branchInfo = () => infoMain({ checkedOut: undefined });
   await menuAt(chip("refs/heads/main"));
   expect(byId("branch-merge").textContent).toBe("Merge into dev…");
   expect(byId("branch-rebase").textContent).toBe("Rebase dev onto main…");
@@ -955,10 +959,10 @@ it("Merge and Rebase name HEAD's branch, show the exact command and send the has
 it("Merge and Rebase are disabled with the reason git gave", async () => {
   const c = fake(withRefs());
   await mount(c);
-  branchInfo = () => infoMain({ merge: undefined, rebase: undefined, why: { merge: "This is the current branch", rebase: "This is the current branch" } });
+  branchInfo = () => infoMain({ checkedOut: undefined, merge: undefined, rebase: undefined, why: { merge: "A merge is in progress", rebase: "A merge is in progress" } });
   await menuAt(chip("refs/heads/main"));
   expect(byId("branch-merge").hasAttribute("data-disabled")).toBe(true);
-  expect(byId("branch-merge").textContent).toContain("This is the current branch");
+  expect(byId("branch-merge").textContent).toContain("A merge is in progress");
 });
 
 it("a branch not checked out here says so in the menu and the dialog; one in another worktree disables Pull with the reason", async () => {
@@ -1016,7 +1020,7 @@ it("Push (plain) sends the plain push argv, not the force one, and no lease", as
   expect(JSON.stringify(sent[0])).not.toContain("force-with-lease");
 });
 
-it("a click on empty list space then Shift+F10 opens the selected row's branches, not an empty menu", async () => {
+it("a click on empty list space then Shift+F10 opens the selected row's commit menu, not an empty menu", async () => {
   const c = fake(withRefs());
   await mount(c);
   await select(0);
@@ -1025,8 +1029,8 @@ it("a click on empty list space then Shift+F10 opens the selected row's branches
   c.sent.length = 0;
   await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
   await menuAt(list());
-  expect(c.sent.filter((m) => m.type === "git.branch").map((m) => m.ref)).toEqual(["refs/heads/main"]);
-  expect(itemTexts()).toEqual(expect.arrayContaining(["Push", "Force push…", "Pull"]));
+  expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(3)]);
+  expect(itemTexts()).toEqual(["New Branch…"]);
 });
 
 it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
@@ -1051,7 +1055,8 @@ it("exact: every git request carries exact: true, and Refresh calls onRefresh", 
   await act(async () => fileBtn(2).click());
   await flush();
   await menuAt(chip("refs/heads/feat"));
-  await act(async () => byId("branch-fetch").click());
+  await closeMenu();
+  await act(async () => byId("graph-fetch").click());
   await flush();
   await act(async () => el.querySelector<HTMLElement>("button[aria-label=Refresh]")!.click());
   await flush();
@@ -1088,8 +1093,8 @@ it("Checkout sends git.checkout and says so; the current branch's item is disabl
   const c = fake(withRefs());
   await mount(c);
   await menuAt(chip("refs/heads/main"));
-  expect(byId("branch-checkout").hasAttribute("data-disabled")).toBe(true);
-  expect(byId("branch-checkout").textContent).toContain("This is the current branch");
+  // The current branch can never be checked out, merged or rebased: those items are absent, not disabled.
+  for (const id of ["branch-checkout", "branch-merge", "branch-rebase"]) expect(byId(id)).toBeNull();
   await closeMenu();
   branchInfo = () => infoMain({ checkedOut: undefined });
   writeReply = async () => ({ written: { output: "", refs: "s2" } });
@@ -1137,7 +1142,7 @@ it("New branch from a row sends git.branchCreate with the row's hash and checkou
   writeReply = async () => ({ written: { output: "", refs: "s2" } });
   const row = rowEls()[1]!;
   await menuAt(row);
-  expect(byId("branch-new").textContent).toBe(`New branch from ${hash(2).slice(0, 7)}…`);
+  expect(byId("branch-new").textContent).toBe("New Branch…");
   await act(async () => byId("branch-new").click());
   expect(byId("git-new-branch-confirm").hasAttribute("disabled")).toBe(true);
   const input = byId("git-new-branch-name") as HTMLInputElement;
@@ -1151,16 +1156,31 @@ it("New branch from a row sends git.branchCreate with the row's hash and checkou
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created and checked out topic");
 });
 
-it("New branch from a chip in the commit details uses the shown commit", async () => {
+it("details of a commit: a chip opens its branch's actions, the rest of the refs line the commit menu", async () => {
   const c = fake(withRefs());
   await mount(c);
   await select(1);
-  const inDetails = [...el.querySelectorAll("[data-testid=commit-details] [data-ref]")][0]!;
+  const inDetails = el.querySelector("[data-testid=commit-details] [data-ref]")!;
   await menuAt(inDetails);
-  expect(byId("branch-new").textContent).toBe(`New branch from ${hash(2).slice(0, 7)}…`);
+  expect(byId("branch-new").textContent).toBe("New branch from origin/main…");
+  await closeMenu();
+  await menuAt(el.querySelector("[data-testid=commit-details] [data-hash]")!);
+  expect(byId("branch-new").textContent).toBe("New Branch…");
 });
 
 const rowOf = (h: string) => el.querySelector(`[data-hash="${h}"]`)!;
+
+it("Copy Revision Number copies the full hash of the row, no daemon request", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  await menuAt(rowOf(hash(2)));
+  const sent = c.sent.length;
+  await act(async () => byId("commit-copy-hash").click());
+  expect(writeText).toHaveBeenCalledWith(hash(2));
+  expect(c.sent.length).toBe(sent);
+});
 
 it("right click on a row offers the commit actions; Undo only on HEAD's commit; Revert sends the shown argv", async () => {
   const c = fake(withRefs());
@@ -1226,4 +1246,131 @@ it("focusCommit before the pane shows: the filter gets the hash, git.log asks fo
   await act(async () => root.render(null));
   await mountPane(c, [own, lib]);
   expect((el.querySelector("[data-testid=graph-filter-text]") as HTMLInputElement).value).toBe("");
+});
+
+// ---- Branch popup ----
+const openPopup = async () => {
+  await act(async () => el.querySelector<HTMLElement>("[data-testid=graph-filter-branch]")!.click());
+  await flush();
+  await new Promise((r) => setTimeout(r, 50));
+};
+const search = () => document.querySelector<HTMLInputElement>("[data-testid=branch-popup-search]")!;
+const typeQuery = async (v: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search(), v);
+    search().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const press = (k: string) => act(async () => void search().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+const popupRows = () => [...document.querySelectorAll<HTMLElement>("[data-testid=branch-popup-row]")].map((r) => r.textContent);
+
+it("the commit menu has commit actions only, in order: Copy Revision Number, Cherry-Pick, Reset (red), Revert, Undo, New Branch…", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowEls()[0]!);
+  await flush();
+  expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "New Branch…"]);
+  expect(byId("commit-reset").className).toContain("text-destructive");
+  expect(document.querySelector("[data-testid=branch-fetch]")).toBeNull();
+});
+
+it("the branch popup focuses its search box, groups All branches, HEAD, Local, and keeps Remote collapsed", async () => {
+  await mount(fake(history(3)));
+  await openPopup();
+  expect(document.activeElement).toBe(search());
+  expect(popupRows()).toEqual(["All branches", "HEAD (main)", "main", "Remote"]);
+  expect(byId("branch-popup-current")).not.toBeNull();
+  await act(async () => document.querySelector<HTMLElement>("[aria-expanded=false][role=button]")!.click());
+  expect(popupRows()).toEqual(["All branches", "HEAD (main)", "main", "Remote", "origin/main"]);
+});
+
+it("typing filters by substring (a search expands Remote) and highlights the match; Enter filters the graph", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await openPopup();
+  await typeQuery("RIG");
+  expect(popupRows()).toEqual(["origin/main"]);
+  expect(byId("branch-popup-match").textContent).toBe("rig");
+  await press("Enter");
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.log").at(-1)).toMatchObject({ ref: "refs/remotes/origin/main", skip: 0 });
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+});
+
+it("ArrowDown and Enter pick a row; Esc clears the query first, a second Esc closes the popup", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await openPopup();
+  await typeQuery("ma");
+  await press("Escape");
+  expect(search().value).toBe("");
+  expect(byId("branch-popup")).not.toBeNull();
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await flush();
+  await new Promise((r) => setTimeout(r, 300));
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+});
+
+it("ArrowRight opens the branch's actions (no Checkout, Merge or Rebase on the current branch), ArrowLeft closes them", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await openPopup();
+  await press("ArrowDown");
+  await press("ArrowDown");
+  await press("ArrowRight");
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([{ type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
+  expect([...byId("branch-popup-sub").querySelectorAll("[role=menuitem]")].map((i) => i.textContent)).toEqual(["Push", "Force push…", "Pull", "New branch from main…"]);
+  await act(async () => void byId("branch-popup-sub").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })));
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+  expect(document.activeElement).toBe(search());
+});
+
+it("the › button of a row opens the same actions; Push there opens its dialog", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  await openPopup();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=branch-popup-more]")!.click());
+  await flush();
+  await act(async () => byId("branch-push").click());
+  expect(byId("git-push-dialog")).not.toBeNull();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+  await act(async () => byId("git-push-cancel").click());
+  await flush();
+});
+
+it("an outside press closes the popup at once, with a query typed or the actions open", async () => {
+  await mount(fake(withRefs()));
+  const outside = async () => {
+    await act(async () => {
+      for (const t of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) document.body.dispatchEvent(new MouseEvent(t, { bubbles: true }));
+    });
+    await flush();
+    await new Promise((r) => setTimeout(r, 300));
+  };
+  await openPopup();
+  await typeQuery("ma");
+  await outside();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+  await openPopup();
+  expect(search().value).toBe("");
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=branch-popup-more]")!.click());
+  await flush();
+  await outside();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+});
+
+it("Esc with the actions open closes only them; a printable key on an action goes to the search box", async () => {
+  await mount(fake(withRefs()));
+  await openPopup();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=branch-popup-more]")!.click());
+  await flush();
+  const item = byId("branch-push");
+  await act(async () => void item.focus());
+  await act(async () => void item.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(search());
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await flush();
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+  expect(byId("branch-popup")).not.toBeNull();
 });

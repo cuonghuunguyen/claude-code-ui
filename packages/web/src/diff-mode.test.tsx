@@ -10,18 +10,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("loadDiffMode defaults to session and keeps a saved mode; an unknown stored value reads as session", () => {
+it("loadDiffMode defaults to uncommitted and keeps a saved mode; an unknown stored value reads as uncommitted", () => {
+  expect(loadDiffMode()).toBe("uncommitted");
+  saveDiffMode("session");
   expect(loadDiffMode()).toBe("session");
-  saveDiffMode("branch");
-  expect(loadDiffMode()).toBe("branch");
   localStorage.setItem("claude-ui.diffMode", "nonsense");
-  expect(loadDiffMode()).toBe("session");
+  expect(loadDiffMode()).toBe("uncommitted");
 });
 
-it("saveDiffMode(session) removes the key; storage that throws keeps the default", () => {
-  saveDiffMode("uncommitted");
-  expect(localStorage.getItem("claude-ui.diffMode")).toBe("uncommitted");
+it("saveDiffMode(uncommitted) removes the key; storage that throws keeps the default", () => {
   saveDiffMode("session");
+  expect(localStorage.getItem("claude-ui.diffMode")).toBe("session");
+  saveDiffMode("uncommitted");
   expect(localStorage.getItem("claude-ui.diffMode")).toBeNull();
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
     throw new Error("blocked");
@@ -29,7 +29,7 @@ it("saveDiffMode(session) removes the key; storage that throws keeps the default
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw new Error("blocked");
   });
-  expect(loadDiffMode()).toBe("session");
+  expect(loadDiffMode()).toBe("uncommitted");
   expect(() => saveDiffMode("branch")).not.toThrow();
   expect(loadDiffScope()).toBe("all");
   expect(() => saveDiffScope("project")).not.toThrow();
@@ -48,9 +48,9 @@ it("useDefaultDiffMode re-renders subscribers when saved", async () => {
   const root = createRoot(el);
   const Probe = () => <span>{useDefaultDiffMode()}</span>;
   await act(async () => root.render(<Probe />));
-  expect(el.textContent).toBe("session");
-  await act(async () => saveDiffMode("uncommitted"));
   expect(el.textContent).toBe("uncommitted");
+  await act(async () => saveDiffMode("session"));
+  expect(el.textContent).toBe("session");
   await act(async () => root.render(null));
 });
 

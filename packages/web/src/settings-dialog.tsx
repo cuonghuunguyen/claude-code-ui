@@ -41,6 +41,9 @@ import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { ClaudeAccountSection } from "./claude-account-settings.tsx";
 import { JiraSection } from "./jira-settings.tsx";
+import { OpenCodeSection } from "./opencode-settings.tsx";
+import { OpenAppSection } from "./open-app-settings.tsx";
+import { onDaemonMachine } from "./open-external-menu.ts";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
@@ -849,7 +852,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onOpenCodeProviders, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** OpenCode login or logout happened: its model lists are stale. */ onOpenCodeProviders?: () => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -874,7 +877,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     return () => void (live = false);
   }, [open, changed]);
 
-  const save = async (patch: SettingsPatch, field?: string, rethrow = false) => {
+  const save = async (patch: SettingsPatch, field?: string, rethrow = false, quiet = false) => {
     setSaving(true);
     try {
       const r = await ask.current<SettingsResult>({ type: "settings.set", patch });
@@ -886,7 +889,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       setError(undefined);
       if (field) setDraft(({ [field]: _, ...rest }) => rest);
     } catch (e) {
-      setError((e as Error).message);
+      if (!quiet) setError((e as Error).message);
       if (rethrow) throw e;
     } finally {
       setSaving(false);
@@ -1058,10 +1061,16 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
+    // GH-646: only for a browser on the daemon machine, and a daemon that lists editors (older ones and Sides have no `editor`).
+    ...(settings?.editor && daemon?.editors && onDaemonMachine()
+      ? [{ id: "open-in-app", title: t("settings.openApp.title"), category: "Integrations" as const, body: <OpenAppSection editor={settings.editor} saving={saving} request={request} onResult={(r) => (setSettings(r.settings), setDaemon(r.daemon), setError(undefined))} onError={setError} /> }]
+      : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
+    // An older daemon has no `opencode` settings: no group.
+    ...(settings?.opencode ? [{ id: "opencode", title: "OpenCode", category: "Integrations" as const, body: <OpenCodeSection opencode={settings.opencode} saving={saving} save={save} request={request} onProviders={onOpenCodeProviders} /> }] : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
     ...(launcher
       ? [

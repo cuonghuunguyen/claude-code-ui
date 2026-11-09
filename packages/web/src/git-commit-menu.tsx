@@ -1,4 +1,4 @@
-// Commit section of the Graph's context menu (docs/spec.md "Layout", Graph tab; GH-562): Undo Commit, Revert Commit, Cherry-Pick and
+// Commit section of the Graph's context menu (docs/spec.md "Layout", Graph tab; GH-562): Copy Revision Number, Undo Commit, Revert Commit, Cherry-Pick and
 // Reset Current Branch to Here for the row under the pointer. The daemon computes what is possible and the exact git command (`git.commitMenu`).
 import { useEffect, useState } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -36,7 +36,7 @@ function useCommitMenu(client: Client, cwd: string, exact: boolean, hash: string
   return state;
 }
 
-/** The top of the popup: header and the four actions of the commit `hash`. Undo shows only for HEAD's commit. */
+/** The commit actions of `hash`: Copy Revision Number, Cherry-Pick, then Reset (red), Revert and Undo (HEAD's commit only). */
 export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, onRun, onReset }: { client: Client; cwd: string; exact?: boolean; repoName?: string; hash: string; busy: boolean; onRun: Run; onReset: (m: GitCommitMenu) => void }) {
   const tr = useT();
   const { menu, error } = useCommitMenu(client, cwd, exact, hash, false);
@@ -46,8 +46,8 @@ export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, 
   const go = (type: "git.undoCommit" | "git.revert" | "git.cherryPick", argv: string[], done: Done, running: string) =>
     onRun({ type, cwd, ...ex, hash, headRef: menu!.headRef ?? "", headHash: menu!.headHash ?? "", argv }, done, running);
   const stop = (stopped: string, ok: string) => (r: OpReply) => of(r.written?.operation ? stopped : ok);
-  const row = (label: string, argv: string[] | undefined, why: string | undefined, id: string, pick: () => void) => (
-    <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11")} disabled={busy || !argv} onClick={pick} title={!argv ? why : undefined} data-testid={id}>
+  const row = (label: string, argv: string[] | undefined, why: string | undefined, id: string, pick: () => void, danger = false) => (
+    <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11", danger && "text-destructive")} disabled={busy || !argv} onClick={pick} title={!argv ? why : undefined} data-testid={id}>
       <span>{label}</span>
       {!argv && why && <span className="text-muted-foreground text-xs">{why}</span>}
     </ContextMenu.Item>
@@ -57,16 +57,21 @@ export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, 
       <div className="px-2 pt-1 font-medium text-muted-foreground text-xs" data-testid="commit-menu-head">
         {tr("sidebar.git.commitHead", { hash: s })}
       </div>
+      {/* navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>): the item does nothing there, like other Copy items. */}
+      <ContextMenu.Item className={cn(ITEM, "max-md:min-h-11")} disabled={busy} onClick={() => void navigator.clipboard?.writeText(hash).catch(() => {})} data-testid="commit-copy-hash">
+        {tr("sidebar.git.commitCopyHash")}
+      </ContextMenu.Item>
       {!menu ? (
         <ContextMenu.Item className={ITEM} disabled>
           {error ?? tr("sidebar.git.loading")}
         </ContextMenu.Item>
       ) : (
         <>
-          {menu.headHash === hash && row(tr("sidebar.git.commitUndo"), menu.undo, menu.why?.undo, "commit-undo", () => go("git.undoCommit", menu.undo!, of(t("sidebar.git.commitUndid", { hash: s })), of(t("sidebar.git.commitUndoing", { hash: s }))))}
-          {row(tr("sidebar.git.commitRevert"), menu.revert, menu.why?.revert, "commit-revert", () => go("git.revert", menu.revert!, stop(t("sidebar.git.commitRevertStopped", { hash: s }), t("sidebar.git.commitReverted", { hash: s })), of(t("sidebar.git.commitReverting", { hash: s }))))}
           {row(tr("sidebar.git.commitCherryPick"), menu.cherryPick, menu.why?.cherryPick, "commit-cherry-pick", () => go("git.cherryPick", menu.cherryPick!, stop(t("sidebar.git.commitPickStopped", { hash: s }), t("sidebar.git.commitPicked", { hash: s })), of(t("sidebar.git.commitPicking", { hash: s }))))}
-          {row(tr("sidebar.git.commitReset"), menu.reset?.mixed, menu.why?.reset, "commit-reset", () => onReset(menu))}
+          <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          {row(tr("sidebar.git.commitReset"), menu.reset?.mixed, menu.why?.reset, "commit-reset", () => onReset(menu), true)}
+          {row(tr("sidebar.git.commitRevert"), menu.revert, menu.why?.revert, "commit-revert", () => go("git.revert", menu.revert!, stop(t("sidebar.git.commitRevertStopped", { hash: s }), t("sidebar.git.commitReverted", { hash: s })), of(t("sidebar.git.commitReverting", { hash: s }))))}
+          {menu.headHash === hash && row(tr("sidebar.git.commitUndo"), menu.undo, menu.why?.undo, "commit-undo", () => go("git.undoCommit", menu.undo!, of(t("sidebar.git.commitUndid", { hash: s })), of(t("sidebar.git.commitUndoing", { hash: s }))))}
         </>
       )}
     </div>

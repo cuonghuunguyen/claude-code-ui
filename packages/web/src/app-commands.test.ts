@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
-import type { SessionListItem } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, type SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
 import { CLEANUP_RULES, RULE_LABEL, type CleanupMenu, type CleanupRule } from "./tab-cleanup.ts";
 import { KEYS } from "./shortcuts.ts";
@@ -609,4 +609,12 @@ it("lists Check for updates when the App can check", () => {
   const checkUpdate = vi.fn();
   expect(run(ctx({ checkUpdate }), "update.check")).toMatchObject({ title: "Check for updates" });
   expect(checkUpdate).toHaveBeenCalled();
+});
+
+it("GH-656: Ask aside is disabled with the reason when the Engine cannot fork; the model page shows the group", () => {
+  const caps = { ...ALL_CAPABILITIES, fork: false };
+  const c = ctx({ askAside: vi.fn(), session: { ...ctx().session!, capabilities: caps } });
+  expect(appCommands(c).find((i) => i.id === "aside.ask")).toMatchObject({ disabled: true, description: "Not supported by this session's engine" });
+  const page = appCommands(ctx({ models: [{ value: "p/m", displayName: "M", description: "d", group: "Acme" }] })).find((i) => i.id === "model.choose")!;
+  expect("page" in page && page.page.items[0]).toMatchObject({ description: "Acme" });
 });

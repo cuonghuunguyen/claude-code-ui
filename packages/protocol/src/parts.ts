@@ -1,8 +1,13 @@
 // Normalized message model (docs/spec.md "Message model"). The UI renders only parts.
 // Every part has an `id`; the client store is keyed by it and replaces a part on update.
-import type { EffortLevel, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
+import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 
-export type { EffortLevel, PermissionMode, PermissionUpdate };
+/** How a session asks before a tool runs; the modes an Engine offers are in `EngineCapabilities.permissionModes`. */
+export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+/** Thinking effort levels a model can offer. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+/** Claude's rule shape (inside `permission_request.suggestions`); stays the SDK type until another Engine maps its rules. */
+export type { PermissionUpdate };
 
 /** Thinking effort; "default" = the model's default (no `effort` option). */
 export type Effort = EffortLevel | "default";
@@ -96,6 +101,8 @@ export type Part = { parentId?: string } & (
       /** ExitPlanMode: the plan text to show when the CLI's `input` has none (it keeps the plan in a file). Display only: never sent back as the input. */
       plan?: string;
       title?: string;
+      /** The Engine cannot run an edited input (OpenCode): the panel hides "Edit content"; the diff stays. */
+      noEdit?: true;
       suggestions: PermissionUpdate[];
       settled: boolean;
       decision?: PermissionDecision;
@@ -188,7 +195,7 @@ export type Part = { parentId?: string } & (
 );
 
 /** A queued message as the clients see it: images are counted, not sent. */
-export type QueuedPrompt = { id: string; text: string; imageCount: number; /** Bash mode command (text = command, no `!`); runs like session.bash. */ bash?: true; /** A bash item that failed to run and stays at the head: the reason. */ error?: string };
+export type QueuedPrompt = { id: string; text: string; imageCount: number; /** Bash mode command (text = command, no `!`); runs like session.bash. */ bash?: true; /** A bash item that failed to run and stays at the head: the reason. */ error?: string; /** GH-622: the brief turn of a Back mark (the chip reads "Brief for your mark", no Edit). */ brief?: true };
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([

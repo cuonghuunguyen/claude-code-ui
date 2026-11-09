@@ -3,13 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createOrchestration } from "../src/orchestration.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
-type Fake = { id: string; live: boolean; state: string; mode: string; works: boolean; pending: Set<string> };
+type Fake = { id: string; cli: boolean; state: string; mode: string; works: boolean; pending: Set<string> };
 function fakeSession(id: string, live = true): any {
-  const f: Fake = { id, live, state: "idle", mode: "default", works: false, pending: new Set() };
+  const f: Fake = { id, cli: live, state: "idle", mode: "default", works: false, pending: new Set() };
   return Object.assign(f, {
     cwd: "/tmp",
     isLive: () => true,
-    liveQuery: () => (f.live ? {} : undefined),
+    live: () => f.cli,
     activity: () => ({ received: 0, at: 0, progress: 0 }),
     info: () => ({ state: f.state, permissionMode: f.mode }),
     working: () => f.works,
@@ -18,7 +18,7 @@ function fakeSession(id: string, live = true): any {
     subscribe: () => () => {},
     interrupt: async () => {},
     restartQuery: () => {
-      f.live = false;
+      f.cli = false;
     },
     close: async () => {},
   });
@@ -142,7 +142,7 @@ describe("worker tree: orchestration for workers", () => {
     expect(await call(t.o, "C", "worker_start", start("a"))).toMatchObject({ name: "a" });
     // W1 (impl) is live as well: two live workers of C.
     expect((await call(t.o, "C", "worker_start", start("b"))).error).toMatch(/Maximum workers per coordinator/);
-    t.sessions.get("new-0").live = false;
+    t.sessions.get("new-0").cli = false;
     expect(await call(t.o, "C", "worker_start", start("b"))).toMatchObject({ name: "b" });
     expect(C).toBeDefined();
   });
@@ -282,8 +282,8 @@ describe("worker tree: orchestration for workers", () => {
   it("worker_remove of a worker with a descendant at depth 2 is a tool error naming its path", async () => {
     const t = setup(undefined, { maxDepth: 3 });
     const [, , , W3] = tree(t, 3);
-    W3.live = false;
-    t.sessions.get("W2").live = false;
+    W3.cli = false;
+    t.sessions.get("W2").cli = false;
     const r = await call(t.o, "C", "worker_remove", { name: "impl" });
     expect(r.error).toMatch(/rev\/w3/);
     expect(r.error).toMatch(/Remove them first/);
@@ -301,13 +301,13 @@ describe("worker tree: orchestration for workers", () => {
   it("a notice to a worker coordinator without a CLI waits while the cap is reached", async () => {
     const t = setup(undefined, { workerCap: 2 });
     const [, W1, W2] = tree(t);
-    W1.live = false; // impl has no CLI; rev runs: 1 of 2
+    W1.cli = false; // impl has no CLI; rev runs: 1 of 2
     t.sessions.set("X", fakeSession("X"));
     t.links.set("X", { coordinatorId: "C", name: "x", cwd: "/tmp", port: 1 }); // cap reached
     t.o.observe(W2, turnEnd);
     await tick();
     expect(t.prompts).toEqual([]);
-    t.sessions.get("X").live = false; // cap freed
+    t.sessions.get("X").cli = false; // cap freed
     t.o.observe(W2, turnEnd);
     await tick();
     expect(t.prompts.map((p) => p[0])).toEqual(["W1"]);
@@ -316,7 +316,7 @@ describe("worker tree: orchestration for workers", () => {
   it("a notice to a worker coordinator without a CLI is not held by another tree at the cap", async () => {
     const t = setup(undefined, { workerCap: 2 });
     const [, W1, W2] = tree(t);
-    W1.live = false;
+    W1.cli = false;
     for (const id of ["D", "Y", "Z"]) t.sessions.set(id, fakeSession(id));
     t.links.set("Y", { coordinatorId: "D", name: "y", cwd: "/tmp", port: 1 });
     t.links.set("Z", { coordinatorId: "D", name: "z", cwd: "/tmp", port: 1 });
@@ -328,7 +328,7 @@ describe("worker tree: orchestration for workers", () => {
   it("a notice to a worker coordinator without a CLI is held at the total maximum", async () => {
     const t = setup(undefined, { workerCap: 10, workerCapTotal: 2 });
     const [, W1, W2] = tree(t);
-    W1.live = false;
+    W1.cli = false;
     for (const id of ["D", "Y"]) t.sessions.set(id, fakeSession(id));
     t.links.set("Y", { coordinatorId: "D", name: "y", cwd: "/tmp", port: 1 }); // W2 and Y run: 2 of 2
     t.o.observe(W2, turnEnd);
@@ -582,7 +582,7 @@ describe("worker tree: remove of a parent", () => {
   it("worker_remove of a worker with any worker below it, live or not, is refused until they are removed", async () => {
     const t = setup(undefined, { maxDepth: 3 });
     const [, , W2] = tree(t, 2);
-    W2.live = false;
+    W2.cli = false;
     const r = await call(t.o, "C", "worker_remove", { name: "impl" });
     expect(r.error).toMatch(/has workers below it: rev/);
     expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "has_workers" });

@@ -10,7 +10,7 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
-import { MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
 import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
@@ -152,6 +152,18 @@ describe("daemon", () => {
     await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
     const events = c.inbox.filter((m) => m.type === "event");
     expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+  });
+
+  it("session.create and session.list carry the Engine's capability flags", async () => {
+    const c = await client();
+    const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string; capabilities?: unknown } } };
+    expect(created.result.session.capabilities).toEqual(ALL_CAPABILITIES);
+    const id = created.result.session.id;
+    await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
+    const listed = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; capabilities?: unknown }[] } };
+    expect(listed.result.sessions.find((x) => x.id === id)?.capabilities).toEqual(ALL_CAPABILITIES);
   });
 
   it.skipIf(!posix)("session.bash runs in the session cwd and streams a bash part; empty command => bad_command; prompt while running => bash_running", async () => {

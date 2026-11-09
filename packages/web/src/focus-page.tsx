@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SessionListItem, Worktree } from "@claude-ui/protocol";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleAlertIcon, ClockIcon, CrosshairIcon, HourglassIcon, LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { answeredLabel, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
+import type { BackMark } from "@claude-ui/protocol";
+import { RING, Snooze } from "./back-panel.tsx";
+import { answeredLabel, backRows, type BackRow, attentionRows, BLOCKING, capRows, focusSubtitle, KIND_LABEL, loadFocusCollapsed, nestRows, nextWaiting, QUIET_SHOWN_MS, quietLabel, rowTodos, saveFocusCollapsed, taskProgress, waitLabel, workingRows, type AttentionKind, type AttentionRow, type Waiting } from "./focus.ts";
 import { useT, type Key } from "./i18n.ts";
 import { loadDraft, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
@@ -80,6 +82,10 @@ type Props = {
   /** Last activity of a session (ms): the last live event this browser saw, else the list's. */
   activity: (sessionId: string) => number;
   onCancelContinue: (sessionId: string) => void;
+  /** GH-622 "Come back to": the Back marks per session, Open of one (scrolls to its reply), and back.set for Snooze and Dismiss. */
+  marks?: Record<string, BackMark[]>;
+  onOpenBack?: (sessionId: string, partId: string) => void;
+  onBack?: (m: Record<string, unknown>) => Promise<unknown>;
 };
 
 const TASK_GROUPS: { status: TodoItem["status"]; label: Key }[] = [
@@ -129,7 +135,7 @@ const KIND_ICON: Record<AttentionKind, { icon: typeof CircleAlertIcon; tone: str
 
 type SectionKey = "needs" | "working" | "finished";
 
-export function FocusPage({ list, views, worktrees, waiting, selected, onSelect, onRespond, onAnswer, onOpenSession, unread, activity, onCancelContinue }: Props) {
+export function FocusPage({ list, views, worktrees, waiting, selected, onSelect, onRespond, onAnswer, onOpenSession, unread, activity, onCancelContinue, marks, onOpenBack, onBack }: Props) {
   const t = useT();
   const now = useNow(1000);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({ needs: false, working: false, finished: false });
@@ -180,6 +186,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const needs = capRows(attention.filter((r) => r.kind !== "finished"), expanded.needs);
   const finished = capRows(attention.filter((r) => r.kind === "finished"), expanded.finished);
   const workingShown = capRows(working, expanded.working);
+  const back = backRows(list, marks ?? {});
   // The rows are in the displayed order already (kind, then time); the answered lines lead.
   const needsEmpty = !answered.length && !needs.shown.length;
   const more = (key: SectionKey, n: number) =>
@@ -331,6 +338,16 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
               {more("finished", finished.more)}
             </section>
           )}
+          {back.length > 0 && (
+            <section aria-labelledby="focus-back" data-testid="focus-back-list">
+              <h2 id="focus-back" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">{t("app.back.focusHeading", { count: back.length })}</h2>
+              <ul className="flex flex-col gap-1.5">
+                {back.map((r) => (
+                  <BackRowView key={`${r.sessionId}:${r.mark.partId}`} row={r} title={titleOf(r.sessionId)} now={now} onOpen={() => onOpenBack?.(r.sessionId, r.mark.partId)} onSet={(extra) => void onBack?.({ type: "back.set", sessionId: r.sessionId, partId: r.mark.partId, title: r.mark.title, ...extra }).catch(() => {})} />
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
         <div className={`flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 max-md:p-3 ${detail && current ? "" : "max-md:hidden"}`} data-testid="focus-detail">
           {current && session ? (
@@ -390,6 +407,43 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
         </div>
       </div>
     </div>
+  );
+}
+
+/** A Back mark: three lines (kind, session and age; reason; reminder or brief state) and the actions beside it, not inside. */
+function BackRowView({ row, title, now, onOpen, onSet }: { row: BackRow; title: string; now: number; onOpen: () => void; onSet: (extra: Record<string, unknown>) => void }) {
+  const t = useT();
+  const { mark } = row;
+  const time = (at: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(at);
+  const pending = mark.briefState === "queued" || mark.briefState === "running";
+  const third = row.fired ? t("app.back.reminded", { time: time(mark.remindedAt!) }) : mark.remindAt !== undefined ? t("app.back.remindsShort", { time: time(mark.remindAt) }) : undefined;
+  return (
+    <li className="flex flex-wrap items-start gap-1 rounded-lg px-1 py-1" data-testid="focus-back-row" data-fired={row.fired || undefined}>
+      <div className="flex min-w-0 flex-1 basis-48 flex-col px-1.5 py-1 text-sm">
+        <span className="flex items-baseline gap-1.5">
+          <span className="shrink-0 font-[530] text-[11px] text-muted-foreground">{t(row.fired ? "app.back.kindReminder" : "app.back.kindBack")}</span>
+          <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
+          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{timeAgo(mark.at, now)}</span>
+        </span>
+        <span className="truncate text-muted-foreground text-xs" title={row.reason}>{row.reason}</span>
+        {pending ? (
+          <span className="flex items-center gap-1.5 text-muted-foreground text-xs"><LoaderCircleIcon aria-hidden className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />{t("app.back.briefWaiting")}</span>
+        ) : mark.briefState === "failed" ? (
+          <span className="flex items-center gap-1.5 text-destructive text-xs"><TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />{t("app.back.briefFailedShort")}</span>
+        ) : (
+          third && <span className="truncate text-muted-foreground text-xs">{third}</span>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2 max-sm:basis-full max-sm:px-1.5">
+        <Button type="button" variant="outline" size="sm" className={`max-md:h-11 ${RING}`} onClick={onOpen}>{t("app.back.open")}</Button>
+        {row.fired && (
+          <>
+            <Snooze mark={mark} apply={(ms) => onSet({ remindMs: ms })} />
+            <Button type="button" variant="ghost" size="sm" className={`max-md:h-11 max-md:px-3 ${RING}`} aria-label={t("app.back.dismissLabel")} onClick={() => onSet({ remindMs: null })}>{t("app.back.dismiss")}</Button>
+          </>
+        )}
+      </div>
+    </li>
   );
 }
 

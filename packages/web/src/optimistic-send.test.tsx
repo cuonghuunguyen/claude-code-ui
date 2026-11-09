@@ -202,6 +202,17 @@ describe("later prompts", () => {
     expect(visible('[data-testid="user-message"]')).toHaveLength(1);
   });
 
+  it("a prompt the Engine ran as its own command (reply local) leaves no bubble: nothing echoes it and no turn ends", async () => {
+    const prompt = defer<unknown>();
+    replies["session.prompt"] = () => prompt.promise;
+    await open();
+    await type("/undo");
+    await enter();
+    expect(visible('[data-testid="user-message"][data-pending]')).toHaveLength(1);
+    await act(async () => prompt.resolve({ local: true }));
+    expect(visible('[data-testid="user-message"]')).toHaveLength(0);
+  });
+
   it("a dialog command (/mcp) sends nothing and shows no bubble", async () => {
     replies["mcp.list"] = { servers: [] };
     await open();

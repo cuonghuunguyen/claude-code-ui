@@ -11,3 +11,4 @@ export * from "./plan.ts";
 export * from "./repo-tree.ts";
 export * from "./node-min.ts";
 export * from "./ssh-command.ts";
+export * from "./editor-command.ts";

@@ -281,7 +281,7 @@ describe("Session", () => {
     const before = closed;
     expect(s.releaseQuery()).toBe(true);
     expect(closed).toBe(before + 1);
-    expect(s.liveQuery()).toBeUndefined();
+    expect(s.live()).toBe(false);
     expect(s.info().state).toBe("idle");
     s.prompt("again");
     expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "sonnet", permissionMode: "acceptEdits" });
@@ -294,7 +294,7 @@ describe("Session", () => {
     s.subscribe(0, (e) => events.push(e));
     s.prompt("hi");
     await until(events, (e) => e.part.type === "turn_result");
-    expect(s.liveQuery()).toBeDefined();
+    expect(s.live()).toBe(true);
   });
 
   it("a CLI start, restartQuery and releaseQuery call onLiveChange with the session id; a drop with no CLI does not", async () => {
@@ -317,7 +317,7 @@ describe("Session", () => {
   it("Plugins Restart of a session without a CLI process does not call onLiveChange", () => {
     const dropped: string[] = [];
     const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, onLiveChange: (id) => dropped.push(id) });
-    expect(s.liveQuery()).toBeUndefined();
+    expect(s.live()).toBe(false);
     s.restartQuery();
     expect(dropped).toEqual([]);
   });
@@ -330,7 +330,7 @@ describe("Session", () => {
     const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, readTranscript, onLiveChange: (sid) => dropped.push(sid) });
     await s.sync();
     await s.sync();
-    expect(s.liveQuery()).toBeUndefined();
+    expect(s.live()).toBe(false);
     expect(dropped).toEqual([]);
   });
 
@@ -1116,6 +1116,12 @@ describe("Session questions", () => {
     expect(s.respond(q.requestId, { decision: "allow" })).toBe(false);
     expect(s.answer("unknown", {})).toBe(false);
     expect(s.info().state).toBe("needs_input");
+  });
+
+  it("a question given an allow reply is denied instead of hanging the turn", async () => {
+    const { s, q, answered } = await ask();
+    (s as any).pending.get(q.requestId).reply({ kind: "allow", decision: "allow" });
+    expect(await Promise.race([answered(), new Promise((r) => setTimeout(() => r("timeout"), 1000))])).toMatchObject({ behavior: "deny" });
   });
 
   it("settles without answers when the SDK aborts the question", async () => {
@@ -2541,7 +2547,7 @@ describe("Session background work", () => {
     await bg(send);
     await send(result(), ["running", "idle+working"]);
     expect(s.releaseQuery()).toBe(false);
-    expect(s.liveQuery()).toBeDefined();
+    expect(s.live()).toBe(true);
   });
 
   it("a notification during a running turn keeps it running; the CLI's own turn after the result runs again", async () => {

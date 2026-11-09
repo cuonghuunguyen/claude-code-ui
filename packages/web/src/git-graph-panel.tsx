@@ -5,7 +5,6 @@ import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
 import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
@@ -15,6 +14,7 @@ import { readFailure } from "./files.ts";
 import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
 import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
+import { BranchPopup } from "./git-branch-popup.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { StashSection } from "./git-stash.tsx";
 import { runRemoteOp, useRemoteOp, type OpReply, type StashRequest } from "./git-remote-ops.ts";
@@ -110,7 +110,6 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       style={{ height: h, transform: `translateY(${start}px)` }}
       data-testid="commit-row"
       data-hash={c.hash}
-      data-local-refs={c.refs.filter((r) => r.startsWith("refs/heads/")).join("\n")}
     >
       {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
       <RefChips refs={c.refs} />
@@ -305,7 +304,6 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
 
   const row = ROW;
   const headLabel = head && branches.includes(head) ? `${HEAD} (${short(head)})` : HEAD;
-  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 max-md:py-2">
@@ -314,24 +312,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder={tr("files.graph.textOrHash")} aria-label={tr("files.graph.textOrHash")} className={cn(INPUT, "pl-8")} data-testid="graph-filter-text" />
         </label>
-        <Select value={ref} open={menuOpen} onOpenChange={setMenuOpen} onValueChange={(v) => v && setRef(v)}>
-          <SelectTrigger aria-label={tr("files.graph.branch")} className="h-8 max-w-44 max-md:h-11!" data-testid="graph-filter-branch">
-            <span className="truncate">{ref === ALL ? tr("files.graph.allBranches") : ref === HEAD ? headLabel : short(ref)}</span>
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} align="start" className="w-auto min-w-44 max-w-[calc(100vw-2rem)]">
-            {menuOpen && (
-              <>
-                <SelectItem value={ALL}>{tr("files.graph.allBranches")}</SelectItem>
-                <SelectItem value={HEAD}>{headLabel}</SelectItem>
-                {branches.map((b) => (
-                  <SelectItem key={b} value={b}>
-                    {short(b)}
-                  </SelectItem>
-                ))}
-              </>
-            )}
-          </SelectContent>
-        </Select>
+        <BranchPopup client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} branches={branches} head={head} value={ref} label={ref === ALL ? tr("files.graph.allBranches") : ref === HEAD ? headLabel : short(ref)} headLabel={headLabel} allLabel={tr("files.graph.allBranches")} onChange={setRef} />
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder={tr("files.graph.author")} aria-label={tr("files.graph.author")} className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
         <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, of(tr("files.graph.fetched")), `${of(tr("files.graph.fetching"))}…`)} title={tr("files.graph.fetchAll")} aria-label={tr("files.graph.fetch")} aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}
@@ -359,7 +340,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? tr("files.graph.noMatch") : tr("files.graph.noCommits")}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => commits[index]?.refs.filter((r) => r.startsWith("refs/heads/")) ?? []} hash={() => selected}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => selected}>
             <div
               ref={scroller}
               role="listbox"
@@ -384,7 +365,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} fallback={() => refs.filter((r) => r.startsWith("refs/heads/"))} hash={() => detail.hash} newBranchOnly>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>

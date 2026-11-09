@@ -8,3 +8,7 @@ The Agent SDK already writes every session to `~/.claude/projects/<encoded-cwd>/
 - `seq` restarts from 1 after a daemon restart; clients detect this through a `logEpoch` and replay from scratch.
 - Sessions started in the terminal CLI appear in the list too (same transcripts).
 - Add a database only when data appears that has no home in the transcript. First case: each session's model, permission mode and effort (`sessions.json` in the config dir); the transcript records mode and effort only per prompt, not a change after the last prompt.
+
+## Amendment: one store per Engine
+
+With a second Engine (OpenCode), the rule reads: each Engine's own store is the only store. OpenCode Sessions are listed and read from the OpenCode server; the daemon never copies their history. The paragraph above about OpenCode having a database describes why we built no agent loop, not a reason to avoid OpenCode as an Engine.

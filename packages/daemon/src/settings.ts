@@ -2,9 +2,10 @@
 // A new setting = a field in `Settings`, `DEFAULTS` and `CHECKS`; the store, the wire messages and the dialog's patch need no change.
 import { isAbsolute } from "node:path";
 import { createJsonFile } from "./json-file.ts";
-import { APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { marksOk } from "./back-marks.ts";
+import { ENGINES, parseEditorCommand, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
 
 /** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
 type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
@@ -66,7 +67,11 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     workerMode: { valid: (v) => (WORKER_MODES as readonly unknown[]).includes(v), label: "Worker mode", rule: `one of ${WORKER_MODES.join(", ")}` },
     workerNotifications: bool("Notifications from workers"),
   },
-  sessions: { defaultMode: { valid: (v) => (SESSION_MODES as readonly unknown[]).includes(v), label: "Default permission mode", rule: `one of ${SESSION_MODES.join(", ")}` } },
+  sessions: {
+    defaultMode: { valid: (v) => (SESSION_MODES as readonly unknown[]).includes(v), label: "Default permission mode", rule: `one of ${SESSION_MODES.join(", ")}` },
+    engine: { valid: (v) => (ENGINES as readonly unknown[]).includes(v), label: "Engine", rule: `one of ${ENGINES.join(", ")}` },
+  },
+  opencode: { path: { valid: (v) => typeof v === "string" && v.length <= 1000 && !v.includes("\0") && (v === "" || isAbsolute(v)), label: "OpenCode binary path", rule: "empty (find opencode on PATH) or an absolute path" } },
   usageLimit: { autoContinue: bool("Continue automatically after a usage limit resets") },
   focus: { nextForYou: bool("Next for you suggestions on the Focus page") },
   notifications: { desktop: bool("Desktop notifications") },
@@ -105,6 +110,12 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     open: bool("Open browser at start"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
+  editor: {
+    command: { valid: (v) => v === "" || (typeof v === "string" && v.length <= 1024 && !/[\0\r\n]/.test(v) && !!parseEditorCommand(v)[0]), label: "Editor command", rule: "one line, at most 1024 characters, with a program first and balanced quotes" },
+    name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters, not only spaces, without control characters` },
+  },
+  // Written only by back.set / back.done / back.brief and the reminder runner (one mark at a time): a whole-map patch would undo their writes.
+  back: { marks: { valid: marksOk, label: "Back marks", rule: "valid", patch: () => false, patchRule: "changed with back.set, back.done or back.brief" } },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },
 };
 const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
@@ -180,6 +191,15 @@ export function createSettings({ file }: { file?: string } = {}) {
         }
       });
       return parseSettings(store.get());
+    },
+    /** One change to the Back marks under the file's change(): `fn` edits the map in place. Throws when the save fails. */
+    changeMarks(fn: (marks: Record<string, BackMark[]>) => void) {
+      store.change((d) => {
+        const marks = structuredClone((d.back?.marks ?? {}) as Record<string, BackMark[]>);
+        fn(marks);
+        if (Object.keys(marks).length) d.back = { marks };
+        else delete d.back;
+      });
     },
   };
 }

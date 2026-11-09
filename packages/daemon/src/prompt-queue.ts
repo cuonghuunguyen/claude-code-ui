@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 
 export const MAX_QUEUED = 20;
-export type QueueItem = { id: string; text: string; images: string[]; bash?: true; /** A bash item that failed to run (why it stays at the head). */ error?: string };
+export type QueueItem = { id: string; text: string; images: string[]; bash?: true; /** GH-622: the part id of the Back mark this brief turn belongs to. */ brief?: string; /** A bash item that failed to run (why it stays at the head). */ error?: string };
 /** Refusals that pass by themselves: no error on the item. */
 const RETRYABLE = new Set(["session_not_live", "external_turn", "session_busy"]);
 export type QueueHeld = { reason: "usage_limit" | "not_live"; until?: number };
@@ -43,7 +43,7 @@ export function createPromptQueue(o: {
 
   return {
     /** The new item's id, or the reason it is refused. */
-    enqueue(id: string, item: { text: string; images: string[]; bash?: true }): string | Err {
+    enqueue(id: string, item: { text: string; images: string[]; bash?: true; brief?: string }): string | Err {
       const e = entry(id);
       if (e.items.length >= MAX_QUEUED) return { code: "queue_full", message: `at most ${MAX_QUEUED} queued messages` };
       const full = { id: randomUUID(), ...item };

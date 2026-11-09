@@ -21,7 +21,7 @@ export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive"
 export type ActionTarget = { title: string; archived: boolean; busy: boolean; transcript: boolean; copyId?: boolean; tab?: boolean; worker?: { closed: boolean }; coordinator?: { finished: number; closed: number; cleanUp?: boolean } };
 
 export const POPUP =
-  "z-50 min-w-40 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
+  "z-50 min-w-40 max-h-(--available-height) overflow-y-auto overscroll-contain rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none origin-(--transform-origin) transition-[scale,opacity] duration-100 data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 motion-reduce:transition-none";
 export const ITEM =
   "flex h-8 cursor-pointer select-none items-center rounded-md px-2 outline-none data-disabled:cursor-not-allowed data-disabled:text-muted-foreground data-highlighted:bg-secondary max-md:h-11";
 

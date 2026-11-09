@@ -73,12 +73,14 @@ let reconnect: () => void = () => {};
 let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
 let slept: (m: unknown) => void = () => {};
+let planUsage: (u: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void; onSlept?: (m: unknown) => void }) => {
     emit = opts.onEvent;
     slept = opts.onSlept ?? (() => {});
+    planUsage = (opts as { onPlanUsage?: (u: unknown) => void }).onPlanUsage ?? (() => {});
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
@@ -4024,6 +4026,7 @@ describe("GH-430: panels on the new-session tab", () => {
   });
 
   it("AC3: Changes on the new-session tab shows the empty state; Uncommitted asks git.diff for the draft cwd", async () => {
+    saveDiffMode("session");
     await openNewTab();
     await pickSide(/changes/i);
     expect(q("changes-empty")!.textContent).toBe("No changes yet. Claude's edits appear here.");
@@ -4541,6 +4544,7 @@ describe("GH-395 Plan pane", () => {
 
   it("Activating a plan tab makes its session current: the side panel shows that session's changes; the plan takes the active split", async () => {
     localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, OTHER], at: 1, ratio: 0.5 }));
+    saveDiffMode("session");
     const restore = await mountMain({ tabs: [ID, OTHER, REF2], hash: `#${ID}` });
     try {
       await sendPart(OTHER, 1, { type: "tool_call", id: "e1", toolUseId: "e1", tool: "Edit", input: { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }, status: "done" });
@@ -6679,4 +6683,24 @@ describe("recommendations hooks (GH-518)", () => {
       }
     });
   });
+});
+
+it("the plan meter shows for a Claude session and hides while the shown session's engine has no plan usage", async () => {
+  const usage = { plan: "Max", windows: [], status: "allowed" };
+  await act(async () => planUsage(usage));
+  expect(el.querySelector('[data-testid="plan-meter"]')).not.toBeNull();
+  const bang = () => act(async () => void promptBox().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "!" })));
+  await bang();
+  expect(el.querySelector('[data-testid="bash-mode"]')).not.toBeNull();
+  const noPlan = { ...session, engine: "opencode", capabilities: { permissionModes: ["default"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false, shell: false } };
+  const restore = await remount({ "session.list": { sessions: [noPlan], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: noPlan } });
+  try {
+    await act(async () => planUsage(usage));
+    expect(el.querySelector('[data-testid="plan-meter"]')).toBeNull();
+    expect(el.querySelector('[data-testid="plan-account"]')).toBeNull();
+    await bang();
+    expect(el.querySelector('[data-testid="bash-mode"]')).toBeNull();
+  } finally {
+    restore();
+  }
 });

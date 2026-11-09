@@ -1,8 +1,8 @@
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { addSubmoduleRemotes } from "../support/git-fixture.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
-const graph = (page: import("@playwright/test").Page) => page.getByTestId("graph-panel");
+const graph = (page: Page) => page.getByTestId("graph-panel");
 
 Given("the scratch project and its submodule have local bare remotes with remote-only branches", async ({ project }) => {
   addSubmoduleRemotes(project.path);
@@ -25,16 +25,22 @@ Then("the Graph has no result line", async ({ page }) => {
   await expect(graph(page).getByTestId("graph-remote-result")).toHaveCount(0);
 });
 
+// A row's name includes its actions button, so match the row by its text.
+const branchRow = (page: Page, name: string) => page.getByTestId("branch-popup-row").filter({ has: page.getByText(name, { exact: true }) });
+
 Then("the Graph branch list offers {string}", async ({ page }, name: string) => {
   await graph(page).getByTestId("graph-filter-branch").click();
-  await expect(page.getByRole("option", { name, exact: true })).toBeVisible({ timeout: 30_000 });
+  // A search expands the collapsed Remote group.
+  await page.getByTestId("branch-popup-search").fill(name);
+  await expect(branchRow(page, name)).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press("Escape");
 });
 
 Then("the Graph branch list does not offer {string}", async ({ page }, name: string) => {
   await graph(page).getByTestId("graph-filter-branch").click();
   await expect(page.getByRole("option", { name: "All branches" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("option", { name, exact: true })).toHaveCount(0);
+  await page.getByTestId("branch-popup-search").fill(name);
+  await expect(branchRow(page, name)).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
 

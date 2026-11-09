@@ -30,7 +30,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -44,8 +44,9 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, sessions: { ...settings.sessions, ...((msg.patch.sessions ?? {}) as object) }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, ...(settings.launcher && { launcher: { ...settings.launcher, ...((msg.patch.launcher ?? {}) as object) } }), labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
+      settings = { orchestration: { ...settings.orchestration, ...v }, sessions: { ...settings.sessions, ...((msg.patch.sessions ?? {}) as object) }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, opencode: { ...settings.opencode, ...((msg.patch.opencode ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, ...(settings.launcher && { launcher: { ...settings.launcher, ...((msg.patch.launcher ?? {}) as object) } }), labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
     }
+    if (msg.type === "opencode.status") return { state: "running", version: "1.18.34" };
     if (msg.type === "launcher.shortcut") return { installed: msg.on };
     if (msg.type === "perf.report") return { daemon: { pid: 1, since: 0, monitor: settings.performance.monitor, eld: { resolutionMs: 50 }, elu: 0, handlers: {}, spans: {}, children: {}, memory: [], worst: [], cost: { ownMs: 0, wallMs: 0 } } };
     if (msg.type === "jira.token") (jiraToken = msg.token !== null), (jiraTokenReset = false);
@@ -361,15 +362,15 @@ it("shows Usage limits: the continue switch is on by default and sends its patch
   expect(q("settings-usageLimit-autoContinue")?.getAttribute("aria-checked")).toBe("false");
 });
 
-it("Default diff view is a per-browser choice: picking Uncommitted saves it and sends no settings.set", async () => {
+it("Default diff view is a per-browser choice: picking Session changes saves it and sends no settings.set", async () => {
   localStorage.removeItem("claude-ui.diffMode");
   const { q, calls, pick } = await render();
   await pick("layout");
-  expect(q("settings-diff-mode")?.textContent).toContain("Session changes");
-  await act(async () => q("settings-diff-mode")!.click());
-  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-diff-mode-uncommitted]")!.click());
-  expect(localStorage.getItem("claude-ui.diffMode")).toBe("uncommitted");
   expect(q("settings-diff-mode")?.textContent).toContain("Uncommitted");
+  await act(async () => q("settings-diff-mode")!.click());
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-diff-mode-session]")!.click());
+  expect(localStorage.getItem("claude-ui.diffMode")).toBe("session");
+  expect(q("settings-diff-mode")?.textContent).toContain("Session changes");
   expect(calls.some((c) => c.type === "settings.set")).toBe(false);
   localStorage.removeItem("claude-ui.diffMode");
 });
@@ -449,7 +450,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "New sessions", "Focus", "Usage limits", "Local history", "Claude account", "Git", "Jira", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "New sessions", "Focus", "Usage limits", "Local history", "Claude account", "Git", "Jira", "OpenCode", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);
@@ -1328,4 +1329,49 @@ it("Claude account (GH-615): add clears the token field and lists the account wi
   await act(async () => q("settings-account-remove")!.click());
   expect(calls.find((c) => c.type === "claude.account.remove")).toEqual({ type: "claude.account.remove", id: "a1" });
   expect(q("settings-account-token-set")).toBeNull();
+});
+
+it("Settings › OpenCode: the daemon judges the path (a Windows-style path is sent) and its refusal shows once under the field; empty and absolute paths are saved; status and Check again", async () => {
+  const { q, calls, pick, refuse } = await render();
+  await pick("opencode");
+  expect(q("settings-opencode-status")?.textContent).toBe("OpenCode 1.18.34 · running");
+  expect(document.querySelector("label")?.textContent).toContain("OpenCode binary path");
+  const input = q("settings-opencode-path") as HTMLInputElement;
+  const type = async (v: string) => {
+    await act(async () => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.blur());
+  };
+  const sets = () => calls.filter((c) => c.type === "settings.set");
+  const refusal = "OpenCode path must be an absolute path to an existing file";
+  refuse(refusal);
+  await type("C:/tools/opencode.exe");
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "C:/tools/opencode.exe" } } });
+  expect(q("settings-opencode-path-error")?.textContent).toBe(refusal);
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(input.value).toBe("C:/tools/opencode.exe");
+  expect(document.body.textContent!.split(refusal)).toHaveLength(2);
+  refuse("");
+  await type("/opt/opencode");
+  expect(q("settings-opencode-path-error")).toBeNull();
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "/opt/opencode" } } });
+  const asked = () => calls.filter((c) => c.type === "opencode.status").length;
+  const before = asked();
+  await act(async () => q("settings-opencode-check")!.click());
+  expect(asked()).toBe(before + 1);
+  await type("");
+  expect(q("settings-opencode-path-error")).toBeNull();
+  expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "" } } });
+});
+
+it("Open in app group shows only when the daemon lists editors (GH-646)", async () => {
+  const withEditors = await render({ daemon: { host: "box", editors: [] } as never });
+  expect(withEditors.q("settings-group-open-in-app")).not.toBeNull();
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  const without = await render();
+  expect(without.q("settings-group-open-in-app")).toBeNull();
 });

@@ -13,8 +13,11 @@ import type {
   FsSearchResult,
   ListResult,
   McpListResult,
+  PromptResult,
   RecentProject,
   ArtifactPreviewResult,
+  Engine,
+  EngineCapabilities,
   MediaResult,
   ModelInfo,
   ModelsResult,
@@ -47,7 +50,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,6 +59,7 @@ import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
 import { clearing, heirView } from "./clear.ts";
 import { addPending, dropPending, movePending, pendingKey, promptedIds, pruneEchoed, titleLoading, unechoed, type Pending } from "./optimistic.ts";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
@@ -72,7 +76,7 @@ import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
-import { GHOST, ModePicker, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
+import { GHOST, ModePicker, modesOf, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
@@ -172,6 +176,9 @@ import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
 import { projectLabel, saveLabel, setLabels, useLabels } from "./labels.ts";
+import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
+import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
+import { briefTag, foldBriefTurns, markFields, markOf, setBack, staleTurns, useBack } from "./back-marks.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -183,7 +190,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
-import { OpenExternalContext, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
+import { OpenExternalContext, canOpenSide, customEditor, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -194,6 +201,8 @@ import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type T
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
+/** An error whose message the screen already shows elsewhere (the prompt box adds no line for it). */
+type ShownError = Error & { shown?: boolean };
 /** What the side and bottom panel show: the shown session, or the new-session tab's project (`key` NEW_TAB, no session). */
 type PanelTarget = { key: string; cwd: string; sessionId?: string };
 
@@ -267,6 +276,8 @@ function usePageFocused() {
   return focused;
 }
 
+const NO_MODELS: ModelInfo[] = [];
+
 export function App() {
   const tr = useT();
   const [list, setList] = useState<SessionListItem[]>([]);
@@ -296,6 +307,11 @@ export function App() {
   const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
+  // Every Engine with its flags and start modes (session.list); none on an older daemon: claude only. `lastEngine`: Settings sessions.engine, the draft's engine until one is picked.
+  const [engines, setEngines] = useState<NonNullable<ListResult["engines"]>>([]);
+  /** The engines of each side (its daemon may allow other modes): a folder of a side reads its entry, else `engines`. */
+  const [sideEngines, setSideEngines] = useState<NonNullable<ListResult["sideEngines"]>>({});
+  const [lastEngine, setLastEngine] = useState<Engine>("claude");
   const [openingProject, setOpeningProject] = useState(false);
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
   // Kept after closing, so the dialog stays mounted for its close and focus return.
@@ -441,7 +457,21 @@ export function App() {
       // Storage blocked: the width lasts until the page reloads.
     }
   }, [sidebarWidth]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  // Model lists per Engine (ADR 0012): Claude's comes with the connection, another Engine's when a session or draft of it shows.
+  // Keyed by engine; an OpenCode list of a folder on a side by `opencode@<side>` (that side's OpenCode has its own providers).
+  const [modelsBy, setModelsBy] = useState<Record<string, ModelInfo[] | undefined>>({});
+  const modelsRequested = useRef(new Set<string>());
+  /** OpenCode read another provider set: every OpenCode model list is fetched again the next time it shows. */
+  const dropOpenCodeModels = () => {
+    setModelsBy((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("opencode"))));
+    for (const k of [...modelsRequested.current]) if (k.startsWith("opencode")) modelsRequested.current.delete(k);
+  };
+  const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
+  const modelsKey = (engine: Engine, cwd?: string) => (engine !== "claude" && cwd && cwdSides[cwd] ? `${engine}@${cwdSides[cwd]}` : engine);
+  const modelsOf = (engine: Engine, cwd?: string) => modelsBy[modelsKey(engine, cwd)] ?? NO_MODELS;
+  /** The engines a new session in `cwd` offers: its side's, else the hub's. */
+  const enginesOf = (cwd?: string) => (cwd && sideEngines[cwdSides[cwd] ?? ""]) || engines;
+  const models = modelsOf("claude");
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
   /** Open Aside popups (docs/spec.md "Aside"), the top one last; `asideFocused`: the one Esc applies to. */
@@ -522,6 +552,23 @@ export function App() {
   const [rewindTo, setRewindTo] = useState<string>();
   // A content search hit (palette Messages) the opened session scrolls to once its message is loaded.
   const [revealHit, setRevealHit] = useState<{ sessionId: string; hit: SearchHit; query: string }>();
+  /** GH-622: Open of a Back mark (Focus, a reminder card, a push click): the session shows scrolled to the marked reply, its panel focused. */
+  const [revealBack, setRevealBack] = useState<{ sessionId: string; partId: string }>();
+  const backMarks = useBack();
+  /** Open of a mark from Focus or a card: a history entry first, so browser Back returns to where it was (open() replaces the entry). */
+  const openBackMark = (sessionId: string, partId: string) => {
+    history.pushState(null, "", location.href);
+    open(sessionId);
+    setRevealBack({ sessionId, partId });
+  };
+  // A push click that opened a new window: ?back=<part id>#<session id> (sw.js).
+  useEffect(() => {
+    const part = new URLSearchParams(location.search).get("back");
+    const id = location.hash.slice(1);
+    if (!part || !id) return;
+    setRevealBack({ sessionId: id, partId: part });
+    history.replaceState(null, "", location.pathname + location.hash);
+  }, []);
   // Wide screens: the bottom panel shown (GH-354 terminal, GH-355 any pane; the key keeps its name so saved state carries over).
   // Kept per browser across reloads; the daemon's shells outlive the page.
   const [bottomOpen, setBottomOpen] = useState(() => loadFlag(TERMINAL_KEY));
@@ -721,7 +768,7 @@ export function App() {
   async function refreshList() {
     const gen = connGen.current;
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const { sessions, projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
@@ -745,6 +792,8 @@ export function App() {
       setWorktrees(worktrees);
       setListLoaded(true);
       if (permissionModes) setNewModes(permissionModes);
+      if (listedEngines) setEngines(listedEngines);
+      setSideEngines(listedSideEngines ?? {});
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
         for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
@@ -875,8 +924,8 @@ export function App() {
       setInfos((i) => {
         const old = i[from] ?? listRef.current.find((x) => x.id === from);
         if (i[to] || !old) return i;
-        const { cwd, state, model, permissionMode, effort, permissionModes } = old;
-        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes } };
+        const { cwd, state, model, permissionMode, effort, permissionModes, capabilities } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes, capabilities } };
       });
       // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
       setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
@@ -923,10 +972,17 @@ export function App() {
     sentHere.current.add(id);
     turnEnded.current.delete(id);
     setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
-    return client.current!.request({ type: "session.prompt", sessionId: id, text, images }).catch((e) => {
-      setOptimistic((o) => dropPending(o, id, key));
-      throw e;
-    });
+    return client.current!.request<PromptResult | undefined>({ type: "session.prompt", sessionId: id, text, images }).then(
+      (r) => {
+        // The Engine ran the text as its own command (OpenCode /undo): nothing echoes it, the bubble goes.
+        if (r?.local) setOptimistic((o) => dropPending(o, id, key));
+        return r;
+      },
+      (e) => {
+        setOptimistic((o) => dropPending(o, id, key));
+        throw e;
+      },
+    );
   }
 
   /** Queued messages (GH-77): the daemon holds them; like sendPrompt, nothing waits for a reconnect. */
@@ -1346,7 +1402,7 @@ export function App() {
 
   /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
   const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
-    ? { editors: appEditors, isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
+    ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: RequestError) => setToast(e.code === "open_failed" && appEditors.find((x) => x.id === how) ? tr("files.menu.openFailed", { app: appEditors.find((x) => x.id === how)!.label, reason: e.message }) : e.message)) }
     : undefined;
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */
@@ -1404,7 +1460,8 @@ export function App() {
         void refreshList();
       },
       onPlanUsage: setPlan,
-      onSettingsChanged: (m) => (setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onOpenCodeProviders: dropOpenCodeModels,
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1426,12 +1483,13 @@ export function App() {
         setStale(undefined);
         // A transient page failure (a side restarting) is retried after a reconnect.
         failedPage.current.clear();
+        modelsRequested.current.clear();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1454,6 +1512,7 @@ export function App() {
       if (e.data?.type !== "open" || typeof e.data.sessionId !== "string") return;
       const id: string = e.data.sessionId;
       open(id);
+      if (typeof e.data.backPart === "string") return setRevealBack({ sessionId: id, partId: e.data.backPart });
       setScrollKeys((k) => ({ ...k, [id]: (k[id] ?? 0) + 1 }));
     };
     navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
@@ -1806,7 +1865,7 @@ export function App() {
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
       // The daemon drops auto to ask when the new model has no auto support.
-      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(models, session.model));
+      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(session.engine ?? "claude", session.cwd), session.model));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1822,10 +1881,10 @@ export function App() {
     }
   }
 
-  async function answer(requestId: string, answers: Record<string, string>) {
+  async function answer(requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) {
     setError(undefined);
     try {
-      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers });
+      await client.current!.request<RespondResult>({ type: "question.respond", requestId, answers, ...(choices && { choices }) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -2065,6 +2124,10 @@ export function App() {
                         rewindTo={id === activeId ? rewindTo : undefined}
                         revealHit={id === revealHit?.sessionId ? revealHit : undefined}
                         onRevealShown={() => setRevealHit(undefined)}
+                        revealBack={id === revealBack?.sessionId ? revealBack.partId : undefined}
+                        onBackRevealed={() => setRevealBack(undefined)}
+                        onBack={(m) => client.current!.request(m as never)}
+                        onNotice={setToast}
                         run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
                         links={linksOf(id)}
@@ -2079,7 +2142,7 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        models={models}
+                        models={modelsOf(s.engine ?? "claude", s.cwd)}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
@@ -2120,7 +2183,7 @@ export function App() {
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
                         onShells={() => openShells(s.id)}
-                        onAside={(q) => openAside(s.id, q)}
+                        onAside={capabilitiesOf(s).fork ? (q) => openAside(s.id, q) : undefined}
                         signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
@@ -2972,13 +3035,37 @@ export function App() {
     setFileTree(true);
     reveal("files");
   };
-  const draftModes = permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === pick.model && m.supportsAutoMode) });
+  const draftEngine = pick.engine ?? lastEngine;
+  const engineEntry = enginesOf(draftProject).find((e) => e.engine === draftEngine);
+  // Claude: the start modes follow the model and the daemon config; another Engine: the modes it lists.
+  const modesFor = (engine: Engine, model: string) => enginesOf(draftProject).find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
+  const draftModes = modesFor(draftEngine, pick.model);
+  // The model list of an Engine is fetched the first time a session or the draft of it shows (Claude's came with the connection).
+  const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? (shown.engine ?? "claude") : undefined;
+  const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
+  const shownCwd = draftShown ? draftProject : shown?.cwd;
+  const listKey = shownEngine && modelsKey(shownEngine, shownCwd);
+  useEffect(() => {
+    if (!shownEngine || !listKey || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(listKey)) return;
+    modelsRequested.current.add(listKey);
+    // A folder of a side: `cwd` routes the request to that side's OpenCode (its own providers).
+    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine, ...(listKey !== shownEngine && { cwd: shownCwd }) }).then(
+      (r) => setModelsBy((m) => ({ ...m, [listKey]: r.models })),
+      () => modelsRequested.current.delete(listKey),
+    );
+  }, [listKey, status, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
-  const draft: StartOptions = { ...pick, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : "default") };
+  const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
   const changeDraft = (d: StartOptions) => {
-    const lost = d.mode === "auto" && !models.some((m) => m.value === d.model && m.supportsAutoMode);
-    if (lost) setToast(autoUnavailable(models, d.model));
+    if (d.engine !== draft.engine) {
+      // Another Engine has its own models, modes and effort levels.
+      const offered = modesFor(d.engine!, "default");
+      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: offered.includes(d.mode) ? d.mode : offered[0] });
+    }
+    const list = modelsOf(draftEngine, draftProject);
+    const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
+    if (lost) setToast(autoUnavailable(list, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
   };
   // The new-session tab's mode comes from the Claude settings of its project, read again each time the tab is shown.
@@ -3159,12 +3246,13 @@ export function App() {
     joinSplits: split ? joinSplits : undefined,
     sessions: list,
     session: draftShown
-      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, running: false, prompts: [], draft: true }
+      ? { model: draft.model, effort: draft.effort, mode: draft.mode, modes: draftModes, capabilities: engineEntry?.capabilities, running: false, prompts: [], draft: true }
       : shown && ownerOnScreen ? {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, models),
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude", shown.cwd), capabilitiesOf(shown)),
+      capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
@@ -3180,7 +3268,7 @@ export function App() {
           }
         }
       : undefined,
-    models,
+    models: shownEngine ? modelsOf(shownEngine, shownCwd) : models,
     canQuickOpen,
     newSession: () => newSession(),
     selectTab: open,
@@ -3639,7 +3727,7 @@ export function App() {
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
-          {plan && status !== "unauthorized" && <PlanMeter usage={plan} switcher={{ accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
+          {plan && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={plan} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
             <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
@@ -4017,15 +4105,17 @@ export function App() {
                   onCwd={(c) => (setDraftCwd(c), setWorktreeJob((j) => (j?.error ? undefined : j)))}
                   onNewWorktree={(p) => void newWorktree(p)}
                   worktreeJob={worktreeJob?.project === projectOf(draftProject ?? "", worktrees) ? worktreeJob : undefined}
-                  models={models}
+                  models={modelsOf(draftEngine, draftProject)}
                   draft={draft}
                   onDraft={changeDraft}
                   modes={draftModes}
+                  caps={engineEntry?.capabilities}
+                  onOpenOpenCodeSettings={() => openSettingsGroup("opencode")}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
-                  onCommands={(cwd) => client.current!.request<CommandsResult>({ type: "session.commands", cwd }).then((r) => r.commands)}
+                  onCommands={(cwd, engine) => client.current!.request<CommandsResult>({ type: "session.commands", cwd, engine }).then((r) => r.commands)}
                   onStart={createSession}
                   onDialog={openDialog}
                   inputRef={newPrompt}
@@ -4056,6 +4146,9 @@ export function App() {
                   unread={unread}
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
+                  marks={backMarks}
+                  onOpenBack={(sessionId, partId) => openBackMark(sessionId, partId)}
+                  onBack={(m) => client.current!.request(m as never)}
                 />
               )}
               {!(layout.side === "left" && lg) && (
@@ -4406,7 +4499,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         />
       )}
-      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} />
+      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} />
       {(viewer || shown) && client.current && (
         <ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4481,6 +4574,14 @@ export function App() {
           hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || findOpen || openingProject || !!guideRun}
           onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
           onTurnedOff={() => setToast(tr("app.main.tipsOff"))}
+        />
+        <BackReminderCards
+          enabled={inApp}
+          skip={(id) => !!list.find((x) => x.id === id)?.archived}
+          marks={backMarks}
+          title={(id) => displayTitle(list.find((x) => x.id === id)?.title || "") || tr("app.focusPage.untitled")}
+          onOpen={(sessionId, partId) => openBackMark(sessionId, partId)}
+          request={(m) => client.current!.request(m as never)}
         />
         <NotificationStack
           items={cardItems}
@@ -4675,14 +4776,14 @@ export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
-  { model, mode, effort, draft }: StartOptions,
+  { model, mode, effort, draft, engine }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
   /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
   onDraftClaimed: () => void = () => {},
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
-  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(draft && { draft }) })).session;
+  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(draft && { draft }) })).session;
   if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);
@@ -4746,6 +4847,19 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
   );
 }
 
+/** A control the session's Engine lacks: muted and aria-disabled (still focusable), the reason in a tooltip on hover, focus and tap. */
+function UnsupportedAction({ label, reason, children }: { label: string; reason: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <TooltipProvider>
+      <Tooltip open={open} onOpenChange={setOpen}>
+        <TooltipTrigger render={<MessageAction className="cursor-default pointer-coarse:size-11 opacity-50" label={label} aria-disabled onClick={() => setOpen(true)} />}>{children}</TooltipTrigger>
+        <TooltipContent data-testid="engine-unsupported">{reason}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /** The new-session tab's card. Hidden, not unmounted, while another tab is active: it keeps its draft, images, model, mode and effort. */
 export function NewSessionTab({ active, ...props }: { active: boolean } & ComponentProps<typeof NewSession>) {
   return (
@@ -4769,6 +4883,8 @@ export function NewSession({
   draft,
   onDraft,
   modes,
+  caps,
+  onOpenOpenCodeSettings,
   onOpenProject,
   onUpload,
   onSearch,
@@ -4794,11 +4910,15 @@ export function NewSession({
   draft: StartOptions;
   onDraft: (d: StartOptions) => void;
   modes: PermissionMode[];
+  /** Flags of the draft's Engine; none = all. */
+  caps?: EngineCapabilities;
+  /** The inline OpenCode error's button. */
+  onOpenOpenCodeSettings?: () => void;
   onOpenProject: () => void;
   onUpload: (file: File) => Promise<string>;
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Commands and skills of a project for the `/` menu (no session exists yet). */
-  onCommands: (cwd: string) => Promise<SlashCommand[]>;
+  onCommands: (cwd: string, engine: Engine) => Promise<SlashCommand[]>;
   /** Changes on any config.changed (a user-wide change shows in every project): the commands are asked again. */
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
@@ -4813,6 +4933,17 @@ export function NewSession({
 }) {
   const tr = useT();
   const { model, mode, effort } = draft;
+  const engine = draft.engine ?? "claude";
+  // A failed start of the OpenCode engine (missing, too old, failed to start) shows under the chips with the way to fix it.
+  const [engineError, setEngineError] = useState<string>();
+  const start = (c: string, first: FirstMessage) => {
+    setEngineError(undefined);
+    return onStart(c, { model, mode, effort, engine: draft.engine }, first).catch((e: RequestError) => {
+      // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
+      throw e;
+    });
+  };
   const project = cwd ? projectOf(cwd, worktrees) : "";
   const runIn = ((project && worktrees[project]) || []).filter((w) => !w.outsideRoots).sort(byRow);
   const here = runIn.find((w) => w.path === cwd);
@@ -4824,10 +4955,10 @@ export function NewSession({
   useEffect(() => {
     if (!cwd || !connected) return setCommands([]);
     let stale = false;
-    onCommands(cwd).then((c) => !stale && setCommands(c), () => {});
+    onCommands(cwd, engine).then((c) => !stale && setCommands(c), () => {});
     return () => void (stale = true);
-  }, [cwd, connected, commandsRev]);
-  useEffect(() => setCommands([]), [cwd]);
+  }, [cwd, connected, commandsRev, engine]);
+  useEffect(() => setCommands([]), [cwd, engine]);
 
   return (
     <div className="flex w-full max-w-[720px] flex-col items-center gap-4">
@@ -4842,18 +4973,19 @@ export function NewSession({
           onModel={(m) => onDraft({ ...draft, model: m })}
           effort={effort}
           onEffort={(e) => onDraft({ ...draft, effort: e })}
+          caps={caps}
           mode={mode}
           modes={modes}
           onMode={(m) => onDraft({ ...draft, mode: m })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
-          onPrompt={(text, images) => (cwd ? onStart(cwd, { model, mode, effort }, { text, images }) : Promise.reject(new Error("no project")))}
-          onBash={cwd ? (command) => onStart(cwd, { model, mode, effort }, { command }) : undefined}
+          onPrompt={(text, images) => (cwd ? start(cwd, { text, images }) : Promise.reject(new Error("no project")))}
+          onBash={cwd && caps?.shell !== false ? (command) => start(cwd, { command }) : undefined}
           state={connected ? "idle" : "disconnected"}
           blocked={creating ? tr("app.main.creatingWorktree") : undefined}
           blockedIcon={creating ? <LoaderCircleIcon aria-hidden className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /> : undefined}
           label={tr("app.main.firstPrompt")}
-          placeholder={cwd ? tr("app.main.askClaudeIn", { place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
+          placeholder={cwd ? tr("app.main.askClaudeIn", { engine: ENGINE_NAME[engine], place: worktreeName(cwd, worktrees) ?? projectName(cwd) }) : tr("app.main.openProjectToStart")}
           autoFocus
           disabled={!cwd}
           inputRef={inputRef}
@@ -4864,6 +4996,21 @@ export function NewSession({
       {cwd ? (
         // Project chip: Base UI Select like the prompt toolbar pickers; "Open project…" is its last item.
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-1">
+        <Select value={engine} onValueChange={(v) => v && onDraft({ ...draft, engine: v as Engine })}>
+          <SelectTrigger aria-label={tr("app.main.engineNamed", { name: ENGINE_NAME[engine] })} data-testid="engine-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
+            <span className="text-muted-foreground">{tr("app.main.engine")}</span>
+            <EngineIcon engine={engine} />
+            <span className="font-medium">{ENGINE_NAME[engine]}</span>
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-40 p-0.5">
+            {ENGINES.map((e) => (
+              <SelectItem key={e} value={e} className={ROW} data-testid={`engine-${e}`}>
+                <EngineIcon engine={e} />
+                {ENGINE_NAME[e]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={project} onValueChange={(v) => (v === OPEN ? onOpenProject() : v && onCwd(v))}>
           <SelectTrigger aria-label={tr("app.main.project")} title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
             <ProjectAvatar cwd={project} />
@@ -4929,6 +5076,16 @@ export function NewSession({
             {tr("app.main.worktreeNotCreated", { message: worktreeJob.error })}
           </p>
         )}
+        {engineError && (
+          <div role="alert" className="flex w-full flex-col items-center gap-1 text-center text-destructive text-sm" data-testid="engine-error">
+            <p>{engineError}</p>
+            {onOpenOpenCodeSettings && (
+              <Button variant="secondary" size="sm" onClick={onOpenOpenCodeSettings} className="max-md:h-11" data-testid="engine-error-settings">
+                {tr("app.main.openOpenCodeSettings")}
+              </Button>
+            )}
+          </div>
+        )}
         </div>
       ) : (
         <Button variant="secondary" size="sm" onClick={onOpenProject} data-testid="new-open-project" className="max-md:h-11">
@@ -4940,14 +5097,15 @@ export function NewSession({
   );
 }
 
-/** The modes a session offers now: SessionInfo.permissionModes is from the last reply; auto follows the current model, which another client can change. */
-const modesOf = (offered: PermissionMode[], model: string, models: ModelInfo[]) =>
-  offered.length && models.length ? permissionModesFor({ allowBypass: offered.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) }) : offered;
+function EngineIcon({ engine }: { engine: Engine }) {
+  const Icon = ENGINE_ICON[engine];
+  return <Icon aria-hidden />;
+}
 
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
-export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string };
+export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string; engine?: Engine };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
@@ -4987,6 +5145,10 @@ export function SessionPane({
   onRewindShown,
   revealHit,
   onRevealShown,
+  revealBack,
+  onBackRevealed,
+  onBack,
+  onNotice,
   onLoadOlder,
   loadingOlder,
   session,
@@ -5045,6 +5207,13 @@ export function SessionPane({
   /** A content search hit to scroll to once its message is loaded (palette Messages). */
   revealHit?: { hit: SearchHit; query: string };
   onRevealShown?: () => void;
+  /** GH-622: a Back mark's part id to scroll to and focus its panel (Open). */
+  revealBack?: string;
+  onBackRevealed?: () => void;
+  /** back.set / back.done / back.brief of this session's marks. */
+  onBack?: (m: { type: "back.set" | "back.done" | "back.brief"; sessionId: string; partId: string } & Record<string, unknown>) => Promise<unknown>;
+  /** A short message in the toast corner. */
+  onNotice?: (message: string) => void;
   /** Loads the page before the view's cursor; `until`: back to the turn holding that part or message id. */
   onLoadOlder?: (opts?: { until?: string; user?: boolean }) => void;
   loadingOlder?: boolean;
@@ -5084,7 +5253,7 @@ export function SessionPane({
   onArtifactTab?: (partId: string) => void;
   onRewind: (userMessageId: string, mode: RewindMode) => Promise<unknown>;
   onRespond: (requestId: string, answer: PermissionAnswer) => void;
-  onAnswer: (requestId: string, answers: Record<string, string>) => void;
+  onAnswer: (requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>) => void;
   /** The daemon is reachable; otherwise the send button is disabled. */
   connected: boolean;
   onGitStatus?: () => Promise<GitStatus | null>;
@@ -5107,7 +5276,7 @@ export function SessionPane({
   // In a subagent view only a request from inside that run replaces the notice; the session view shows every one.
   const permission = pendingPart && (!current || inRun(view, pendingPart.toolUseId, current.id)) ? pendingPart : undefined;
   const question = pendingAsk && (!current || inRun(view, pendingAsk.toolUseId, current.id)) ? pendingAsk : undefined;
-  const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models)} onMode={onMode} shortcut={false} />;
+  const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
   const sendModeSetting = useSendMode();
@@ -5154,7 +5323,33 @@ export function SessionPane({
     onRewindShown?.();
   }, [rewindTo]);
   const items = useMemo(() => timeline(view), [view]);
-  const shownItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
+  const baseItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
+  // GH-622: a brief turn (tagged prompt) shows as one collapsed row; its own text and tools are folded into it.
+  const folded = useMemo(() => foldBriefTurns(baseItems), [baseItems]);
+  const shownItems = folded.items;
+  const backMarks = useBack();
+  // A mark whose reply is gone (rewind, /clear) shows at the end of the timeline once every page is loaded.
+  const orphans = view.older ? [] : (backMarks[session.id] ?? []).filter((m) => !view.parts.has(m.partId));
+  const triedBack = useRef<string>(undefined);
+  const focusPanel = (partId: string, tries = 30) => {
+    const el = [...document.querySelectorAll<HTMLElement>("[data-back-panel]")].find((e) => e.dataset.backPanel === partId);
+    if (el) {
+      // The reply is revealed at the top; on a phone it is taller than the view, so the panel itself is brought to the top (scroll-mt clears the sticky prompt bar).
+      el.focus({ preventScroll: true });
+      return el.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "auto" });
+    }
+    if (tries > 0) requestAnimationFrame(() => focusPanel(partId, tries - 1));
+  };
+  useEffect(() => {
+    if (!revealBack) return;
+    if (!view.parts.has(revealBack)) {
+      // Not loaded: it may be in an older page; load back to it once. Still missing: the panel shows at the end with "no longer in the session".
+      if (loadingOlder) return;
+      if (view.older && triedBack.current !== revealBack) return (triedBack.current = revealBack), onLoadOlder?.({ until: revealBack.split(":")[0] });
+    } else setReveal({ key: revealBack });
+    onBackRevealed?.();
+    focusPanel(revealBack);
+  }, [revealBack, view.parts, loadingOlder]);
   // Palette Messages: the session may still be loading; the hit is revealed once its message is in the timeline.
   const triedUntil = useRef<unknown>(undefined);
   useEffect(() => {
@@ -5223,6 +5418,7 @@ export function SessionPane({
           {place ?? projectName(session.cwd)}
         </span>
         <SideBadge cwd={session.cwd} />
+        <EngineTag engine={session.engine} />
         <span className="min-w-0 truncate text-muted-foreground" title={session.cwd}>
           {session.cwd}
         </span>
@@ -5250,7 +5446,7 @@ export function SessionPane({
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
-            if (item.kind !== "part" || item.part.type !== "user_text" || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
+            if (item.kind !== "part" || item.part.type !== "user_text" || briefTag(item.part.text) || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
             const { text } = splitUploads(summarizePasted(item.part.text));
             const n = item.part.images.length;
             const label = text || `${n} image${n === 1 ? "" : "s"}`;
@@ -5262,8 +5458,11 @@ export function SessionPane({
             (prompt.current ?? dock.current?.querySelector<HTMLElement>("form input[type=radio], form input[type=checkbox], form button"))?.focus();
           }}
           footer={
-            (shownPending.length > 0 || thinking) && (
+            (shownPending.length > 0 || thinking || orphans.length > 0) && (
               <>
+                {orphans.map((m) => (
+                  <BackPanel key={m.partId} sessionId={session.id} mark={m} gone stale={0} held={view.queue?.held} request={(m2) => onBack!(m2)} onNotice={onNotice} />
+                ))}
                 {shownPending.map((p, i) => (
                   <PendingMessage key={p.key} p={p} view={view} index={shownItems.length + i} />
                 ))}
@@ -5292,6 +5491,8 @@ export function SessionPane({
                   <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(ORCHESTRATION_NOTICE.length).trim()}</span>
                 </span>
               </div>
+            ) : item.part.type === "user_text" && briefTag(item.part.text) ? (
+              <BriefRow answer={folded.answers.get(item.part.id)} />
             ) : item.part.type === "user_text" ? (
               <UserMessage
                 part={item.part}
@@ -5302,15 +5503,21 @@ export function SessionPane({
                     <CopyAction text={stripPasted(item.part.text)} />
                     <QuoteAction text={splitUploads(stripPasted(item.part.text)).text} />
                     {/* No tooltip prop: its trigger renders a button around this button. */}
-                    <MessageAction
-                      className="pointer-coarse:size-11"
-                      title={tr("app.prompt.rewind")}
-                      label={tr("app.prompt.rewindLabel")}
-                      disabled={turnRunning}
-                      onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
-                    >
-                      <RotateCcwIcon />
-                    </MessageAction>
+                    {capabilitiesOf(session).rewind ? (
+                      <MessageAction
+                        className="pointer-coarse:size-11"
+                        title={tr("app.prompt.rewind")}
+                        label={tr("app.prompt.rewindLabel")}
+                        disabled={turnRunning}
+                        onClick={() => setRewinding(rewinding === item.part.id ? undefined : item.part.id)}
+                      >
+                        <RotateCcwIcon />
+                      </MessageAction>
+                    ) : (
+                      <UnsupportedAction label={tr("app.prompt.rewindLabel")} reason={tr("engine.unsupported")}>
+                        <RotateCcwIcon />
+                      </UnsupportedAction>
+                    )}
                   </>
                 }
               >
@@ -5342,15 +5549,46 @@ export function SessionPane({
               <PartView part={item.part} view={view} />
             )
             );
-            return copyText ? (
+            const part = item.kind === "part" ? item.part : undefined;
+            const mark = part?.type === "assistant_text" ? markOf(backMarks, session.id, part.id) : undefined;
+            const shownRow = mark ? (
               <>
                 {row}
-                <MessageActions className="mt-1">
-                  <CopyAction text={copyText} label={tr("app.prompt.copyResponse")} className="max-md:size-11" />
-                </MessageActions>
+                <BackPanel
+                  sessionId={session.id}
+                  mark={mark}
+                  stale={staleTurns(view.order.map((id) => view.parts.get(id)!), mark.partId)}
+                  held={view.queue?.held}
+                  request={(m) => onBack!(m)}
+                  onNotice={onNotice}
+                  onRemoved={() => requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-back-button="${CSS.escape(mark.partId)}"]`)?.focus())}
+                />
               </>
             ) : (
               row
+            );
+            const reply = copyText && onBack ? markFields(shownItems, index) : undefined;
+            return copyText ? (
+              <>
+                {shownRow}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label={tr("app.prompt.copyResponse")} className="max-md:size-11" />
+                  {reply && (
+                    <BackButton
+                      partId={reply.partId}
+                      marked={!!markOf(backMarks, session.id, reply.partId)}
+                      onMark={() => void onBack!({ type: "back.set", sessionId: session.id, ...reply }).catch((e: Error) => onNotice?.(tr("app.back.markFailed", { reason: e.message })))}
+                      onGo={() => {
+                        const el = [...document.querySelectorAll<HTMLElement>("[data-back-panel]")].find((e) => e.dataset.backPanel === reply.partId);
+                        el?.scrollIntoView({ block: "nearest", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+                        el?.focus({ preventScroll: true });
+                      }}
+                    />
+                  )}
+                </MessageActions>
+              </>
+            ) : (
+              shownRow
             );
           }}
         />
@@ -5387,7 +5625,7 @@ export function SessionPane({
         {permission ? (
           <PermissionPanel key={permission.id} part={permission} onRespond={(a) => onRespond(permission.requestId, a)} mode={modePicker} onStop={onInterrupt} />
         ) : question ? (
-          <QuestionPanel key={question.id} part={question} onAnswer={(a) => onAnswer(question.requestId, a)} onDismiss={onInterrupt} mode={modePicker} />
+          <QuestionPanel key={question.id} part={question} onAnswer={(a, c) => onAnswer(question.requestId, a, c)} onDismiss={onInterrupt} mode={modePicker} />
         ) : current ? (
           <NotPromptable view={view} run={current} onOpen={onOpenRun} onStop={stopRun} stopping={!!stopOf && !stopOf.error} error={stopOf?.error} />
         ) : (
@@ -5407,14 +5645,15 @@ export function SessionPane({
               effort={view.effort ?? session.effort}
               onEffort={onEffort}
               mode={view.permissionMode ?? session.permissionMode}
-              modes={modesOf(session.permissionModes, view.model ?? session.model, models)}
+              modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))}
+              caps={capabilitiesOf(session)}
               onMode={onMode}
               onUpload={onUpload}
               onPrompt={onPrompt}
               onQueue={onQueue}
               takeBack={takeBack}
               onTaken={() => (setTakeBack(undefined), setDraft(undefined))}
-              onBash={onBash}
+              onBash={capabilitiesOf(session).shell ? onBash : undefined}
               onSearch={onSearch}
               insert={insert}
               onInserted={onInserted}
@@ -5430,7 +5669,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask")) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull")}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask", { engine: ENGINE_NAME[session.engine ?? "claude"] })) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull", { engine: ENGINE_NAME[session.engine ?? "claude"] })}
             />
           </>
         )}
@@ -5468,6 +5707,7 @@ function PromptBox({
   onEffort,
   mode,
   modes,
+  caps,
   onMode,
   onUpload,
   onPrompt,
@@ -5512,6 +5752,8 @@ function PromptBox({
   onEffort: (effort: Effort) => void;
   mode: PermissionMode;
   modes: PermissionMode[];
+  /** The session's Engine flags; none (new-session draft) = all. */
+  caps?: EngineCapabilities;
   onMode: (mode: PermissionMode) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
@@ -5732,10 +5974,13 @@ function PromptBox({
     setSendError(undefined);
   }, [cwd]);
   // While a turn runs and queueing is available, Enter and the send button follow the Sending setting and Alt+Enter does the other one.
-  const sendMode = useSendMode();
+  // An Engine without steering: a message sent while a turn runs can only queue.
+  const noSteer = caps?.steering === false;
+  const sendSetting = useSendMode();
+  const sendMode = noSteer ? "queue" : sendSetting;
   const running = state === "running" || state === "needs_input";
   const enterHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "queue" : "send";
-  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" ? "send" : "queue";
+  const altHow: "send" | "queue" = running && onQueue && sendMode === "queue" && !noSteer ? "send" : "queue";
   const send = (given = text, how: "send" | "queue" = enterHow) => {
     // Each pasted text goes as the CLI's pasted_content block at its token (GH-441); the bash and dialog paths never hold one.
     const t = bash ? given : expandPastes(given, pastes, pasteTag ?? pasteTagId());
@@ -5746,7 +5991,7 @@ function PromptBox({
       onBash!(command).catch((e: Error) => {
         restore(t);
         setBash(true);
-        setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
+        if (!(e as ShownError).shown) setSendError(tr("app.prompt.commandNotRun", { message: e.message }));
       });
       edit("");
       setBash(false);
@@ -5793,7 +6038,7 @@ function PromptBox({
       // Back into the prompt box, before anything typed since.
       restore(t);
       setImages((cur) => [...sent, ...cur]);
-      setSendError(tr("app.main.promptNotSent", { message: e.message }));
+      if (!(e as ShownError).shown) setSendError(tr("app.main.promptNotSent", { message: e.message }));
     });
     dropDraft();
     edit("");
@@ -6064,6 +6309,7 @@ function PromptBox({
       />
       <PromptToolbar
         models={models}
+        caps={caps}
         model={model}
         onModel={onModel}
         effort={effort}

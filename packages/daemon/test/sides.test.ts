@@ -28,6 +28,7 @@ const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 /** A side daemon in this process, wired like the attach server of a Hub (`claude-ui side --attach`). */
 function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: ReturnType<typeof createDaemon>) => void): SideProcess {
   const side = createDaemon({
+    openExternal: sideOpen,
     webRoot,
     token: "",
     roots: [root],
@@ -50,6 +51,9 @@ function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: Ret
   return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
 }
 let sidePush: (p: PushPayload) => void = () => {};
+/** The side daemon's fs.openExternal option (a WSL daemon: `winPath` set); `run` records the commands. */
+const sideRun = vi.fn(async (_c: { cmd: string; args: string[] }) => {});
+const sideOpen = { run: sideRun, editors: () => new Map(), winPath: async (p: string) => "\\\\wsl.localhost\\Ubuntu" + p.replaceAll("/", "\\") };
 /** What the hub wrote to the side's stdin. */
 const sideFrames: string[] = [];
 
@@ -492,12 +496,61 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it.skipIf(win32)("fs.openExternal of a side path is side_unsupported", async () => {
+  it.skipIf(win32)("fs.openExternal of a WSL side path runs explorer.exe in the side with the converted path", async () => {
+    writeFileSync(join(wslRoot, "o.txt"), "x");
+    sideRun.mockClear();
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
-    expect(await c.request({ type: "fs.openExternal", path: join(wslRoot, "s.png"), cwd: wslRoot, with: "reveal" })).toMatchObject({ type: "error", code: "side_unsupported" });
+    const file = join(wslRoot, "o.txt");
+    expect(await c.request({ type: "fs.openExternal", path: file, cwd: wslRoot, with: "reveal" })).toMatchObject({ type: "reply" });
+    expect(sideRun).toHaveBeenCalledWith({ cmd: "explorer.exe", args: ["/select," + (await sideOpen.winPath(file))], ignoreExit: true });
+    expect(await c.request({ type: "fs.openExternal", path: file, cwd: wslRoot, with: "idea" })).toMatchObject({ type: "error", code: "editor_missing" });
     c.ws.close();
+  });
+
+  it("session.list keeps the local project order: a just added project without sessions stays above older projects", async () => {
+    const s = createSides({ targets: [], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const sent: ServerMessage[] = [];
+    const list = { sessions: [{ id: "a", cwd: "/old", lastActivity: 5 }, { id: "b", cwd: "/older", lastActivity: 9 }], projects: ["/new", "/old", "/older"], recentProjects: [] };
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent[0] as any).result.projects).toEqual(["/new", "/old", "/older"]);
+  });
+
+  it("session.list across sides: a side's session-less top project does not rise above local projects", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (m.type === "session.list" ? { sessions: [{ id: "y", cwd: "/y", lastActivity: 100 }], projects: ["/x", "/y"], recentProjects: [] } : {})) });
+    await s.refresh();
+    await s.start("wsl:Ubuntu");
+    const sent: ServerMessage[] = [];
+    const list = { sessions: [{ id: "a", cwd: "/a", lastActivity: 1000 }], projects: ["/a"], recentProjects: [] };
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent.find((m) => m.type === "reply") as any).result.projects).toEqual(["/a", "/y", "/x"]);
+  });
+
+  it("fs.openExternal: custom on a WSL side is side_unsupported, nothing is forwarded (GH-646)", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const sent: ServerMessage[] = [];
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost: true });
+    await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "custom", side: "wsl:Ubuntu", reqId: "r" } as never);
+    expect(sent[0]).toMatchObject({ type: "error", code: "side_unsupported" });
+  });
+
+  it("fs.openExternal: a WSL side is refused for a browser on another machine; a Docker side is side_unsupported", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const run = async (sameHost: boolean | undefined, id: string) => {
+      const sent: ServerMessage[] = [];
+      const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost });
+      await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "reveal", side: id, reqId: "r" } as never);
+      return sent[0] as any;
+    };
+    expect(await run(false, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
+    expect(await run(undefined, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
+    expect(await run(true, "docker:dev")).toMatchObject({ code: "side_unsupported" });
   });
 
   it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {
@@ -811,9 +864,11 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   it("the hub's settings reach a side, so a coordinator there starts workers in the container", async () => {
     const c = await client(await dport());
     await c.request({ type: "side.start", side: "docker:dev" });
-    expect(await c.request({ type: "settings.set", patch: { orchestration: { enabled: true, workerNotifications: false } } })).toMatchObject({ type: "reply" });
+    expect(await c.request({ type: "settings.set", patch: { orchestration: { enabled: true, workerNotifications: false }, editor: { command: "subl" } } })).toMatchObject({ type: "reply" });
     await expect.poll(async () => (await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.orchestration.workerNotifications).toBe(false);
     await expect.poll(async () => (await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.orchestration.enabled).toBe(true);
+    // GH-646: the editor command runs on the Hub's desktop only.
+    expect((await c.request({ type: "settings.get", side: "docker:dev" })).result?.settings.editor.command).toBe("");
     const coord = await c.request({ type: "session.create", cwd: dockRoot });
     expect(coord).toMatchObject({ type: "reply" });
     const tools = sideDaemon.orchestration.tools(coord.result.session.id);

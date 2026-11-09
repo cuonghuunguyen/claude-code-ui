@@ -13,7 +13,7 @@ tracker:     github-issues   (https://github.com/cuonghuunguyen/claude-code-ui/i
 query:       --label ready-for-agent
 states:      started → —, implemented → —, in-review → —
 host:        github
-push:        ask
+push:        coordinator   (the pre-push data scan in CLAUDE.md still applies; push the issue branch only, never main)
 merge:       auto   (see Merge; overrides orchestrate-tickets "never merge" for this repo)
 remote-branch: same
 ci:          none
@@ -81,7 +81,7 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
 - `notes.md`: design decisions, files, per acceptance criterion the evidence (test name,
   scenario name or screenshot), start command and port, manual steps for a UI tester,
   out-of-scope findings (report, do not fix).
-- Do not merge into main, do not comment on GitHub, do not push unless the user asks. Merging
+- Do not merge into main, do not comment on GitHub, do not push (a stage worker never pushes; the coordinator pushes). Merging
   is the coordinator's job (Merge).
 
 ## Merge
@@ -113,6 +113,7 @@ other forbidden call stays forbidden.
   `main` rebases onto the new `main` before its next stage.
 - Merge refused or not `MERGEABLE`: do not force it. Send the conflict to the implementer
   (rebase onto `main`, re-run scoped tests), then check again.
+- Run `gh pr merge` as one plain command per call, no chaining. Read `mergeable` in a separate call (`UNKNOWN` right after a base PR merged: read again).
 
 ## Acceptance
 Scripted: each visible acceptance criterion is a Cucumber scenario in `packages/e2e/features`,

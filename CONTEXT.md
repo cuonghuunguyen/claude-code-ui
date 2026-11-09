@@ -45,8 +45,16 @@ A `claude-ui <command>` (status, open, sessions, projects, workers) that asks th
 _Avoid_: CLI session, remote control
 
 **Session**:
-One SDK session in one working directory, identified by its session ID. The SDK transcript is its durable history. It may be driven by several `query()` runs over time (e.g. resumed after a daemon restart).
+One Engine session in one working directory, identified by its session ID. The Engine's own store is its durable history. It may be driven by several runs over time (e.g. resumed after a daemon restart).
 _Avoid_: chat, conversation, thread
+
+**Engine**:
+The agent runtime that runs a Session: Claude (Claude Agent SDK) or OpenCode. Chosen per Session when it is created, fixed afterwards, and shown as a tag on the Session in the sidebar. The UI is the same for every Engine; a control the Engine cannot support is hidden or disabled for its Sessions. Coordinators and Workers each pick their own Engine.
+_Avoid_: provider (OpenCode's word for a model vendor), backend, agent
+
+**OpenCode server**:
+The one `opencode serve` process a Daemon starts on the first OpenCode Session. It holds OpenCode Session history and provider credentials; the Daemon keeps neither.
+_Avoid_: OpenCode daemon
 
 **Docked session**:
 A session tab shown in the side or bottom panel instead of the tabs bar (wide screens). It keeps its place in the stored tab list but is never the current session.
@@ -285,3 +293,11 @@ _Avoid_: mod (alone), addon
 **Marketplace**:
 A plugin catalog known to the Claude Code CLI (a GitHub repo, git or URL source, a local directory or file, an npm package).
 _Avoid_: plugin store, registry
+
+**Back mark**:
+A user mark on one assistant reply, "I'll be back": it holds a brief, an optional note and an optional reminder, and stays until the user clicks Done (or the session is deleted). Kept in the Hub's settings, shown in the reply's panel and in Focus ("Come back to").
+_Avoid_: bookmark, pin, reminder (a mark's optional part)
+
+**Brief turn**:
+The turn claude-ui sends to a marked session when the mark is made (or refreshed or retried), asking the session itself for a brief (About / Focus now / Next). A normal turn in the transcript, recognised by its tag line; the timeline shows it as one collapsed row.
+_Avoid_: summary turn, recap

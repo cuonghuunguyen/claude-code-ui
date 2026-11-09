@@ -1,0 +1,2540 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794087176000
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Step 1: use the question tool to ask me whether I prefer red or blue. Step 2: after my answer, use the task tool with subagent general and the prompt \"read a.txt and report its content\". Step 3: run `pwd` with the bash tool.",
+     "messageID": "msg_1b7edc740001O4pmvcerlGMfyC",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1b7edc740002a481uG6rSOlt46"
+    },
+    "time": 1794087176001
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/work/proj"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "big-pickle",
+     "providerID": "opencode",
+     "time": {
+      "created": 1794087176003
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1794087176000
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+     },
+     "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7edd072001nR1rwtftEpPclu",
+     "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "sessionID": "ses_ROOT",
+     "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+     "type": "step-start"
+    },
+    "time": 1794087178354
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7edd075001BBhyw2PO2vvxNk",
+     "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "",
+     "time": {
+      "start": 1794087178357
+     }
+    },
+    "time": 1794087178357
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+    "partID": "prt_1b7edd075001BBhyw2PO2vvxNk",
+    "field": "text",
+    "delta": "The"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+    "partID": "prt_1b7edd075001BBhyw2PO2vvxNk",
+    "field": "text",
+    "delta": " user"
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7edd075001BBhyw2PO2vvxNk",
+     "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "The user wants me to ask a question first with the question tool. Then after the answer, use task tool. So I must do step 1 now, wait for answer.",
+     "time": {
+      "start": 1794087178357,
+      "end": 1794087178639
+     }
+    },
+    "time": 1794087178639
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_1b7edd191001X8qUxfuFakAxNX",
+     "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "question",
+     "callID": "call_99ca8530407841bc920c77fd",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1794087178641
+   }
+  },
+  {
+   "type": "question.asked",
+   "properties": {
+    "id": "que_1b7edd2ad001vvGXsFVXVXH1oa",
+    "sessionID": "ses_ROOT",
+    "questions": [
+     {
+      "question": "Which color do you prefer: red or blue?",
+      "header": "Color preference",
+      "options": [
+       {
+        "label": "Red",
+        "description": "Prefer red"
+       },
+       {
+        "label": "Blue",
+        "description": "Prefer blue"
+       }
+      ]
+     }
+    ],
+    "tool": {
+     "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+     "callID": "call_99ca8530407841bc920c77fd"
+    }
+   }
+  }
+ ],
+ "on": {
+  "answer": {
+   "events": [
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "question",
+       "callID": "call_99ca8530407841bc920c77fd",
+       "state": {
+        "status": "running",
+        "input": {
+         "questions": [
+          {
+           "question": "Which color do you prefer: red or blue?",
+           "header": "Color preference",
+           "options": [
+            {
+             "label": "Red",
+             "description": "Prefer red"
+            },
+            {
+             "label": "Blue",
+             "description": "Prefer blue"
+            }
+           ]
+          }
+         ]
+        },
+        "time": {
+         "start": 1794087178926
+        }
+       },
+       "id": "prt_1b7edd191001X8qUxfuFakAxNX",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7edc7430012nD5wygY3pbo1k"
+      },
+      "time": 1794087178926
+     }
+    },
+    {
+     "type": "question.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "que_1b7edd2ad001vvGXsFVXVXH1oa",
+      "answers": [
+       [
+        "Blue"
+       ]
+      ]
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "question",
+       "callID": "call_99ca8530407841bc920c77fd",
+       "state": {
+        "status": "completed",
+        "input": {
+         "questions": [
+          {
+           "question": "Which color do you prefer: red or blue?",
+           "header": "Color preference",
+           "options": [
+            {
+             "label": "Red",
+             "description": "Prefer red"
+            },
+            {
+             "label": "Blue",
+             "description": "Prefer blue"
+            }
+           ]
+          }
+         ]
+        },
+        "output": "User has answered your questions: \"Which color do you prefer: red or blue?\"=\"Blue\". You can now continue with the user's answers in mind.",
+        "metadata": {
+         "answers": [
+          [
+           "Blue"
+          ]
+         ],
+         "truncated": false
+        },
+        "title": "Asked 1 question",
+        "time": {
+         "start": 1794087178926,
+         "end": 1794087184266
+        }
+       },
+       "id": "prt_1b7edd191001X8qUxfuFakAxNX",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7edc7430012nD5wygY3pbo1k"
+      },
+      "time": 1794087184267
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ede7e6001OUC6CRRFnuXdWp",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14980,
+        "input": 217,
+        "output": 93,
+        "reasoning": 36,
+        "cache": {
+         "write": 0,
+         "read": 14634
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087184358
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7edc7430012nD5wygY3pbo1k",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14980,
+        "input": 217,
+        "output": 93,
+        "reasoning": 36,
+        "cache": {
+         "write": 0,
+         "read": 14634
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087176003
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7edc7430012nD5wygY3pbo1k",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14980,
+        "input": 217,
+        "output": 93,
+        "reasoning": 36,
+        "cache": {
+         "write": 0,
+         "read": 14634
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087176003,
+        "completed": 1794087184424
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087184426
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087176000
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7edeeea001fj9chSiyJFhv0C",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "sessionID": "ses_ROOT",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087186154
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7edeeed001xiyJqHM0K7r2Km",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "",
+       "time": {
+        "start": 1794087186157
+       }
+      },
+      "time": 1794087186157
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+      "partID": "prt_1b7edeeed001xiyJqHM0K7r2Km",
+      "field": "text",
+      "delta": "Now"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+      "partID": "prt_1b7edeeed001xiyJqHM0K7r2Km",
+      "field": "text",
+      "delta": " step"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7edeeed001xiyJqHM0K7r2Km",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "sessionID": "ses_ROOT",
+       "type": "reasoning",
+       "text": "Now step 2: task tool subagent general with prompt \"read a.txt and report its content\". Then step 3: pwd.\n\nThese are dependent per user's instruction \"after my answer\" - step 2 and 3 could be parallel, but user specified step 3 after step 2. I'll do task first.",
+       "time": {
+        "start": 1794087186157,
+        "end": 1794087186611
+       }
+      },
+      "time": 1794087186611
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7edf0b4001JW4u21z9q5gP48",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "sessionID": "ses_ROOT",
+       "type": "tool",
+       "tool": "task",
+       "callID": "call_6145ce7d53c5486689591c7f",
+       "state": {
+        "status": "pending",
+        "input": {},
+        "raw": ""
+       }
+      },
+      "time": 1794087186612
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "task",
+       "callID": "call_6145ce7d53c5486689591c7f",
+       "state": {
+        "title": "Read a.txt and report",
+        "metadata": {
+         "parentSessionId": "ses_ROOT",
+         "sessionId": "ses_CHILD",
+         "model": {
+          "modelID": "big-pickle",
+          "providerID": "opencode"
+         }
+        },
+        "status": "running",
+        "input": {
+         "description": "Read a.txt and report",
+         "prompt": "read a.txt and report its content",
+         "subagent_type": "general"
+        },
+        "time": {
+         "start": 1794087187000
+        }
+       },
+       "id": "prt_1b7edf0b4001JW4u21z9q5gP48",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk"
+      },
+      "time": 1794087187000
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "user",
+       "sessionID": "ses_CHILD",
+       "time": {
+        "created": 1794087187004
+       },
+       "agent": "general",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       }
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "type": "text",
+       "text": "read a.txt and report its content",
+       "messageID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "sessionID": "ses_CHILD",
+       "id": "prt_1b7edf23e0014Z1v8eKG0pUuAI"
+      },
+      "time": 1794087187006
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "task",
+       "callID": "call_6145ce7d53c5486689591c7f",
+       "state": {
+        "title": "Read a.txt and report",
+        "metadata": {
+         "parentSessionId": "ses_ROOT",
+         "sessionId": "ses_CHILD",
+         "model": {
+          "modelID": "big-pickle",
+          "providerID": "opencode"
+         }
+        },
+        "status": "running",
+        "input": {
+         "description": "Read a.txt and report",
+         "prompt": "read a.txt and report its content",
+         "subagent_type": "general"
+        },
+        "time": {
+         "start": 1794087187000
+        }
+       },
+       "id": "prt_1b7edf0b4001JW4u21z9q5gP48",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk"
+      },
+      "time": 1794087187010
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edf2440010PpokRPuBcagsE",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087187012
+       },
+       "sessionID": "ses_CHILD"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087187004
+       },
+       "agent": "general",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "id": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "sessionID": "ses_CHILD",
+       "summary": {
+        "diffs": []
+       }
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7edf72d001fX3ecYH7yXo58A",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+       "sessionID": "ses_CHILD",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087188270
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7edf731001AVnRDoZvx7uB1T",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+       "sessionID": "ses_CHILD",
+       "type": "reasoning",
+       "text": "",
+       "time": {
+        "start": 1794087188273
+       }
+      },
+      "time": 1794087188273
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+      "partID": "prt_1b7edf731001AVnRDoZvx7uB1T",
+      "field": "text",
+      "delta": "The"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+      "partID": "prt_1b7edf731001AVnRDoZvx7uB1T",
+      "field": "text",
+      "delta": " user"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7edf731001AVnRDoZvx7uB1T",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+       "sessionID": "ses_CHILD",
+       "type": "reasoning",
+       "text": "The user asks to read a.txt and report its content. Let me check the file.",
+       "time": {
+        "start": 1794087188273,
+        "end": 1794087188623
+       }
+      },
+      "time": 1794087188623
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7edf890001fvKzw0VeSJefUw",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+       "sessionID": "ses_CHILD",
+       "type": "tool",
+       "tool": "read",
+       "callID": "call_421b03fa7d6549968ff480b9",
+       "state": {
+        "status": "pending",
+        "input": {},
+        "raw": ""
+       }
+      },
+      "time": 1794087188624
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "type": "tool",
+       "tool": "read",
+       "callID": "call_421b03fa7d6549968ff480b9",
+       "state": {
+        "status": "running",
+        "input": {
+         "filePath": "/work/proj/a.txt"
+        },
+        "time": {
+         "start": 1794087189056
+        }
+       },
+       "id": "prt_1b7edf890001fvKzw0VeSJefUw",
+       "sessionID": "ses_CHILD",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE"
+      },
+      "time": 1794087189056
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "type": "tool",
+       "tool": "read",
+       "callID": "call_421b03fa7d6549968ff480b9",
+       "state": {
+        "status": "completed",
+        "input": {
+         "filePath": "/work/proj/a.txt"
+        },
+        "output": "<path>/work/proj/a.txt</path>\n<type>file</type>\n<content>\n1: hi\n\n(End of file - total 1 lines)\n</content>",
+        "metadata": {
+         "preview": "hi",
+         "truncated": false,
+         "loaded": [],
+         "display": {
+          "type": "file",
+          "path": "/work/proj/a.txt",
+          "text": "hi",
+          "lineStart": 1,
+          "lineEnd": 1,
+          "totalLines": 1,
+          "truncated": false
+         }
+        },
+        "title": "a.txt",
+        "time": {
+         "start": 1794087189056,
+         "end": 1794087189074
+        }
+       },
+       "id": "prt_1b7edf890001fvKzw0VeSJefUw",
+       "sessionID": "ses_CHILD",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE"
+      },
+      "time": 1794087189075
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7edfabd001nnbsmHLl7fMQ5r",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7edf2440010PpokRPuBcagsE",
+       "sessionID": "ses_CHILD",
+       "type": "step-finish",
+       "tokens": {
+        "total": 12281,
+        "input": 10406,
+        "output": 65,
+        "reasoning": 18,
+        "cache": {
+         "write": 0,
+         "read": 1792
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087189181
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edf2440010PpokRPuBcagsE",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 12281,
+        "input": 10406,
+        "output": 65,
+        "reasoning": 18,
+        "cache": {
+         "write": 0,
+         "read": 1792
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087187012
+       },
+       "sessionID": "ses_CHILD",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edf2440010PpokRPuBcagsE",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 12281,
+        "input": 10406,
+        "output": 65,
+        "reasoning": 18,
+        "cache": {
+         "write": 0,
+         "read": 1792
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087187012,
+        "completed": 1794087189249
+       },
+       "sessionID": "ses_CHILD",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087189250
+       },
+       "sessionID": "ses_CHILD"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087187004
+       },
+       "agent": "general",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "sessionID": "ses_CHILD"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7ee00ab001vIlIk9KJB9C7yW",
+       "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "sessionID": "ses_CHILD",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087190700
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7ee00e30016qbO5NLssMPFw1",
+       "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "sessionID": "ses_CHILD",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1794087190755
+       }
+      },
+      "time": 1794087190756
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+      "partID": "prt_1b7ee00e30016qbO5NLssMPFw1",
+      "field": "text",
+      "delta": "Content"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+      "partID": "prt_1b7ee00e30016qbO5NLssMPFw1",
+      "field": "text",
+      "delta": ": `hi`"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7ee00e30016qbO5NLssMPFw1",
+       "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "sessionID": "ses_CHILD",
+       "type": "text",
+       "text": "Content: `hi`",
+       "time": {
+        "start": 1794087190755,
+        "end": 1794087190787
+       }
+      },
+      "time": 1794087190788
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "part": {
+       "id": "prt_1b7ee016c001WZ1WpEmazeZbqe",
+       "reason": "stop",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "sessionID": "ses_CHILD",
+       "type": "step-finish",
+       "tokens": {
+        "total": 12356,
+        "input": 317,
+        "output": 7,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 12032
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087190892
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 12356,
+        "input": 317,
+        "output": 7,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 12032
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087189250
+       },
+       "sessionID": "ses_CHILD",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "id": "msg_1b7edfb020015rFTSzbJYNh7QC",
+       "parentID": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "role": "assistant",
+       "mode": "general",
+       "agent": "general",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 12356,
+        "input": 317,
+        "output": 7,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 12032
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087189250,
+        "completed": 1794087190967
+       },
+       "sessionID": "ses_CHILD",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_CHILD"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "task",
+       "callID": "call_6145ce7d53c5486689591c7f",
+       "state": {
+        "status": "completed",
+        "input": {
+         "description": "Read a.txt and report",
+         "prompt": "read a.txt and report its content",
+         "subagent_type": "general"
+        },
+        "output": "<task id=\"ses_CHILD\" state=\"completed\">\n<task_result>\nContent: `hi`\n</task_result>\n</task>",
+        "metadata": {
+         "parentSessionId": "ses_ROOT",
+         "sessionId": "ses_CHILD",
+         "model": {
+          "modelID": "big-pickle",
+          "providerID": "opencode"
+         },
+         "truncated": false
+        },
+        "title": "Read a.txt and report",
+        "time": {
+         "start": 1794087187000,
+         "end": 1794087190970
+        }
+       },
+       "id": "prt_1b7edf0b4001JW4u21z9q5gP48",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk"
+      },
+      "time": 1794087190970
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ee01f6001G3DxgJf0dE1ywB",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 15174,
+        "input": 300,
+        "output": 83,
+        "reasoning": 69,
+        "cache": {
+         "write": 0,
+         "read": 14722
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087191030
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 15174,
+        "input": 300,
+        "output": 83,
+        "reasoning": 69,
+        "cache": {
+         "write": 0,
+         "read": 14722
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087184426
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ede82a001WGXjZ0x2BxIupk",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 15174,
+        "input": 300,
+        "output": 83,
+        "reasoning": 69,
+        "cache": {
+         "write": 0,
+         "read": 14722
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087184426,
+        "completed": 1794087191105
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087191107
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_CHILD",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087187004
+       },
+       "agent": "general",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7edf23b001dNpbKvJtBBy68K",
+       "sessionID": "ses_CHILD"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1794087176000
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "opencode",
+        "modelID": "big-pickle"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ee07f3001Ug0NmM27TIiUdF",
+       "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+       "sessionID": "ses_ROOT",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "type": "step-start"
+      },
+      "time": 1794087192563
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ee07f6001flBD1peTjyZhLp",
+       "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+       "sessionID": "ses_ROOT",
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_c395bdbbe80641cb808b9fbb",
+       "state": {
+        "status": "pending",
+        "input": {},
+        "raw": ""
+       }
+      },
+      "time": 1794087192566
+     }
+    },
+    {
+     "type": "permission.asked",
+     "properties": {
+      "id": "per_1b7ee081a001iaPA46B9flfTJ8",
+      "sessionID": "ses_ROOT",
+      "permission": "bash",
+      "patterns": [
+       "pwd"
+      ],
+      "metadata": {
+       "command": "pwd"
+      },
+      "always": [
+       "pwd *"
+      ],
+      "tool": {
+       "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+       "callID": "call_c395bdbbe80641cb808b9fbb"
+      }
+     }
+    }
+   ],
+   "on": {
+    "reject:message": {
+     "events": [
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "type": "tool",
+         "tool": "bash",
+         "callID": "call_c395bdbbe80641cb808b9fbb",
+         "state": {
+          "status": "running",
+          "input": {
+           "command": "pwd"
+          },
+          "time": {
+           "start": 1794087192603
+          }
+         },
+         "id": "prt_1b7ee07f6001flBD1peTjyZhLp",
+         "sessionID": "ses_ROOT",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P"
+        },
+        "time": 1794087192603
+       }
+      },
+      {
+       "type": "permission.replied",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "requestID": "per_1b7ee081a001iaPA46B9flfTJ8",
+        "reply": "reject"
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "type": "tool",
+         "tool": "bash",
+         "callID": "call_c395bdbbe80641cb808b9fbb",
+         "state": {
+          "status": "error",
+          "input": {
+           "command": "pwd"
+          },
+          "error": "The user rejected permission to use this specific tool call with the following feedback: Do not run pwd; just say the folder is proj.",
+          "time": {
+           "start": 1794087192603,
+           "end": 1794087216973
+          }
+         },
+         "id": "prt_1b7ee07f6001flBD1peTjyZhLp",
+         "sessionID": "ses_ROOT",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P"
+        },
+        "time": 1794087216973
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee67ae001FbA40o0w5tp1OP",
+         "reason": "tool-calls",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "sessionID": "ses_ROOT",
+         "type": "step-finish",
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "cost": 0
+        },
+        "time": 1794087217070
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087191107
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "tool-calls"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087191107,
+          "completed": 1794087217135
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "tool-calls"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+           "read": 0,
+           "write": 0
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137
+         },
+         "sessionID": "ses_ROOT"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "role": "user",
+         "time": {
+          "created": 1794087176000
+         },
+         "agent": "build",
+         "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+         },
+         "summary": {
+          "diffs": []
+         },
+         "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "sessionID": "ses_ROOT"
+        }
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c28001tgOJPWwRXxer88",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "type": "step-start"
+        },
+        "time": 1794087218216
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "text",
+         "text": "",
+         "time": {
+          "start": 1794087218228
+         }
+        },
+        "time": 1794087218228
+       }
+      },
+      {
+       "type": "message.part.delta",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+        "partID": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+        "field": "text",
+        "delta": "Blue"
+       }
+      },
+      {
+       "type": "message.part.delta",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+        "partID": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+        "field": "text",
+        "delta": " noted"
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "text",
+         "text": "Blue noted. `a.txt` contains `hi`. The folder is `proj`.",
+         "time": {
+          "start": 1794087218228,
+          "end": 1794087218318
+         }
+        },
+        "time": 1794087218318
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6cf10011SKUqIYxiQuer7",
+         "reason": "stop",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "step-finish",
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "cost": 0
+        },
+        "time": 1794087218417
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "stop"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137,
+          "completed": 1794087218482
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "stop"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "idle"
+        }
+       }
+      },
+      {
+       "type": "session.idle",
+       "properties": {
+        "sessionID": "ses_ROOT"
+       }
+      }
+     ]
+    },
+    "reject": {
+     "events": [
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "type": "tool",
+         "tool": "bash",
+         "callID": "call_c395bdbbe80641cb808b9fbb",
+         "state": {
+          "status": "running",
+          "input": {
+           "command": "pwd"
+          },
+          "time": {
+           "start": 1794087192603
+          }
+         },
+         "id": "prt_1b7ee07f6001flBD1peTjyZhLp",
+         "sessionID": "ses_ROOT",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P"
+        },
+        "time": 1794087192603
+       }
+      },
+      {
+       "type": "permission.replied",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "requestID": "per_1b7ee081a001iaPA46B9flfTJ8",
+        "reply": "reject"
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "type": "tool",
+         "tool": "bash",
+         "callID": "call_c395bdbbe80641cb808b9fbb",
+         "state": {
+          "status": "error",
+          "input": {
+           "command": "pwd"
+          },
+          "error": "The user rejected permission to use this specific tool call with the following feedback: Do not run pwd; just say the folder is proj.",
+          "time": {
+           "start": 1794087192603,
+           "end": 1794087216973
+          }
+         },
+         "id": "prt_1b7ee07f6001flBD1peTjyZhLp",
+         "sessionID": "ses_ROOT",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P"
+        },
+        "time": 1794087216973
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee67ae001FbA40o0w5tp1OP",
+         "reason": "tool-calls",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "messageID": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "sessionID": "ses_ROOT",
+         "type": "step-finish",
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "cost": 0
+        },
+        "time": 1794087217070
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087191107
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "tool-calls"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee0243001G6Jzy8d3RaSE5P",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15265,
+          "input": 334,
+          "output": 39,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 14892
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087191107,
+          "completed": 1794087217135
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "tool-calls"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+           "read": 0,
+           "write": 0
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137
+         },
+         "sessionID": "ses_ROOT"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "role": "user",
+         "time": {
+          "created": 1794087176000
+         },
+         "agent": "build",
+         "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+         },
+         "summary": {
+          "diffs": []
+         },
+         "id": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "sessionID": "ses_ROOT"
+        }
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c28001tgOJPWwRXxer88",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "type": "step-start"
+        },
+        "time": 1794087218216
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "text",
+         "text": "",
+         "time": {
+          "start": 1794087218228
+         }
+        },
+        "time": 1794087218228
+       }
+      },
+      {
+       "type": "message.part.delta",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+        "partID": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+        "field": "text",
+        "delta": "Blue"
+       }
+      },
+      {
+       "type": "message.part.delta",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+        "partID": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+        "field": "text",
+        "delta": " noted"
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6c34001xFlpnm5HTvijWi",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "text",
+         "text": "Blue noted. `a.txt` contains `hi`. The folder is `proj`.",
+         "time": {
+          "start": 1794087218228,
+          "end": 1794087218318
+         }
+        },
+        "time": 1794087218318
+       }
+      },
+      {
+       "type": "message.part.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "part": {
+         "id": "prt_1b7ee6cf10011SKUqIYxiQuer7",
+         "reason": "stop",
+         "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+         "messageID": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "sessionID": "ses_ROOT",
+         "type": "step-finish",
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "cost": 0
+        },
+        "time": 1794087218417
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "stop"
+        }
+       }
+      },
+      {
+       "type": "message.updated",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "info": {
+         "id": "msg_1b7ee67f1001xoLwzHngQtojEM",
+         "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+         "role": "assistant",
+         "mode": "build",
+         "agent": "build",
+         "path": {
+          "cwd": "/work/proj",
+          "root": "/work/proj"
+         },
+         "cost": 0,
+         "tokens": {
+          "total": 15323,
+          "input": 207,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+           "write": 0,
+           "read": 15096
+          }
+         },
+         "modelID": "big-pickle",
+         "providerID": "opencode",
+         "time": {
+          "created": 1794087217137,
+          "completed": 1794087218482
+         },
+         "sessionID": "ses_ROOT",
+         "finish": "stop"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "busy"
+        }
+       }
+      },
+      {
+       "type": "session.status",
+       "properties": {
+        "sessionID": "ses_ROOT",
+        "status": {
+         "type": "idle"
+        }
+       }
+      },
+      {
+       "type": "session.idle",
+       "properties": {
+        "sessionID": "ses_ROOT"
+       }
+      }
+     ]
+    }
+   }
+  },
+  "reject": {
+   "events": [
+    {
+     "type": "question.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "que_1b7edd2ad001vvGXsFVXVXH1oa",
+      "answers": [
+       [
+        "Blue"
+       ]
+      ]
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "question",
+       "callID": "call_99ca8530407841bc920c77fd",
+       "state": {
+        "status": "completed",
+        "input": {
+         "questions": [
+          {
+           "question": "Which color do you prefer: red or blue?",
+           "header": "Color preference",
+           "options": [
+            {
+             "label": "Red",
+             "description": "Prefer red"
+            },
+            {
+             "label": "Blue",
+             "description": "Prefer blue"
+            }
+           ]
+          }
+         ]
+        },
+        "output": "User has answered your questions: \"Which color do you prefer: red or blue?\"=\"Blue\". You can now continue with the user's answers in mind.",
+        "metadata": {
+         "answers": [
+          [
+           "Blue"
+          ]
+         ],
+         "truncated": false
+        },
+        "title": "Asked 1 question",
+        "time": {
+         "start": 1794087178926,
+         "end": 1794087184266
+        }
+       },
+       "id": "prt_1b7edd191001X8qUxfuFakAxNX",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_1b7edc7430012nD5wygY3pbo1k"
+      },
+      "time": 1794087184267
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_1b7ede7e6001OUC6CRRFnuXdWp",
+       "reason": "tool-calls",
+       "snapshot": "e9b3a35a07972433efdb6e30933d4d4771eaccff",
+       "messageID": "msg_1b7edc7430012nD5wygY3pbo1k",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 14980,
+        "input": 217,
+        "output": 93,
+        "reasoning": 36,
+        "cache": {
+         "write": 0,
+         "read": 14634
+        }
+       },
+       "cost": 0
+      },
+      "time": 1794087184358
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_1b7edc7430012nD5wygY3pbo1k",
+       "parentID": "msg_1b7edc740001O4pmvcerlGMfyC",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/work/proj"
+       },
+       "cost": 0,
+       "tokens": {
+        "total": 14980,
+        "input": 217,
+        "output": 93,
+        "reasoning": 36,
+        "cache": {
+         "write": 0,
+         "read": 14634
+        }
+       },
+       "modelID": "big-pickle",
+       "providerID": "opencode",
+       "time": {
+        "created": 1794087176003
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

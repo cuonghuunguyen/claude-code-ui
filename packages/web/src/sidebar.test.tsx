@@ -118,13 +118,25 @@ it("one group per working directory with the project name as header and the full
 
 it("rows show title and relative time; only running and needs input get a state, closed and idle none", async () => {
   const { rows, el, onOpen } = await render();
-  expect(rows().map((r) => r.textContent)).toEqual(["Fix login1m", "Old idea2h", "Docs pass5m", "Refactor2d"]);
+  expect(rows().map((r) => r.textContent)).toEqual(["Fix loginClaude1m", "Old ideaClaude2h", "Docs passClaude5m", "RefactorClaude2d"]);
   expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Fix login, running", "Old idea, unread", "Docs pass, needs input", "Refactor"]);
-  expect(rows().map((r) => r.querySelectorAll("svg").length)).toEqual([1, 0, 1, 0]);
+  expect(rows().map((r) => r.querySelectorAll("svg").length)).toEqual([2, 1, 2, 1]);
   expect(el.textContent).not.toMatch(/closed|idle/);
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
   await act(async () => rows()[2]!.click());
   expect(onOpen).toHaveBeenCalledWith("b");
+});
+
+it("every row has a static engine tag with text (absent engine = Claude), no button role of its own", async () => {
+  const { rows } = await render({ list: [{ ...LIST[0]!, engine: "opencode" }, LIST[1]!] });
+  const tags = rows().map((r) => r.querySelector<HTMLElement>('[data-testid="engine-tag"]')!);
+  expect(tags.map((t) => t.textContent)).toEqual(["OpenCode", "Claude"]);
+  for (const t of tags) {
+    expect(t.getAttribute("role")).toBeNull();
+    expect(t.closest("[role=button]")).toBeNull();
+    expect(t.tabIndex).toBe(-1);
+    expect(t.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  }
 });
 
 it("groups collapse and the collapsed state survives a reload", async () => {

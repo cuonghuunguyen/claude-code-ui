@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
+import { EventEmitter } from "node:events";
 import { createDaemon } from "../src/server.ts";
 import { createSettings } from "../src/settings.ts";
 import type { Launcher, OpenCommand } from "../src/open-external.ts";
@@ -92,5 +93,81 @@ describe("fs.openExternal", () => {
     } finally {
       plain.close();
     }
+  });
+});
+
+describe("fs.openExternal in a WSL daemon (winPath)", () => {
+  const winPath = vi.fn(async (p: string) => "\\\\wsl.localhost\\U" + p.replaceAll("/", "\\"));
+  const wsl = mk({ openExternal: { run, editors: () => editors, winPath } });
+  const plain = mk();
+  /** A side's virtual connection (no HTTP request); returns what the daemon sent. */
+  const virtual = (daemon: typeof d) => {
+    const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: (x: string) => void sent.push(JSON.parse(x)), close() {}, ping() {}, terminate() {} });
+    const sent: any[] = [];
+    daemon.accept(ws as never);
+    return async (msg: object) => {
+      const reqId = Math.random().toString(36);
+      ws.emit("message", Buffer.from(JSON.stringify({ ...msg, reqId })));
+      return vi.waitFor(() => sent.find((m) => m.reqId === reqId && (m.type === "reply" || m.type === "error")) ?? Promise.reject(new Error("no reply")), { timeout: 5000 }) as Promise<any>;
+    };
+  };
+  it("reveal and default run explorer.exe with the converted path; an editor keeps the POSIX paths", async () => {
+    run.mockClear();
+    const req = virtual(wsl);
+    const a = join(root, "a.txt");
+    expect(await req(open(a, "reveal"))).toMatchObject({ type: "reply" });
+    expect(await req(open(a, "default"))).toMatchObject({ type: "reply" });
+    expect(await req(open(a, "code"))).toMatchObject({ type: "reply" });
+    const w = await winPath(a);
+    expect(run.mock.calls.map((c) => c[0])).toEqual([
+      { cmd: "explorer.exe", args: ["/select," + w], ignoreExit: true },
+      { cmd: "explorer.exe", args: [w], ignoreExit: true },
+      { cmd: "/bin/code", args: [root, a] },
+    ]);
+  });
+  it("a winPath failure is open_failed and runs nothing", async () => {
+    run.mockClear();
+    winPath.mockRejectedValueOnce(new Error("wslpath: not found"));
+    expect(await virtual(wsl)(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "open_failed", message: "wslpath: not found" });
+    expect(run).not.toHaveBeenCalled();
+  });
+  it("a daemon without winPath still refuses a virtual connection", async () => {
+    run.mockClear();
+    expect(await virtual(plain)(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "not_local" });
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("fs.openExternal custom editor (GH-646)", () => {
+  const prog = process.execPath;
+  it("unset: editor_missing, runs nothing", async () => {
+    run.mockClear();
+    expect(await (await client(port))(open(join(root, "a.txt"), "custom"))).toMatchObject({ type: "error", code: "editor_missing" });
+    expect(run).not.toHaveBeenCalled();
+  });
+  it("a Host that is not local cannot set it (not_local)", async () => {
+    const req = await client(tailPort, "box.tail1234.ts.net");
+    expect(await req({ type: "settings.set", patch: { editor: { command: "evil" } } })).toMatchObject({ type: "error", code: "not_local" });
+    expect((await req({ type: "settings.get" })).result.settings.editor.command).toBe("");
+  });
+  it("invalid commands are bad_settings", async () => {
+    const req = await client(port);
+    for (const command of ['a "b', '""', "a\nb", "x".repeat(1025)]) expect(await req({ type: "settings.set", patch: { editor: { command } } })).toMatchObject({ type: "error", code: "bad_settings" });
+  });
+  it("set: listed in daemon.editors, runs the configured argv with the path; shell characters stay literal", async () => {
+    const req = await client(port);
+    const r = await req({ type: "settings.set", patch: { editor: { command: `"${prog}" --goto={path}`, name: "My Editor" } } });
+    expect(r.result.daemon.editors.at(-1)).toEqual({ id: "custom", label: "My Editor" });
+    writeFileSync(join(root, "a;b$(x)`y`'z.txt"), "x");
+    run.mockClear();
+    expect(await req(open(join(root, "a;b$(x)`y`'z.txt"), "custom"))).toMatchObject({ type: "reply" });
+    expect(run.mock.calls[0]![0]).toEqual({ cmd: prog, args: [`--goto=${join(root, "a;b$(x)`y`'z.txt")}`] });
+  });
+  it("missing program: editor_missing; the command never comes from the message", async () => {
+    const req = await client(port);
+    await req({ type: "settings.set", patch: { editor: { command: "no-such-editor-xyz" } } });
+    run.mockClear();
+    expect(await req({ ...open(join(root, "a.txt"), "custom"), command: "evil" })).toMatchObject({ type: "error", code: "editor_missing" });
+    expect(run).not.toHaveBeenCalled();
   });
 });
