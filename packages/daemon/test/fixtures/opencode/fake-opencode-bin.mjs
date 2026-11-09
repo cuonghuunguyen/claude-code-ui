@@ -10,7 +10,7 @@
 // MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -77,6 +77,7 @@ const broken = new Set((process.env.FAKE_OPENCODE_BROKEN ?? "").split(",").filte
 const MCP_LOAD_MS = Number(process.env.FAKE_OPENCODE_MCP_LOAD_MS ?? 0);
 const loads = new Map(); // directory -> its MCP load (a wait)
 let aborts = 0;
+const warm = new Set();
 let pendingOauth = {}; // provider -> method index of the last authorize
 
 /** Plays a node's events one by one; an abort (or another turn) ends the playback. */
@@ -227,6 +228,8 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     return res.write('data: {"type":"server.connected","properties":{}}\n\n');
   }
+  // A cold folder: only its first GET and its first POST /session answer late.
+  if (url.pathname === "/session" && !warm.has(`${req.method} ${dir}`)) (warm.add(`${req.method} ${dir}`), await sleep(Number(process.env.FAKE_OPENCODE_SESSION_DELAY_MS ?? 0)));
   if (url.pathname === "/session" && req.method === "GET") {
     const roots = url.searchParams.get("roots") === "true";
     return json(200, sessions.filter((s) => (!dir || s.directory === dir) && (!roots || !s.parentID)));

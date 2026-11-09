@@ -550,7 +550,8 @@ export function createDaemon(opts: {
   const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
   /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
   async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
-    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
+    // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
+    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
     if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
     openCodeMeta.set(s.id, { cwd, title: row.title });
@@ -1218,7 +1219,7 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
-    openCodeAgents: async (cwd) => (await openCode.request<{ name: string; mode?: string; hidden?: boolean }[]>("/agent", { directory: cwd })).filter((a) => !a.hidden && a.mode !== "subagent").map((a) => a.name),
+    openCodeAgents: async (cwd) => (await openCode.request<{ name: string; mode?: string; hidden?: boolean }[]>("/agent", { directory: cwd, timeoutMs: 0 })).filter((a) => !a.hidden && a.mode !== "subagent").map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
     openCodeModels: () => openCodeModels(openCode),
@@ -1345,7 +1346,8 @@ export function createDaemon(opts: {
   async function readOpenCodeList(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
     const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
     try {
-      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd })] as const);
+      // No timeout: a cold OpenCode answers after its folder's first load (> 3 s). `list()` waits `listWaitMs` for it; the late answer is pushed as `sessions.changed` (listOpenCode).
+      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd, timeoutMs: 0 })] as const);
       openCodeListError = undefined;
       out.ran = true;
       for (const [cwd, list] of rows)
@@ -1453,7 +1455,7 @@ export function createDaemon(opts: {
   async function restoreOpenCode(id: string): Promise<Session | undefined> {
     const known = openCodeMeta.get(id);
     // shortcut: a session of a folder not seen yet is found only when OpenCode answers `GET /session/{id}` without a directory (unverified against a real server).
-    const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd }).catch(() => undefined);
+    const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd, timeoutMs: 0 }).catch(() => undefined);
     const cwd = row && allowed(known?.cwd ?? row.directory);
     if (!row || !cwd || isRemoving(cwd)) return undefined;
     const history = await loadOpenCodeHistory(openCode, id, cwd);

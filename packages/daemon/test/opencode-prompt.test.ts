@@ -1093,3 +1093,43 @@ describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () =
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 });
+
+describe("OpenCode on a cold folder: slow GET /session and POST /session lose nothing (GH-682)", { timeout: 40_000 }, () => {
+  it("a session created while POST /session takes 4 s still arrives and gets its reply", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_SESSION_DELAY_MS: "4000" } });
+    const t = Date.now();
+    const s = await d.open();
+    expect(Date.now() - t).toBeGreaterThanOrEqual(3900);
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+  });
+
+  it("a session list that OpenCode answers after 4 s is pushed as sessions.changed and then lists the sessions", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_cold", slug: "c", projectID: "global", directory: project, title: "Cold", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, env: { FAKE_OPENCODE_SESSION_DELAY_MS: "4000" }, data: { sessions: [row], messages: { ses_cold: [] } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const first = await d.ok({ type: "session.list" });
+    expect(first.sessions.filter((x: any) => x.engine === "opencode")).toEqual([]);
+    await until(() => d.inbox.some((m) => m.type === "sessions.changed"), 15_000);
+    const second = await d.ok({ type: "session.list" });
+    expect(second.sessions.filter((x: any) => x.engine === "opencode").map((x: any) => x.id)).toEqual(["ses_cold"]);
+  });
+
+  it("a stored session opens when its messages and row come after 4 s", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_cold", slug: "c", projectID: "global", directory: project, title: "Cold", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, env: { FAKE_OPENCODE_MESSAGE_DELAY_MS: "4000" }, data: { sessions: [row], messages: { ses_cold: [{ info: { id: "msg_u", role: "user", sessionID: "ses_cold" }, parts: [{ id: "p1", sessionID: "ses_cold", messageID: "msg_u", type: "text", text: "old question" }] }] } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.requests("GET", "/session").length >= 1);
+    const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_cold", sinceSeq: 0, paged: true });
+    expect(sub.snapshot.page.parts.map((p: any) => p.id)).toContain("msg_u");
+  });
+});

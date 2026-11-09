@@ -77,7 +77,8 @@ type Payload = { type: string; properties: Record<string, any> };
 export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string): Promise<OpenCodeHistory> {
-  const at = { directory: cwd };
+  // No timeout: reopening a session after a restart reads a cold folder, whose first answer takes more than 3 s; giving up would lose the session.
+  const at = { directory: cwd, timeoutMs: 0 };
   const [all, row, status, permissions, questions] = await Promise.all([
     server.request<OpenCodeMessage[]>(`/session/${id}/message`, at),
     server.request<{ permission?: Rule[]; revert?: { messageID: string } | null }>(`/session/${id}`, at).catch(() => ({}) as { permission?: Rule[]; revert?: null }),
@@ -807,7 +808,7 @@ class OpenCodeEngineImpl implements Engine {
   /** The `plan` agent's `edit` rules, read once (shortcut: until the daemon restarts; a changed OpenCode config needs one). */
   planEdit(cwd: string): Promise<Rule[]> {
     return (this.plan ??= this.server
-      .request<{ name: string; permission: Rule[] }[]>("/agent", { directory: cwd })
+      .request<{ name: string; permission: Rule[] }[]>("/agent", { directory: cwd, timeoutMs: 0 })
       .then((agents) => agents.find((a) => a.name === "plan")?.permission.filter((r) => r.permission === "edit") ?? [])
       .catch((err) => ((this.plan = undefined), Promise.reject(err))));
   }
