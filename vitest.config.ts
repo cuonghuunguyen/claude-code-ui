@@ -4,7 +4,7 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./packages/web/src", import.meta.url)) } },
   test: {
     include: ["packages/*/test/**/*.test.ts", "packages/*/src/**/*.test.{ts,tsx}"],
-    setupFiles: ["packages/web/src/vitest.setup.ts"],
+    setupFiles: ["vitest.git-env.ts", "packages/web/src/vitest.setup.ts"],
     // Default workers = all cores; with a second suite or other agents running, jsdom files starve and hit the 5 s default.
     maxWorkers: "50%",
     // Windows starts a process several times slower: tests that spawn many git processes need more under a full suite.
