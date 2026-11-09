@@ -4026,6 +4026,7 @@ describe("GH-430: panels on the new-session tab", () => {
   });
 
   it("AC3: Changes on the new-session tab shows the empty state; Uncommitted asks git.diff for the draft cwd", async () => {
+    saveDiffMode("session");
     await openNewTab();
     await pickSide(/changes/i);
     expect(q("changes-empty")!.textContent).toBe("No changes yet. Claude's edits appear here.");
@@ -4543,6 +4544,7 @@ describe("GH-395 Plan pane", () => {
 
   it("Activating a plan tab makes its session current: the side panel shows that session's changes; the plan takes the active split", async () => {
     localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, OTHER], at: 1, ratio: 0.5 }));
+    saveDiffMode("session");
     const restore = await mountMain({ tabs: [ID, OTHER, REF2], hash: `#${ID}` });
     try {
       await sendPart(OTHER, 1, { type: "tool_call", id: "e1", toolUseId: "e1", tool: "Edit", input: { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }, status: "done" });
