@@ -2184,6 +2184,8 @@ it("Changes and Graph show the repository chosen for the project; a pick in eith
       await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
       await wait();
     };
+    // The Files tree reads one git.diff per repository for its marks while it is shown (a slow start sends them before the switch): only what follows the switch is the Changes read.
+    gits.length = 0;
     await pickSide(/changes/i);
     await wait();
     expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);

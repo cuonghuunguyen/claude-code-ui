@@ -283,5 +283,14 @@ const server = createServer(async (req, res) => {
 server.listen(port, hostname, () => {
   log({ type: "start", pid: process.pid, argv: args, passwordSet: true, hostname, port: server.address().port });
   console.log(`opencode server listening on http://${hostname}:${server.address().port}`);
+  // Dies with its parent: a killed test run must not leave fakes behind (they lingered for tens of minutes and loaded the machine).
+  const parent = process.ppid;
+  setInterval(() => {
+    try {
+      process.kill(parent, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 2000).unref();
   if (process.env.FAKE_OPENCODE_CRASH === "1") (console.error("fake opencode crashed on purpose"), process.exit(1));
 });

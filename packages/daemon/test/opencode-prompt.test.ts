@@ -23,6 +23,9 @@ const until = async (cond: () => boolean, ms = 8000) => {
   for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
   expect(cond()).toBe(true);
 };
+/** The first request of a boot waits for the daemon to spawn the fake OpenCode, a process start that takes seconds on Windows under load: replies are bounded by the test timeout, not by 8 s. */
+const REPLY_MS = 60_000;
+const TEST_MS = process.platform === "win32" ? 90_000 : 30_000;
 const lastOf = <T,>(a: T[], f: (x: T) => boolean): T | undefined => [...a].reverse().find(f);
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
@@ -64,7 +67,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const request = async (msg: object) => {
     const reqId = `r${++n}`;
     ws.send(JSON.stringify({ ...msg, reqId }));
-    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId));
+    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId), REPLY_MS);
     return inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId) as { type: "reply"; result: any } | { type: "error"; code: string; message: string };
   };
   const ok = async (msg: object) => {
@@ -98,7 +101,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   return { root, project, http, ws, inbox, request, ok, log, requests, fake, open };
 }
 
-describe("OpenCode prompting", { timeout: 30_000 }, () => {
+describe("OpenCode prompting", { timeout: TEST_MS }, () => {
   it("plugins.reload counts no OpenCode session as reloaded", async () => {
     const d = await boot();
     await d.open();
@@ -396,6 +399,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => d.requests("GET", "/session/ses_old/message").length >= 2);
     // The saved mode differs from OpenCode's last block after a mode change made elsewhere: the next prompt writes the block first.
     await d.ok({ type: "permission.respond", requestId: "per_old", decision: "allow" });
+    // The reply POST to OpenCode is not awaited by permission.respond: wait for it to arrive.
+    await until(() => d.requests("POST", "/permission/per_old/reply").length > 0);
     expect(d.requests("POST", "/permission/per_old/reply")[0]!.body).toEqual({ reply: "once" });
   });
 
@@ -567,7 +572,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode event stream", { timeout: 30_000 }, () => {
+describe("OpenCode event stream", { timeout: TEST_MS }, () => {
   it("after a drop a prompt waits for the reconnect instead of sending into a closed stream", async () => {
     const d = await boot();
     const s = await d.open();
@@ -582,7 +587,7 @@ describe("OpenCode event stream", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode restore", { timeout: 30_000 }, () => {
+describe("OpenCode restore", { timeout: TEST_MS }, () => {
   it("a restored busy session whose idle event was lost ends its turn when the stream connects", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const project = join(root, "project");
@@ -616,7 +621,7 @@ describe("OpenCode restore", { timeout: 30_000 }, () => {
 });
 
 
-describe("OpenCode rewind", { timeout: 30_000 }, () => {
+describe("OpenCode rewind", { timeout: TEST_MS }, () => {
   const diff = (file: string, additions: number, deletions: number) => ({ file, additions, deletions });
   const user = (id: string, text: string, diffs: object[] = []) => ({ info: { id, role: "user", sessionID: "ses_rw", agent: "build", summary: { diffs } }, parts: [{ id: `${id}_p`, sessionID: "ses_rw", messageID: id, type: "text", text }] });
   const messages = [user("msg_u1", "one"), user("msg_u2", "two", [diff("a.ts", 2, 1)]), user("msg_u3", "three", [diff("a.ts", 1, 0), diff("b.ts", 3, 0)]), user("msg_u4", "four")];
@@ -752,7 +757,7 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
+describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
   const row = (project: string, id = "ses_own") => ({ id, slug: id, projectID: "global", directory: project, title: "Owner", version: "1.18.34", time: { created: 1, updated: 2 } });
   const msg = (id: string, info: object) => ({ info: { id, sessionID: "ses_own", ...info }, parts: [] });
   const done = { role: "assistant", time: { created: 1, completed: 2 } };
@@ -836,7 +841,7 @@ describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode orchestration", { timeout: 30_000 }, () => {
+describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
   const on = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
   /** The bearer token of the session's attach (`POST /mcp`), once it came. */
   const attached = async (d: Boot, id: string) => {

@@ -163,7 +163,11 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const pid = d.starts()[0]!.pid as number;
     process.kill(pid);
     await until(() => !alive(pid));
-    await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    // The daemon learns of the exit from the watcher's exit event, a moment after the pid is gone (longer on Windows): a create in that gap meets the dead
+    // server (one "fetch failed", the event stream's reconnect then starts it again by itself). The next create after the exit is noticed starts it.
+    let r = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    for (let i = 0; i < 50 && r.type === "error"; i++) (await new Promise((ok) => setTimeout(ok, 100)), (r = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })));
+    expect(r.type).toBe("reply");
     expect(d.starts()).toHaveLength(2);
   });
 
