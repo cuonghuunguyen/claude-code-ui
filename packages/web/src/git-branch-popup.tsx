@@ -28,7 +28,7 @@ function Highlight({ text, q }: { text: string; q: string }) {
   return (
     <>
       {text.slice(0, i)}
-      <mark className="rounded-sm bg-primary/25 text-inherit" data-testid="branch-popup-match">{text.slice(i, i + q.length)}</mark>
+      <mark className="rounded-sm bg-[color-mix(in_srgb,var(--ref-head)_35%,transparent)] font-semibold text-inherit" data-testid="branch-popup-match">{text.slice(i, i + q.length)}</mark>
       {text.slice(i + q.length)}
     </>
   );
