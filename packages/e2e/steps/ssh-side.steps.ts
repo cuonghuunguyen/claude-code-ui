@@ -65,7 +65,7 @@ Then("the Files pane lists {string}", async ({ page }, name: string) => {
 
 Then("the Changes pane lists {string}", async ({ page }, name: string) => {
   await pickPane(page, "changes");
-  // The default "Session changes" mode lists only Claude's edits; hello.txt is an untracked file of the repo.
+  // hello.txt is an untracked file; pick Uncommitted explicitly so the step holds under any saved default.
   await page.getByTestId("diff-mode").click();
   await page.getByRole("option", { name: "Uncommitted" }).click();
   await expect(page.getByTestId("changed-file").filter({ hasText: name }).first()).toBeVisible({ timeout: 60_000 });

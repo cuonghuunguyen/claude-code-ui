@@ -2,7 +2,7 @@
 import type { GitDiff, GitOperation, GitStatus, Part } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
 import { getRepoChoice, setRepoChoice } from "./repo-choice.ts";
@@ -63,6 +63,8 @@ const view = (parts: Part[]): SessionView =>
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);
+// Most tests here read the session changes; the app default is Uncommitted.
+beforeEach(() => saveDiffMode("session"));
 afterEach(() => {
   act(() => root.render(null));
   narrow = false;
@@ -630,10 +632,11 @@ const openSelect = async (id: string) => act(async () => (el.querySelector<HTMLE
 const optionById = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 const panel = (client: ReturnType<typeof fakeClient>, p: Partial<React.ComponentProps<typeof ChangesPanel>> = {}) => <ChangesPanel client={client} view={view([])} cwd="/p" onOpen={() => {}} {...p} />;
 
-it("defaults to Session changes; the mode select lists Uncommitted and Against branch", async () => {
-  await act(async () => root.render(panel(fakeClient({}, { status: REPO }))));
+it("defaults to Uncommitted; the mode select lists Session changes, Uncommitted and Against branch", async () => {
+  saveDiffMode("uncommitted");
+  await act(async () => root.render(panel(fakeClient({}, { status: REPO, diff: D([]) }))));
   await flush();
-  expect(mode().textContent).toContain("Session changes");
+  expect(mode().textContent).toContain("Uncommitted");
   await openSelect("diff-mode");
   expect([...document.querySelectorAll("[role=option]")].map((o) => o.textContent)).toEqual(["Session changes", "Uncommitted", "Against branch"]);
   expect(optionById("diff-mode-uncommitted").hasAttribute("data-disabled")).toBe(false);
@@ -1532,17 +1535,17 @@ it("third pick of the same non-default mode offers it as default; Turn on saves 
     await act(async () => (optionById(`diff-mode-${m}`).click(), undefined));
     await flush();
   };
-  await pickMode("uncommitted");
-  await pickMode("uncommitted");
-  await pickMode("session"); // another mode resets the run
-  await pickMode("uncommitted");
-  await pickMode("uncommitted");
+  await pickMode("session");
+  await pickMode("session");
+  await pickMode("uncommitted"); // another mode resets the run
+  await pickMode("session");
+  await pickMode("session");
   expect(show).not.toHaveBeenCalled();
-  await pickMode("uncommitted");
+  await pickMode("session");
   expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Make Uncommitted the default diff view?");
+  expect(show.mock.calls[0]![0]).toBe("Make Session changes the default diff view?");
   show.mock.calls[0]![1].run();
-  expect(loadDiffMode()).toBe("uncommitted");
+  expect(loadDiffMode()).toBe("session");
   setRecommendationHost(undefined);
   localStorage.clear();
   resetPageForTests();

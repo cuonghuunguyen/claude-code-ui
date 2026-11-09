@@ -17,9 +17,10 @@ const SCOPE_KEY = "claude-ui.diffScope";
 export function loadDiffMode(): DiffMode {
   try {
     const v = localStorage.getItem(MODE_KEY);
-    return v === "uncommitted" || v === "branch" ? v : "session";
+    // Default Uncommitted; a folder outside git falls back to session in the panel.
+    return v === "session" || v === "branch" ? v : "uncommitted";
   } catch {
-    return "session";
+    return "uncommitted";
   }
 }
 
@@ -29,7 +30,7 @@ let memory: DiffMode | undefined;
 export function saveDiffMode(m: DiffMode) {
   memory = m;
   try {
-    if (m === "session") localStorage.removeItem(MODE_KEY);
+    if (m === "uncommitted") localStorage.removeItem(MODE_KEY);
     else localStorage.setItem(MODE_KEY, m);
   } catch {
     // See `memory`.
@@ -41,7 +42,7 @@ function readMode(): DiffMode {
     localStorage.getItem(MODE_KEY);
     return loadDiffMode();
   } catch {
-    return memory ?? "session";
+    return memory ?? "uncommitted";
   }
 }
 
@@ -72,7 +73,7 @@ function subscribe(l: () => void) {
   };
 }
 /** The Settings default; re-renders when it is saved here or in another tab. */
-export const useDefaultDiffMode = (): DiffMode => useSyncExternalStore(subscribe, readMode, () => "session");
+export const useDefaultDiffMode = (): DiffMode => useSyncExternalStore(subscribe, readMode, () => "uncommitted");
 
 /** A panel's own choice per session, for this page only (a panel remounts on every session tab switch); `ref`: the branch compared, `refRepo`: the repository (its canonical top) it belongs to. */
 export const sessionDiffChoice = new Map<string, { mode: DiffMode; ref?: string; refRepo?: string }>();
