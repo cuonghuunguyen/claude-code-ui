@@ -196,7 +196,8 @@ async function client(p = port) {
 const c = await client();
 afterAll(() => c.ws.close());
 
-async function until<T>(get: () => T | undefined | false, ms = 5000): Promise<T> {
+/** Polls until `get` answers. A poll bound, not a speed check: starting a worker's CLI took over 5 s in a full suite on Windows, so a pass costs nothing and only a hang waits the 30 s. */
+async function until<T>(get: () => T | undefined | false, ms = 30_000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const v = get();
@@ -1431,8 +1432,10 @@ describe("orchestration", () => {
     const q = await pendingQ(w.sessionId);
     expect((await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1001) })).error).toMatch(/Invalid input/);
     await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1000) });
-    await new Promise((r) => setTimeout(r, 400));
-    const turns = runsOf(coord).reduce((n, r) => n + r.texts.length, 0);
+    // Let the coordinator's own turns settle (a fixed 400 ms was too short under load): the count is the same over 1 s.
+    const count = () => runsOf(coord).reduce((n, r) => n + r.texts.length, 0);
+    for (let same = 0, last = -1; same < 5; await new Promise((r) => setTimeout(r, 200))) (same = count() === last ? same + 1 : 0), (last = count());
+    const turns = count();
     expect((await call(coord, "worker_wait", { names: ["blk"], types: ["question"], timeoutMs: 100 })).events).toEqual([]);
     expect(runsOf(coord).reduce((n, r) => n + r.texts.length, 0)).toBe(turns);
   });
