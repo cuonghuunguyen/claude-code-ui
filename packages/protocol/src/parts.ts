@@ -152,7 +152,7 @@ export type Part = { parentId?: string } & (
   /** The agent prompts run as changed (Engines with `agents`): session.setAgent, or the user's choice in the Engine's own UI. */
   | { type: "session_agent"; id: "session_agent"; agent: string }
   /** The primary agents to choose from (Engines with `agents`), read at begin and every resync. */
-  | { type: "agents"; id: "agents"; agents: AgentInfo[] }
+  | { type: "agents"; id: "agents"; agents: AgentInfo[]; /** OpenCode did not answer: the list is empty for now; the web offers a retry. */ failed?: true }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   /** `costUsd`: this turn's cost; absent when unknown (first turn after a daemon restart). */
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }

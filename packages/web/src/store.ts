@@ -21,6 +21,8 @@ export type SessionView = {
   /** OpenCode: the agent prompts run as (session_agent), and the primary agents to choose from (`agents` part). */
   agent?: string;
   agents?: AgentInfo[];
+  /** OpenCode did not answer the agent list: the chooser offers a retry. */
+  agentsFailed?: boolean;
   /** Seq of the subscribe reply: replayed changes up to it are older than the reply's values. */
   settingsSeq: number;
   commands: SlashCommand[];
@@ -81,7 +83,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "session_permission_mode") return { ...s, lastSeq: e.seq, permissionMode: part.mode };
   if (part.type === "session_effort") return { ...s, lastSeq: e.seq, effort: part.effort };
   if (part.type === "session_agent") return { ...s, lastSeq: e.seq, agent: part.agent };
-  if (part.type === "agents") return { ...s, lastSeq: e.seq, agents: part.agents };
+  if (part.type === "agents") return { ...s, lastSeq: e.seq, agents: part.agents, agentsFailed: !!part.failed };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
   if (part.type === "context_usage") return { ...s, lastSeq: e.seq, contextUsage: part.usage };
   if (part.type === "rewind") {

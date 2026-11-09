@@ -36,9 +36,11 @@ let counter = 0;
 const expected = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
 
 const clients = new Set();
-const failNext = new Set();
+const failNext = new Set(data.fail ?? []);
 /** GET /agent answers this when set (POST /__agents {agents}). */
 let agents;
+/** path -> ms: the next request to that path answers that much later (POST /__delay {path, ms}), like a folder whose state is still loading. */
+const delays = new Map(Object.entries(data.delays ?? {}));
 const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boolean);
 /** The node waiting for a reply or abort, the asks not answered yet, the sessions that are busy. */
 let current;
@@ -155,6 +157,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/__heal") broken.delete(body.directory);
     if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__agents") agents = body.agents;
+    if (url.pathname === "/__delay") delays.set(body.path, body.ms);
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
@@ -162,6 +165,11 @@ const server = createServer(async (req, res) => {
   const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : undefined;
   log({ type: "request", method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), authed, ...(body !== undefined && { body }) });
   if (!authed) return json(401, { error: "unauthorized" });
+  if (delays.has(url.pathname)) {
+    const ms = delays.get(url.pathname);
+    delays.delete(url.pathname);
+    await new Promise((r) => setTimeout(r, ms));
+  }
   if (failNext.delete(url.pathname)) return json(500, { name: "UnknownError", data: { message: "failed on purpose" } });
   const dir = url.searchParams.get("directory");
   const reply = (key) => {

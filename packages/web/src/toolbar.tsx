@@ -167,7 +167,9 @@ export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortc
 }
 
 /** Agent chooser (Engines with `agents`, OpenCode): the primary agents the session can run as. Shift+Tab cycles them in the prompt box. */
-export function AgentPicker({ agent, agents, onAgent, className = "shrink-0", shortcut = true }: { agent: string; agents: AgentInfo[]; onAgent: (agent: string) => void; className?: string; shortcut?: boolean }) {
+const RETRY = "\0retry";
+/** The chooser shows the current agent while the list is unknown or failed to load; a failed list adds a "Retry" entry (never no chooser). */
+export function AgentPicker({ agent, agents, onAgent, onRetry, className = "shrink-0", shortcut = true }: { agent: string; agents: AgentInfo[]; onAgent: (agent: string) => void; /** Given when the list failed to load: a "Retry" entry asks again. */ onRetry?: () => void; className?: string; shortcut?: boolean }) {
   const t = useT();
   const all = agents.some((a) => a.name === agent) ? agents : [{ name: agent }, ...agents];
   return (
@@ -175,9 +177,9 @@ export function AgentPicker({ agent, agents, onAgent, className = "shrink-0", sh
       label={shortcut ? t("app.toolbar.agentKey") : t("app.toolbar.agent")}
       testId="agent-select"
       value={agent}
-      onChange={onAgent}
+      onChange={(v) => (v === RETRY ? onRetry?.() : onAgent(v))}
       icon={<BotIcon className="size-4" />}
-      items={all.map((a) => ({ value: a.name, label: agentLabel(a.name), description: (a as AgentInfo).description }))}
+      items={[...all.map((a) => ({ value: a.name, label: agentLabel(a.name), description: (a as AgentInfo).description })), ...(onRetry ? [{ value: RETRY, label: t("app.toolbar.agentRetry") }] : [])]}
       className={className}
     />
   );
@@ -198,6 +200,9 @@ export function PromptToolbar(props: {
   agent?: string;
   agentList?: AgentInfo[];
   onAgent?: (agent: string) => void;
+  /** The agent list failed to load: the chooser offers a retry. */
+  agentsFailed?: boolean;
+  onRetryAgents?: () => void;
   onAttach: (files: File[]) => void;
   /** Agents button (session view), after the choosers. */
   agents?: ReactNode;
@@ -226,7 +231,7 @@ export function PromptToolbar(props: {
   const models = props.models.some((m) => m.value === props.model) ? props.models : [{ value: props.model, displayName: props.model, description: "" }, ...props.models];
   const efforts = effortOptions(props.models, props.model, props.caps);
   const phone = usePhone();
-  const showAgents = !!props.onAgent && !!props.agentList?.length && !!props.caps?.agents;
+  const showAgents = !!props.onAgent && !!props.caps?.agents;
   const effort = efforts.includes(props.effort) ? props.effort : "default";
   const modelItems = models.map((m) => ({
     value: m.value,
@@ -273,7 +278,7 @@ export function PromptToolbar(props: {
           <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelItems={modelItems} showAgents={showAgents} />
         ) : (
           <>
-            {showAgents && <AgentPicker agent={props.agent ?? "build"} agents={props.agentList!} onAgent={props.onAgent!} />}
+            {showAgents && <AgentPicker agent={props.agent ?? "build"} agents={props.agentList ?? []} onAgent={props.onAgent!} onRetry={props.agentsFailed ? props.onRetryAgents : undefined} />}
             <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} cycles={!showAgents} />
             <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
@@ -295,9 +300,9 @@ function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { e
 }
 
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
-function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, showAgents, agent = "build", agentList = [], onAgent }: {
+function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, showAgents, agent = "build", agentList = [], onAgent, agentsFailed, onRetryAgents }: {
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
-  efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[]; showAgents: boolean; agent?: string; agentList?: AgentInfo[]; onAgent?: (a: string) => void;
+  efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[]; showAgents: boolean; agent?: string; agentList?: AgentInfo[]; onAgent?: (a: string) => void; agentsFailed?: boolean; onRetryAgents?: () => void;
 }) {
   const t = useT();
   const Mode = MODE_LABEL[mode].Icon;
@@ -319,7 +324,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
             aria-label={t("app.toolbar.sessionSettings")}
             className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
-            {showAgents && <AgentPicker agent={agent} agents={agentList} onAgent={onAgent!} shortcut={false} className={wide} />}
+            {showAgents && <AgentPicker agent={agent} agents={agentList} onAgent={onAgent!} onRetry={agentsFailed ? onRetryAgents : undefined} shortcut={false} className={wide} />}
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
             <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}

@@ -285,6 +285,9 @@ export class Session {
   setPermissionMode(mode: PermissionMode) {
     return this.run.setPermissionMode(mode);
   }
+  refreshAgents() {
+    return this.run.refreshAgents?.();
+  }
   setAgent(agent: string) {
     if (!this.run.setAgent) throw new Error("this session's engine has no agents");
     return this.run.setAgent(agent);

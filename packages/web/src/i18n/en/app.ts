@@ -136,6 +136,7 @@ export default {
   "app.toolbar.defaultModel": "Default model",
   "app.toolbar.permissionModeKey": "Permission mode (Shift+Tab)",
   "app.toolbar.agent": "Agent",
+  "app.toolbar.agentRetry": "Retry loading agents",
   "app.toolbar.agentKey": "Agent (Shift+Tab)",
   "app.toolbar.permissionMode": "Permission mode",
   "app.toolbar.attach": "Add images and files",

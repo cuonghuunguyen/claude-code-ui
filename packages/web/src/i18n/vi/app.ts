@@ -138,6 +138,7 @@ export default {
   "app.toolbar.defaultModel": "Model mặc định",
   "app.toolbar.permissionModeKey": "Chế độ quyền (Shift+Tab)",
   "app.toolbar.agent": "Agent",
+  "app.toolbar.agentRetry": "Thử tải lại danh sách agent",
   "app.toolbar.agentKey": "Agent (Shift+Tab)",
   "app.toolbar.permissionMode": "Chế độ quyền",
   "app.toolbar.attach": "Thêm ảnh và tệp",

@@ -291,11 +291,13 @@ class OpenCodeSession implements EngineSession {
     this.session.emit({ type: "commands", id: "commands", commands });
   }
 
-  private async emitAgents() {
+  /** The `agents` part; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). Never waits for the caller. */
+  refreshAgents = async () => {
     const list = await this.engine.agents(this.cwd).catch(() => undefined);
-    if (!list) return;
+    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
     this.session.emit({ type: "agents", id: "agents", agents: primaryAgents(list).map(({ name, description }) => ({ name, ...(description && { description }) })) });
-  }
+  };
+  private emitAgents = () => this.refreshAgents();
 
   private noteUsage(info: OpenCodeMessage["info"]) {
     if (info.role === "assistant" && info.time?.completed && info.tokens && info.providerID && info.modelID) this.usage = { tokens: info.tokens, providerID: info.providerID, modelID: info.modelID };
@@ -1048,7 +1050,9 @@ class OpenCodeEngineImpl implements Engine {
   agents(cwd: string): Promise<OpenCodeAgent[]> {
     const hit = this.agentLists.get(cwd);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = this.server.request<OpenCodeAgent[]>("/agent", { directory: cwd });
+    // Waits for OpenCode's load of the folder (first answers take 2-5 s): never cut off (see brokenMcp); a callback that must not wait is not given one.
+    // A failure drops the entry, so the next call (session open, resync, the chooser's retry) asks again.
+    const list = this.server.request<OpenCodeAgent[]>("/agent", { directory: cwd, timeoutMs: 0 });
     this.agentLists.set(cwd, { at: Date.now(), list });
     list.catch(() => this.agentLists.delete(cwd));
     return list;

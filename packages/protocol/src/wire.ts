@@ -106,7 +106,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
   | { type: "session.commands"; cwd: string; engine?: Engine }
   /** The primary agents of `cwd` for the new-session draft; none for Claude. */
-  | { type: "session.agents"; cwd: string; engine?: Engine }
+  | { type: "session.agents"; cwd: string; engine?: Engine; /** A live session: its `agents` part is emitted again (the chooser's retry). */ sessionId?: string }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   /** `background`: follow only (unread markers); it does not keep the session's CLI from the idle close (docs/spec.md "Idle close"). */
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string }

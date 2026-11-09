@@ -435,6 +435,30 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.find("session_agent")?.agent).toBe("docs");
   });
 
+  it("GH-684: GET /agent that answers after 3 s is not cut off: the agents part arrives, the session.agents draft request waits for it", async () => {
+    const d = await boot({ data: { delays: { "/agent": 4500 } } });
+    const draft = d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" });
+    const s = await d.open();
+    await until(() => !!s.find("agents"), 15000);
+    expect(s.find("agents")).toMatchObject({ agents: [{ name: "build" }, { name: "docs" }, { name: "plan" }] });
+    expect(s.find("agents")).not.toHaveProperty("failed");
+    expect((await draft).agents.map((a: { name: string }) => a.name)).toEqual(["build", "docs", "plan"]);
+    expect(d.requests("GET", "/agent")).toHaveLength(1);
+  });
+
+  it("GH-684: a failed GET /agent shows as a failed agents part and is read again by session.agents with the session id", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    // A reconnect clears the cache and reads again: that read fails.
+    await d.fake("/__fail", { path: "/agent" });
+    await d.fake("/__drop");
+    await until(() => s.find("agents")?.failed === true);
+    expect(s.find("agents")!.agents).toEqual([]);
+    await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode", sessionId: s.id });
+    await until(() => s.find("agents")?.failed !== true && s.find("agents")!.agents.length === 3);
+  });
+
   it("an agent gone from OpenCode's list runs the prompt as build with a notice", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();

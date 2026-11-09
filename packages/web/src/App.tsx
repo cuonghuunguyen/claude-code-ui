@@ -2148,6 +2148,7 @@ export function App() {
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onAgent={(agent) => configure({ type: "session.setAgent", sessionId: s.id, agent })}
+                        onRetryAgents={() => void client.current!.request({ type: "session.agents", cwd: s.cwd, engine: "opencode", sessionId: s.id }).catch(() => {})}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
                         onPrompt={(text, images) => {
@@ -4961,13 +4962,17 @@ export function NewSession({
   // The project's commands, asked when the tab shows or the project changes; until they arrive only the dialog commands are listed.
   // The agents of the folder (OpenCode), asked when the tab shows an Engine with agents; the draft starts as build (else the first).
   const [agentList, setAgentList] = useState<AgentInfo[]>([]);
+  const [agentsFailed, setAgentsFailed] = useState(false);
+  const [agentsTry, setAgentsTry] = useState(0);
   useEffect(() => {
+    setAgentsFailed(false);
     if (!cwd || !connected || !caps?.agents) return setAgentList([]);
     let stale = false;
-    onAgents?.(cwd, engine).then((l) => !stale && setAgentList(l), () => !stale && setAgentList([]));
+    onAgents?.(cwd, engine).then((l) => !stale && setAgentList(l), () => !stale && (setAgentList([]), setAgentsFailed(true)));
     return () => void (stale = true);
-  }, [cwd, connected, engine, caps?.agents]);
-  const agent = caps?.agents ? (draft.agent && agentList.some((a) => a.name === draft.agent) ? draft.agent : (agentList.find((a) => a.name === "build") ?? agentList[0])?.name) : undefined;
+  }, [cwd, connected, engine, caps?.agents, agentsTry]);
+  // Until the list arrives (or when it failed) the chooser shows the pick, else build.
+  const agent = caps?.agents ? (draft.agent && (!agentList.length || agentList.some((a) => a.name === draft.agent)) ? draft.agent : (agentList.find((a) => a.name === "build") ?? agentList[0])?.name ?? "build") : undefined;
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   useEffect(() => {
     if (!cwd || !connected) return setCommands([]);
@@ -4997,6 +5002,8 @@ export function NewSession({
           agent={agent}
           agentList={agentList}
           onAgent={(a) => onDraft({ ...draft, agent: a })}
+          agentsFailed={agentsFailed}
+          onRetryAgents={() => setAgentsTry((n) => n + 1)}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? start(cwd, { text, images }) : Promise.reject(new Error("no project")))}
@@ -5178,6 +5185,7 @@ export function SessionPane({
   onModel,
   onMode,
   onAgent,
+  onRetryAgents,
   onEffort,
   onUpload,
   onPrompt,
@@ -5249,6 +5257,7 @@ export function SessionPane({
   onModel: (model: string) => void;
   onMode: (mode: PermissionMode) => void;
   onAgent?: (agent: string) => void;
+  onRetryAgents?: () => void;
   onEffort: (effort: Effort) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
@@ -5673,6 +5682,8 @@ export function SessionPane({
               agent={view.agent ?? session.agent}
               agentList={view.agents}
               onAgent={onAgent}
+              agentsFailed={view.agentsFailed}
+              onRetryAgents={onRetryAgents}
               onUpload={onUpload}
               onPrompt={onPrompt}
               onQueue={onQueue}
@@ -5737,6 +5748,8 @@ function PromptBox({
   agent,
   agentList,
   onAgent,
+  agentsFailed,
+  onRetryAgents,
   onUpload,
   onPrompt,
   onQueue,
@@ -5787,6 +5800,8 @@ function PromptBox({
   agent?: string;
   agentList?: AgentInfo[];
   onAgent?: (agent: string) => void;
+  agentsFailed?: boolean;
+  onRetryAgents?: () => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
@@ -6357,6 +6372,8 @@ function PromptBox({
         agent={agent}
         agentList={agentList}
         onAgent={onAgent}
+        agentsFailed={agentsFailed}
+        onRetryAgents={onRetryAgents}
         onAttach={(f) => void attach(f)}
         agents={agents}
         usage={usage}

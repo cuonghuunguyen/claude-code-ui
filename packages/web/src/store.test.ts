@@ -163,6 +163,13 @@ describe("OpenCode agents (GH-684)", () => {
     s = applyEvent(s, ev(6, { type: "session_agent", id: "session_agent", agent: "plan" }));
     expect(s.agent).toBe("plan");
   });
+
+  it("a failed agents part keeps the agent and sets agentsFailed; the next list clears it", () => {
+    let s = [ev(1, { type: "session_agent", id: "session_agent", agent: "plan" }), ev(2, { type: "agents", id: "agents", agents: [], failed: true })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: [], agentsFailed: true });
+    s = applyEvent(s, ev(3, { type: "agents", id: "agents", agents: [{ name: "build" }] }));
+    expect(s).toMatchObject({ agents: [{ name: "build" }], agentsFailed: false });
+  });
 });
 
 describe("withSubscribe", () => {

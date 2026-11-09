@@ -2236,6 +2236,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
+            if (typeof msg.sessionId === "string") void (await find(msg.sessionId))?.refreshAgents();
             return reply({ agents: msg.engine === "opencode" ? primaryAgents(await openCodeEngine.agents(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })) : [] });
           } catch (e) {
             return fail("agents_failed", (e as Error).message);

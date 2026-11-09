@@ -315,6 +315,25 @@ it("GH-684: an OpenCode draft fetches the agents of its folder, shows build, and
   expect(onStart).toHaveBeenCalledWith("/p/a", expect.objectContaining({ engine: "opencode", agent: "plan", mode: "default" }), { text: "hi", images: [] });
 });
 
+it("GH-684: an OpenCode draft shows the agent chooser with Build before the list arrives and after the request failed; Retry asks again", async () => {
+  let n = 0;
+  const onAgents = vi.fn(() => (++n === 1 ? new Promise<never>(() => {}) : n === 2 ? Promise.reject(new Error("aborted")) : Promise.resolve([{ name: "build" }, { name: "plan" }])));
+  const { el, rerender } = await render({ onAgents, engine: "opencode" });
+  const chooser = () => el.querySelector<HTMLElement>('[data-testid="agent-select"]')!;
+  expect(chooser().textContent).toContain("Build");
+  // A project change asks again; that answer fails: the chooser stays and offers Retry.
+  await rerender({ cwd: "/p/b" });
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  expect(chooser().textContent).toContain("Build");
+  await act(async () => chooser().click());
+  const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")].map((o) => o.textContent);
+  expect(rows()).toEqual(["Build", "Retry loading agents"]);
+  await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")][1]!.click());
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  await act(async () => chooser().click());
+  expect(rows()).toEqual(["Build", "Plan"]);
+});
+
 it("GH-684: startSession sets the picked agent before the first prompt, only when it differs from the session's", async () => {
   const sent: { type: string; agent?: string }[] = [];
   const request = vi.fn(async (m: { type: string; agent?: string }) => {

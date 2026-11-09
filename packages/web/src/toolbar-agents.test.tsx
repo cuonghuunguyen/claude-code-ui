@@ -88,8 +88,27 @@ it("no agent chooser without the flag or without agents; the permission chooser 
   expect(a.$("agent-select")).toBeNull();
   expect(a.$("mode-select")!.getAttribute("aria-label")).toContain("Shift+Tab");
   unmount();
-  const b = await render({ agentList: [] });
-  expect(b.$("agent-select")).toBeNull();
+  unmount();
+  const c = await render({ caps: { ...OPENCODE, agents: undefined }, onAgent: undefined });
+  expect(c.$("agent-select")).toBeNull();
+});
+
+it("GH-684: before the list arrives the chooser shows the current agent; after a failure it adds a Retry entry that asks again", async () => {
+  const onRetryAgents = vi.fn();
+  const onAgent = vi.fn();
+  const a = await render({ agentList: undefined, agent: "build", onAgent });
+  expect(a.$("agent-select")!.textContent).toContain("Build");
+  await act(async () => a.$("agent-select")!.click());
+  expect(options().map((o) => o.textContent)).toEqual(["Build"]);
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  unmount();
+  const b = await render({ agentList: [], agent: "plan", agentsFailed: true, onRetryAgents, onAgent });
+  expect(b.$("agent-select")!.textContent).toContain("Plan");
+  await act(async () => b.$("agent-select")!.click());
+  expect(options().map((o) => o.textContent)).toEqual(["Plan", "Retry loading agents"]);
+  await act(async () => options()[1]!.click());
+  expect(onRetryAgents).toHaveBeenCalledTimes(1);
+  expect(onAgent).not.toHaveBeenCalled();
 });
 
 it("the permission chooser of an OpenCode session offers no Plan mode", async () => {
