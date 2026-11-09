@@ -81,11 +81,13 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   };
   // Choosing an action closes the popup; its dialog is rendered by the popup's host, outside the popup.
   const subHost: BranchHost = { ...host, checkout: (r) => (close(), host.checkout(r)), pick: (k, i) => (close(), host.pick(k, i)), newBranch: (a, l) => (close(), host.newBranch(a, l)) };
-  const onOpenChange = (o: boolean) => {
+  const onOpenChange = (o: boolean, d?: { reason?: string }) => {
     if (o) return setOpen(true);
-    // Esc: first the submenu, then the query, then the popup. (An outside press or a focus loss closes at once.)
-    if (sub) return (setSub(undefined), input.current?.focus());
-    if (q && open) return setQ("");
+    // Esc: first the submenu, then the query, then the popup. An outside press or a focus loss closes at once.
+    if (d?.reason === "escape-key") {
+      if (sub) return (setSub(undefined), input.current?.focus());
+      if (q) return setQ("");
+    }
     close();
   };
   const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -109,6 +111,14 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const onPopupKey = (e: React.KeyboardEvent) => {
     if (e.target === input.current || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
     if (e.key === " " && (e.target as HTMLElement).tagName === "BUTTON") return;
+    // Below md the actions replace the list and the box: back to the list with the key typed.
+    if (input.current && !input.current.offsetParent && sub) {
+      e.preventDefault();
+      setSub(undefined);
+      setQ((v) => v + e.key);
+      setTimeout(() => input.current?.focus());
+      return;
+    }
     input.current?.focus();
   };
   const onSubKey = (e: React.KeyboardEvent) => {

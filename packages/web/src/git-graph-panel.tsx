@@ -110,7 +110,6 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
       style={{ height: h, transform: `translateY(${start}px)` }}
       data-testid="commit-row"
       data-hash={c.hash}
-      data-local-refs={c.refs.filter((r) => r.startsWith("refs/heads/")).join("\n")}
     >
       {!filtered && <GraphCell row={row} head={c.refs.includes("HEAD")} h={h} />}
       <RefChips refs={c.refs} />

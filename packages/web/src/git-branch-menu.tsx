@@ -57,7 +57,7 @@ export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRu
   };
   const dialogs = (
     <>
-      {fresh && <NewBranchDialog from={fresh.label} onCancel={() => setFresh(undefined)} onCreate={(n, co) => {
+      {fresh && <NewBranchDialog from={fresh.label ?? ""} onCancel={() => setFresh(undefined)} onCreate={(n, co) => {
         const { at } = fresh;
         setFresh(undefined);
         send({ type: "git.branchCreate", cwd, ...ex, name: n, ...(at && { at }), checkout: co }, (r) => of(t(co ? (stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.createdCheckedOut") : "sidebar.git.created", { target: n })), t("sidebar.git.creating", { target: of(n) }), n);
@@ -288,13 +288,13 @@ export function BranchDialog({ dialog, cwd, exact = false, repoName, onRun, onCl
 }
 
 /** Name field and "Check out" box; mounted only while open, so each open starts blank. */
-function NewBranchDialog({ from, onCancel, onCreate }: { from?: string; onCancel: () => void; onCreate: (name: string, checkout: boolean) => void }) {
+function NewBranchDialog({ from, onCancel, onCreate }: { from: string; onCancel: () => void; onCreate: (name: string, checkout: boolean) => void }) {
   const t = useT();
   const [n, setN] = useState("");
   const [co, setCo] = useState(true);
   const go = () => n.trim() && onCreate(n.trim(), co);
   return (
-    <ConfirmDialog open title={t("sidebar.git.newBranchTitle")} description={from ? t("sidebar.git.newBranchText", { from }) : t("sidebar.git.newBranchTextHead")} confirm={t("sidebar.git.newBranchCreate")} confirmDisabled={!n.trim()} onConfirm={go} onCancel={onCancel} testId="git-new-branch">
+    <ConfirmDialog open title={t("sidebar.git.newBranchTitle")} description={t("sidebar.git.newBranchText", { from })} confirm={t("sidebar.git.newBranchCreate")} confirmDisabled={!n.trim()} onConfirm={go} onCancel={onCancel} testId="git-new-branch">
       <input autoFocus aria-label={t("sidebar.git.newBranchName")} placeholder={t("sidebar.git.newBranchName")} value={n} onChange={(e) => setN(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), go())} className="h-9 rounded-md border bg-transparent px-2 text-sm max-md:h-11 focus-visible:outline-2 focus-visible:outline-ring" data-testid="git-new-branch-name" />
       <label className="flex items-center gap-2 text-sm max-md:min-h-11">
         <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={co} onChange={(e) => setCo(e.target.checked)} data-testid="git-new-branch-checkout" />

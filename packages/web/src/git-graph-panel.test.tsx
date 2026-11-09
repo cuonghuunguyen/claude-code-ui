@@ -1338,3 +1338,39 @@ it("the › button of a row opens the same actions; Push there opens its dialog"
   await act(async () => byId("git-push-cancel").click());
   await flush();
 });
+
+it("an outside press closes the popup at once, with a query typed or the actions open", async () => {
+  await mount(fake(withRefs()));
+  const outside = async () => {
+    await act(async () => {
+      for (const t of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) document.body.dispatchEvent(new MouseEvent(t, { bubbles: true }));
+    });
+    await flush();
+    await new Promise((r) => setTimeout(r, 300));
+  };
+  await openPopup();
+  await typeQuery("ma");
+  await outside();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+  await openPopup();
+  expect(search().value).toBe("");
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=branch-popup-more]")!.click());
+  await flush();
+  await outside();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+});
+
+it("Esc with the actions open closes only them; a printable key on an action goes to the search box", async () => {
+  await mount(fake(withRefs()));
+  await openPopup();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=branch-popup-more]")!.click());
+  await flush();
+  const item = byId("branch-push");
+  await act(async () => void item.focus());
+  await act(async () => void item.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(search());
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await flush();
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+  expect(byId("branch-popup")).not.toBeNull();
+});
