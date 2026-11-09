@@ -127,10 +127,12 @@ it("rows show title and relative time; only running and needs input get a state,
   expect(onOpen).toHaveBeenCalledWith("b");
 });
 
-it("every row has a static engine tag with text (absent engine = Claude), no button role of its own", async () => {
+it("every row has a static icon-only engine tag, its name in a tooltip and for screen readers (absent engine = Claude), no button role of its own", async () => {
   const { rows } = await render({ list: [{ ...LIST[0]!, engine: "opencode" }, LIST[1]!] });
   const tags = rows().map((r) => r.querySelector<HTMLElement>('[data-testid="engine-tag"]')!);
   expect(tags.map((t) => t.textContent)).toEqual(["OpenCode", "Claude"]);
+  expect(tags.map((t) => t.title)).toEqual(["OpenCode", "Claude"]);
+  expect(tags.map((t) => t.querySelector(".sr-only")?.textContent)).toEqual(["OpenCode", "Claude"]);
   for (const t of tags) {
     expect(t.getAttribute("role")).toBeNull();
     expect(t.closest("[role=button]")).toBeNull();
