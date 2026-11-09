@@ -250,8 +250,8 @@ Feature: OpenCode parity features (GH-658)
   @model
   Scenario: A message sent right after Stop starts the next turn and is answered
     Given the viewport is 1440x900
-    And OpenCode is set up in a scratch project
     And OpenCode has the owner's login
+    And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     And the OpenCode server of the daemon is running
     When I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
@@ -269,8 +269,8 @@ Feature: OpenCode parity features (GH-658)
   @model
   Scenario: /compact summarizes the conversation and the turn ends
     Given the viewport is 1440x900
-    And OpenCode is set up in a scratch project
     And OpenCode has the owner's login
+    And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     And the OpenCode server of the daemon is running
     When I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser

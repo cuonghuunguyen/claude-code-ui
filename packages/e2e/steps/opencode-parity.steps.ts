@@ -218,6 +218,7 @@ Then("the shell command has ended", async ({ page }) => {
 });
 
 // The owner's OpenCode login: E2E_OPENCODE_AUTH names a copy of the auth file. It is copied unread into the run's own OpenCode data dir and deleted after the scenario.
+// Before "OpenCode is set up": its new-session tab may start the server at once (the run keeps the last Engine), which reads the login at start.
 const authCopy = () => join(runDir(), "opencode-data", "opencode", "auth.json");
 Given("OpenCode has the owner's login", async ({ $test }) => {
   const src = process.env.E2E_OPENCODE_AUTH;
