@@ -129,12 +129,12 @@ Feature: OpenCode prompting (GH-656)
       | 1440  | 900    |
       | 390   | 844    |
 
-  Scenario: The mode picker offers the OpenCode modes and no effort chooser
+  Scenario: The permission chooser offers the OpenCode permission modes and no effort chooser
     Given the viewport is 1440x900
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     When I open the mode chooser
-    Then the mode chooser offers exactly "Ask before edits, Edit automatically, Plan mode"
+    Then the permission chooser offers exactly "Ask before edits, Edit automatically"
     And the effort chooser is absent
     And I capture "modes"
 
