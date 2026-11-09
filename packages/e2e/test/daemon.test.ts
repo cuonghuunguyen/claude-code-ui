@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
 import { runDir, slug } from "../support/paths.ts";
-import { fakeDockerScript, writeFakeDocker } from "../support/fake-docker.ts";
+import { fakeDockerScript, sideAttachSock, writeFakeDocker } from "../support/fake-docker.ts";
 import { spawnSync } from "node:child_process";
 
 describe("freePort", () => {
@@ -244,6 +244,9 @@ describe.skipIf(process.platform === "win32")("fake docker", () => {
       expect(text).toContain("side.pid");
       expect(text).toContain("side --attach --start");
       expect(text).not.toContain("--side");
+      // Its own attach socket, short enough for sun_path (104 bytes on macOS).
+      expect(text).toContain(`CLAUDE_UI_ATTACH_SOCK='${sideAttachSock(join(d, "h"))}'`);
+      expect(Buffer.byteLength(sideAttachSock(join(d, "h")))).toBeLessThan(104);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

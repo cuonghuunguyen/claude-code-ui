@@ -1,6 +1,8 @@
 // A fake `docker` CLI for acceptance tests that need a container without Docker (GH-448). A sh script: it answers the calls the daemon makes
 // (docker-side.ts) from a fixed configuration; nothing is run in any container. POSIX only (spawn("docker") finds no .cmd shim on Windows).
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type FakeDockerConfig = {
@@ -25,11 +27,17 @@ const answer = (a: { code?: number; stdout?: string; stderr?: string }) => `prin
  * The script text. `exec`'s last argument is the script docker would run: the setup script says CLAUDE_UI_SETUP, the check script
  * `installed`, the target probe only `uname -m` (checked in this order; the check script contains the probe's lines too).
  */
+/**
+ * The side Hub's attach socket. Its config path is too long for `sun_path`, so it would fall back to `/tmp/claude-ui-<uid>/attach.sock`, which the
+ * e2e daemon (same fallback) or another run may own: the side Hub then sees a live socket and exits. A short path of its own per side home.
+ */
+export const sideAttachSock = (home: string) => join(tmpdir(), `cui-e2e-${createHash("sha1").update(home).digest("hex").slice(0, 12)}`, "attach.sock");
+
 export function fakeDockerScript(c: FakeDockerConfig): string {
   const log = (what: string) => (c.log ? `echo ${what} >> ${q(c.log)}; ` : "");
   // exec keeps the PID: kill of side.pid ends the bridge, like a dropped pipe. The Hub it started stays (detached, own PID in daemon.json), like in a container.
   // cwd = the repo, so `--import tsx` resolves; NODE_OPTIONS lets the detached Hub (same main.ts, started by the bridge) load tsx too. The script's last words are the cli arguments.
-  const side = c.side && `mkdir -p ${q(c.side.home)}; echo $$ > ${q(join(c.side.home, "side.pid"))}; case "$s" in *"side --attach --start"*) a="side --attach --start";; *) a="side --attach";; esac; cd ${q(c.side.repo)} && exec env HOME=${q(c.side.home)} XDG_CONFIG_HOME=${q(join(c.side.home, ".config"))} CLAUDE_UI_ROOTS=${q(c.side.projects)} NODE_OPTIONS="--import tsx" ${q(process.execPath)} packages/daemon/src/main.ts $a`;
+  const side = c.side && `mkdir -p ${q(c.side.home)}; echo $$ > ${q(join(c.side.home, "side.pid"))}; case "$s" in *"side --attach --start"*) a="side --attach --start";; *) a="side --attach";; esac; cd ${q(c.side.repo)} && exec env HOME=${q(c.side.home)} XDG_CONFIG_HOME=${q(join(c.side.home, ".config"))} CLAUDE_UI_ROOTS=${q(c.side.projects)} CLAUDE_UI_ATTACH_SOCK=${q(sideAttachSock(c.side.home))} NODE_OPTIONS="--import tsx" ${q(process.execPath)} packages/daemon/src/main.ts $a`;
   return `${c.log ? `echo "$1" >> ${q(c.log)}\n` : ""}case "$1" in
   version) echo linux;;
   ps) printf '%s\\n' ${c.containers.map(q).join(" ")};;
