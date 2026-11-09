@@ -20,3 +20,4 @@ docs/site/.vitepress/cache/
 .claude/memory.db*
 .claude/settings.local.json
 .claude/scout-report.json
+CLAUDE.local.md

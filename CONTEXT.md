@@ -66,6 +66,10 @@ The daemon ends the CLI process of an idle session no tab holds after a set time
 A working directory the user added in claude-ui: opened with "Open project" (also by picking a recent project), the cwd of a session created in the web app, or a project reached by a link or notification click to one of its sessions (not by a reconnect or a page load). Cwds that only have terminal CLI transcripts are recent projects, not projects, until added. New sessions start in a project. Removing one hides it from the list; files and transcripts stay.
 _Avoid_: workspace, folder (folder = any directory in the folder browser)
 
+**Project settings**:
+Values that apply to one Project only: its Label, commit message instruction, skill overrides and overrides of some global settings (new-Session model, Permission mode, effort, Claude account; local history; Jira branch template). An unset value inherits the global setting; overrides apply when a Session is created. Its Worktrees use the Project's values; a Project on a Side keeps them on that Side. Private to the machine and never committed; kept when the Project is removed. Browser view state (selected repository, selected terminal) is not Project settings.
+_Avoid_: workspace settings, repo settings, local settings (Claude Code's settings.local.json is a different thing)
+
 **Worktree**:
 A linked git worktree of a project's repository, identified by its directory. The repository's own checkout is the main worktree. Its sessions show under the project without adding it.
 _Avoid_: workspace, sandbox
