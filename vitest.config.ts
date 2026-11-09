@@ -9,5 +9,7 @@ export default defineConfig({
     maxWorkers: "50%",
     // Windows starts a process several times slower: tests that spawn many git processes need more under a full suite.
     testTimeout: process.platform === "win32" ? 60_000 : 15_000,
+    // The same for a beforeAll that builds a git repository (addons.test.ts: about ten git processes, 0.4-0.9 s each on Windows, over the 10 s default under load).
+    hookTimeout: process.platform === "win32" ? 60_000 : 10_000,
   },
 });

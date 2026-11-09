@@ -2658,10 +2658,11 @@ describe("daemon", () => {
       const first = c.request({ type: "session.list" });
       await vi.waitFor(() => expect(scans).toBe(1));
       const burst = Array.from({ length: 10 }, () => c.request({ type: "session.list" }));
-      await new Promise((r) => setTimeout(r, 50));
+      // A request sent after the burst on the same socket: its answer shows the daemon took the burst in (a fixed 50 ms is too short for a loaded machine).
+      await c.request({ type: "fs.read", path: join(webRoot, "no-such-file") }).catch(() => {});
       expect(scans).toBe(1);
       release.shift()!();
-      await vi.waitFor(() => expect(scans).toBe(2));
+      await vi.waitFor(() => expect(scans).toBe(2), { timeout: 10_000 });
       release.shift()!();
       const titles = (r: unknown) => (r as { result: { sessions: { title: string }[] } }).result.sessions.map((s) => s.title);
       expect(titles(await first)).toEqual(["scan 1"]);

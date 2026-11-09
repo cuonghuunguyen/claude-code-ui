@@ -1,4 +1,5 @@
 // Addons (docs/spec.md "Addons"): install from a local bare git repo or a folder, approval, serving with the addon CSP, updates, redaction.
+import { canSymlink, needsLinks } from "./symlink-support.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
@@ -192,6 +193,13 @@ describe("serving", () => {
     const i = await approveAll("example");
     expect((await fetchAddon(`/addon/${"0".repeat(32)}/example/pane.html`)).status).toBe(404);
     expect((await fetchAddon(i.base + "..%2faddon.json")).status).toBe(404);
+    expect((await fetchAddon(i.base + ".git/config", "script")).status).toBe(404);
+  });
+
+  it.skipIf(!canSymlink)(needsLinks("a link inside the add-on that leads out of it is 404"), async () => {
+    commitAddon();
+    await installGit();
+    const i = await approveAll("example");
     symlinkSync("/etc/hosts", join(addonsDir, "addons/example/hosts.json"));
     expect((await fetchAddon(i.base + "hosts.json", "script")).status).toBe(404);
     expect((await fetchAddon(i.base + ".git/config", "script")).status).toBe(404);
