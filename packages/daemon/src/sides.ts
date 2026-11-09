@@ -1618,9 +1618,14 @@ export function createRouter(opts: {
     const newest = new Map<string, number>();
     for (const s of merged.sessions) newest.set(s.cwd, Math.max(newest.get(s.cwd) ?? 0, s.lastActivity));
     // Each side's own order stays (it counts when a project was added, a session-less project too): a key never rises down a side's list.
-    const order = perSide.flatMap((ps) => {
-      let key = Infinity;
-      return ps.map((p) => [p, (key = Math.min(key, newest.get(p) ?? key))] as const);
+    // shortcut: session-less projects above a side's first session go first only on the local side (the router cannot see other sides' added times), #672.
+    const order = perSide.flatMap((ps, side) => {
+      let key: number | undefined;
+      return ps.map((p) => {
+        const t = newest.get(p);
+        if (t !== undefined) key = Math.min(key ?? t, t);
+        return [p, key ?? (side ? -1 : Infinity)] as const;
+      });
     });
     merged.projects = order.map((x, i) => [...x, i] as const).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);

@@ -519,6 +519,17 @@ describe("sides", () => {
     expect((sent[0] as any).result.projects).toEqual(["/new", "/old", "/older"]);
   });
 
+  it("session.list across sides: a side's session-less top project does not rise above local projects", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (m.type === "session.list" ? { sessions: [{ id: "y", cwd: "/y", lastActivity: 100 }], projects: ["/x", "/y"], recentProjects: [] } : {})) });
+    await s.refresh();
+    await s.start("wsl:Ubuntu");
+    const sent: ServerMessage[] = [];
+    const list = { sessions: [{ id: "a", cwd: "/a", lastActivity: 1000 }], projects: ["/a"], recentProjects: [] };
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent.find((m) => m.type === "reply") as any).result.projects).toEqual(["/a", "/y", "/x"]);
+  });
+
   it("fs.openExternal: custom on a WSL side is side_unsupported, nothing is forwarded (GH-646)", async () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
     await s.refresh();
