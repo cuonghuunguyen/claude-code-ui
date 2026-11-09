@@ -1244,17 +1244,42 @@ export function createDaemon(opts: {
   // Requests during a scan share one queued scan, so a reply is never older than its request.
   // Each listSessions() call also grows the daemon RSS by ~4 MB that it never returns (SDK 0.3.285, heap flat; probe in
   // development-docs/FIX-C/ls-probe.log): while no transcript changed (names, sizes, mtimes), the last result is reused.
+  // A running session writes its transcript every turn: with the same file set, only the changed files are read again
+  // (getSessionInfo, two 64 KB reads each), not all of them; a file added or removed scans all again.
+  type Scanned = Awaited<ReturnType<typeof listSessions>>;
   let scan: ReturnType<typeof listSessions> | undefined;
   let nextScan: ReturnType<typeof listSessions> | undefined;
-  let lastScan: { stamp: string; result: Awaited<ReturnType<typeof listSessions>> } | undefined;
+  let lastScan: { stamp: Map<string, string>; result: Scanned } | undefined;
   const listCache = opts.listCache ?? !opts.history?.listSessions;
+  /** `last.result` with the entries of the `changed` files read again; undefined when only a full scan gives the same list. */
+  async function patchScan(last: Scanned, changed: string[], stamp: Map<string, string>): Promise<Scanned | undefined> {
+    const idOf = (file: string) => file.slice(file.lastIndexOf("/") + 1, -".jsonl".length);
+    const count = new Map<string, number>();
+    for (const f of stamp.keys()) count.set(idOf(f), (count.get(idOf(f)) ?? 0) + 1);
+    const ids = changed.map(idOf);
+    // A session in two project folders, or one the SDK left out of the list (filtered): its entry needs the full scan's rules.
+    if (ids.some((id) => count.get(id) !== 1 || last.filter((t) => t.sessionId === id).length !== 1)) return undefined;
+    const infos = await mapLimit(ids, 8, (id) => history.getSessionInfo(id).catch(() => undefined));
+    if (infos.some((i, n) => i?.sessionId !== ids[n])) return undefined;
+    const fresh = new Map(infos.map((i) => [i!.sessionId, i!]));
+    return last.map((t) => fresh.get(t.sessionId) ?? t).sort((a, b) => b.lastModified - a.lastModified);
+  }
   function transcripts(): ReturnType<typeof listSessions> {
     if (!scan) {
       // Taken before the scan: a file written during it changes the next stamp.
       return (scan = (async () => {
         const stamp = listCache ? await transcriptStamp(projectsDir) : undefined;
-        if (stamp !== undefined && lastScan?.stamp === stamp) return lastScan.result;
+        const last = lastScan;
+        if (stamp && last && stamp.size === last.stamp.size && [...stamp.keys()].every((f) => last.stamp.has(f))) {
+          const changed = [...stamp].filter(([f, v]) => last.stamp.get(f) !== v).map(([f]) => f);
+          const sp = perfMon.span("session.scan");
+          const result = changed.length ? await patchScan(last.result, changed, stamp) : last.result;
+          sp.end();
+          if (result) return (lastScan = { stamp, result }).result;
+        }
+        const sp = perfMon.span("session.scanAll");
         const result = await history.listSessions();
+        sp.end();
         lastScan = stamp === undefined ? undefined : { stamp, result };
         return result;
       })().finally(() => (scan = undefined)));

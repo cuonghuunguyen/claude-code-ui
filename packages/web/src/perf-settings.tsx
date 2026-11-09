@@ -107,6 +107,7 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
   }, [load]);
 
   const d = report?.daemon;
+  const cpu = d?.memory.flatMap((m) => (m.cpu === undefined ? [] : [m.cpu])) ?? [];
   const row = (id: string, label: string, value: string, hint?: string) => (
     <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11" data-testid={id}>
       <div className="min-w-0 flex-1">
@@ -137,6 +138,7 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
           {!d.monitor && <p className="border-t py-2 text-muted-foreground text-xs">{t("perf.monitorOff")}</p>}
           {row("perf-eld", t("perf.eld"), ms(d.eld.excessP95), t("perf.eldHint", { idle: ms(d.eld.idleP50), worst: ms(d.eld.excessMax) }))}
           {row("perf-elu", t("perf.elu"), `${(d.elu * 100).toFixed(1)} %`, t("perf.eluHint"))}
+          {cpu.length > 0 && row("perf-cpu", t("perf.cpu"), t("perf.cpuValue", { last: cpu.at(-1)!, max: Math.max(...cpu) }), t("perf.cpuHint"))}
           <Table id="perf-slowest" title={t("perf.slowest")} rows={top(d.handlers, d.spans)} />
           <Table id="perf-processes" title={t("perf.processes")} rows={top(d.children)} />
           <div className="border-t py-2" data-testid="perf-events">

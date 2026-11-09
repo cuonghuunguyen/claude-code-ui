@@ -57,6 +57,15 @@ describe("event loop", () => {
     expect(r.eld.excessP95).toBeGreaterThan(150);
     expect(r.eld.excessMax).toBeGreaterThan(350);
   });
+  it("cpu: process CPU per 10 s window in % of one core, from the second sample", () => {
+    let used = 0;
+    const { p } = make({ cpu: () => ({ user: used, system: 0 }) });
+    p.setEnabled(true);
+    tick(10_000);
+    used += 15e6;
+    tick(10_000);
+    expect(p.report().memory.map((m) => m.cpu)).toEqual([undefined, 150]);
+  });
   it("memory keeps the last 60 samples", () => {
     const { p } = make();
     p.setEnabled(true);

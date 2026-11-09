@@ -2706,6 +2706,45 @@ describe("daemon", () => {
     }
   });
 
+  it("a listed transcript that changed is read again alone (getSessionInfo), not every transcript", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const id = "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, "{}\n");
+    const entry = (summary: string, lastModified: number) => ({ sessionId: id, summary, lastModified, cwd: webRoot, fileSize: 3 });
+    let scans = 0;
+    const infos: string[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      modelListWaitMs: 0,
+      history: {
+        listSessions: (async () => (scans++, [entry("Old title", 1)])) as never,
+        getSessionInfo: (async (sid: string) => (infos.push(sid), entry("New title", 2))) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "project.open", cwd: webRoot });
+      await c.request({ type: "session.list" });
+      writeFileSync(file, "{}\n{}\n");
+      const r = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(scans).toBe(1);
+      expect(infos).toEqual([id]);
+      expect(r.result.sessions.find((s) => s.id === id)?.title).toBe("New title");
+    } finally {
+      d.close();
+    }
+  });
+
   it("warmUp lists once when the server starts: the first session.list reuses that scan", async () => {
     const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
     mkdirSync(join(projectsDir, "-p"));

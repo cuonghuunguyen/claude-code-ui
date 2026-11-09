@@ -59,6 +59,8 @@ export type PerfOptions = {
   eld?: () => EldLike;
   memory?: () => { rss: number; heapUsed: number };
   elu?: EluFn;
+  /** Test seam: process CPU time (µs), worker threads included. */
+  cpu?: () => NodeJS.CpuUsage;
   version?: string;
   /** Called on each 10 s tick: false turns the monitor off (the setting changed in another daemon). */
   poll?: () => boolean | undefined;
@@ -120,6 +122,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
   let prevElu: EluValue | undefined;
   let lastElu = 0;
   let idleP50: number | undefined;
+  let prevCpu: { usage: NodeJS.CpuUsage; at: number } | undefined;
 
   type Store = {
     handlers: Map<string, Histogram>;
@@ -127,7 +130,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
     children: Map<string, Histogram>;
     excess: Histogram;
     excessMax: number | undefined;
-    memory: { at: number; rss: number; heapUsed: number }[];
+    memory: { at: number; rss: number; heapUsed: number; cpu?: number }[];
     worst: PerfWorst[];
   };
   const fresh = (): Store => ({ handlers: new Map(), spans: new Map(), children: new Map(), excess: newHistogram(), excessMax: undefined, memory: [], worst: [] });
@@ -214,7 +217,11 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       lastElu = (prevElu ? elu(cur, prevElu) : cur).utilization;
       prevElu = cur;
       const m = memoryOf();
-      st.memory.push({ at: Date.now(), rss: m.rss, heapUsed: m.heapUsed });
+      // Process CPU, worker threads included: a scan off the main thread shows neither in event-loop delay nor in ELU.
+      const cpuNow = { usage: (o.cpu ?? process.cpuUsage)(), at: now() };
+      const cpu = prevCpu && cpuNow.at > prevCpu.at ? Math.round(((cpuNow.usage.user + cpuNow.usage.system - prevCpu.usage.user - prevCpu.usage.system) / 1000 / (cpuNow.at - prevCpu.at)) * 100) : undefined;
+      prevCpu = cpuNow;
+      st.memory.push({ at: Date.now(), rss: m.rss, heapUsed: m.heapUsed, ...(cpu !== undefined && { cpu }) });
       if (st.memory.length > MEMORY_MAX) st.memory.shift();
     });
 
@@ -257,6 +264,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       eld.enable();
       enabledAt = now();
       prevElu = undefined;
+      prevCpu = undefined;
       idleP50 = undefined;
       tickTimer = setInterval(tick, TICK_MS);
       tickTimer.unref();
