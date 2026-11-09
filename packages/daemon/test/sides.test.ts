@@ -509,6 +509,16 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it("session.list keeps the local project order: a just added project without sessions stays above older projects", async () => {
+    const s = createSides({ targets: [], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    const sent: ServerMessage[] = [];
+    const list = { sessions: [{ id: "a", cwd: "/old", lastActivity: 5 }, { id: "b", cwd: "/older", lastActivity: 9 }], projects: ["/new", "/old", "/older"], recentProjects: [] };
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent[0] as any).result.projects).toEqual(["/new", "/old", "/older"]);
+  });
+
   it("fs.openExternal: custom on a WSL side is side_unsupported, nothing is forwarded (GH-646)", async () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
     await s.refresh();

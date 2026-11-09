@@ -1602,6 +1602,7 @@ export function createRouter(opts: {
     const cachedIds = new Set(cached.map(([id]) => id));
     const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
     const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
+    const perSide = [(local.result as ListLike).projects];
     for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);
     const sideEngines: Record<string, unknown[]> = {};
     for (const [id, r] of lists) {
@@ -1610,13 +1611,18 @@ export function createRouter(opts: {
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
       merged.projects = [...merged.projects, ...r.projects];
+      perSide.push(r.projects);
       merged.recentProjects = [...merged.recentProjects, ...r.recentProjects];
     }
     // Newest activity first across sides, as each side orders its own.
     const newest = new Map<string, number>();
     for (const s of merged.sessions) newest.set(s.cwd, Math.max(newest.get(s.cwd) ?? 0, s.lastActivity));
-    const order = merged.projects.map((p, i) => [p, i] as const);
-    merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
+    // Each side's own order stays (it counts when a project was added, a session-less project too): a key never rises down a side's list.
+    const order = perSide.flatMap((ps) => {
+      let key = Infinity;
+      return ps.map((p) => [p, (key = Math.min(key, newest.get(p) ?? key))] as const);
+    });
+    merged.projects = order.map((x, i) => [...x, i] as const).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
     return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides, ...(Object.keys(sideEngines).length && { sideEngines }) } };
