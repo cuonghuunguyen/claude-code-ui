@@ -66,8 +66,9 @@ When("I pick {string} in the branch popup actions", async ({ page }, name: strin
 
 Then("every branch popup action button is at least 44px high", async ({ page }) => {
   const more = popup(page).getByTestId("branch-popup-more");
+  // The branches arrive after the popup opens: wait for the first button before counting.
+  await expect(more.first()).toBeVisible({ timeout: 30_000 });
   const n = await more.count();
-  expect(n).toBeGreaterThan(0);
   // The popup scales in (scale-95 to 100): measure after the transition.
   for (let i = 0; i < n; i++) {
     await expect.poll(async () => (await more.nth(i).boundingBox())!.height).toBeGreaterThanOrEqual(43.5);
