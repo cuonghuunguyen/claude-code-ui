@@ -51,3 +51,27 @@ Feature: The Graph branch popup searches branches and offers branch actions (GH-
     Then every branch popup action button is at least 44px high
     And the scrollWidth of the page is 390
     And I capture "popup-phone"
+
+  Scenario: Typing while the actions have focus reaches the search box, an outside press closes the popup
+    Given the viewport is 1440x900
+    And the scratch project is a git repository with an origin inside the allowed roots
+    And the scratch project has the branch "topic" that edits the first line of "a.txt"
+    And a Haiku session with one finished reply
+    When I open the Graph tab of the side panel
+    And I open the Graph branch popup
+    And I open the actions of the branch "topic" in the branch popup
+    And I type "top" in the branch popup
+    Then the branch popup search box has the value "top"
+    And the branch popup does not list "main"
+    And I capture "popup-type-from-actions"
+    When I click outside the branch popup
+    Then the branch popup is closed
+    When I open the Graph branch popup
+    And I type "top" in the branch popup
+    And I click outside the branch popup
+    Then the branch popup is closed
+    When I open the Graph branch popup
+    And I open the actions of the branch "topic" in the branch popup
+    And I click outside the branch popup
+    Then the branch popup is closed
+    And I capture "popup-outside-press"

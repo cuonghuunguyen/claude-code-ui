@@ -73,3 +73,15 @@ Then("every branch popup action button is at least 44px high", async ({ page }) 
     expect((await more.nth(i).boundingBox())!.width).toBeGreaterThanOrEqual(43.5);
   }
 });
+
+Then("the branch popup search box has the value {string}", async ({ page }, v: string) => {
+  await expect(popup(page).getByTestId("branch-popup-search")).toHaveValue(v);
+});
+
+When("I click outside the branch popup", async ({ page }) => {
+  await page.mouse.click(5, 5);
+});
+
+Then("the branch popup is closed", async ({ page }) => {
+  await expect(popup(page)).toHaveCount(0);
+});
