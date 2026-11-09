@@ -1,4 +1,4 @@
-// Commit section of the Graph's context menu (docs/spec.md "Layout", Graph tab; GH-562): Undo Commit, Revert Commit, Cherry-Pick and
+// Commit section of the Graph's context menu (docs/spec.md "Layout", Graph tab; GH-562): Copy Revision Number, Undo Commit, Revert Commit, Cherry-Pick and
 // Reset Current Branch to Here for the row under the pointer. The daemon computes what is possible and the exact git command (`git.commitMenu`).
 import { useEffect, useState } from "react";
 import { ContextMenu } from "@base-ui/react/context-menu";
@@ -57,6 +57,10 @@ export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, 
       <div className="px-2 pt-1 font-medium text-muted-foreground text-xs" data-testid="commit-menu-head">
         {tr("sidebar.git.commitHead", { hash: s })}
       </div>
+      {/* navigator.clipboard is undefined on a non-secure origin (http://<LAN IP>): the item does nothing there, like other Copy items. */}
+      <ContextMenu.Item className={cn(ITEM, "max-md:min-h-11")} disabled={busy} onClick={() => void navigator.clipboard?.writeText(hash).catch(() => {})} data-testid="commit-copy-hash">
+        {tr("sidebar.git.commitCopyHash")}
+      </ContextMenu.Item>
       {!menu ? (
         <ContextMenu.Item className={ITEM} disabled>
           {error ?? tr("sidebar.git.loading")}

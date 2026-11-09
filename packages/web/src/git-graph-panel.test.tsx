@@ -1162,6 +1162,18 @@ it("New branch from a chip in the commit details uses the shown commit", async (
 
 const rowOf = (h: string) => el.querySelector(`[data-hash="${h}"]`)!;
 
+it("Copy Revision Number copies the full hash of the row, no daemon request", async () => {
+  const c = fake(withRefs());
+  await mount(c);
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  await menuAt(rowOf(hash(2)));
+  const sent = c.sent.length;
+  await act(async () => byId("commit-copy-hash").click());
+  expect(writeText).toHaveBeenCalledWith(hash(2));
+  expect(c.sent.length).toBe(sent);
+});
+
 it("right click on a row offers the commit actions; Undo only on HEAD's commit; Revert sends the shown argv", async () => {
   const c = fake(withRefs());
   await mount(c);

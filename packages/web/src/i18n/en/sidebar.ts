@@ -398,6 +398,7 @@ export default {
   "sidebar.cl.alsoRemoveWt": "Also remove its worktree",
   "sidebar.cl.hiddenByFilter": " (hidden by the filter)",
   "sidebar.git.commitHead": "Commit {hash}",
+  "sidebar.git.commitCopyHash": "Copy Revision Number",
   "sidebar.git.commitUndo": "Undo Commit",
   "sidebar.git.commitRevert": "Revert Commit",
   "sidebar.git.commitCherryPick": "Cherry-Pick",

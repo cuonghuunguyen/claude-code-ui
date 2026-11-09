@@ -400,6 +400,7 @@ export default {
   "sidebar.cl.alsoRemoveWt": "Xóa cả worktree của nó",
   "sidebar.cl.hiddenByFilter": " (bị bộ lọc ẩn)",
   "sidebar.git.commitHead": "Commit {hash}",
+  "sidebar.git.commitCopyHash": "Sao chép mã commit",
   "sidebar.git.commitUndo": "Hoàn tác commit",
   "sidebar.git.commitRevert": "Revert commit",
   "sidebar.git.commitCherryPick": "Cherry-pick",
