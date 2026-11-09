@@ -24,6 +24,7 @@ import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
@@ -87,7 +88,8 @@ export interface Conn {
   terminate(): void;
   on(event: "message", listener: (data: RawData) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
-  on(event: "pong" | "close", listener: () => void): unknown;
+  on(event: "pong", listener: () => void): unknown;
+  on(event: "close", listener: (code?: number) => void): unknown;
 }
 // Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
 void ((w: WebSocket): Conn => w);
@@ -128,6 +130,10 @@ const IDLE_CHECK_MS = 60_000;
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
+const LAG_TICK_MS = 500;
+const LAG_LOG_MS = 1_000;
+const MEM_LOG_MS = 10 * 60_000;
+const mb = (n: number) => Math.round(n / 2 ** 20);
 
 /** An OpenCode session id: it reaches a request path, so only this shape does. */
 const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
@@ -1902,6 +1908,7 @@ export function createDaemon(opts: {
   const pinger = setInterval(() => {
     for (const ws of [...connections]) {
       if (!answered.has(ws)) {
+        console.warn(`${new Date().toISOString()} ws: no pong in ${(opts.pingMs ?? PING_MS) / 1000}s, dropped (${connections.size - 1} left)`);
         drop(ws);
         continue;
       }
@@ -1913,7 +1920,22 @@ export function createDaemon(opts: {
       }
     }
   }, opts.pingMs ?? PING_MS).unref();
-  http.on("close", () => clearInterval(pinger));
+  // Perf log: an event loop blocked ≥1 s delays every reply and pong (a page probe times out, a socket is dropped).
+  let lagAt = performance.now();
+  const lagWatch = setInterval(() => {
+    const t = performance.now();
+    const late = t - lagAt - LAG_TICK_MS;
+    lagAt = t;
+    if (late < LAG_LOG_MS) return;
+    const m = process.memoryUsage();
+    console.warn(`${new Date().toISOString()} perf: event loop blocked ${Math.round(late)}ms, rss ${mb(m.rss)}MB, heap ${mb(m.heapUsed)}MB, ${connections.size} sockets`);
+  }, LAG_TICK_MS).unref();
+  // Perf log: memory every 10 min, to see a leak over a day.
+  const memLog = setInterval(() => {
+    const m = process.memoryUsage();
+    console.log(`${new Date().toISOString()} perf: rss ${mb(m.rss)}MB, heap ${mb(m.heapUsed)}/${mb(m.heapTotal)}MB, ${connections.size} sockets, ${sessions.size} sessions`);
+  }, MEM_LOG_MS).unref();
+  http.on("close", () => (clearInterval(pinger), clearInterval(lagWatch), clearInterval(memLog)));
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
     const sameBrowser = sameMachine(req);
@@ -1923,6 +1945,7 @@ export function createDaemon(opts: {
     sleepWatch?.check();
     connections.add(ws);
     answered.add(ws);
+    const openedAt = Date.now();
     ws.on("pong", () => answered.add(ws));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
@@ -1970,7 +1993,8 @@ export function createDaemon(opts: {
     };
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
-    ws.on("close", () => {
+    ws.on("close", (code) => {
+      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left)`);
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
@@ -1995,6 +2019,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
+      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 300)}`);
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
       const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
