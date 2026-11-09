@@ -69,6 +69,8 @@ export type CommandContext = {
   splitPrev?: () => void;
   joinSplits?: () => void;
   quickOpen: () => void;
+  /** Opens Find in files (Ctrl+Shift+F), prefilled from the selection. */
+  findInFiles: () => void;
   toggleSidebar: () => void;
   toggleSidePanel: () => void;
   toggleFileTree: () => void;
@@ -160,6 +162,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.newWorktree && cmd("worktree.new", t("app.cmd.worktreeNew"), c.newWorktree),
     c.cleanUp && cmd("cleanup.open", t("app.cmd.cleanupOpen"), c.cleanUp),
     c.canQuickOpen && cmd("file.open", t("app.cmd.fileOpen"), c.quickOpen),
+    c.canQuickOpen && cmd("find.files", t("app.cmd.findFiles"), c.findInFiles),
     c.tabs.length > 1 && cmd("tab.next", t("app.cmd.tabNext"), () => go(step(1))),
     c.tabs.length > 1 && cmd("tab.prev", t("app.cmd.tabPrev"), () => go(step(-1))),
     at >= 0 && cmd("tab.close", t("app.cmd.tabClose"), () => c.closeTab(c.activeId!)),

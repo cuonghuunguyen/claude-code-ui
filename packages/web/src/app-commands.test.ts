@@ -22,6 +22,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   selectTab: vi.fn(),
   closeTab: vi.fn(),
   quickOpen: vi.fn(),
+  findInFiles: vi.fn(),
   toggleSidebar: vi.fn(),
   toggleSidePanel: vi.fn(),
   toggleFileTree: vi.fn(),
@@ -59,6 +60,7 @@ it("lists the issue's commands with shortcuts, then the sessions", () => {
   expect(items.map((i) => [i.id, i.keys])).toEqual([
     ["session.new", "mod+shift+s"],
     ["file.open", "mod+p"],
+    ["find.files", "mod+shift+f"],
     ["tab.next", "mod+alt+arrowright"],
     ["tab.prev", "mod+alt+arrowleft"],
     ["tab.close", "mod+alt+w"],
@@ -160,6 +162,13 @@ it("rewind lists prompts newest first; hidden while a turn runs, when Stop shows
 it("without a shown session only the app-level commands remain", () => {
   const items = appCommands(ctx({ session: undefined, panels: false, canQuickOpen: false, tabs: ["new"], activeId: "new", sessions: [] }));
   expect(items.map((i) => i.id)).toEqual(["session.new", "tab.close", "tab.goto1", "tab.gotoLast", "shortcuts.open", "settings.open", "guide.start", "tips.reset", "sidebar.toggle", "signal.toggle", "layout.reset"]);
+});
+
+it("find.files needs canQuickOpen and runs findInFiles", () => {
+  const c = ctx();
+  expect(appCommands(c).find((i) => i.id === "find.files")).toMatchObject({ title: "Find in files", keys: "mod+shift+f" });
+  run(c, "find.files");
+  expect(c.findInFiles).toHaveBeenCalled();
 });
 
 it("a shortcut finds its command; Esc, Shift+Tab and plain keys run nothing from here", () => {

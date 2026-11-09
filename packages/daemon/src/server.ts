@@ -10,7 +10,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -18,6 +18,7 @@ import { createLocalHistory, HistoryError } from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
+import { findInFiles, GrepError, parseGlobs } from "./grep.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
@@ -1957,6 +1958,8 @@ export function createDaemon(opts: {
     // Attached terminals: ID → detach.
     const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
+    /** The running `fs.grep` of this connection: stopped by a newer one and the close. */
+    let grepping: AbortController | undefined;
     /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
     let generating: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
@@ -1976,6 +1979,7 @@ export function createDaemon(opts: {
       unwatchAll();
       attached.forEach((d) => d());
       searching?.abort();
+      grepping?.abort();
       generating?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
@@ -2809,6 +2813,29 @@ export function createDaemon(opts: {
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
           return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])), (p) => inRoots(real(p) ?? p))).filter((p) => allowed(join(cwd, p))) });
+        }
+        case "fs.grep": {
+          grepping?.abort();
+          grepping = undefined;
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (typeof msg.query !== "string" || (msg.globs !== undefined && typeof msg.globs !== "string") || [msg.regex, msg.includeIgnored].some((b) => b !== undefined && typeof b !== "boolean")) return fail("bad_query", "query and globs must be strings, regex and includeIgnored booleans");
+          if (!msg.query.trim()) return reply({ files: [], matches: 0, ms: 0, includeIgnored: false, git: false } satisfies FsGrepResult);
+          if (msg.query.length > MAX_SEARCH_CHARS) return fail("bad_query", `query longer than ${MAX_SEARCH_CHARS} characters`);
+          const globs = parseGlobs(msg.globs);
+          if (typeof globs === "string") return fail("bad_glob", globs);
+          const ctl = (grepping = new AbortController());
+          try {
+            const repos = await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => []);
+            const r = await findInFiles(cwd, { query: msg.query, regex: !!msg.regex, globs, includeIgnored: msg.includeIgnored }, { signal: ctl.signal, allowed: (p) => !!allowed(p), repoAllowed: (p) => inRoots(real(p) ?? p), repos });
+            // No query text in the log (it may hold a secret).
+            console.log(`fs.grep: ${r.files.length} files, ${r.matches} matches, ${r.ms} ms${r.stopped ? `, stopped: ${r.stopped}` : ""}`);
+            return reply(r);
+          } catch (e) {
+            return fail(e instanceof GrepError ? e.code : "fs_error", (e as Error).message);
+          } finally {
+            if (grepping === ctl) grepping = undefined;
+          }
         }
         case "sessions.search": {
           // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.

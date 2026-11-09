@@ -15,6 +15,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "palette.open", title: "Command palette", group: "General", key: "mod+k" },
   { id: "palette.alt", title: "Command palette (second key)", group: "General", key: "mod+shift+p" },
   { id: "file.open", title: "Open file", group: "General", key: "mod+p" },
+  { id: "find.files", title: "Find in files", group: "General", key: "mod+shift+f" },
   { id: "settings.open", title: "Open settings", group: "General", key: "mod+," },
   { id: "shortcuts.open", title: "Keyboard shortcuts", group: "General", key: "mod+/" },
   { id: "notifications.focus", title: "Go to notifications", group: "General", key: "mod+alt+n" },

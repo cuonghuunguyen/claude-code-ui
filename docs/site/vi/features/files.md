@@ -41,11 +41,22 @@ Bấm chuột phải (nhấn giữ, hoặc <kbd>Shift</kbd>+<kbd>F10</kbd>) vào
 | **Mở trong tab** | Chuyển tệp thành tab riêng cạnh phiên của nó (cũng có thể bấm chuột giữa vào dòng). Xem [Khung & bố cục](/vi/features/panes#one-file-or-one-artifact-as-a-tab). |
 | **Thêm vào prompt** | Chèn tệp vào hộp prompt dưới dạng @mention. |
 
+## Tìm trong tệp
+
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> (<kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>F</kbd> trên Mac, hoặc **Tìm trong tệp** trong bảng lệnh) tìm văn bản trong các tệp của dự án bằng `git grep`, nên cần cài git. Văn bản đang chọn trong trình soạn thảo hoặc ô nhập sẽ thành từ khóa.
+
+- Kết quả nhóm theo tệp, kèm hai dòng ngữ cảnh và phần khớp được đánh dấu. <kbd>Enter</kbd> hoặc nhấp chuột mở kết quả tại đúng dòng.
+- Nút regex chuyển sang biểu thức chính quy (tương thích Perl, như `git grep -P`: `\d`, `\w` và `\b` dùng được; git không hỗ trợ PCRE sẽ báo). **Tệp cần tìm** nhận mẫu như `*.ts, *.tsx`.
+- Dự án git bỏ qua tệp bị ignore; nút con mắt bao gồm chúng. Thư mục không phải dự án git tìm tất cả, kể cả tệp bị ignore, và nút này sẽ ẩn chúng.
+- <kbd>↑</kbd> và <kbd>↓</kbd> trong các ô gọi lại lần tìm trước; trong danh sách kết quả (<kbd>Tab</kbd>) chúng di chuyển giữa các kết quả.
+- Tìm kiếm dừng sau 5 giây, 200 tệp hoặc 2000 kết quả và sẽ báo. Tệp nhị phân bị bỏ qua.
+
 ## Phím {#keys}
 
 | Phím | Ở đâu | Tác dụng |
 | --- | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Mọi nơi | Mở tệp theo tên. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> trong danh sách sẽ chèn `@path` vào prompt thay vì mở. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | Mọi nơi | Tìm trong tệp |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> | Trình soạn thảo | Lưu |
 | <kbd>Alt</kbd>+<kbd>K</kbd> | Trình soạn thảo | Chèn tệp và các dòng đã chọn vào hộp prompt (<kbd>⌥</kbd> <kbd>K</kbd> trên Mac) |
 | <kbd>Ctrl</kbd>+<kbd>\\</kbd> | Mọi nơi | Hiện hoặc ẩn cây tệp |
