@@ -1,0 +1,14 @@
+[
+  { "info": { "id": "msg_u1", "sessionID": "ses_hist", "role": "user", "time": { "created": 1 }, "agent": "build", "model": { "providerID": "acme", "modelID": "m" } },
+    "parts": [{ "id": "prt_u1", "sessionID": "ses_hist", "messageID": "msg_u1", "type": "text", "text": "list the files" }] },
+  { "info": { "id": "msg_a1", "sessionID": "ses_hist", "role": "assistant", "time": { "created": 2 }, "parentID": "msg_u1", "modelID": "m", "providerID": "acme", "mode": "build", "agent": "build", "path": { "cwd": "/", "root": "/" }, "cost": 0, "tokens": {} },
+    "parts": [
+      { "id": "prt_a0", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "step-start" },
+      { "id": "prt_a1", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "reasoning", "text": "I should run ls", "time": { "start": 1 } },
+      { "id": "prt_a2", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "tool", "callID": "call_1", "tool": "bash", "state": { "status": "completed", "input": { "command": "ls" }, "output": "a.txt\nb.txt", "title": "ls", "metadata": {}, "time": { "start": 1, "end": 2 } } },
+      { "id": "prt_a3", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "tool", "callID": "call_2", "tool": "read", "state": { "status": "error", "input": { "filePath": "/nope" }, "error": "file not found", "time": { "start": 1, "end": 2 } } },
+      { "id": "prt_a4", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "tool", "callID": "call_3", "tool": "bash", "state": { "status": "running", "input": { "command": "sleep 9" }, "time": { "start": 1 } } },
+      { "id": "prt_a5", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "step-finish", "reason": "stop", "cost": 0, "tokens": {} },
+      { "id": "prt_a6", "sessionID": "ses_hist", "messageID": "msg_a1", "type": "text", "text": "There are two files." }
+    ] }
+]

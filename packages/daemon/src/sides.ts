@@ -1359,7 +1359,7 @@ type Router = { attach(id: string): void; detach(id: string): void };
 /** The local daemon's answer to one message: its reply or error. */
 type LocalCall = (msg: ClientMessage) => Promise<ServerMessage>;
 
-type ListLike = { sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]> };
+type ListLike = { engines?: unknown[]; sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]> };
 
 /**
  * Per browser connection: forwards each request to its side and merges the answers that span sides. `local` handles a
@@ -1602,22 +1602,35 @@ export function createRouter(opts: {
     const cachedIds = new Set(cached.map(([id]) => id));
     const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
     const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
+    const perSide = [(local.result as ListLike).projects];
     for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);
+    const sideEngines: Record<string, unknown[]> = {};
     for (const [id, r] of lists) {
+      if (r.engines) sideEngines[id] = r.engines;
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
       merged.sessions = [...merged.sessions, ...r.sessions];
       merged.projects = [...merged.projects, ...r.projects];
+      perSide.push(r.projects);
       merged.recentProjects = [...merged.recentProjects, ...r.recentProjects];
     }
     // Newest activity first across sides, as each side orders its own.
     const newest = new Map<string, number>();
     for (const s of merged.sessions) newest.set(s.cwd, Math.max(newest.get(s.cwd) ?? 0, s.lastActivity));
-    const order = merged.projects.map((p, i) => [p, i] as const);
-    merged.projects = order.sort((a, b) => (newest.get(b[0]) ?? -1) - (newest.get(a[0]) ?? -1) || a[1] - b[1]).map(([p]) => p);
+    // Each side's own order stays (it counts when a project was added, a session-less project too): a key never rises down a side's list.
+    // shortcut: session-less projects above a side's first session go first only on the local side (the router cannot see other sides' added times), #672.
+    const order = perSide.flatMap((ps, side) => {
+      let key: number | undefined;
+      return ps.map((p) => {
+        const t = newest.get(p);
+        if (t !== undefined) key = Math.min(key ?? t, t);
+        return [p, key ?? (side ? -1 : Infinity)] as const;
+      });
+    });
+    merged.projects = order.map((x, i) => [...x, i] as const).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides } };
+    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides, ...(Object.keys(sideEngines).length && { sideEngines }) } };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {

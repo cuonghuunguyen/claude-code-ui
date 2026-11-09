@@ -57,6 +57,7 @@ Then("the owner transcript does not mention {string}", async ({ page }, text: st
 });
 
 When("I ask the aside {string}", async ({ page, memo }, question: string) => {
+  memo.owner = sessionId(page);
   const box = prompt(owner(page));
   await box.fill(`/btw ${question}`);
   await box.press("Enter");
@@ -78,9 +79,8 @@ When("I send {string} in the owner", async ({ page }, text: string) => {
 });
 
 When("I open the owner session", async ({ page, memo }) => {
-  // After Focus: the popup's owner is the first session tab.
-  await page.getByTestId("session-list").getByTestId("session-item").first().click();
-  void memo;
+  // By ID: the worker's daemon is shared by scenarios, so another project's session may be listed first.
+  await page.locator(`[data-testid="session-item"][data-session-id="${memo.owner}"]`).click();
 });
 
 Then("an aside popup shows", async ({ page }) => {

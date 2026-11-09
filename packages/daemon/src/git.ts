@@ -734,8 +734,8 @@ export type CreateWorktreeOptions = {
   allowed: (path: string) => boolean;
   /** Claude config dir, for user settings `worktree.*`. */
   claudeDir: string;
-  /** Runs under the repository lock once the worktree is ready (GH-79 part 5: the worker's session and link). When it throws, the new worktree and its branch are removed and the error is rethrown. */
-  onCreated?: (r: { path: string; branch: string }) => void;
+  /** Runs under the repository lock once the worktree is ready (GH-79 part 5: the worker's session and link). A returned promise is awaited. When it throws or rejects, the new worktree and its branch are removed and the error is rethrown. */
+  onCreated?: (r: { path: string; branch: string }) => unknown;
 };
 
 /** `git worktree add` under `<main>/.claude/worktrees/<name>` (docs/spec.md "Worktrees"); throws WorktreeError. */
@@ -856,7 +856,7 @@ async function finishCreate(main: string, path: string, branch: string, settings
     }
     if (o.onCreated)
       try {
-        o.onCreated({ path, branch });
+        await o.onCreated({ path, branch });
       } catch (e) {
         await run(main, ["worktree", "remove", "--force", "--", path]).catch((x) => console.warn(`worktree: rollback of ${path} failed: ${x.message}`));
         if (ours) await run(main, ["branch", "-D", "--", branch]).catch((x) => console.warn(`worktree: rollback of branch ${branch} failed: ${x.message}`));

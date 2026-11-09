@@ -86,11 +86,12 @@ Then("the row menu has {string} in its own section near the top", async ({ page 
   const m = menu(page);
   const item = m.getByRole("menuitem", { name, exact: true });
   await expect(item).toBeVisible();
-  // Own section: a separator right before and after the item; near the top: at most 4 items before it (New session/worktree entries).
+  // Own section: a separator right before and after the item (GH-515: a project row's "Change name and icon…" shares it); near the top: at most 4 items before it (New session/worktree entries).
   const info = await m.evaluate((el, label) => {
     const kids = [...el.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="separator"]')];
     const i = kids.findIndex((k) => k.getAttribute("role") === "menuitem" && k.textContent?.trim() === label);
-    return { i, before: kids[i - 1]?.getAttribute("role"), after: kids[i + 1]?.getAttribute("role"), items: kids.slice(0, i).filter((k) => k.getAttribute("role") !== "separator").length, total: kids.filter((k) => k.getAttribute("role") !== "separator").length };
+    const next = kids[i + 1]?.textContent?.trim() === "Change name and icon…" ? i + 2 : i + 1;
+    return { i, before: kids[i - 1]?.getAttribute("role"), after: kids[next]?.getAttribute("role"), items: kids.slice(0, i).filter((k) => k.getAttribute("role") !== "separator").length, total: kids.filter((k) => k.getAttribute("role") !== "separator").length };
   }, name);
   expect(info.i).toBeGreaterThanOrEqual(0);
   expect(info.before, "separator before").toBe("separator");
@@ -103,10 +104,8 @@ Then("the row menu items are at least 44px high", async ({ page }) => {
   const items = menu(page).getByRole("menuitem");
   const n = await items.count();
   expect(n).toBeGreaterThan(0);
-  for (let i = 0; i < n; i++) {
-    const b = await items.nth(i).boundingBox();
-    expect(b!.height, `item ${i} height`).toBeGreaterThanOrEqual(43.5);
-  }
+  // Polled: the popup opens with a scale-95 transition, so an early box is 95% of the item.
+  for (let i = 0; i < n; i++) await expect.poll(async () => (await items.nth(i).boundingBox())!.height, { message: `item ${i} height` }).toBeGreaterThanOrEqual(43.5);
 });
 
 Then("the page is exactly 390px wide", async ({ page }) => {

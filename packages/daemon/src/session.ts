@@ -1,29 +1,9 @@
-// A live session: one long-lived streaming-input query() whose SDK messages become logged events.
+// A live session: the shared event log, state and permission bridge of one conversation. The Engine runtime behind it (claude-engine.ts) owns the agent query and its messages.
 import { randomUUID } from "node:crypto";
 import { artifactFileOf, type ArtifactFile } from "./artifact-preview.ts";
 import {
-  query as sdkQuery,
-  type CanUseTool,
-  type ModelInfo,
-  type Options,
-  type PermissionResult,
-  type PermissionUpdate,
-  type Query,
-  type SDKControlGetContextUsageResponse,
-  type SDKConversationResetMessage,
-  type SDKMessage,
-  type SDKUserMessage,
-  type SessionMessage,
-  type SettingSource,
-} from "@anthropic-ai/claude-agent-sdk";
-import {
-  bashRecords,
-  escapeBash,
-  createAdapter,
-  imageBlock,
   MAX_FROM_PARTS,
   omitMedia,
-  permissionModesFor,
   type Effort,
   type Event,
   type Part,
@@ -32,38 +12,29 @@ import {
   type PosPart,
   type Snapshot,
   type TimelinePage,
-  type Question,
   type RewindMode,
   type RewindPreview,
   type SessionInfo,
   type SessionState,
 } from "@claude-ui/protocol";
-import { claudeEnv } from "./claude-env.ts";
 import type { PlanTracker } from "./plan-usage.ts";
-import { runBash, type BashResult, type BashRun } from "./bash.ts";
-
-/** How long a restart waits for a bash mode command moved to the background (GH-485). Only the wait ends; the command is never killed for time. */
-export const BASH_BACKGROUND_WAIT_MS = 30 * 60_000;
+import type { runBash } from "./bash.ts";
 import { PartIndex } from "./part-index.ts";
-import { readTail, taskDirs } from "./shell-output.ts";
-import { perf, type PerfSpanHandle } from "./perf.ts";
-import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
+import type { TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
+import { claudeEngine, ClaudeSession, type Options, type Query, type QueryFn, type SessionMessage, type Transcript } from "./claude-engine.ts";
+import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+
+// The SDK-facing code lives in claude-engine.ts; these names stay importable from here.
+export { withQuery, openQuery, queuedQuery, listModels, transcriptModel, THROWAWAY_TIMEOUT_MS, CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, STALE_TURN_MS, INTERRUPT_GRACE_MS, BASH_BACKGROUND_WAIT_MS, type Transcript } from "./claude-engine.ts";
 
 type Listener = (e: Event) => void;
-// Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
-const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 /** A coordinator settle reads the tier at most this often while the session keeps changing; then it is refused. */
 const SETTLE_READS = 5;
-// Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
-const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
 type PermissionCard = { input: Record<string, unknown>; title?: string; onAllow?: () => void };
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
 type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number; message?: string; updatedInput?: Record<string, unknown> };
-
-// Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
-const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
 /** `uploadDir`: the folder of this session's fs.uploads by its id (created on call), readable by Claude without a permission request. */
@@ -73,12 +44,14 @@ export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "ef
  * settings this change set; none when the first query starts or a /clear heir begins (saved only if the session has no entry).
  * `onCleared`: a /clear handed the live query of `from` (the session that was cleared) to `heir`, a new session (the daemon lists it).
  */
-type SessionOpts = Partial<SessionSettings> & {
+export type SessionOpts = Partial<SessionSettings> & {
+  /** The Engine the session runs on; default: the Claude Engine. */
+  engine?: Engine;
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
   uploadDir?: (id: string) => string | undefined;
-  query?: typeof sdkQuery;
+  query?: QueryFn;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session, from: Session) => void;
   /** A CLI process started or was dropped (worker_close, Plugins Restart, idle close, rewind): the session's `live` changed, the daemon re-lists it. */
@@ -124,18 +97,6 @@ type SessionOpts = Partial<SessionSettings> & {
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
-export type Transcript = {
-  main: SessionMessage[];
-  runs: SessionMessage[][];
-  /** Raw main-transcript lines, when read through JsonlTail (restore: mode and effort fallback). */
-  entries?: readonly unknown[];
-};
-
-// ExitPlanMode comes without suggestions; Claude Code's "Yes, and auto-accept edits" (verified: the CLI then runs in acceptEdits).
-const ACCEPT_EDITS: PermissionUpdate = { type: "setMode", mode: "acceptEdits", destination: "session" };
-// Plain allow must name its mode too: without one the CLI restores the mode active before plan mode (acceptEdits after Shift+Tab).
-const MANUAL_EDITS: PermissionUpdate = { type: "setMode", mode: "default", destination: "session" };
-
 export class Session {
   readonly id: string;
   readonly createdAt = Date.now();
@@ -148,41 +109,13 @@ export class Session {
   /** Per part id with a replaceable latest event: that event, or "first" while it is the id's first event (kept: its timeline position). */
   private readonly latest = new Map<string, Event | "first">();
   private readonly listeners = new Set<Listener>();
-  private input = new InputQueue();
-  private query?: Query;
-  /** The running drive() loop; it ends after the CLI process exited. */
-  private driving?: Promise<void>;
-  /** The session the live query's permission requests go to: this one, until a /clear hands the query over. */
-  private owner?: { session: Session };
-  private model: string;
-  private permissionMode: PermissionMode;
-  private effort: Effort;
-  private adapter: ReturnType<typeof createAdapter>;
-  /** Bumped when a conversation rewind drops the query; the old drive loop then stops logging. */
-  private generation = 0;
   /**
-   * Checkpoints: user prompt UUID -> UUID of the last main-thread assistant message before it, which is the
-   * `resumeSessionAt` fork point of a conversation rewind (undefined for the first prompt). Insertion order = prompt order.
+   * Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). `reply`: the Engine's
+   * half of the answer. `ctx`: the Engine's request flags the permission tier reads (blockedPath, defaultToNo, requiresUserInteraction).
    */
-  private readonly checkpoints = new Map<string, string | undefined>();
-  private lastAssistant?: string;
-  /** Fork point for the next start() after a conversation rewind. */
-  private resumeAt?: string;
-  /** True while rewind() awaits rewindFiles(): a prompt then would run on the query the rewind closes. */
-  private rewinding = false;
-  /** The bash mode command that runs now (`bash()`). */
-  private bashRun?: BashRun & { id: string; toBackground(): void };
-  /** Bash mode commands moved to the background (GH-485), by bash part id. `cleared`: a /clear took the query; its end notice is dropped. */
-  private bashShells = new Map<string, { run: BashRun; since: number; cleared?: true }>();
-  /** End notices of those commands that wait for the turn (or a bash mode command) to end: the CLI takes them after the turn. */
-  private bashNotices: { status: string; id: string; content: string }[] = [];
-  /** Session-scoped grants the user gave (destination "session"): re-applied at each query start, the CLI forgets them on exit. */
-  private grants: PermissionUpdate[] = [];
-  /** Pending permission requests and questions by requestId (docs/spec.md "Permission bridge", "Questions"). */
-  /** `ctx`: the SDK's request flags the permission tier reads (blockedPath, defaultToNo, requiresUserInteraction). */
   private readonly pending = new Map<
     string,
-    { part: PermissionPart | QuestionPart; resolve: (r: PermissionResult) => void; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void; tier?: { epoch: number; value: Promise<Tier> } }
+    { part: PermissionPart | QuestionPart; reply: (r: Reply) => void; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void; tier?: { epoch: number; value: Promise<Tier> } }
   >();
   /**
    * Bumped by whatever may change files in the cwd: an allowed request, a tool call or bash command that ended. A request's tier
@@ -193,101 +126,31 @@ export class Session {
   private epochAt = performance.now();
   /** Coordinator settles of this session, one at a time (coordinatorRespond). */
   private settling: Promise<unknown> = Promise.resolve();
-  /** SDK task ID of each running subagent run by its Agent call's toolUseId (task_started, a resume's too; dropped at task_notification). */
-  private tasks = new Map<string, string>();
-  /** Session IDs this session's live query ran under before a /clear handed it over: their CLI task folders hold the output files of the shells it took over. */
-  private taskSessions: string[] = [];
-  /** Bumped per refreshUsage(): an older answer that arrives later is dropped. */
-  private usageRequest = 0;
-  /** Open from start() until the CLI sends its first message (performance monitor, GH-272). */
-  private startSpan?: PerfSpanHandle;
-  /** False until the first start(): the first query creates the transcript (sessionId), every later one resumes it. */
-  private started: boolean;
-  /** The current query's CLI keeps every Bash command in the cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR). */
-  private bashPinned = false;
-  /** Born by a /clear hand-over and not prompted yet: its title is "New session" without reading its transcript. */
-  private cleared = false;
-  /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
-  private readonly transcript = createAdapter();
-  /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
-  private readonly known = new Set<string>();
-  /** Main-chain message UUIDs the timeline shows, in log order; a rewind cuts it. */
-  private readonly timeline: string[] = [];
-  /** tool_use IDs of the session's own query: their subagent runs are not external. */
-  private readonly ownCalls = new Set<string>();
-  /** True from a task_notification to the next result: the CLI runs a turn of its own for it, while the session is idle. */
-  private cliTurn = false;
-  private cliTurnTimer?: NodeJS.Timeout;
-  /** Non-ambient task IDs of the CLI's last background_tasks_changed level (GH-239); reset when a CLI process starts. */
-  private backgroundLevel = new Set<string>();
-  /** Call ID of each ambient task by its task ID: not activity, but tracked again if the level turns its flag false. */
-  private ambientTasks = new Map<string, string>();
-  /** Fires STALE_TURN_MS after the last stream message of a running turn: checks whether the session missed the turn's end (GH-239). */
-  private staleTimer?: NodeJS.Timeout;
-  /** Stream messages received so far: a stale check that sees a newer one keeps the turn. */
-  private received = 0;
-  /** Date.now() of the last stream message (or of this object): the stall watchdog reads it with `received` (activity()). */
-  private receivedAt = Date.now();
-  /** Assistant, result, stream, tool progress, compaction status and prompt hook messages received so far (activity()). */
-  private progress = 0;
-  /** The first stale check that found the turn ended: the transcript size and message count it saw; a second one must see the same. */
-  private staleSeen?: { size: number; received: number };
-  /** The CLI compacts the conversation (status compacting until compact_boundary or another status): a silent turn. */
-  private compacting = false;
-  /** hook_started IDs without their hook_response (includeHookEvents): a hook may run long without a message. */
-  private readonly hooks = new Set<string>();
-  /** A sync was asked while the session was busy: it runs at the end of the turn. */
-  private syncDeferred = false;
-  private syncing?: Promise<void>;
-  private syncAgain = false;
-  /** UUIDs of the prompts and messages of the session's own query: a transcript ending in one is no external turn. */
-  private readonly own = new Set<string>();
-  /** A terminal CLI turn runs (external_turn part); ends with its turn, or EXTERNAL_TURN_QUIET_MS after the last growth. */
-  private externalTurn = false;
-  private externalQuiet?: NodeJS.Timeout;
-  /** The turn hit the plan usage limit (assistant error rate_limit) and the reset time of its rejected rate_limit_event (ms). */
-  private limitHit = false;
-  private limitResetsAt?: number;
   private continueAt: number | null = null;
   private limitStopped = false;
-  private suggested = false;
-  /** The throwaway commands query was asked (once; a failure asks again at the next subscribe). */
-  private commandsAsked = false;
+  /** A prompt suggestion is shown (set by the Engine when it emits one). */
+  suggested = false;
   /**
    * Whose upload folder the running CLI was started with (`uploadDir(uploadOwner)`). A /clear heir keeps its parent's until
    * its CLI closes (`dropQuery`: idle close, restart, rewind) and a query of its own starts: the CLI cannot get another directory, so uploads go where it already reads.
    */
   uploadOwner: string;
-  /** After a failed load no new throwaway starts before this time (ms). */
-  private commandsRetryAt = 0;
+
+  /** The Engine runtime of this session (engine use). */
+  readonly run: EngineSession;
+  private readonly engine: Engine;
 
   constructor(
     readonly cwd: string,
     private readonly opts: SessionOpts = {},
     /** Without `history`: a new session with a given id (a claimed draft, see uploads.ts). */
-    restored?: { id: string; history?: SessionMessage[]; read?: Iterable<string> },
+    restored?: Restored & { history?: SessionMessage[] },
   ) {
     this.id = restored?.id ?? randomUUID();
     this.uploadOwner = this.id;
-    this.model = opts.model ?? "default";
-    this.permissionMode = opts.permissionMode ?? "default";
-    this.effort = opts.effort ?? "default";
-    this.adapter = createAdapter({ resumed: !!restored?.history });
-    this.started = !!restored?.history;
-    // The CLI starts on the first prompt; until then a throwaway query lists the commands for the / menu.
-    if (!restored?.history) {
-      void this.loadCommands();
-      return;
-    }
-    // ADR 0001: after a daemon restart the SDK transcript is the history; the query resumes on the first prompt. The live query
-    // shares the adapter: a task notification after the resume finds a restored run.
-    // Every message read is known, also those the restore left out (pruned orphan runs): a sync must not log them after all.
-    for (const u of restored.read ?? []) this.known.add(u);
-    this.logTranscript(restored.history, this.adapter);
-    // No query runs: a call or run without its end in the transcript (the CLI exited mid-run) is no longer running.
-    for (const part of this.adapter.endCalls()) this.emit(part);
-    this.setState("idle");
-    void this.refreshUsage();
+    this.engine = opts.engine ?? claudeEngine;
+    this.run = this.engine.open(this, opts, restored);
+    this.run.begin();
   }
 
   /**
@@ -298,87 +161,23 @@ export class Session {
     return new Session(cwd, opts, { id, history, read });
   }
 
-  /** `timed` false: no prompt follows (rewind, bash records), so the CLI may stay silent and there is no start to time. */
-  private start(timed = true) {
-    this.startSpan?.end();
-    this.startSpan = timed ? perf.span("session.start") : undefined;
-    // A new CLI reads the current login: an earlier login change is no reason to drop it.
-    this.staleLogin = false;
-    const owner = (this.owner = { session: this as Session });
-    // The level is per CLI process (SDK): a new one starts empty.
-    this.backgroundLevel = new Set();
-    this.ambientTasks.clear();
-    const up = this.opts.uploadDir?.(this.id);
-    const agent = this.opts.agent?.(this.id);
-    const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
-    const rules = sessionRules(this.grants);
-    const disallowed = this.opts.disallowedTools?.(this.id);
-    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
-    this.bashPinned = !!this.opts.worker?.(this.id);
-    const q = (this.query = (this.opts.query ?? sdkQuery)({
-      prompt: this.input,
-      options: {
-        ...(this.started ? { resume: this.id } : { sessionId: this.id }),
-        resumeSessionAt: this.resumeAt,
-        // Checkpoints: file backups per user message, and the user message UUIDs echoed back.
-        enableFileCheckpointing: true,
-        cwd: this.cwd,
-        additionalDirectories: dirs.length ? dirs : undefined,
-        ...(rules.length && { allowedTools: rules }),
-        // Not a canUseTool deny: a user settings allow rule (e.g. Edit) would skip canUseTool.
-        ...(disallowed && { disallowedTools: disallowed }),
-        model: this.model === "default" ? undefined : this.model,
-        permissionMode: this.permissionMode,
-        allowDangerouslySkipPermissions: !!this.opts.allowBypass,
-        effort: this.effort === "default" ? undefined : this.effort,
-        includePartialMessages: true,
-        // hook_started/hook_response: the stale-turn check waits for a running hook (GH-239); the adapter ignores them.
-        includeHookEvents: true,
-        promptSuggestions: this.opts.promptSuggestions?.(),
-        settingSources: SETTING_SOURCES,
-        // Thinking text is omitted by default; summaries feed the thinking parts.
-        extraArgs: { "thinking-display": "summarized", "replay-user-messages": null, ...(this.opts.chrome?.() && !this.bashPinned && { chrome: null }) },
-        // Subagent text and thinking too, not only its tool calls: the UI shows the nested transcript.
-        forwardSubagentText: true,
-        // ADR 0002: subscription login only. An inherited API key would take precedence and bill per token.
-        // Todo tools are off by default on current models; TodoWrite (not the Task* tools) sends the whole list.
-        // Artifact tools and skills are on in the TUI but off in SDK sessions; CLAUDE_CODE_ARTIFACT (undocumented) turns them on.
-        env: {
-          CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
-          CLAUDE_CODE_ENABLE_TASKS: "0",
-          CLAUDE_CODE_ARTIFACT: "1",
-          ...claudeEnv(),
-          ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
-        },
-        canUseTool: (tool, input, o) => owner.session.canUseTool(tool, input, o),
-        mcpServers: this.opts.mcpServers?.(this.id),
-        ...(agent && { agent }),
-      },
-    }));
-    this.resumeAt = undefined;
-    // The first query creates the transcript: saved now, defaults too. A restore without an entry reads the transcript, whose
-    // replies record the effort they ran with (the model's default, e.g. medium), not "default".
-    if (!this.started) this.settingsChanged([]);
-    this.started = true;
-    this.driving = this.drive(q);
-    this.opts.onLiveChange?.(this.id);
-    // Later changes arrive as system/commands_changed through drive().
-    q.supportedCommands().then(
-      (list) => this.adapter.commands(list).forEach((p) => this.emit(p)),
-      (err) => console.error(`session ${this.id}: supportedCommands failed:`, err),
-    );
-    return q;
+  /** The new session of a /clear (engine use): same cwd and options, the settings of the cleared one. */
+  heir(id: string, settings: SessionSettings) {
+    return Session.restore(id, this.cwd, [], { ...this.opts, ...settings });
   }
 
   info(): SessionInfo {
+    const { model, permissionMode, effort } = this.run.settings();
     return {
       id: this.id,
       cwd: this.cwd,
       state: this.state,
-      model: this.model,
-      permissionMode: this.permissionMode,
-      effort: this.effort,
-      permissionModes: permissionModesFor({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(this.model) }),
+      model,
+      permissionMode,
+      effort,
+      permissionModes: this.engine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model) }),
+      capabilities: this.engine.capabilities,
+      engine: this.engine.name,
     };
   }
 
@@ -433,81 +232,97 @@ export class Session {
 
   /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
   subscribe(sinceSeq: number, listener: Listener): () => void {
-    // A restored session has no query before its first prompt: its commands load when a tab first opens it (Infinity: the daemon's own observer, no tab).
-    if (sinceSeq !== Infinity && !this.query) void this.loadCommands();
+    this.run.subscribed(sinceSeq);
     for (const e of this.log) if (e.seq > sinceSeq) listener(e);
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  /**
-   * Ends the query for good and resolves once its message loop ended (the CLI process exited). The CLI writes
-   * session metadata to the transcript on exit, so a transcript delete must wait for this.
-   */
-  async close() {
-    this.bashRun?.kill();
-    for (const b of this.bashShells.values()) ((b.cleared = true), b.run.kill());
-    this.bashNotices = [];
-    clearTimeout(this.externalQuiet);
-    clearTimeout(this.staleTimer);
-    this.generation++;
-    this.query?.close();
-    this.query = undefined;
-    // ponytail: 5 s cap in case the CLI hangs on exit; a later write then leaves a metadata-only transcript stub.
-    await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
-  }
 
-  /**
-   * What the CLI sent: all messages and when the last came (a long tool call still sends a heartbeat every 30 s), and `progress`,
-   * the messages that show the turn runs (not the echo of the prompt, which the CLI sends once it took it).
-   */
+  // The Engine runtime does these (same signatures, same docs: see claude-engine.ts).
+  close() {
+    return this.run.close();
+  }
   activity() {
-    return { received: this.received, at: this.receivedAt, progress: this.progress };
+    return this.run.activity();
   }
-
-  /** The running query, for control requests of the config dialogs; none before the first prompt or after it ended. */
-  liveQuery(): Query | undefined {
-    return this.isLive() ? this.query : undefined;
+  /** Whether the Engine's runtime process runs. */
+  live(): boolean {
+    return this.run.live();
   }
-
-  /** Plugins dialog: `reloadPlugins()` on the running query (none: undefined); the new command list becomes the commands part. */
-  async reloadPlugins(): Promise<number | undefined> {
-    const q = this.liveQuery();
-    if (!q) return undefined;
-    // As the VS Code extension 2.1.283 does: get_settings first makes the CLI re-read the settings files a plugin write just
-    // changed; without it the reload can miss a plugin installed a moment ago (seen with CLI 2.1.285). `getSettings` is in
-    // sdk.mjs 0.3.285 but not in sdk.d.ts.
-    await (q as Query & { getSettings(): Promise<unknown> }).getSettings();
-    const r = await q.reloadPlugins();
-    this.adapter.commands(r.commands).forEach((p) => this.emit(p));
-    return r.error_count;
+  /** The running Claude query, for the config dialogs; none for another Engine or before the first prompt. */
+  claudeQuery(): Query | undefined {
+    return this.run instanceof ClaudeSession ? this.run.liveQuery() : undefined;
   }
-
-  /** Plugins dialog "Restart": drops the running query; the next prompt resumes the transcript in a new CLI (same model, mode, effort). */
+  reloadPlugins() {
+    return this.run.reloadPlugins();
+  }
   restartQuery() {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
-    this.dropQuery();
+    return this.run.restartQuery();
   }
-
-  /** The Claude login or account changed: the live CLI is replaced at the end of the running turn. */
-  staleLogin = false;
-
-  /** Idle close (docs/spec.md "Idle close"): drops the live query when nothing runs or waits; the next prompt resumes. False when busy or no query. */
   releaseQuery() {
-    if (!this.query || !this.isLive() || this.busy() || this.externalTurn || this.bashRun || this.bashShells.size || this.syncing) return false;
-    this.dropQuery();
-    return true;
+    return this.run.releaseQuery();
   }
-
-  /** A terminal CLI turn runs in this session: a prompt now would fork the transcript (docs/spec.md "Terminal CLI and web app on one session"). */
   externalTurnRunning() {
-    return this.externalTurn;
+    return this.run.externalTurnRunning();
   }
-
-  /** A /clear heir before its first prompt. */
   untitled() {
-    return this.cleared;
+    return this.run.untitled();
+  }
+  bashRunning() {
+    return this.run.bashRunning();
+  }
+  bash(command: string) {
+    return this.run.bash(command);
+  }
+  prompt(text: string, images: string[] = []) {
+    return this.run.prompt(text, images);
+  }
+  setModel(model: string) {
+    return this.run.setModel(model);
+  }
+  setPermissionMode(mode: PermissionMode) {
+    return this.run.setPermissionMode(mode);
+  }
+  setEffort(effort: Effort) {
+    return this.run.setEffort(effort);
+  }
+  interrupt() {
+    return this.run.interrupt();
+  }
+  stopSubagent(callId: string) {
+    return this.run.stopSubagent(callId);
+  }
+  backgroundShell(toolUseId: string) {
+    return this.run.backgroundShell(toolUseId);
+  }
+  stopShell(id: string) {
+    return this.run.stopShell(id);
+  }
+  shellOutput(toolUseId: string) {
+    return this.run.shellOutput(toolUseId);
+  }
+  previewRewind(userMessageId: string): Promise<RewindPreview> {
+    return this.run.previewRewind(userMessageId);
+  }
+  rewind(userMessageId: string, mode: RewindMode) {
+    return this.run.rewind(userMessageId, mode);
+  }
+  sync() {
+    return this.run.sync();
+  }
+  working() {
+    return this.run.working();
+  }
+  takesQueued() {
+    return this.run.takesQueued();
+  }
+  /** The Claude login or account changed: the live CLI is replaced at the end of the running turn. */
+  get staleLogin() {
+    return this.run.staleLogin;
+  }
+  set staleLogin(v: boolean) {
+    this.run.staleLogin = v;
   }
 
   /** False once the query ended or failed: nothing reads the input queue any more. */
@@ -515,407 +330,6 @@ export class Session {
     return this.state !== "error" && this.state !== "closed";
   }
 
-  bashRunning() {
-    return !!this.bashRun;
-  }
-
-  /**
-   * Bash mode: runs `command` in the cwd and logs a `bash` part, then appends the CLI's two records to the transcript with
-   * shouldQuery: false (no turn; Claude sees them with the next prompt).
-   */
-  bash(command: string) {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    if (this.state !== "idle" || this.pending.size || this.rewinding || this.cliTurn || this.externalTurn) throw new Error("session is busy: wait for the turn to end");
-    if (this.bashRun) throw new Error("a shell command is already running");
-    const id = randomUUID();
-    const outId = randomUUID();
-    const generation = this.generation;
-    let bg = false;
-    const part = (p: Partial<Extract<Part, { type: "bash" }>>) => this.emit({ type: "bash", id, command, stdout: "", stderr: "", status: "running", ...(bg && { shell: "background" as const }), ...p });
-    part({});
-    let last = 0;
-    let shown = "";
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let latest: [string, string] = ["", ""];
-    const flush = () => {
-      timer = undefined;
-      last = Date.now();
-      const key = latest.join("\0");
-      if (key === shown) return;
-      shown = key;
-      part({ stdout: latest[0], stderr: latest[1] });
-    };
-    const raw = (this.opts.runBash ?? runBash)(command, this.cwd, (stdout, stderr) => {
-      latest = [stdout, stderr];
-      // At most every 500 ms, with a trailing update for the last output.
-      if (!timer) timer = setTimeout(flush, Math.max(0, 500 - (Date.now() - last)));
-    });
-    const run = (this.bashRun = {
-      ...raw,
-      done: raw.done,
-      id,
-      // Run in background (GH-485): the command runs on without the session; the CLI's two records go in at once.
-      toBackground: () => {
-        raw.background();
-        bg = true;
-        this.bashRun = undefined;
-        this.bashShells.set(id, { run: raw, since: Date.now() });
-        clearTimeout(timer);
-        flush();
-        part({ stdout: latest[0], stderr: latest[1] });
-        this.appendBashRecords([id, outId], [`<bash-input>${command}</bash-input>`, `<bash-stdout>Command was manually backgrounded by user with ID: ${id}. You will be notified with its output when it ends.</bash-stdout><bash-stderr></bash-stderr>`]);
-      },
-    });
-    void run.done.then((r) => {
-      clearTimeout(timer);
-      const shell = this.bashShells.get(id);
-      if (bg) this.bashShells.delete(id);
-      else this.bashRun = undefined;
-      part({ stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, status: r.stopped ? "stopped" : r.exitCode ? "error" : "done" });
-      // A moved command outlives a dropped query (sync, rewind); close() and /clear mark it `cleared`.
-      if (!this.isLive() || (!bg && generation !== this.generation)) return;
-      if (bg) return shell?.cleared ? undefined : this.bashEnded(id, command, r);
-      this.appendBashRecords([id, outId], bashRecords(command, r.stdout, r.stderr, r.exitCode));
-      this.flushBashNotices();
-    });
-  }
-
-  /** Appends Bash mode records as own user messages; no turn (`shouldQuery: false`). The next prompt forks after the last one. */
-  private appendBashRecords(uuids: `${string}-${string}-${string}-${string}-${string}`[], contents: string[]) {
-    for (const u of uuids) {
-      this.known.add(u);
-      this.own.add(u);
-      this.timeline.push(u);
-    }
-    // The next prompt's rewind fork point is after the records, else rewinding it would drop them from Claude's view.
-    this.lastAssistant = uuids.at(-1);
-    if (!this.query) this.start(false);
-    contents.forEach((content, i) => this.input.push({ type: "user", uuid: uuids[i], shouldQuery: false, message: { role: "user", content }, parent_tool_use_id: null }));
-  }
-
-  /**
-   * End notice of a `!` command moved to the background (GH-485): the CLI's <task-notification> plus the output records. It starts
-   * a turn like the CLI does; a killed one waits for the next message. While a turn (or a bash mode command) runs it waits for its end.
-   */
-  private bashEnded(id: string, command: string, r: BashResult) {
-    const status = r.stopped ? "killed" : r.exitCode ? "failed" : "completed";
-    const cmd = escapeBash(command);
-    const summary = status === "killed" ? `Background command "${cmd}" was stopped` : status === "failed" ? `Background command "${cmd}" failed with exit code ${r.exitCode}` : `Background command "${cmd}" completed (exit code 0)`;
-    const content = `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>\n${bashRecords(command, r.stdout, r.stderr, r.exitCode)[1]}`;
-    this.bashNotices.push({ status, id, content });
-    this.flushBashNotices();
-  }
-
-  private flushBashNotices() {
-    if (!this.bashNotices.length || !this.takesQueued()) return;
-    for (const { status, content } of this.bashNotices.splice(0)) {
-      const uuid = randomUUID();
-      this.known.add(uuid);
-      this.own.add(uuid);
-      this.timeline.push(uuid);
-      const turn = status !== "killed";
-      // No reply follows a killed notice: it is the rewind fork point like the other records.
-      if (!turn) this.lastAssistant = uuid;
-      if (!this.query) this.start(turn);
-      if (turn) this.setState("running");
-      this.input.push({ type: "user", uuid, ...(!turn && { shouldQuery: false }), message: { role: "user", content }, parent_tool_use_id: null });
-    }
-  }
-
-  /** `images`: data URLs already checked with imageBlock(). Returns the user_text part id. */
-  prompt(text: string, images: string[] = []): string {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    if (this.bashRun) throw new Error("a shell command is running: stop it first");
-    if (this.rewinding) throw new Error("session is rewinding");
-    this.cleared = false;
-    // A login or account change that could not replace the CLI at the end of a turn (a background shell kept it): now.
-    if (this.staleLogin && this.state === "idle" && this.releaseQuery()) this.staleLogin = false;
-    const uuid = randomUUID();
-    this.known.add(uuid);
-    this.own.add(uuid);
-    this.timeline.push(uuid);
-    this.checkpoints.set(uuid, this.lastAssistant);
-    this.emit({ type: "user_text", id: uuid, text, images });
-    this.setState(this.pending.size ? "needs_input" : "running");
-    if (!this.query) this.start();
-    const content = images.length
-      ? [...(text ? [{ type: "text" as const, text }] : []), ...images.map((i) => imageBlock(i)!)]
-      : text;
-    this.input.push({ type: "user", uuid, message: { role: "user", content }, parent_tool_use_id: null });
-    return uuid;
-  }
-
-  /** Switches the live query's model; "default" resets to the SDK default. A restored session not yet resumed resumes with it. */
-  async setModel(model: string) {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    await this.query?.setModel(model);
-    this.model = model;
-    this.emit({ type: "session_model", id: "session_model", model });
-    // Auto needs a model that supports it: back to ask, as the web toast says.
-    try {
-      if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model)) {
-        await this.query?.setPermissionMode("default");
-        this.setMode("default");
-      }
-    } finally {
-      this.settingsChanged(["model"]);
-    }
-    // The window size can differ per model.
-    void this.refreshUsage();
-  }
-
-  /** Applies from the next turn on; before the query runs it becomes the start option. */
-  async setPermissionMode(mode: PermissionMode) {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    if (!this.info().permissionModes.includes(mode)) throw new Error(`permission mode ${mode} is not enabled`);
-    await this.query?.setPermissionMode(mode);
-    // The user's pick is saved even when unchanged here: another daemon may have saved a different mode meanwhile.
-    if (mode === this.permissionMode) this.settingsChanged(["permissionMode"]);
-    else this.setMode(mode);
-  }
-
-  /** Applies from the next turn on; "default" goes back to the model's default effort. */
-  async setEffort(effort: Effort) {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    await this.query?.applyFlagSettings({ effortLevel: effort === "default" ? null : effort });
-    this.effort = effort;
-    this.emit({ type: "session_effort", id: "session_effort", effort });
-    this.settingsChanged(["effort"]);
-  }
-
-  private setMode(mode: PermissionMode) {
-    if (mode === this.permissionMode) return;
-    this.permissionMode = mode;
-    this.emit({ type: "session_permission_mode", id: "session_permission_mode", mode });
-    this.settingsChanged(["permissionMode"]);
-  }
-
-  private settingsChanged(fields: (keyof SessionSettings)[]) {
-    this.opts.onSettings?.({ model: this.model, permissionMode: this.permissionMode, effort: this.effort }, this.id, fields);
-  }
-
-  /**
-   * Claude Code's Esc: denies pending permission requests and cancels pending questions, then `interrupt()`. The CLI
-   * ends the turn with a turn_interrupted marker and an aborted result, which returns the session to idle; the query stays live.
-   */
-  async interrupt() {
-    if (this.bashRun) return this.bashRun.kill();
-    if (this.state === "idle" && (this.tasks.size || this.cliTurn)) return this.resetWorking();
-    if (!this.query || (this.state !== "running" && this.state !== "needs_input")) return;
-    for (const [id, { part }] of [...this.pending]) {
-      if (part.type === "question") {
-        this.cancel(id, REJECTED);
-        continue;
-      }
-      for (const p of this.adapter.deny(part.toolUseId)) this.emit(p);
-      this.settle(id, { decision: "deny" }, { behavior: "deny", message: REJECTED, interrupt: true });
-    }
-    await this.query.interrupt();
-    // Stop on a turn whose end the session missed (GH-239): an idle CLI sends no result for the interrupt.
-    setTimeout(() => void this.checkStale(true), INTERRUPT_GRACE_MS).unref();
-  }
-
-  /**
-   * Stop on an idle session that still counts background work (GH-239): the web shows it running. Tasks the CLI's last level
-   * does not name are dropped (a missed task_notification, a foreground run, a CLI without levels) and the wait for the CLI's
-   * own turn ends; a background run the level names keeps it working (its own Stop agent stops it).
-   */
-  private resetWorking() {
-    for (const [call, task] of this.tasks) if (!this.backgroundLevel.has(task)) this.tasks.delete(call);
-    this.cliTurn = false;
-    clearTimeout(this.cliTurnTimer);
-    this.setState("idle");
-  }
-
-  /**
-   * Stops the task of call `callId`: a subagent run (Stop agent; the parent turn goes on with the run's error result) or a
-   * background shell (Kill, GH-442). False when no task of that call runs in the live query.
-   */
-  async stopSubagent(callId: string): Promise<boolean> {
-    const task = this.tasks.get(callId);
-    if (!task || !this.query) return false;
-    await this.query.stopTask(task);
-    return true;
-  }
-
-  /** Run in background (GH-440): `backgroundTasks()` of the Bash call `toolUseId`, or the running bash mode command with that part id (GH-485). False without a live query or when the CLI runs no foreground task of that call. */
-  async backgroundShell(toolUseId: string): Promise<boolean> {
-    if (this.bashRun?.id === toolUseId) return this.bashRun.toBackground(), true;
-    return this.query ? this.query.backgroundTasks(toolUseId) : false;
-  }
-
-  /** Kill (GH-442): a bash mode command moved to the background (GH-485), else the task of call `id` (Stop agent's way). */
-  async stopShell(id: string): Promise<boolean> {
-    const b = this.bashShells.get(id);
-    if (b) return b.run.kill(), true;
-    return this.stopSubagent(id);
-  }
-
-  /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file; undefined when none is known, it lies outside the CLI's task folder, or it is gone. */
-  async shellOutput(toolUseId: string) {
-    const file = this.adapter.outputFile(toolUseId);
-    return file ? readTail(file, [this.id, ...this.taskSessions].flatMap((id) => taskDirs(this.cwd, id))) : undefined;
-  }
-
-  /** Dry run of a code rewind to before this prompt. */
-  async previewRewind(userMessageId: string): Promise<RewindPreview> {
-    const r = await this.control(userMessageId).rewindFiles(userMessageId, { dryRun: true });
-    // canRewind false: no file checkpoint for this message, so nothing to restore.
-    const files = r.canRewind ? (r.filesChanged ?? []) : [];
-    return {
-      filesChanged: files,
-      insertions: files.length ? (r.insertions ?? 0) : 0,
-      deletions: files.length ? (r.deletions ?? 0) : 0,
-      conversation: this.checkpoints.get(userMessageId) !== undefined,
-    };
-  }
-
-  /** Claude Code `/rewind` to before this prompt: files via `rewindFiles()`, conversation via `resumeSessionAt` on the next prompt. */
-  async rewind(userMessageId: string, mode: RewindMode) {
-    const q = this.control(userMessageId);
-    const forkAt = this.checkpoints.get(userMessageId);
-    if (mode !== "code" && forkAt === undefined) throw new Error("cannot rewind the conversation to before the first prompt");
-    if (mode !== "conversation") {
-      this.rewinding = true;
-      try {
-        const r = await q.rewindFiles(userMessageId);
-        if (!r.canRewind) throw new Error(r.error ?? "cannot rewind files");
-      } finally {
-        this.rewinding = false;
-      }
-    }
-    if (mode === "code") return;
-    // The running CLI holds the full conversation: drop it; the next prompt resumes the transcript truncated at forkAt.
-    // resumeDropsTurn is not passed: it refuses any discarded range longer than one turn (verified with SDK 0.3.285).
-    this.dropQuery();
-    this.resumeAt = this.lastAssistant = forkAt;
-    this.cut(userMessageId);
-    // The window now holds the conversation up to forkAt only.
-    void this.refreshUsage();
-  }
-
-  /** Closes the live query for good; the next prompt starts a fresh one that resumes the transcript. */
-  private dropQuery() {
-    const hadTasks = this.tasks.size > 0;
-    const hadQuery = !!this.query;
-    this.generation++;
-    this.query?.close();
-    this.query = undefined;
-    // The next query is granted this session's own folder (a /clear heir read its parent's until now).
-    this.uploadOwner = this.id;
-    // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
-    this.tasks.clear();
-    for (const part of this.adapter.endCalls()) this.emit(part);
-    this.input = new InputQueue();
-    if (hadTasks) this.setState(this.state); // clients drop `working`
-    // Nothing to drop (a transcript sync, Plugins Restart of a session without a CLI): `live` did not change.
-    if (hadQuery) this.opts.onLiveChange?.(this.id);
-  }
-
-  /** Drops this prompt and everything after it from the timeline (a `rewind` event). */
-  private cut(userMessageId: string) {
-    let drop = false;
-    for (const id of [...this.checkpoints.keys()]) if ((drop ||= id === userMessageId)) this.checkpoints.delete(id);
-    const at = this.timeline.indexOf(userMessageId);
-    if (at >= 0) this.timeline.length = at;
-    this.emit({ type: "rewind", id: randomUUID(), userMessageId });
-  }
-
-  /** Logs transcript messages (main chain, then subagent runs) through the transcript adapter (restore: the live one). */
-  private logTranscript(messages: SessionMessage[], adapter = this.transcript) {
-    for (const m of messages) {
-      this.known.add(m.uuid);
-      if (!m.parent_tool_use_id) this.timeline.push(m.uuid);
-      for (const part of adapter.convert(m as SDKMessage)) {
-        // A subagent run's prompt is no checkpoint.
-        if (part.type === "user_text" && !part.parentId) this.checkpoints.set(part.id, this.lastAssistant);
-        this.emit(part);
-      }
-      if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
-      // Bash mode's output record: the fork point of the next prompt (restore, sync).
-      const c = (m.message as { content?: unknown } | undefined)?.content;
-      if (m.type === "user" && !m.parent_tool_use_id && typeof c === "string" && c.startsWith("<bash-stdout>")) this.lastAssistant = m.uuid;
-    }
-  }
-
-  /**
-   * A turn runs (also one the CLI starts by itself on a task notification), input is pending or a background task (subagent
-   * run, background shell) of the own query runs: an update restart waits for it (docs/spec.md "Updates").
-   */
-  working() {
-    return this.state === "running" || this.state === "needs_input" || this.pending.size > 0 || this.tasks.size > 0 || this.cliTurn || !!this.bashRun || [...this.bashShells.values()].some((b) => Date.now() - b.since < BASH_BACKGROUND_WAIT_MS);
-  }
-
-  /** A turn, a decision or a rewind is under way, or a subagent run of the own query still runs: a sync now would cut into it. */
-  private busy() {
-    return this.state !== "idle" || this.pending.size > 0 || this.rewinding || this.tasks.size > 0 || this.cliTurn;
-  }
-
-  /**
-   * Appends external turns (docs/spec.md "Terminal CLI and web app on one session"): transcript messages after the last
-   * one the session knows. When the timeline's last message left the main chain (a terminal CLI rewind), a `rewind` event
-   * first cuts the timeline back to the common message. Found any: the live query, which misses them, is dropped. A busy
-   * session syncs at the end of its turn; calls during a sync run it once more after it.
-   */
-  sync(): Promise<void> {
-    this.syncAgain = !!this.syncing;
-    return (this.syncing ??= (async () => {
-      do {
-        this.syncAgain = false;
-        await this.syncOnce();
-      } while (this.syncAgain);
-    })().finally(() => (this.syncing = undefined)));
-  }
-
-  private async syncOnce() {
-    if (!this.started || !this.opts.readTranscript || !this.isLive()) return;
-    if (this.busy()) return void (this.syncDeferred = true);
-    let t: Transcript;
-    try {
-      t = await this.opts.readTranscript(this.id, this.cwd);
-    } catch (err) {
-      return void console.error(`session ${this.id}: reading the transcript failed:`, err);
-    }
-    if (!this.isLive()) return;
-    if (this.busy()) return void (this.syncDeferred = true);
-    const chain = t.main.filter((m) => !m.parent_tool_use_id);
-    // The own CLI's notice of its own background call that it only logs (queueTranscriptOnly, e.g. a run that handed its
-    // report back in a message): no stream message, no turn. Own: no external turn, the live query stays.
-    // Also the own CLI's artifact-auto-react notice after an interrupt (GH-513): it names no call. A terminal CLI's call-less notices (Monitor, orphan shells) stay external.
-    const notices = chain.filter((m) => !this.known.has(m.uuid) && (this.ownCalls.has(noticeCall(m) ?? "") || /<task-type>artifact-auto-react<\/task-type>/.test(noticeText(m))));
-    for (const m of notices) this.own.add(m.uuid);
-    this.logTranscript(notices, this.adapter);
-    const tail = this.timeline.at(-1);
-    // A daemon-run message not in the transcript (yet): the timeline forked from the transcript at the last message both have.
-    const forked = tail !== undefined && !chain.some((m) => m.uuid === tail);
-    const timeline = new Set(this.timeline);
-    const from = forked ? lastIndex(chain, (m) => timeline.has(m.uuid)) : lastIndex(chain, (m) => this.known.has(m.uuid));
-    const fresh = chain.slice(from + 1).filter((m) => !this.known.has(m.uuid));
-    // A run of an external Agent call; the own query's runs stream to the session (their first prompt does not).
-    const runs = t.runs
-      .map((run) => (run.some((m) => m.parent_tool_use_id && this.ownCalls.has(m.parent_tool_use_id)) ? [] : run.slice(lastIndex(run, (m) => this.known.has(m.uuid)) + 1).filter((m) => !this.known.has(m.uuid))))
-      .filter((run) => run.length);
-    // A compaction (terminal CLI /compact or auto-compact) puts its summary before the preserved messages the session knows.
-    const summaries = chain.slice(0, from + 1).filter((m) => (m as { isCompactSummary?: boolean }).isCompactSummary && !this.known.has(m.uuid));
-    // External messages that open or continue a turn: a CLI turn runs. A read without new ones (a prompt's sync) only ends it.
-    const last = chain.at(-1);
-    const open = !!last && !this.own.has(last.uuid) && turnOpen(last);
-    if (!open || fresh.length || runs.length) this.setExternalTurn(open);
-    // Nothing new: e.g. the transcript lags behind the own query's last messages.
-    if (!fresh.length && !runs.length && !summaries.length) return;
-    if (forked && from >= 0) {
-      const common = this.timeline.lastIndexOf(chain[from]!.uuid);
-      const prompt = this.timeline.slice(common + 1).find((u) => this.checkpoints.has(u));
-      if (prompt) this.cut(prompt);
-      this.timeline.length = common + 1;
-    }
-    this.dropQuery();
-    this.resumeAt = undefined;
-    this.lastAssistant = chain[lastIndex(chain.slice(0, from + 1), (m) => m.type === "assistant")]?.uuid;
-    // Chain order, as a restore shows it: the divider before the messages after it.
-    this.logTranscript([...summaries, ...interleaveRuns(fresh, runs)]);
-    void this.refreshUsage();
-  }
 
   /** Shows (ms) or clears (null) the scheduled continue after a usage limit (auto-continue.ts). */
   setContinueAt(at: number | null) {
@@ -946,89 +360,51 @@ export class Session {
   }
   private queueShown: { items: unknown[]; held?: unknown } = { items: [] };
 
-  /** The session takes a queued message as a new turn now: idle and nothing else going on. A background task alone does not count as busy. */
-  takesQueued() {
-    return this.isLive() && this.state === "idle" && !this.pending.size && !this.rewinding && !this.bashRun && !this.externalTurn && !this.cliTurn;
+  // Engine use: what the runtime needs of the shared half.
+  currentState() {
+    return this.state;
   }
 
-  private setExternalTurn(running: boolean) {
-    clearTimeout(this.externalQuiet);
-    // A CLI that died mid-turn leaves no end in the transcript; the quiet time ends the turn unless the CLI still reports it.
-    if (running) this.externalQuiet = setTimeout(() => this.setExternalTurn(!!this.opts.cliTurnRunning?.(this.id)), EXTERNAL_TURN_QUIET_MS).unref();
-    if (running === this.externalTurn) return;
-    this.externalTurn = running;
-    this.emit({ type: "external_turn", id: "external_turn", running });
-    if (!running) this.flushBashNotices();
+  pendingCount() {
+    return this.pending.size;
   }
 
-  /** The query to send control requests to, started (resumed) without a prompt if none runs. */
-  private control(userMessageId: string): Query {
-    if (!this.isLive()) throw new Error(`session ${this.id} is not live (${this.state})`);
-    if (this.rewinding) throw new Error("session is rewinding");
-    if (this.bashRun) throw new Error("a shell command is running: stop it first");
-    if (this.state !== "idle") throw new Error("session is running: interrupt the turn first");
-    if (!this.checkpoints.has(userMessageId)) throw new Error(`unknown user message ${userMessageId}`);
-    return this.query ?? this.start(false);
+  /** The plan of an ExitPlanMode call, folded from the plan files of this session's folders. */
+  planOf(toolUseId: string) {
+    return this.index.planOf(toolUseId, this.planDirs());
   }
 
-  /** Rules already saved never reach this callback. No timeout: the promise waits for respond() or the SDK's abort. */
-  private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
-    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
-    let suggestions = opts.suggestions ?? [];
-    // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
-    const { requiresUserInteraction } = opts as { requiresUserInteraction?: boolean };
-    const policy = this.opts.toolPolicy?.(tool, mcpServer);
-    if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
-    if (policy === "no_rules") suggestions = [];
-    // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
-    if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
-    const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
-    const card = made instanceof Promise ? await made : made;
-    // The SDK may abort while the card's git read runs.
-    if (made instanceof Promise && signal.aborted) return { behavior: "deny", message: "Request cancelled" };
-    const title = card?.title ?? sdkTitle;
-    return new Promise((resolve) => {
-      const requestId = randomUUID();
-      const part: PermissionPart | QuestionPart =
-        tool === "AskUserQuestion"
-          ? { type: "question", id: requestId, requestId, toolUseId: toolUseID, questions: (input as { questions: Question[] }).questions, settled: false, at: Date.now() }
-          : {
-              type: "permission_request",
-              id: requestId,
-              requestId,
-              toolUseId: toolUseID,
-              tool,
-              input: card?.input ?? input,
-              ...this.planField(tool, toolUseID, input),
-              ...(title ? { title } : {}),
-              suggestions: tool === "ExitPlanMode" && !suggestions.length ? [ACCEPT_EDITS] : suggestions,
-              settled: false,
-              at: Date.now(),
-            };
-      this.pending.set(requestId, { part, resolve, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow });
-      this.emit(part);
-      this.setState("needs_input");
-      if (part.type === "permission_request") this.markLowTier(requestId);
-      signal.addEventListener("abort", () => this.cancel(requestId, "Request cancelled"), { once: true });
-    });
-  };
+  /** The runtime asks the user: the request waits in `pending` until respond, answer, coordinatorSettle or cancel settles it through `reply`. */
+  request(e: { part: PermissionPart | QuestionPart; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void; reply: (r: Reply) => void }) {
+    this.pending.set(e.part.requestId, { part: e.part, reply: e.reply, ctx: e.ctx, onAllow: e.onAllow });
+    this.emit(e.part);
+    this.setState("needs_input");
+    if (e.part.type === "permission_request") this.markLowTier(e.part.requestId);
+  }
+
+  /** Stop (Esc): denies pending permission requests and cancels pending questions. */
+  interruptPending() {
+    for (const [id, { part, reply }] of [...this.pending]) {
+      reply({ kind: "interrupt" });
+      this.settle(id, part.type === "question" ? {} : { decision: "deny" }, false);
+    }
+  }
+
+  /** A cancelled permission request gets decision "cancelled"; a cancelled question settles without answers. */
+  cancel(requestId: string, message: string) {
+    const req = this.pending.get(requestId);
+    if (!req) return;
+    req.reply({ kind: "cancel", message });
+    this.settle(requestId, req.part.type === "permission_request" ? { decision: "cancelled" as PermissionDecision } : {}, false);
+  }
+
+  cancelAll(message: string) {
+    for (const id of [...this.pending.keys()]) this.cancel(id, message);
+  }
 
   /** The plan folders of this session's CLI. */
   planDirs(): string[] | undefined {
     return this.opts.planDirs?.(this.cwd);
-  }
-
-  /**
-   * The plan the approval request shows (display data `plan`; the Plan pane and the plan card use it for this call). The CLI fills `input.plan` from its plan
-   * file when the call runs, so after an Edit of the same message ran: that wins. Without it (Claude Code 2.1.294 also asks with an empty input) the plan-file
-   * fold (planOfCall), which may miss an Edit whose result has not streamed in yet. `input` stays what the CLI sent, as it is what goes back on Approve (a
-   * changed plan input would make the CLI rewrite its plan file).
-   */
-  private planField(tool: string, toolUseId: string, input: unknown): { plan?: string } {
-    if (tool !== "ExitPlanMode") return {};
-    const own = (input as { plan?: unknown } | null)?.plan;
-    const plan = typeof own === "string" && own ? own : this.index.planOf(toolUseId, this.planDirs());
-    return plan ? { plan } : {};
   }
 
   /** A low tier request is sent again with `tier: "low"` once its tier is read (the Focus page offers Always allow only then); high or unknown stays unmarked. A later read that says otherwise sends it again without the mark. */
@@ -1068,7 +444,7 @@ export class Session {
   private readTier(part: PermissionPart, ctx: Omit<TierContext, "cwd"> | undefined, since: number): Promise<Tier> {
     const read = this.opts.tier ?? tierAsync;
     return Promise.resolve()
-      .then(() => read(part.tool, part.input, { cwd: this.cwd, bashCwdPinned: this.bashPinned, since, ...ctx }))
+      .then(() => read(part.tool, part.input, { cwd: this.cwd, bashCwdPinned: this.run.bashCwdPinned(), since, ...ctx }))
       .catch(() => "high" as const);
   }
 
@@ -1080,34 +456,14 @@ export class Session {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "permission_request") return false;
     const { decision, ruleIndex, message, updatedInput } = answer;
-    const { input, suggestions, toolUseId } = req.part;
     const text = message?.trim();
     if (decision === "deny") {
-      for (const part of this.adapter.deny(toolUseId)) this.emit(part);
-      // Like Claude Code: "No" with feedback lets Claude continue with it; a bare "No" stops the turn.
-      return this.settle(
-        requestId,
-        { decision: "deny", ...(text ? { message: text } : {}) },
-        text ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${text}` } : { behavior: "deny", message: REJECTED, interrupt: true },
-      );
+      req.reply({ kind: "deny", ...(text ? { message: text } : {}) });
+      return this.settle(requestId, { decision: "deny", ...(text ? { message: text } : {}) }, false);
     }
-    const updatedPermissions =
-      req.part.tool === "ExitPlanMode"
-        ? [decision === "allow_always" ? ACCEPT_EDITS : MANUAL_EDITS]
-        : decision === "allow_always"
-          ? ruleIndex === undefined
-            ? suggestions
-            : suggestions.slice(ruleIndex, ruleIndex + 1)
-          : undefined;
-    if (updatedPermissions) this.grants.push(...updatedPermissions.filter((u) => u.destination === "session"));
-    // Edit before accept: the timeline shows what runs, not Claude's proposal.
-    if (updatedInput) for (const part of this.adapter.edit(toolUseId, updatedInput)) this.emit(part);
+    req.reply({ kind: "allow", decision, ruleIndex, updatedInput });
     req.onAllow?.();
-    return this.settle(
-      requestId,
-      { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) },
-      { behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(updatedPermissions ? { updatedPermissions } : {}) },
-    );
+    return this.settle(requestId, { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) }, true);
   }
 
   /**
@@ -1144,13 +500,11 @@ export class Session {
   }
 
   private coordinatorSettle(requestId: string, part: PermissionPart, { decision, message }: Answer): boolean {
+    const req = this.pending.get(requestId);
+    if (!req) return false;
     const reason = message!.trim();
-    for (const p of this.adapter.byCoordinator(part.toolUseId, decision as "allow" | "deny", reason)) this.emit(p);
-    const done = { decision, by: "coordinator" as const, message: reason };
-    if (decision === "allow") return this.settle(requestId, done, { behavior: "allow", updatedInput: part.input as Record<string, unknown> });
-    for (const p of this.adapter.deny(part.toolUseId)) this.emit(p);
-    // No interrupt: the worker goes on with the reason, like the user's "No" with feedback.
-    return this.settle(requestId, done, { behavior: "deny", message: COORDINATOR_DENIED + reason });
+    req.reply({ kind: "coordinator", decision: decision as "allow" | "deny", message: reason });
+    return this.settle(requestId, { decision, by: "coordinator" as const, message: reason }, decision === "allow");
   }
 
   /** Hands a pending request to the user (worker_escalate): re-emitted with `escalated` and `reason`. False when settled, unknown or escalated already. */
@@ -1163,339 +517,27 @@ export class Session {
   }
 
   /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. `by`: set only by orchestration; an escalated question refuses it. */
-  answer(requestId: string, answers: Record<string, string>, by?: "coordinator"): boolean {
+  answer(requestId: string, answers: Record<string, string>, by?: "coordinator", choices?: Record<string, string[]>): boolean {
     const req = this.pending.get(requestId);
     if (req?.part.type !== "question" || (by && req.part.escalated)) return false;
-    // The SDK docs: updatedInput must carry the original questions next to the answers.
-    return this.settle(requestId, { answers, ...(by ? { by } : {}) }, { behavior: "allow", updatedInput: { questions: req.part.questions, answers } });
+    req.reply({ kind: "answer", answers, ...(choices && { choices }) });
+    return this.settle(requestId, { answers, ...(by ? { by } : {}) }, true);
   }
 
-  /** A cancelled permission request gets decision "cancelled"; a cancelled question settles without answers. */
-  private cancel(requestId: string, message: string) {
-    const done = this.pending.get(requestId)?.part.type === "permission_request" ? { decision: "cancelled" as PermissionDecision } : {};
-    this.settle(requestId, done, { behavior: "deny", message });
-  }
-
-  private settle(requestId: string, done: Partial<PermissionPart> | Partial<QuestionPart>, result: PermissionResult) {
+  /** `allowed`: the answer lets the tool run (a file may change: the tier epoch moves). The Engine's reply was sent before. */
+  private settle(requestId: string, done: Partial<PermissionPart> | Partial<QuestionPart>, allowed: boolean) {
     const req = this.pending.get(requestId);
     if (!req) return false;
     this.pending.delete(requestId);
-    if (result.behavior === "allow") this.bump();
+    if (allowed) this.bump();
     this.emit({ ...req.part, ...done, settled: true } as Part);
     if (!this.pending.size && this.state === "needs_input") this.setState("running");
-    req.resolve(result);
     return true;
   }
 
-  private async drive(q: Query) {
-    // The session the query's messages belong to: a /clear hands the query to a new one.
-    let s: Session = this;
-    let generation = this.generation;
-    // After a conversation_reset the CLI writes a new transcript, named by the session_id of its next messages (not by
-    // new_conversation_id; development-docs/GH-52/probe-clear.log, CLI 2.1.285).
-    let reset: SDKConversationResetMessage | undefined;
-    try {
-      for await (const m of q) {
-        if (generation !== s.generation) return;
-        if (m.type === "conversation_reset") reset = m;
-        else if (reset && m.session_id && m.session_id !== s.id) {
-          s = s.handOver(m.session_id, reset.user_message_uuid);
-          generation = s.generation;
-          reset = undefined;
-        }
-        this.startSpan?.end();
-        this.startSpan = undefined;
-        s.receive(m, q);
-      }
-      if (generation === s.generation) s.setState("closed");
-    } catch (err) {
-      if (generation !== s.generation) return;
-      console.error(`session ${s.id} failed:`, err);
-      s.emit({ type: "raw", id: randomUUID(), message: { error: String(err) } });
-      s.setState("error");
-    } finally {
-      this.startSpan?.end();
-      this.startSpan = undefined;
-      // Nothing waits for these answers any more, and no call of this query runs.
-      for (const id of [...s.pending.keys()]) s.cancel(id, "Session ended");
-      // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
-      if (generation === s.generation) {
-        s.tasks.clear();
-        for (const part of s.adapter.endCalls()) s.emit(part);
-      }
-    }
-  }
 
-  /** Edit/Write call id -> file_path, until its result arrives. */
-  private editCalls = new Map<string, string>();
-  /** Reports the text an Edit or Write replaced (`tool_use_result.originalFile`, the data the adapter reads for the changes tab). */
-  private trackEdits(m: SDKMessage) {
-    if (m.type === "assistant") {
-      for (const b of m.message.content) {
-        if (b.type !== "tool_use" || (b.name !== "Edit" && b.name !== "Write")) continue;
-        const path = (b.input as { file_path?: unknown }).file_path;
-        if (typeof path === "string") this.editCalls.set(b.id, path);
-      }
-    } else if (m.type === "user" && !("isReplay" in m && m.isReplay) && Array.isArray(m.message.content)) {
-      const original = (m.tool_use_result as { originalFile?: unknown } | undefined)?.originalFile;
-      const results = m.message.content.filter((b) => b.type === "tool_result");
-      for (const b of results) {
-        const path = this.editCalls.get(b.tool_use_id);
-        this.editCalls.delete(b.tool_use_id);
-        // One tool_use_result per message: with several results it cannot be told which one it belongs to.
-        if (path && results.length === 1 && !b.is_error && typeof original === "string") this.opts.onFileEdit?.(path, original);
-      }
-    }
-  }
-
-  /** One SDK message of this session's live query. */
-  private receive(m: SDKMessage, q: Query) {
-    this.received++;
-    this.receivedAt = Date.now();
-    // Compaction and a prompt hook run before the first reply of a healthy turn: they count, so no_start does not fire on them.
-    if (["assistant", "result", "stream_event", "tool_progress"].includes(m.type) || (m.type === "system" && (m.subtype === "status" || m.subtype === "compact_boundary" || (m.subtype === "hook_started" && m.hook_event === "UserPromptSubmit")))) this.progress++;
-    this.armStale();
-    if ((m.type === "user" || m.type === "assistant") && m.uuid) {
-      this.known.add(m.uuid);
-      this.own.add(m.uuid);
-      if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
-    }
-    if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
-    if (this.opts.onFileEdit) this.trackEdits(m);
-    // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
-    // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
-    if (m.type === "user" && "isReplay" in m && m.isReplay) {
-      if (this.state === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.setState("running");
-      return;
-    }
-    if (m.type === "assistant" && !m.parent_tool_use_id) this.lastAssistant = m.uuid;
-    // The CLI's own turn (answer to a task notification) starts without a prompt: its first main-chain message (a slow
-    // first answer streams before the assistant message) sets running until its result.
-    if ((m.type === "assistant" || m.type === "stream_event") && !m.parent_tool_use_id && this.state === "idle") {
-      clearTimeout(this.cliTurnTimer);
-      this.setState("running");
-    }
-    // A run SendMessage resumed: its task messages name the SendMessage call; the adapter knows the task's Agent call.
-    // An ambient task is no activity (SDK: hosts exclude it from activity indicators), e.g. the comment monitor an Artifact
-    // publish arms: it lives while the artifact is watched, so counting it kept the session working for good (GH-239).
-    if (m.type === "system" && m.subtype === "task_started") {
-      const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
-      if (id && m.ambient) this.ambientTasks.set(m.task_id, id);
-      else if (id) this.tasks.set(id, m.task_id);
-    }
-    if (m.type === "system" && m.subtype === "background_tasks_changed") this.levelChanged(m.tasks);
-    if (m.type === "system" && m.subtype === "status") this.compacting = m.status === "compacting";
-    if (m.type === "system" && m.subtype === "compact_boundary") this.compacting = false;
-    if (m.type === "system" && m.subtype === "hook_started") this.hooks.add(m.hook_id);
-    if (m.type === "system" && m.subtype === "hook_response") this.hooks.delete(m.hook_id);
-    if (m.type === "system" && m.subtype === "task_notification") {
-      const id = this.adapter.taskCall(m.task_id) ?? m.tool_use_id;
-      if (id) this.tasks.delete(id);
-      this.ambientTasks.delete(m.task_id);
-      // A stopped task (Kill, Stop agent) gets no turn of its own while the session is idle: the CLI hands the notice to Claude with the next message (probe, GH-442).
-      this.cliTurn = m.status !== "stopped";
-      // Idle: `working` may end now. The CLI's own turn, if any, shows running from its first assistant message.
-      if (this.state === "idle") this.setState("idle");
-      // ponytail: a stopped or killed task may get no CLI turn, so no result clears cliTurn; give up after 10 s. Upgrade: clear on a CLI signal if one exists.
-      clearTimeout(this.cliTurnTimer);
-      this.cliTurnTimer = setTimeout(() => {
-        if (this.cliTurn && this.state === "idle") {
-          this.cliTurn = false;
-          this.setState("idle");
-        }
-      }, CLI_TURN_WAIT_MS).unref();
-    }
-    // The CLI changes the mode itself too (plan approved, "all edits this session"); init and status carry it.
-    if (m.type === "system" && (m.subtype === "init" || m.subtype === "status") && m.permissionMode) this.setMode(m.permissionMode);
-    // A CLI started while the setting was on goes on suggesting after it is turned off: no new chip then.
-    const late = m.type === "prompt_suggestion" && !this.opts.promptSuggestions?.();
-    if (!late) for (const part of this.adapter.convert(m)) this.emit(part);
-    if (m.type === "prompt_suggestion" && !late) this.suggested = true;
-    if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
-    if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.resetsAt) this.limitResetsAt = m.rate_limit_info.resetsAt * 1000;
-    if (m.type === "assistant" && !m.parent_tool_use_id && m.error === "rate_limit") this.limitHit = true;
-    if (m.type === "result") {
-      this.cliTurn = false;
-      this.compacting = false;
-      this.hooks.clear();
-      this.setState("idle");
-      const hit = this.limitHit, at = this.limitResetsAt;
-      this.limitHit = false;
-      this.limitResetsAt = undefined;
-      if (hit) this.opts.onLimitStop?.(this.id, at);
-      // Not on a query the login change just dropped.
-      if (this.query === q) void this.opts.plan?.refresh(q);
-      if (this.syncDeferred && !this.busy()) {
-        this.syncDeferred = false;
-        void this.sync();
-      }
-    }
-    if (m.type === "result" || (m.type === "system" && m.subtype === "compact_boundary")) void this.refreshUsage();
-  }
-
-  /**
-   * /clear (SDK conversation_reset; also plan mode exit with clear context): the CLI goes on in a new transcript `id`. A new
-   * session takes over the live query, its state, model, mode and effort; this one keeps its history without the /clear prompt
-   * (`clearId`; its transcript does not record it), and its next prompt resumes its own transcript in a CLI of its own.
-   */
-  private handOver(id: string, clearId: string | undefined): Session {
-    const heir = Session.restore(id, this.cwd, [], { ...this.opts, model: this.model, permissionMode: this.permissionMode, effort: this.effort });
-    heir.cleared = true;
-    heir.uploadOwner = this.uploadOwner;
-    // Background calls (shells, subagent runs) still run in the CLI: the heir owns them (shells list, Stop agent, their
-    // notification); here they end as a restore of this transcript shows them.
-    for (const part of this.adapter.endCalls(true)) this.emit(part);
-    for (const call of this.adapter.openCalls()) {
-      heir.ownCalls.add(call.id);
-      heir.emit(call);
-    }
-    // A command moved to the background keeps running here (list, Kill); its end notice is dropped: the heir's CLI does not know it.
-    for (const b of this.bashShells.values()) b.cleared = true;
-    // A notice queued before `cleared` was set (the command ended during the /clear turn) would start a CLI turn here at the setState below.
-    this.bashNotices = [];
-    heir.tasks = this.tasks;
-    heir.taskSessions = [...this.taskSessions, this.id];
-    this.tasks = new Map();
-    heir.backgroundLevel = this.backgroundLevel;
-    heir.ambientTasks = this.ambientTasks;
-    this.backgroundLevel = new Set();
-    this.ambientTasks = new Map();
-    // The heir runs in the CLI that holds the grants; this session's old transcript resumes in a new CLI with them too.
-    heir.grants = [...this.grants];
-    // The CLI's cost total and command list carry over; this session starts over like a restored one.
-    heir.adapter = this.adapter;
-    this.adapter = createAdapter({ resumed: true });
-    heir.query = this.query;
-    heir.input = this.input;
-    heir.driving = this.driving;
-    heir.owner = this.owner;
-    if (heir.owner) heir.owner.session = heir;
-    this.query = this.driving = this.owner = undefined;
-    this.input = new InputQueue();
-    heir.setState(this.state);
-    heir.settingsChanged([]);
-    this.opts.onCleared?.(heir, this);
-    if (clearId && this.checkpoints.has(clearId)) this.cut(clearId);
-    this.emit({ type: "session_cleared", id: randomUUID(), sessionId: id });
-    this.setState("idle");
-    return heir;
-  }
-
-  /**
-   * Logs a context_usage part from `getContextUsage()`. A session without a query (restored, or after a conversation rewind)
-   * asks a throwaway query resumed on its transcript, at the rewind's fork point if any; persistSession: false, else the CLI
-   * appends a cost-state line on close and the bumped mtime moves the session to the top of the list. "summary": no
-   * token-count requests. A queued throwaway is dropped when the session got a real query or a newer request meanwhile.
-   * A failed or timed-out read is logged; the meter keeps its last value (none for a restored session).
-   */
-  private async refreshUsage() {
-    const request = ++this.usageRequest;
-    const read = async (q: Query) => {
-      const u = await q.getContextUsage({ detail: "summary" });
-      if (request === this.usageRequest) this.emit({ type: "context_usage", id: "context_usage", usage: contextUsage(u) });
-    };
-    try {
-      if (this.query) return await read(this.query);
-      await queued(async () => {
-        if (this.query || request !== this.usageRequest) return;
-        const model = this.model === "default" ? undefined : this.model;
-        // A new session before its first prompt has no transcript: the window of a fresh conversation.
-        const at = this.started ? { resume: this.id, resumeSessionAt: this.resumeAt } : {};
-        await withQuery(read, this.opts.query, { ...at, persistSession: false, cwd: this.cwd, model });
-      });
-    } catch (err) {
-      console.error(`session ${this.id}: context usage failed:`, err);
-    }
-  }
-
-  /** Commands and skills of a new or restored session before its first prompt (the CLI's start lists them once it runs). */
-  private async loadCommands() {
-    if (this.commandsAsked || Date.now() < this.commandsRetryAt) return;
-    this.commandsAsked = true;
-    try {
-      const list = await queued(async () => (this.query ? undefined : withQuery((q) => q.supportedCommands(), this.opts.query, { cwd: this.cwd, persistSession: false })));
-      if (list && !this.query) this.adapter.commands(list).forEach((p) => this.emit(p));
-    } catch (err) {
-      this.commandsAsked = false;
-      this.commandsRetryAt = Date.now() + 60_000;
-      console.error(`session ${this.id}: supportedCommands failed:`, err);
-    }
-  }
-
-  /**
-   * The CLI's level of live background tasks (REPLACE semantics; a foreground run is in none). A tracked task it flags ambient
-   * ends now (an ambient one it no longer flags is tracked again); one it named before and names no more ends CLI_TURN_WAIT_MS
-   * later unless its task_notification ended it first or it is back (the level usually comes first; ending it at once would
-   * flash idle before the CLI's own turn). GH-239: a missed bookend must not keep the session working.
-   */
-  private levelChanged(list: { task_id: string; ambient?: boolean }[]) {
-    const ambient = new Set(list.filter((t) => t.ambient).map((t) => t.task_id));
-    const live = new Set(list.filter((t) => !t.ambient).map((t) => t.task_id));
-    const gone = [...this.tasks].filter(([, task]) => this.backgroundLevel.has(task) && !live.has(task) && !ambient.has(task));
-    this.backgroundLevel = live;
-    let changed = false;
-    for (const [call, task] of this.tasks)
-      if (ambient.has(task)) {
-        this.tasks.delete(call);
-        this.ambientTasks.set(task, call);
-        changed = true;
-      }
-    for (const [task, call] of this.ambientTasks)
-      if (live.has(task)) {
-        this.ambientTasks.delete(task);
-        this.tasks.set(call, task);
-        changed = true;
-      }
-    if (changed && this.state === "idle") this.setState("idle");
-    if (!gone.length) return;
-    setTimeout(() => {
-      let late = false;
-      // Still the same task of that call (not a new run started on it), and not named again.
-      for (const [call, task] of gone) if (this.tasks.get(call) === task && !this.backgroundLevel.has(task)) late = this.tasks.delete(call);
-      if (late && this.state === "idle") this.setState("idle");
-    }, CLI_TURN_WAIT_MS).unref();
-  }
-
-  /** Arms (running, nothing pending) or clears the stale-turn check. */
-  private armStale() {
-    clearTimeout(this.staleTimer);
-    if (this.state === "running" && !this.pending.size) this.staleTimer = setTimeout(() => void this.checkStale(), STALE_TURN_MS).unref();
-  }
-
-  /**
-   * Safety net (GH-239): a running turn whose result the session missed. The turn has ended when the CLI reports no turn of the
-   * session (an SDK CLI's sessions file says busy for its whole turn: transcript.ts cliTurnRunning) and the transcript ends with a
-   * reply that ended the turn. Not while the CLI compacts or a hook runs: both are silent and leave the transcript as it was.
-   * Quiet checks (STALE_TURN_MS after the last stream message) must find this twice, with the same transcript size and no message
-   * between; Stop (`now`) once.
-   */
-  private async checkStale(now = false) {
-    const { transcriptEnd, cliTurnRunning } = this.opts;
-    const at = this.received;
-    const candidate = () => this.state === "running" && !this.pending.size && at === this.received;
-    if (!candidate() || !transcriptEnd || !cliTurnRunning) return;
-    if (!now && (this.compacting || this.hooks.size)) return this.armStale();
-    let end: TranscriptEnd | undefined;
-    if (!cliTurnRunning(this.id)) {
-      try {
-        end = await transcriptEnd(this.id, this.cwd);
-      } catch (err) {
-        console.error(`session ${this.id}: reading the transcript end failed:`, err);
-      }
-    }
-    // A stream message, a permission request or the turn's end came during the read.
-    if (!candidate()) return;
-    const ended = !!end?.last && end.last.type === "assistant" && !turnOpen(end.last);
-    const seen = this.staleSeen;
-    this.staleSeen = ended ? { size: end!.size, received: at } : undefined;
-    if (!ended || (!now && (seen?.size !== end!.size || seen.received !== at))) return void (now || this.armStale());
-    console.warn(`session ${this.id}: the CLI ended the turn without a result the session saw; idle again`);
-    this.staleSeen = undefined;
-    this.cliTurn = false;
-    this.setState("idle");
-  }
-
-  private setState(state: SessionState) {
+  /** Engine use. */
+  setState(state: SessionState) {
     this.state = state;
     if (state === "running" && this.limitStopped) {
       this.limitStopped = false;
@@ -1505,11 +547,9 @@ export class Session {
       this.suggested = false;
       this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
     }
-    this.armStale();
+    this.run.beforeStateEvent();
     this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
-    if (state === "idle") this.flushBashNotices();
-    // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
-    if (state === "idle" && this.staleLogin && this.releaseQuery()) this.staleLogin = false;
+    if (state === "idle") this.run.idle();
   }
 
   private bump() {
@@ -1517,7 +557,8 @@ export class Session {
     this.epochAt = performance.now();
   }
 
-  private emit(part: Part) {
+  /** Engine use. */
+  emit(part: Part) {
     // A tool call or bash command that ended may have changed files: pending tiers are stale.
     if ((part.type === "tool_call" || part.type === "bash") && part.status !== "running" && part.status !== "pending") this.bump();
     const seq = ++this.lastSeq;
@@ -1536,137 +577,5 @@ export class Session {
   }
 }
 
-// The CLI's echo of a model switch, with the resolved model ID in parentheses.
-const SET_MODEL = /^<local-command-stdout>Set model to `.*\(([^()\s]+)\)`<\/local-command-stdout>$/s;
-
-/** Model ID a transcript last ran on (main-thread reply) or switched to (model switch echo); undefined when it has none. */
-export function transcriptModel(history: SessionMessage[]): string | undefined {
-  let model: string | undefined;
-  for (const m of history) {
-    const { model: used, content } = m.message as { model?: unknown; content?: unknown };
-    // "<synthetic>": a CLI-made reply (API error), no model ran.
-    if (m.type === "assistant" && !m.parent_tool_use_id && typeof used === "string" && !used.startsWith("<")) model = used;
-    if (m.type === "user" && typeof content === "string") model = SET_MODEL.exec(content)?.[1] ?? model;
-  }
-  return model;
-}
-/** How long a task notification waits for the CLI's own turn before the session stops counting one. */
-export const CLI_TURN_WAIT_MS = 10_000;
-
-
-/**
- * A terminal CLI turn without transcript growth for this long counts as ended (a CLI that died mid-turn writes no end), unless
- * a running CLI process reports the session busy or waiting (a long tool, a terminal permission prompt): then it is checked again.
- */
-export const EXTERNAL_TURN_QUIET_MS = 120_000;
-
-/** A running turn without a stream message for this long is checked for an end the session missed (GH-239). */
-export const STALE_TURN_MS = 120_000;
-/** After Stop, a turn without its result for this long gets the stale check at once (GH-239). */
-export const INTERRUPT_GRACE_MS = 5_000;
-
-// User text that ends a turn: a local command's output, an interrupt.
-const TURN_END = /^(<local-command-std(out|err)>|<bash-(input|stdout)>|\[Request interrupted by user)/;
-
 /** A part that carries its whole state so far, so the next event of its id makes it obsolete in the log (GH-139). */
 const replaceable = (p: Part) => ((p.type === "assistant_text" || p.type === "thinking") && p.streaming) || (p.type === "bash" && p.status === "running");
-
-/** Whether a transcript's last main-chain message leaves a turn open: a prompt, a tool result, a reply calling a tool or cut mid-stream. */
-function turnOpen(m: SessionMessage) {
-  const { content, stop_reason } = (m.message ?? {}) as { content?: unknown; stop_reason?: unknown };
-  if (m.type === "assistant") return stop_reason === "tool_use" || stop_reason == null;
-  if (typeof content === "string") return !TURN_END.test(content);
-  return !(Array.isArray(content) && content.some((b) => (b as { type?: unknown })?.type === "text" && TURN_END.test((b as { text?: string }).text ?? "")));
-}
-
-/** Text of a `<task-notification>` user message; "" for any other message. */
-function noticeText(m: SessionMessage) {
-  const content = (m.message as { content?: unknown } | undefined)?.content;
-  return m.type === "user" && typeof content === "string" && content.startsWith("<task-notification>") ? content : "";
-}
-
-/** Call ID (`<tool-use-id>`) of a `<task-notification>` user message; undefined for any other message. */
-function noticeCall(m: SessionMessage) {
-  return /<tool-use-id>(.*?)<\/tool-use-id>/.exec(noticeText(m))?.[1];
-}
-
-/** Index of the last message matching `pred`, -1 when none (Array#findLastIndex is ES2023). */
-function lastIndex(ms: SessionMessage[], pred: (m: SessionMessage) => boolean) {
-  for (let i = ms.length - 1; i >= 0; i--) if (pred(ms[i]!)) return i;
-  return -1;
-}
-
-/** Tail of the daemon-wide queue of throwaway queries: one throwaway CLI at a time (a reload subscribes every restored tab at once, FIX-LEAK). */
-let throwawayTail: Promise<unknown> = Promise.resolve();
-
-/** Runs `task` in the daemon-wide throwaway queue. */
-function queued<T>(task: () => Promise<T>): Promise<T> {
-  const run = throwawayTail.then(task);
-  throwawayTail = run.catch(() => {});
-  return run;
-}
-
-const contextUsage = (u: SDKControlGetContextUsageResponse) => ({
-  totalTokens: u.totalTokens,
-  maxTokens: u.maxTokens,
-  percentage: u.percentage,
-  categories: u.categories.flatMap(({ name, tokens, kind }) => (kind === "deferred" ? [] : [{ name, tokens, kind }])),
-});
-
-/** A throwaway CLI that does not answer within this time is closed (killed) and the request fails. */
-export const THROWAWAY_TIMEOUT_MS = 30_000;
-
-/**
- * Control requests outside a live query (supportedModels(), plan usage, context usage, commands) need a query; this one
- * gets no prompt and is closed right after the answer or after THROWAWAY_TIMEOUT_MS. disableAllHooks: viewing a session
- * must not run the user's hooks (SessionStart fires on every CLI start, resume included; verified with SDK 0.3.285).
- */
-export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> {
-  const q = openQuery(query, options);
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer from the CLI within ${THROWAWAY_TIMEOUT_MS} ms`)), THROWAWAY_TIMEOUT_MS);
-  });
-  try {
-    return await Promise.race([fn(q), timeout]);
-  } finally {
-    clearTimeout(timer);
-    q.close();
-  }
-}
-
-/** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
-export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
-  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: claudeEnv(), settings: { disableAllHooks: true }, ...options } });
-
-/** withQuery() in the daemon-wide throwaway queue. */
-export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
-
-export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
-
-
-/** The CLI's rule string of a rule value: `\`, `(` and `)` in the content are escaped with `\` (probed in the CLI 2.1.x binary). */
-const ruleString = ({ toolName, ruleContent }: { toolName: string; ruleContent?: string }) =>
-  ruleContent ? `${toolName}(${ruleContent.replace(/[\\()]/g, "\\$&")})` : toolName;
-
-const sessionRules = (g: PermissionUpdate[]) => g.flatMap((u) => (u.type === "addRules" && u.behavior === "allow" ? u.rules.map(ruleString) : []));
-
-const sessionDirs = (g: PermissionUpdate[]) => g.flatMap((u) => (u.type === "addDirectories" ? u.directories : []));
-
-/** Async iterable fed by prompt(); stays open for the session lifetime (streaming input mode). */
-class InputQueue implements AsyncIterable<SDKUserMessage> {
-  private items: SDKUserMessage[] = [];
-  private wake?: () => void;
-
-  push(m: SDKUserMessage) {
-    this.items.push(m);
-    this.wake?.();
-  }
-
-  async *[Symbol.asyncIterator]() {
-    for (;;) {
-      while (this.items.length) yield this.items.shift()!;
-      await new Promise<void>((r) => (this.wake = r));
-    }
-  }
-}

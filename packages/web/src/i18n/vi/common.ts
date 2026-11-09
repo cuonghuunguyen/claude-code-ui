@@ -3,6 +3,7 @@ import type { Messages } from "../../i18n.ts";
 export default {
   "language.label": "Ngôn ngữ",
   "language.hint": "Ngôn ngữ của ứng dụng. Hệ thống: theo trình duyệt. Lưu trong trình duyệt này.",
+  "engine.unsupported": "Engine của phiên này không hỗ trợ",
   "language.system": "Hệ thống",
   "common.fileName.empty": "Cần nhập tên.",
   "common.fileName.dots": "“.” và “..” không phải là tên.",

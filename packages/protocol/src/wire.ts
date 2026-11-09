@@ -1,15 +1,51 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
-import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { Effort, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
+import type { Effort, EffortLevel, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
 import type { HistSummary } from "./histogram.ts";
 
-export type { ModelInfo };
+/** A model an Engine offers (models.list). `value` goes to session.setModel; "default" = the Engine's default. */
+export type ModelInfo = {
+  value: string;
+  /** The model id an alias `value` resolves to. */
+  resolvedModel?: string;
+  displayName: string;
+  description: string;
+  /** Picker group label (OpenCode: the provider name). */
+  group?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: EffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+  supportsFastMode?: boolean;
+  supportsAutoMode?: boolean;
+};
 
 /** All permission modes, in picker order. Shift+Tab cycles them without dontAsk (Claude Code's order). */
 export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
-/** The modes offered now: auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
-export const permissionModesFor = ({ allowBypass, supportsAuto }: { allowBypass?: boolean; supportsAuto?: boolean }) =>
-  PERMISSION_MODES.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));
+/** The agent runtimes a session can run on (ADR 0012); the engine of a session follows its id (UUID = claude, `ses_` = opencode). */
+export const ENGINES = ["claude", "opencode"] as const;
+export type Engine = (typeof ENGINES)[number];
+/** Oldest OpenCode this daemon works with: its API was checked against 1.18.34. Raise when a later feature needs newer endpoints. */
+export const OPENCODE_MIN = "1.18.0";
+/** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
+export type EngineCapabilities = {
+  /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
+  permissionModes: PermissionMode[];
+  effort: boolean;
+  rewind: boolean;
+  fork: boolean;
+  steering: boolean;
+  slashCommands: boolean;
+  planMeter: boolean;
+  account: boolean;
+  contextUsage: boolean;
+  /** Bash mode (`!`): shell commands run in the session cwd. */
+  shell: boolean;
+};
+export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
+/** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
+export const capabilitiesOf = (s: { capabilities?: EngineCapabilities }) => s.capabilities ?? ALL_CAPABILITIES;
+/** The modes offered now, of `modes` (the Engine's own): auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
+export const permissionModesFor = ({ allowBypass, supportsAuto, modes = PERMISSION_MODES }: { allowBypass?: boolean; supportsAuto?: boolean; modes?: PermissionMode[] }) =>
+  modes.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
 /** Prefix of the user message the daemon sends a coordinator on worker events; the web app shows it as a chip. */
 export const ORCHESTRATION_NOTICE = "[claude-ui orchestration notice]";
@@ -26,6 +62,10 @@ export type SessionInfo = {
   permissionMode: PermissionMode;
   effort: Effort;
   permissionModes: PermissionMode[];
+  /** What the session's Engine supports; absent (an older daemon) = everything (capabilitiesOf). */
+  capabilities?: EngineCapabilities;
+  /** The Engine the session runs on; absent (an older daemon) = claude. */
+  engine?: Engine;
 };
 /**
  * A `session.list` entry: a transcript from `listSessions()` (terminal CLI sessions too) or a session of this daemon run.
@@ -44,11 +84,23 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
   /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. */
-  | { type: "session.create"; cwd: string; model?: string; draft?: string }
+  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
+  /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
+  | { type: "opencode.status" }
+  /** Providers of the OpenCode server with their login methods (starts the server). Reply OpenCodeProvidersResult. */
+  | { type: "opencode.providers" }
+  /** `api` method: stores `key` (`inputs` = the method's prompt values), reply OpenCodeProvidersResult. `oauth` method: reply OpenCodeLoginStart. `method` = index in the provider's `methods`. The daemon never logs or keeps `key`. */
+  | { type: "opencode.login"; provider: string; method: number; key?: string; inputs?: Record<string, string> }
+  /** Ends an OAuth login: waits for the browser (`auto`) or sends `code`. Reply OpenCodeProvidersResult; error `cancelled` after opencode.loginCancel. */
+  | { type: "opencode.loginFinish"; provider: string; method: number; code?: string }
+  /** Stops the daemon's wait of a pending OAuth login; reply `{}`. */
+  | { type: "opencode.loginCancel"; provider: string }
+  /** Removes the saved login of a provider; reply OpenCodeProvidersResult. */
+  | { type: "opencode.logout"; provider: string }
   /** The mode a new session in `cwd` starts in: Claude settings `permissions.defaultMode` (local > project > user), when offered; else "default". */
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
-  | { type: "session.commands"; cwd: string }
+  | { type: "session.commands"; cwd: string; engine?: Engine }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   /** `background`: follow only (unread markers); it does not keep the session's CLI from the idle close (docs/spec.md "Idle close"). */
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string }
@@ -64,7 +116,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
-  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp.
+  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`): no `user_text` echo follows, the client drops its pending bubble.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
   /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
   | { type: "session.bash"; sessionId: string; command: string }
@@ -111,9 +163,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
       message?: string;
       updatedInput?: Record<string, unknown>;
     }
-  /** `answers`: question text -> answer. First answer wins, like permission.respond. */
-  | { type: "question.respond"; requestId: string; answers: Record<string, string> }
-  | { type: "models.list" }
+  /** `answers`: question text -> answer. First answer wins, like permission.respond. `choices`: question text -> the chosen option labels, then the Other text; optional, an Engine that needs the structure of a multi-select answer (OpenCode) uses it, Claude ignores it. */
+  | { type: "question.respond"; requestId: string; answers: Record<string, string>; choices?: Record<string, string[]> }
+  | { type: "models.list"; engine?: Engine; cwd?: string }
   | { type: "session.list" }
   /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
   | { type: "session.ids" }
@@ -472,6 +524,8 @@ export type ServerMessage =
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */
   | { type: "terminal.exit"; terminalId: string; exitCode: number }
+  /** To every connection when OpenCode read a changed provider set (after a login or logout): its model list is stale. */
+  | { type: "opencode.providersChanged" }
   /** To every connection of this daemon after `settings.set`. */
   | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; claudeAccounts?: ClaudeAccountInfo[] }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
@@ -508,6 +562,8 @@ export const MAX_SEARCH_CHARS = 200;
 
 export type CreateResult = { session: SessionInfo };
 /** `from`: the Aside question's user_text part id: the popup subscribes from it (only the Aside's own messages). */
+/** Reply of `session.prompt`: `local` = the Engine ran the text as one of its own commands and echoes nothing. */
+export type PromptResult = { local?: true };
 export type AsideOpenResult = { session: SessionInfo; title: string; from: string };
 /**
  * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
@@ -518,6 +574,16 @@ export type AsideOpenResult = { session: SessionInfo; title: string; from: strin
 export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort. */
 export type SetModelResult = { session: SessionInfo };
+/** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */
+export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; path?: string; message?: string };
+export type OpenCodeAuthPrompt = { type: "text"; key: string; message: string; placeholder?: string; when?: { key: string; op: "eq" | "neq"; value: string } } | { type: "select"; key: string; message: string; options: { label: string; value: string; hint?: string }[]; when?: { key: string; op: "eq" | "neq"; value: string } };
+export type OpenCodeAuthMethod = { type: "api" | "oauth"; label: string; prompts?: OpenCodeAuthPrompt[] };
+/** `source`: where the connection comes from; only `api` and `custom` (OAuth, plugin) can be logged out. */
+export type OpenCodeProvider = { id: string; name: string; connected: boolean; source?: "env" | "config" | "custom" | "api"; methods: OpenCodeAuthMethod[] };
+/** opencode.providers, and the login and logout requests that end with a changed list. */
+export type OpenCodeProvidersResult = { providers: OpenCodeProvider[] };
+/** opencode.login with an OAuth method: open `url`; `auto` = OpenCode finishes by itself, `code` = the user pastes a code. */
+export type OpenCodeLoginStart = { url: string; mode: "auto" | "code"; instructions: string };
 /** session.defaultMode. */
 export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
@@ -552,6 +618,10 @@ export type ListResult = {
   projects: string[];
   recentProjects: RecentProject[];
   permissionModes: PermissionMode[];
+  /** Every Engine of this daemon with its flags and the modes a new session starts with; the new-session tab reads the selected one. Absent (an older daemon): claude only. */
+  engines?: { engine: Engine; capabilities: EngineCapabilities; permissionModes: PermissionMode[] }[];
+  /** A hub with sides: `engines` of each ready side, by side id (a side's daemon may allow other modes, e.g. bypass). The new-session tab of a folder of that side reads its entry; absent: use `engines`. */
+  sideEngines?: Record<string, NonNullable<ListResult["engines"]>>;
   /** A daemon with sides (WSL distros, Docker containers): every side, this daemon's own ("local": Windows, Linux or macOS) first. Absent: no sides. */
   sides?: SideInfo[];
   /**
@@ -682,7 +752,7 @@ export type RecentProject = { cwd: string; sessionCount: number; lastActivity: n
 export type ProjectOpenResult = { cwd: string };
 export type FsListResult = { entries: FsEntry[] };
 /** Dry run of a code rewind: files it would restore (empty = no code options); `conversation` false for the first prompt. */
-export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean };
+export type RewindPreview = { filesChanged: string[]; insertions: number; deletions: number; conversation: boolean; /** The modes the engine offers; absent = all the preview allows. */ modes?: RewindMode[] };
 /** Paths relative to the searched cwd, best first; folders end with `/`. */
 export type FsSearchResult = { paths: string[] };
 export type FsReadResult = { content: string; mtime: number };
@@ -917,7 +987,7 @@ export const BACK_REMIND_MAX_MS = 7 * 86_400_000;
 /** First line of the brief turn's prompt; the web app folds a user_text that starts with it. */
 export const BACK_TAG = /^<claude-ui-brief part="([^"]+)"\/>$/;
 
-export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number] }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
+export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; coordinatorPermissions: boolean; workerMode: WorkerModeSetting; /** Off: a worker's finished, needs-input and error notify nobody but its coordinator; an escalated request still does (GH-387). */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number]; /** The Engine of the last session created: the new-session tab starts with it. */ engine: Engine }; /** OpenCode engine (docs/spec.md "OpenCode engine"): `path` of its binary, "" = look it up on PATH. */ opencode: { path: string }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
   /** Performance monitor (GH-272): measures the daemon; off stops every observer and the sampling. */

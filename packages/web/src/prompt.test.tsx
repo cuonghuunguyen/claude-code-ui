@@ -2,7 +2,7 @@
 import { Activity, act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ModelInfo } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, type ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
@@ -437,7 +437,7 @@ it("question dock pages through the questions: Next, Back, Submit sends every an
   await act(async () => button("Next").click());
   await act(async () => option("npm").click());
   await act(async () => button("Submit").click());
-  expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" });
+  expect(onAnswer).toHaveBeenCalledWith({ "A?": "pnpm", "B?": "npm" }, { "A?": ["pnpm"], "B?": ["npm"] });
 });
 
 it("the context meter sits in the prompt box toolbar once the session reports its usage", async () => {
@@ -719,6 +719,13 @@ it("GH-165: a running turn has exactly one Stop, in the prompt box; the header h
   expect($("session-header")).not.toBeNull();
 });
 
+it("the session header shows a static engine tag next to the project", async () => {
+  const b = await render({ session: { id: "s2", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], engine: "opencode" } });
+  const tag = b.$("session-header")!.querySelector('[data-testid="engine-tag"]')!;
+  expect(tag.textContent).toBe("OpenCode");
+  expect(tag.closest("button")).toBeNull();
+});
+
 it("GH-165: no state chip for idle, running or needs_input; error and closed keep theirs", async () => {
   for (const state of ["idle", "running", "needs_input"] as const) {
     const d = await render({}, { ...emptySession(), state });
@@ -773,6 +780,10 @@ it("GH-166: phone: the idle prompt box is one line with a short placeholder; des
     const idle = await render();
     expect(idle.box.rows).toBe(1);
     expect(idle.box.placeholder).toBe("Ask Claude…");
+    unmount();
+    unmount();
+    const oc = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"], engine: "opencode" } });
+    expect(oc.box.placeholder).toBe("Ask OpenCode…");
     unmount();
     const busy = await render({}, { ...emptySession(), state: "running" });
     expect(busy.box.placeholder).toBe("Claude is working…");
@@ -1624,4 +1635,32 @@ it("GH-505 a box in a hidden pane shows the draft written meanwhile when the pan
   activity = "visible";
   await d.rerender({});
   expect(d.box.value).toBe("mine\n\nnext");
+});
+
+// GH-656: an Engine without steering or rewind.
+const NO_STEER = { ...ALL_CAPABILITIES, steering: false, rewind: false, fork: false };
+
+it("GH-656: without steering Enter queues while a turn runs, and the button says Queue", async () => {
+  const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
+  const session = { id: "s1", cwd: "/tmp", state: "running" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default" as const], capabilities: NO_STEER };
+  const { box, $ } = await render({ onPrompt, onQueue, session }, { ...emptySession(), state: "running" });
+  await type(box, "later");
+  expect($("send")!.getAttribute("aria-label")).toContain("Queue");
+  await key(box, { key: "Enter" });
+  expect(onQueue).toHaveBeenCalledWith("later", []);
+  expect(onPrompt).not.toHaveBeenCalled();
+});
+
+it("GH-656: without rewind the button is aria-disabled with the reason, opens no panel", async () => {
+  const session = { id: "s1", cwd: "/tmp", state: "idle" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default" as const], capabilities: NO_STEER };
+  const view = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } });
+  const { el } = await render({ session }, view);
+  const btn = [...el.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === "Rewind to before this message")!;
+  expect(btn.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => btn.focus());
+  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+  expect(document.body.textContent).toContain("Not supported by this session's engine");
+  await act(async () => btn.click());
+  expect(el.querySelector('[data-testid="rewind-panel"]')).toBeNull();
 });
