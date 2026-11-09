@@ -307,23 +307,35 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       const up = await ensure();
       const url = new URL(path, `${up.url}/`);
       if (r.directory) url.searchParams.set("directory", r.directory);
-      const res = await fetch(url, {
-        method: r.method ?? "GET",
-        headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
-        body: r.body === undefined ? undefined : JSON.stringify(r.body),
-        // `timeoutMs: 0` = no timeout (a command answers when its turn ends).
-        signal: AbortSignal.any([...(r.signal ? [r.signal] : []), ...(r.timeoutMs === 0 ? [] : [AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS)])]),
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        let body: unknown;
-        try {
-          body = JSON.parse(text);
-        } catch {}
-        // The path only, never the request body: a login body holds the key.
-        throw new OpenCodeHttpError(`OpenCode ${r.method ?? "GET"} ${path} answered ${res.status}: ${text.slice(0, 300)}`, res.status, body);
-      }
-      return (text ? JSON.parse(text) : undefined) as T;
+      const work = (async () => {
+        const res = await fetch(url, {
+          method: r.method ?? "GET",
+          headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
+          body: r.body === undefined ? undefined : JSON.stringify(r.body),
+          // Only the caller's own signal aborts. A timeout never does (below).
+          signal: r.signal,
+        });
+        const text = await res.text();
+        if (!res.ok) {
+          let body: unknown;
+          try {
+            body = JSON.parse(text);
+          } catch {}
+          // The path only, never the request body: a login body holds the key.
+          throw new OpenCodeHttpError(`OpenCode ${r.method ?? "GET"} ${path} answered ${res.status}: ${text.slice(0, 300)}`, res.status, body);
+        }
+        return (text ? JSON.parse(text) : undefined) as T;
+      })();
+      // `timeoutMs: 0` = wait for as long as it takes (a command answers when its turn ends).
+      if (r.timeoutMs === 0) return work;
+      // The timeout only stops this caller from waiting: the request keeps running. OpenCode loads a folder's state (MCP servers, providers, agents,
+      // commands) on the first request that needs it and caches the result of that load, an interruption included (1.19.5): a request the client
+      // cut off during the load would leave the folder broken until its instance is disposed. See `brokenMcp` (opencode-engine.ts).
+      work.catch(() => {});
+      const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms)));
+      return Promise.race([work, late]).finally(() => clearTimeout(timer));
     },
   };
 }

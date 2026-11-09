@@ -86,6 +86,10 @@ Then("typing {string} in the prompt box does not start bash mode", async ({ page
   await expect(page.getByTestId("bash-mode")).toHaveCount(0);
 });
 
+Then("I see no notice {string}", async ({ page }, text: string) => {
+  await expect(page.getByText(text, { exact: false })).toHaveCount(0);
+});
+
 Then("the OpenCode server lists a connected orchestration MCP for the project", async ({ project }) => {
   await expect(async () => {
     const status = await opencode<Record<string, { status: string }>>("/mcp", project.path);

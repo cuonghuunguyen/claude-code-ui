@@ -22,7 +22,7 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: { name: string; data?: { message?: string } }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };

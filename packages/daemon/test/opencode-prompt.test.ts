@@ -24,6 +24,8 @@ const until = async (cond: () => boolean, ms = 8000) => {
   expect(cond()).toBe(true);
 };
 const lastOf = <T,>(a: T[], f: (x: T) => boolean): T | undefined => [...a].reverse().find(f);
+/** The warnings of a turn OpenCode ended on its own (GH-682). */
+const abortNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "notice" && p.id.includes(":aborted:")) as Extract<Part, { type: "notice" }>[];
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
@@ -226,6 +228,9 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await d.ok({ type: "session.interrupt", sessionId: s.id });
     await until(() => !!s.find("turn_interrupted") && s.states().at(-1) === "idle");
     expect(d.requests("POST", `/session/${s.id}/abort`)).toHaveLength(2);
+    // A Stop is not an abort OpenCode did on its own: no warning, no reload of the folder.
+    expect(abortNotices(s)).toHaveLength(0);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
   it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
@@ -876,6 +881,34 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     expect(json(await again.callTool({ name: "worker_list", arguments: {} })).workers).toHaveLength(1);
   });
 
+  it("with a slow MCP load the attach waits instead of timing out: no warning, the server is attached before the prompt, the turn gets its reply (GH-681)", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" } });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
+    expect(s.parts().some((p) => p.type === "notice" && p.id === `${s.id}:mcp_failed`)).toBe(false);
+    expect((await attached(d, s.id)).name).toBe(mcpName(s.id));
+    const log = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
+    expect(log.indexOf("POST /mcp")).toBeLessThan(log.indexOf(`POST /session/${s.id}/prompt_async`));
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    expect(s.parts().some((p) => p.type === "notice" && p.id.includes(":aborted:"))).toBe(false);
+  });
+
+  it("an attach that fails is a warning notice and the prompt is still sent (GH-681)", async () => {
+    const d = await boot({ script: ["text"] });
+    await on(d);
+    const s = await d.open();
+    await attached(d, s.id);
+    await d.fake("/__fail", { path: "/mcp" });
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(s.find("notice", (n) => n.id === `${s.id}:mcp_failed`)).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(1);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
   it("the mode block hides other sessions' tools, allows the own ones and asks for worker_start; tool keys map to the orchestration cards", async () => {
     const d = await boot({ script: ["text"] });
     await on(d);
@@ -948,5 +981,115 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
     expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], agent: "docs", model: { providerID: "opencode", modelID: "alpha" } });
     expect(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[w.sessionId]).toMatchObject({ agent: "docs" });
+  });
+});
+
+describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () => {
+  const on = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
+  const done = (s: { states: () => string[]; find: (t: "turn_result") => unknown }, turns = 1) => until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 10_000 + turns);
+  /** A root whose project path is known before the fake OpenCode starts (it is broken from its start). */
+  const brokenRoot = () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    return { root, env: { FAKE_OPENCODE_BROKEN: join(root, "project") } };
+  };
+
+  it("a turn OpenCode aborts on its own shows a warning notice, ends as an error turn and reloads the broken folder", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    await d.fake("/__break", { directory: d.project });
+    await s.prompt("hi");
+    await until(() => abortNotices(s).some((n) => /reloaded the folder in OpenCode\. Send the prompt again/.test(n.text)));
+    const [notice] = abortNotices(s);
+    expect(notice).toMatchObject({ id: expect.stringMatching(new RegExp(`^${s.id}:aborted:msg_selfabort_`)), level: "warning", text: expect.stringMatching(/ended this turn on its own/) });
+    await until(() => s.states().at(-1) === "idle");
+    expect(s.find("turn_result")).toMatchObject({ isError: true });
+    expect(s.find("turn_interrupted")).toBeUndefined();
+    expect(d.requests("POST", "/instance/dispose").map((r) => r.query.directory)).toEqual([d.project]);
+    // The reloaded folder works.
+    await d.fake("/__script", { files: [turn("text")] });
+    const results = s.parts().filter((p) => p.type === "turn_result").length;
+    await s.prompt("again");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length > results && s.states().at(-1) === "idle");
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.find("assistant_text")).toBeTruthy();
+  });
+
+  it("a folder with a busy OpenCode session is not reloaded; the notice says it will be", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    await d.fake("/__break", { directory: d.project });
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: "ses_other", status: { type: "busy" } } }] });
+    await s.prompt("hi");
+    await until(() => abortNotices(s).some((n) => /reloads the folder when no OpenCode turn runs in it/.test(n.text)));
+    await until(() => s.states().at(-1) === "idle");
+    expect(s.find("turn_result")).toMatchObject({ isError: true });
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("a session opened in a broken folder reloads it: the commands list arrives and the first prompt gets its reply", async () => {
+    const { root, env } = brokenRoot();
+    const d = await boot({ root, env, script: ["text"] });
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    expect(s.find("commands")!.commands.map((c) => c.name)).toContain("init");
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+    expect(d.requests("GET", "/command")).toHaveLength(2);
+    await s.prompt("hi");
+    await done(s);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(abortNotices(s)).toHaveLength(0);
+  });
+
+  it("with orchestration on, a broken folder is reloaded at open and the session's MCP server is attached after it, once", async () => {
+    const { root, env } = brokenRoot();
+    const d = await boot({ root, env, script: ["text"] });
+    await on(d);
+    const s = await d.open();
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)));
+    const order = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
+    expect(order.indexOf("POST /instance/dispose")).toBeGreaterThan(-1);
+    expect(order.indexOf("POST /instance/dispose")).toBeLessThan(order.indexOf("POST /mcp"));
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+    await s.prompt("hi");
+    await done(s);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(abortNotices(s)).toHaveLength(0);
+  });
+
+  it("requests that wait for OpenCode's MCP load are not cut off: a 4 s load breaks nothing", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" }, script: ["text"] });
+    const s = await d.open();
+    await until(() => !!s.find("commands"), 12_000);
+    await s.prompt("hi");
+    await done(s);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(abortNotices(s)).toHaveLength(0);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("with orchestration on, attach waits for a 4 s MCP load too (GET and POST /mcp are never cut off)", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" }, script: ["text"] });
+    await on(d);
+    const s = await d.open();
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)), 12_000);
+    await s.prompt("hi");
+    await done(s);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.parts().filter((p) => p.type === "notice")).toHaveLength(0);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("closing a session does not wait for the MCP disconnect and does not cut it off", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" } });
+    await on(d);
+    const s = await d.open();
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)), 12_000);
+    await d.ok({ type: "session.delete", sessionId: s.id });
+    await until(() => d.requests("POST", `/mcp/${mcpName(s.id)}/disconnect`).length === 1);
+    await new Promise((r) => setTimeout(r, 3500));
+    await d.fake("/__emit", { directory: d.project, events: [] });
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 });

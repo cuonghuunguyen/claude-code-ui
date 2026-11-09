@@ -7,9 +7,10 @@
 // POST /session/:id/shell plays turn-shell.json (a bash command run without a model call) and answers when it is done.
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
+// MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state.
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -72,6 +73,10 @@ const AUTH_METHODS = {
 };
 const waiting = new Map(); // provider -> resolve of an auto callback
 const mcp = {}; // directory -> MCP server name -> {status}
+const broken = new Set((process.env.FAKE_OPENCODE_BROKEN ?? "").split(",").filter(Boolean)); // directories in OpenCode's broken MCP state
+const MCP_LOAD_MS = Number(process.env.FAKE_OPENCODE_MCP_LOAD_MS ?? 0);
+const loads = new Map(); // directory -> its MCP load (a wait)
+let aborts = 0;
 let pendingOauth = {}; // provider -> method index of the last authorize
 
 /** Plays a node's events one by one; an abort (or another turn) ends the playback. */
@@ -90,6 +95,36 @@ async function play(node, sessionId, directory, messageID, recorded) {
     if (e.type === "permission.replied" || e.type === "question.replied") asks = asks.filter((a) => a.id !== p.requestID);
     send(directory, e);
   }
+}
+
+/** The turn of a broken folder: OpenCode aborts it at tool resolution, before the model call, and sends no session.error. */
+const selfAbort = (n) => {
+  const id = `msg_selfabort_${n}`;
+  const user = { id: "msg_USER", sessionID: "ses_ROOT", role: "user", agent: "build", time: { created: 1 } };
+  const assistant = { id, sessionID: "ses_ROOT", role: "assistant", parentID: "msg_USER", agent: "build", providerID: "opencode", modelID: "big-pickle", time: { created: 2 } };
+  const event = (type, properties) => ({ type, properties });
+  return {
+    events: [
+      event("message.updated", { sessionID: "ses_ROOT", info: user }),
+      event("session.status", { sessionID: "ses_ROOT", status: { type: "busy" } }),
+      event("message.updated", { sessionID: "ses_ROOT", info: assistant }),
+      event("message.updated", { sessionID: "ses_ROOT", info: { ...assistant, time: { created: 2, completed: 3 }, error: { name: "MessageAbortedError", data: { message: "Aborted" } } } }),
+      event("session.status", { sessionID: "ses_ROOT", status: { type: "idle" } }),
+      event("session.idle", { sessionID: "ses_ROOT" }),
+    ],
+  };
+};
+
+/** A request that waits for the folder's MCP load. False when it was answered 499 (broken folder) or its client left (that breaks the folder). */
+async function mcpGate(dir, res) {
+  const key = dir ?? "";
+  if (!broken.has(key) && MCP_LOAD_MS) {
+    if (!loads.has(key)) loads.set(key, sleep(MCP_LOAD_MS));
+    const left = new Promise((r) => res.on("close", () => r(!res.writableEnded)));
+    if (await Promise.race([loads.get(key).then(() => false), left])) return (broken.add(key), false);
+  }
+  if (!broken.has(key)) return true;
+  return (res.writeHead(499), res.end(), false);
 }
 
 const server = createServer(async (req, res) => {
@@ -113,6 +148,7 @@ const server = createServer(async (req, res) => {
       const s = sessions.find((x) => x.id === body.sessionId);
       (delete s.revert, updated(s));
     }
+    if (url.pathname === "/__break") broken.add(body.directory);
     if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
@@ -167,13 +203,16 @@ const server = createServer(async (req, res) => {
     const result = await new Promise((r) => (waiting.set(id, r), res.on("close", () => waiting.get(id) === r && waiting.delete(id))));
     return result === "success" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "failed" } });
   }
+  if (url.pathname === "/instance/dispose" && req.method === "POST") return (broken.delete(dir ?? ""), loads.delete(dir ?? ""), delete mcp[dir ?? ""], json(200, true));
   if (url.pathname === "/mcp") {
+    if (!(await mcpGate(dir, res))) return;
     const map = (mcp[dir ?? ""] ??= {});
     if (req.method === "POST") map[body.name] = { status: "connected" };
     return json(200, map);
   }
   m3 = /^\/mcp\/([^/]+)\/disconnect$/.exec(url.pathname);
-  if (m3 && req.method === "POST") return ((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true);
+  if (m3 && req.method === "POST") return (await mcpGate(dir, res)) ? (((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true)) : undefined;
+  if (url.pathname === "/command" && !(await mcpGate(dir, res))) return;
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
   if (url.pathname === "/agent") return json(200, [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
@@ -256,8 +295,9 @@ const server = createServer(async (req, res) => {
       delete s.revert;
       updated(s, dir);
     }
-    const file = scripts.shift();
-    if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
+    const file = broken.has(dir ?? "") ? undefined : scripts.shift();
+    if (broken.has(dir ?? "")) play(selfAbort(++aborts), s.id, dir, body.messageID);
+    else if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     res.writeHead(204);
     return res.end();
   }

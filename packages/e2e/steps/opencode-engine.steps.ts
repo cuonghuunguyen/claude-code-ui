@@ -1,10 +1,10 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
 import { createOpenCodeSession, opencodeEnv } from "../support/opencode.ts";
-import { runDir } from "../support/paths.ts";
+import { configHome, runDir } from "../support/paths.ts";
 import { openSettings } from "../support/ui.ts";
 import { After, Given, Then, When } from "./fixtures.ts";
 
@@ -26,6 +26,14 @@ export const openDrawer = async (page: Page) => {
   const drawer = page.getByTestId("open-drawer");
   if ((await drawer.isVisible()) && !(await page.getByTestId("sidebar").isVisible().then((v) => v && page.getByTestId("sidebar").evaluate((e) => e.getBoundingClientRect().right > 0)))) await drawer.click();
 };
+
+/** The OpenCode config of a scenario that needs an MCP server (the run's config home is shared by its OpenCode scenarios: removed after). */
+const slowConfig = () => join(configHome(runDir()), "opencode", "opencode.json");
+Given("OpenCode has an MCP server that takes 8 seconds to load", async () => {
+  mkdirSync(join(configHome(runDir()), "opencode"), { recursive: true });
+  // A local server that never answers: OpenCode gives up on it after its own `timeout`, so the folder's MCP load takes 8 s.
+  writeFileSync(slowConfig(), JSON.stringify({ mcp: { slow: { type: "local", command: [process.execPath, "-e", "setInterval(()=>{},1000)"], enabled: true, timeout: 8000 } } }));
+});
 
 Given("OpenCode is set up in a scratch project", async ({ page, project, $test, $testInfo }) => {
   $test.skip(!BIN(), "E2E_OPENCODE_BIN is not set: point it at a real opencode binary (1.18 or newer) to run the OpenCode engine scenarios");
@@ -170,6 +178,10 @@ When("I click the inline engine error button", async ({ page }) => {
 Then("Settings shows the OpenCode section", async ({ page }) => {
   await expect(page.getByTestId("settings-opencode")).toBeVisible();
   await expect(page.getByTestId("settings-opencode-path")).toBeVisible();
+});
+
+After({ name: "remove the slow MCP config" }, async () => {
+  rmSync(slowConfig(), { force: true });
 });
 
 After({ name: "stop the OpenCode scenario daemon" }, async () => {
