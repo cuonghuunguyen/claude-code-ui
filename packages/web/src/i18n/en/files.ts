@@ -58,6 +58,7 @@ export default {
   "files.menu.revealWin": "Reveal in File Explorer",
   "files.menu.revealOther": "Open Containing Folder",
   "files.menu.openIn": "Open in {app}",
+  "files.menu.openFailed": "Could not open in {app}: {reason}",
   "files.menu.openDefault": "Open with Default App",
   "files.menu.rename": "Rename…",
   "files.menu.duplicate": "Duplicate",

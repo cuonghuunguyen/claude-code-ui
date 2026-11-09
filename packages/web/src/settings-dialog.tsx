@@ -42,6 +42,8 @@ import { ListSetting } from "./list-setting.tsx";
 import { ClaudeAccountSection } from "./claude-account-settings.tsx";
 import { JiraSection } from "./jira-settings.tsx";
 import { OpenCodeSection } from "./opencode-settings.tsx";
+import { OpenAppSection } from "./open-app-settings.tsx";
+import { onDaemonMachine } from "./open-external-menu.ts";
 import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
@@ -1059,6 +1061,10 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
+    // GH-646: only for a browser on the daemon machine, and a daemon that lists editors (older ones and Sides have no `editor`).
+    ...(settings?.editor && daemon?.editors && onDaemonMachine()
+      ? [{ id: "open-in-app", title: t("settings.openApp.title"), category: "Integrations" as const, body: <OpenAppSection editor={settings.editor} saving={saving} request={request} onResult={(r) => (setSettings(r.settings), setDaemon(r.daemon), setError(undefined))} onError={setError} /> }]
+      : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]

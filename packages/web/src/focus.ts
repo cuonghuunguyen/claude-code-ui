@@ -1,5 +1,6 @@
 // Focus page model (docs/spec.md "Focus"): every unanswered permission request and question across the listed sessions.
-import type { Part, SessionListItem, TodoItem } from "@claude-ui/protocol";
+import type { BackMark, Part, SessionListItem, TodoItem } from "@claude-ui/protocol";
+import { aboutOf } from "./back-marks.ts";
 import { t } from "./i18n.ts";
 import { lastLine } from "./notify.ts";
 import { relPath } from "./paths.ts";
@@ -326,4 +327,24 @@ export function saveFocusCollapsed(ids: ReadonlySet<string>, list: SessionListIt
   } catch {
     // Storage blocked: folding still works for this page.
   }
+}
+
+/** A Back mark as a Focus row (GH-622): `fired` = its reminder fired and waits for Snooze or Dismiss. */
+export type BackRow = { sessionId: string; mark: BackMark; fired: boolean; /** "Come back: <note>", else "About: <brief About>", else "Come back: <reply title>". */ reason: string };
+
+/**
+ * The "Come back to" list: marks of listed, not archived sessions. Fired reminders first (the one that fired earliest first), then the newest mark first.
+ * It never counts as waiting: the waiting count, the badge and the status text ignore marks.
+ */
+export function backRows(list: SessionListItem[], marks: Record<string, BackMark[]>): BackRow[] {
+  const rows: BackRow[] = [];
+  for (const s of list) {
+    if (s.archived) continue;
+    for (const mark of marks[s.id] ?? []) {
+      const about = aboutOf(mark);
+      const reason = mark.note ? t("app.back.cardTitle", { title: mark.note }) : about ? `${t("app.back.about")}: ${about}` : t("app.back.cardTitle", { title: mark.title });
+      rows.push({ sessionId: s.id, mark, fired: mark.remindedAt !== undefined, reason });
+    }
+  }
+  return rows.sort((a, b) => (a.fired === b.fired ? (a.fired ? a.mark.remindedAt! - b.mark.remindedAt! : b.mark.at - a.mark.at) : a.fired ? -1 : 1));
 }

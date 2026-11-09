@@ -10,17 +10,17 @@ self.addEventListener("push", (e) => {
   e.waitUntil(self.registration.showNotification(p.title, { body: p.body, tag: p.tag ?? p.sessionId, data: p, icon: "/icon-192.png", badge: "/badge-96.png", silent: !!p.silent, renotify: false }));
 });
 
-// Opens the session scrolled to the bottom: in an open tab (the app listens for "open"), else in a new window.
+// Opens the session scrolled to the bottom (a "come back" reminder: to its mark, `backPart`): in an open tab (the app listens for "open"), else in a new window.
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const { sessionId } = e.notification.data;
+  const { sessionId, backPart } = e.notification.data;
   e.waitUntil(
     (async () => {
       const tabs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const tab = tabs.find((c) => new URL(c.url).hash === `#${sessionId}`) ?? tabs[0];
-      if (!tab) return self.clients.openWindow(`/#${sessionId}`);
+      if (!tab) return self.clients.openWindow(backPart ? `/?back=${encodeURIComponent(backPart)}#${sessionId}` : `/#${sessionId}`);
       // Message first: focus() throws without the click's user activation.
-      tab.postMessage({ type: "open", sessionId });
+      tab.postMessage({ type: "open", sessionId, backPart });
       await tab.focus();
     })(),
   );

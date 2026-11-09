@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -386,4 +386,13 @@ it("history: enabled is a boolean, exclude a list of globs", () => {
   expect(checkPatch({ history: { enabled: false, exclude: ["**/dist/**"] } })).toBeUndefined();
   expect(checkPatch({ history: { enabled: "yes" } })).toMatch(/Local history must be/);
   expect(checkPatch({ history: { exclude: [""] } })).toMatch(/excluded paths must be/);
+});
+
+it("editor: defaults empty; accepts a command and a name; refuses newline, NUL, unbalanced quote, empty program, over 1024 (GH-646)", () => {
+  const s = createSettings({ file: join(mkdtempSync(join(tmpdir(), "set-")), "s.json") });
+  expect(s.get().editor).toEqual({ command: "", name: "" });
+  expect(s.set({ editor: { command: '"C:\\Program Files\\S\\subl.exe" {path}', name: "Sublime" } }).editor).toEqual({ command: '"C:\\Program Files\\S\\subl.exe" {path}', name: "Sublime" });
+  for (const command of ["a\nb", "a\rb", "a\0b", 'a "b', '""', "   ", "x".repeat(1025)]) expect(() => s.set({ editor: { command } })).toThrow(/^Editor command must be/);
+  expect(() => s.set({ editor: { name: "a\nb" } })).toThrow(/^Editor name must be/);
+  expect(s.set({ editor: { command: "" } }).editor.command).toBe("");
 });

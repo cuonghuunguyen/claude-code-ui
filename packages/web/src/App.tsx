@@ -49,7 +49,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, isAttention, isPromptImage, LOCAL_SIDE, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -174,6 +174,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { LabelDialog } from "./label-dialog.tsx";
 import { projectLabel, saveLabel, setLabels, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
+import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
+import { briefTag, foldBriefTurns, markFields, markOf, setBack, staleTurns, useBack } from "./back-marks.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
@@ -185,7 +187,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
-import { OpenExternalContext, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
+import { OpenExternalContext, canOpenSide, customEditor, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -547,6 +549,23 @@ export function App() {
   const [rewindTo, setRewindTo] = useState<string>();
   // A content search hit (palette Messages) the opened session scrolls to once its message is loaded.
   const [revealHit, setRevealHit] = useState<{ sessionId: string; hit: SearchHit; query: string }>();
+  /** GH-622: Open of a Back mark (Focus, a reminder card, a push click): the session shows scrolled to the marked reply, its panel focused. */
+  const [revealBack, setRevealBack] = useState<{ sessionId: string; partId: string }>();
+  const backMarks = useBack();
+  /** Open of a mark from Focus or a card: a history entry first, so browser Back returns to where it was (open() replaces the entry). */
+  const openBackMark = (sessionId: string, partId: string) => {
+    history.pushState(null, "", location.href);
+    open(sessionId);
+    setRevealBack({ sessionId, partId });
+  };
+  // A push click that opened a new window: ?back=<part id>#<session id> (sw.js).
+  useEffect(() => {
+    const part = new URLSearchParams(location.search).get("back");
+    const id = location.hash.slice(1);
+    if (!part || !id) return;
+    setRevealBack({ sessionId: id, partId: part });
+    history.replaceState(null, "", location.pathname + location.hash);
+  }, []);
   // Wide screens: the bottom panel shown (GH-354 terminal, GH-355 any pane; the key keeps its name so saved state carries over).
   // Kept per browser across reloads; the daemon's shells outlive the page.
   const [bottomOpen, setBottomOpen] = useState(() => loadFlag(TERMINAL_KEY));
@@ -1376,7 +1395,7 @@ export function App() {
 
   /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
   const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
-    ? { editors: appEditors, isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: Error) => setToast(e.message)) }
+    ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: RequestError) => setToast(e.code === "open_failed" && appEditors.find((x) => x.id === how) ? tr("files.menu.openFailed", { app: appEditors.find((x) => x.id === how)!.label, reason: e.message }) : e.message)) }
     : undefined;
 
   /** Copies to the clipboard, which the browser offers on HTTPS and localhost only. */
@@ -1435,7 +1454,7 @@ export function App() {
       },
       onPlanUsage: setPlan,
       onOpenCodeProviders: dropOpenCodeModels,
-      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setLabels(m.settings.labels), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1463,7 +1482,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -1486,6 +1505,7 @@ export function App() {
       if (e.data?.type !== "open" || typeof e.data.sessionId !== "string") return;
       const id: string = e.data.sessionId;
       open(id);
+      if (typeof e.data.backPart === "string") return setRevealBack({ sessionId: id, partId: e.data.backPart });
       setScrollKeys((k) => ({ ...k, [id]: (k[id] ?? 0) + 1 }));
     };
     navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
@@ -2097,6 +2117,10 @@ export function App() {
                         rewindTo={id === activeId ? rewindTo : undefined}
                         revealHit={id === revealHit?.sessionId ? revealHit : undefined}
                         onRevealShown={() => setRevealHit(undefined)}
+                        revealBack={id === revealBack?.sessionId ? revealBack.partId : undefined}
+                        onBackRevealed={() => setRevealBack(undefined)}
+                        onBack={(m) => client.current!.request(m as never)}
+                        onNotice={setToast}
                         run={id === activeId ? run : splitShown ? split!.runs?.[id] : undefined}
                         onOpenRun={(r) => openRun(s.id, r)}
                         links={linksOf(id)}
@@ -4098,6 +4122,9 @@ export function App() {
                   unread={unread}
                   activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
+                  marks={backMarks}
+                  onOpenBack={(sessionId, partId) => openBackMark(sessionId, partId)}
+                  onBack={(m) => client.current!.request(m as never)}
                 />
               )}
               {!(layout.side === "left" && lg) && (
@@ -4514,6 +4541,14 @@ export function App() {
           hidden={drawer || settingsOpen || shortcutsOpen || !!palette || quickOpen || openingProject || !!guideRun}
           onAssign={(id) => (setShortcutsEdit(id), setShortcutsOpen(true))}
           onTurnedOff={() => setToast(tr("app.main.tipsOff"))}
+        />
+        <BackReminderCards
+          enabled={inApp}
+          skip={(id) => !!list.find((x) => x.id === id)?.archived}
+          marks={backMarks}
+          title={(id) => displayTitle(list.find((x) => x.id === id)?.title || "") || tr("app.focusPage.untitled")}
+          onOpen={(sessionId, partId) => openBackMark(sessionId, partId)}
+          request={(m) => client.current!.request(m as never)}
         />
         <NotificationStack
           items={cardItems}
@@ -5077,6 +5112,10 @@ export function SessionPane({
   onRewindShown,
   revealHit,
   onRevealShown,
+  revealBack,
+  onBackRevealed,
+  onBack,
+  onNotice,
   onLoadOlder,
   loadingOlder,
   session,
@@ -5135,6 +5174,13 @@ export function SessionPane({
   /** A content search hit to scroll to once its message is loaded (palette Messages). */
   revealHit?: { hit: SearchHit; query: string };
   onRevealShown?: () => void;
+  /** GH-622: a Back mark's part id to scroll to and focus its panel (Open). */
+  revealBack?: string;
+  onBackRevealed?: () => void;
+  /** back.set / back.done / back.brief of this session's marks. */
+  onBack?: (m: { type: "back.set" | "back.done" | "back.brief"; sessionId: string; partId: string } & Record<string, unknown>) => Promise<unknown>;
+  /** A short message in the toast corner. */
+  onNotice?: (message: string) => void;
   /** Loads the page before the view's cursor; `until`: back to the turn holding that part or message id. */
   onLoadOlder?: (opts?: { until?: string; user?: boolean }) => void;
   loadingOlder?: boolean;
@@ -5244,7 +5290,33 @@ export function SessionPane({
     onRewindShown?.();
   }, [rewindTo]);
   const items = useMemo(() => timeline(view), [view]);
-  const shownItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
+  const baseItems = useMemo<SignalItem[]>(() => (signalOnly ? signalItems(items, (c) => awaitingPermission(view).has(c.toolUseId)) : items), [items, signalOnly, view]);
+  // GH-622: a brief turn (tagged prompt) shows as one collapsed row; its own text and tools are folded into it.
+  const folded = useMemo(() => foldBriefTurns(baseItems), [baseItems]);
+  const shownItems = folded.items;
+  const backMarks = useBack();
+  // A mark whose reply is gone (rewind, /clear) shows at the end of the timeline once every page is loaded.
+  const orphans = view.older ? [] : (backMarks[session.id] ?? []).filter((m) => !view.parts.has(m.partId));
+  const triedBack = useRef<string>(undefined);
+  const focusPanel = (partId: string, tries = 30) => {
+    const el = [...document.querySelectorAll<HTMLElement>("[data-back-panel]")].find((e) => e.dataset.backPanel === partId);
+    if (el) {
+      // The reply is revealed at the top; on a phone it is taller than the view, so the panel itself is brought to the top (scroll-mt clears the sticky prompt bar).
+      el.focus({ preventScroll: true });
+      return el.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "auto" });
+    }
+    if (tries > 0) requestAnimationFrame(() => focusPanel(partId, tries - 1));
+  };
+  useEffect(() => {
+    if (!revealBack) return;
+    if (!view.parts.has(revealBack)) {
+      // Not loaded: it may be in an older page; load back to it once. Still missing: the panel shows at the end with "no longer in the session".
+      if (loadingOlder) return;
+      if (view.older && triedBack.current !== revealBack) return (triedBack.current = revealBack), onLoadOlder?.({ until: revealBack.split(":")[0] });
+    } else setReveal({ key: revealBack });
+    onBackRevealed?.();
+    focusPanel(revealBack);
+  }, [revealBack, view.parts, loadingOlder]);
   // Palette Messages: the session may still be loading; the hit is revealed once its message is in the timeline.
   const triedUntil = useRef<unknown>(undefined);
   useEffect(() => {
@@ -5341,7 +5413,7 @@ export function SessionPane({
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
-            if (item.kind !== "part" || item.part.type !== "user_text" || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
+            if (item.kind !== "part" || item.part.type !== "user_text" || briefTag(item.part.text) || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
             const { text } = splitUploads(summarizePasted(item.part.text));
             const n = item.part.images.length;
             const label = text || `${n} image${n === 1 ? "" : "s"}`;
@@ -5353,8 +5425,11 @@ export function SessionPane({
             (prompt.current ?? dock.current?.querySelector<HTMLElement>("form input[type=radio], form input[type=checkbox], form button"))?.focus();
           }}
           footer={
-            (shownPending.length > 0 || thinking) && (
+            (shownPending.length > 0 || thinking || orphans.length > 0) && (
               <>
+                {orphans.map((m) => (
+                  <BackPanel key={m.partId} sessionId={session.id} mark={m} gone stale={0} held={view.queue?.held} request={(m2) => onBack!(m2)} onNotice={onNotice} />
+                ))}
                 {shownPending.map((p, i) => (
                   <PendingMessage key={p.key} p={p} view={view} index={shownItems.length + i} />
                 ))}
@@ -5383,6 +5458,8 @@ export function SessionPane({
                   <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(ORCHESTRATION_NOTICE.length).trim()}</span>
                 </span>
               </div>
+            ) : item.part.type === "user_text" && briefTag(item.part.text) ? (
+              <BriefRow answer={folded.answers.get(item.part.id)} />
             ) : item.part.type === "user_text" ? (
               <UserMessage
                 part={item.part}
@@ -5439,15 +5516,46 @@ export function SessionPane({
               <PartView part={item.part} view={view} />
             )
             );
-            return copyText ? (
+            const part = item.kind === "part" ? item.part : undefined;
+            const mark = part?.type === "assistant_text" ? markOf(backMarks, session.id, part.id) : undefined;
+            const shownRow = mark ? (
               <>
                 {row}
-                <MessageActions className="mt-1">
-                  <CopyAction text={copyText} label={tr("app.prompt.copyResponse")} className="max-md:size-11" />
-                </MessageActions>
+                <BackPanel
+                  sessionId={session.id}
+                  mark={mark}
+                  stale={staleTurns(view.order.map((id) => view.parts.get(id)!), mark.partId)}
+                  held={view.queue?.held}
+                  request={(m) => onBack!(m)}
+                  onNotice={onNotice}
+                  onRemoved={() => requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-back-button="${CSS.escape(mark.partId)}"]`)?.focus())}
+                />
               </>
             ) : (
               row
+            );
+            const reply = copyText && onBack ? markFields(shownItems, index) : undefined;
+            return copyText ? (
+              <>
+                {shownRow}
+                <MessageActions className="mt-1">
+                  <CopyAction text={copyText} label={tr("app.prompt.copyResponse")} className="max-md:size-11" />
+                  {reply && (
+                    <BackButton
+                      partId={reply.partId}
+                      marked={!!markOf(backMarks, session.id, reply.partId)}
+                      onMark={() => void onBack!({ type: "back.set", sessionId: session.id, ...reply }).catch((e: Error) => onNotice?.(tr("app.back.markFailed", { reason: e.message })))}
+                      onGo={() => {
+                        const el = [...document.querySelectorAll<HTMLElement>("[data-back-panel]")].find((e) => e.dataset.backPanel === reply.partId);
+                        el?.scrollIntoView({ block: "nearest", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+                        el?.focus({ preventScroll: true });
+                      }}
+                    />
+                  )}
+                </MessageActions>
+              </>
+            ) : (
+              shownRow
             );
           }}
         />

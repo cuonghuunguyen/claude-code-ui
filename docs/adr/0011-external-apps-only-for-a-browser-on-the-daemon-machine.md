@@ -15,5 +15,10 @@ Decision: `fs.openExternal` runs only when the connection is from the daemon mac
 
 - An `ssh -L` tunnel to a remote daemon looks local: the app opens on the daemon machine (wrong screen, harmless).
 - A token holder can already run any command through a session, so this adds no privilege.
-- Sides (SSH, WSL, Docker) answer `side_unsupported`; a WSL hub has no `xdg-open` usually and answers `open_failed`.
+- Docker and SSH Sides answer `side_unsupported`.
+- A daemon in WSL converts the path with `wslpath -w` and starts `explorer.exe` through WSL interop. The Windows Hub forwards the request of a WSL Side path to the Side daemon, only for a browser on the Hub machine. The Side daemon trusts its attached Hubs (a virtual connection has no peer address): an attached Hub is the Windows Hub of the same machine, which checked its browser. Accepted risk: a Hub on another machine attached over SSH into the distro can open Explorer on this machine (same class as the `ssh -L` case above).
 - Linux Reveal opens the folder without selecting the file.
+
+## Amendment (GH-646)
+
+The user can set one editor command (Settings `editor`). The command comes from the hub's own settings file, never from a request, a project file or a project environment: `fs.openExternal` carries only `with: "custom"`. Changing it needs a browser on the daemon machine (`settings.set` answers `not_local` otherwise), so a phone or Tailscale browser cannot plant a command for the local user's next click. The daemon splits the line itself and starts the program without a shell. It is not synced to Sides.

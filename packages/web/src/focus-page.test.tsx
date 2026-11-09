@@ -469,3 +469,33 @@ it("rows of closed workers are neither shown nor counted: section count, subtitl
   expect(el.querySelector('[data-testid="focus-more"]')).toBeNull();
   expect(rows().map((r) => r.dataset.kind)).toEqual(["permission", "finished"]);
 });
+
+it("Come back to: fired reminders first, reason line, third line, actions beside the row; the waiting count and subtitle are unchanged", async () => {
+  const onBack = vi.fn(async () => ({}));
+  const onOpenBack = vi.fn();
+  const marks = {
+    a: [{ partId: "p1", at: 100, title: "Older reply", remindMs: 7_200_000, remindAt: 150, remindedAt: 200, note: "Check the diff" }, { partId: "p2", at: 300, title: "Newest reply", brief: { text: "About: Auth fix\nFocus now: x\nNext: y", at: 301 } }],
+    b: [{ partId: "p3", at: 200, title: "Middle reply", briefState: "running" as const }, { partId: "p4", at: 50, title: "Failed one", briefState: "failed" as const }],
+    gone: [{ partId: "p5", at: 1, title: "Not listed" }],
+  };
+  await act(async () => root.render(<FocusPage list={base().list} views={base().views} worktrees={{}} waiting={waitingRequests(base().list, base().views, new Map(), Date.now())} onSelect={() => {}} onRespond={respond} onAnswer={answer} onOpenSession={open} unread={new Set()} activity={() => 0} onCancelContinue={cancelContinue} marks={marks} onOpenBack={onOpenBack} onBack={onBack} />));
+  const section = el.querySelector('[data-testid="focus-back-list"]')!;
+  expect(section.querySelector("h2")!.textContent).toBe("Come back to · 4");
+  const list = [...section.querySelectorAll<HTMLElement>('[data-testid="focus-back-row"]')];
+  expect(list.map((r) => r.textContent!.match(/Come back: [^R]*|About: [^R]*/)?.[0] ?? "")).toHaveLength(4);
+  expect(list[0]!.dataset.fired).toBe("true");
+  expect(list[0]!.textContent).toContain("Reminder");
+  expect(list[0]!.textContent).toContain("Come back: Check the diff");
+  expect(list[0]!.textContent).toMatch(/Reminded \d/);
+  expect(list[1]!.textContent).toContain("About: Auth fix");
+  expect(list[2]!.textContent).toContain("Writing brief…");
+  expect(list[3]!.textContent).toContain("Brief not written");
+  const names = [...list[0]!.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent);
+  expect(names).toEqual(["Open", "Snooze 2 hours", "Dismiss reminder"]);
+  expect([...list[1]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Open"]);
+  await act(async () => void list[0]!.querySelector<HTMLButtonElement>('button[aria-label="Dismiss reminder"]')!.click());
+  expect(onBack).toHaveBeenCalledWith({ type: "back.set", sessionId: "a", partId: "p1", title: "Older reply", remindMs: null });
+  await act(async () => void [...list[1]!.querySelectorAll("button")][0]!.click());
+  expect(onOpenBack).toHaveBeenCalledWith("a", "p2");
+  expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("2 need you · 1 working");
+});

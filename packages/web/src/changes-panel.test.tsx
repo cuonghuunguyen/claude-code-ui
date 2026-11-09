@@ -1725,7 +1725,7 @@ it("right click on a row offers Open, Copy path and, in an app-capable browser, 
   expect(await menu()).toEqual(["row-open", "row-copyPath", "row-copyRel"]);
   await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-copyRel]")!.click());
   expect(onCopy).toHaveBeenCalledWith("a.ts", "relative path");
-  await act(async () => root.render(panel({ editors: [{ id: "code", label: "VS Code" }], isLocal: () => true, run })));
+  await act(async () => root.render(panel({ editors: [{ id: "code", label: "VS Code" }], canOpen: () => true, isLocal: () => true, run })));
   await flush();
   expect(await menu()).toEqual(["row-open", "row-copyPath", "row-copyRel", "row-ext-menu-reveal", "row-ext-menu-code", "row-ext-menu-default"]);
   await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-ext-menu-code]")!.click());

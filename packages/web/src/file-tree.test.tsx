@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import type { GitRepo } from "@claude-ui/protocol";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
+import { OpenExternalContext } from "./open-external-menu.ts";
 import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -1097,4 +1098,20 @@ it("GH-555 rows are draggable and dragstart carries the entry type and the path"
   expect(JSON.parse(data[DRAG_TYPE]!)).toEqual({ path: "/p/README.md", name: "README.md", isDir: false, side: "wsl:x" });
   expect(data["text/plain"]).toBe("/p/README.md");
   t.unmount();
+});
+
+it("GH-645 the open-in-app entries show for this machine and a WSL side, not for a Docker or SSH side", async () => {
+  const ext = { editors: [{ id: "code" as const, label: "VS Code" }], canOpen: () => true, isLocal: () => true, run: vi.fn() };
+  const ids = async (side: string) => {
+    const t = setup({ side });
+    const render = () => act(async () => t.root.render(<OpenExternalContext.Provider value={ext}><FileTree client={{ request: t.request } as never} cwd="/p" side={side} onOpen={() => {}} onViewer={() => {}} /></OpenExternalContext.Provider>));
+    await render();
+    await ctxMenu(t.row("/p/README.md"));
+    const found = menuIds().filter((i) => i.startsWith("ext-menu-"));
+    await closeMenu();
+    t.unmount();
+    return found;
+  };
+  for (const side of ["local", "wsl:Ubuntu"]) expect(await ids(side)).toEqual(["ext-menu-reveal", "ext-menu-code", "ext-menu-default"]);
+  for (const side of ["docker:dev", "ssh:box"]) expect(await ids(side)).toEqual([]);
 });
