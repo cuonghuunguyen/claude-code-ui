@@ -207,10 +207,11 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_HANG: "1" }, sessionsJson: entry, opencode: { listWaitMs: 300, startTimeoutMs: 20_000 } });
     const t = Date.now();
     const listed = (await d_list(d)).result;
-    expect(Date.now() - t).toBeLessThan(5000);
+    // The point: the list answers after its own wait, not after the 20 s start timeout (3.0 s alone, 5.1 s seen under a full suite).
+    expect(Date.now() - t).toBeLessThan(10_000);
     expect(listed.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
     expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
-  }, 15_000);
+  }, 30_000);
 
   it("the OpenCode server ends with a daemon that is killed (SIGKILL)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));

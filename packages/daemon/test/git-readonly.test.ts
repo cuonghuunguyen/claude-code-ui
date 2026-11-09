@@ -351,10 +351,12 @@ describe("gitReadOnly", () => {
     });
 
     it("tierAsync matches tier for every low and high row", async () => {
-      for (const command of [...low, ...high.filter((h) => typeof h === "string")] as string[]) {
-        expect(await tierAsync("Bash", { command }, { cwd, bashCwdPinned: true }), command).toBe(tier("Bash", { command }, { cwd, bashCwdPinned: true }));
+      // The rows are independent: a row after row costs 200 s alone on Windows (0.4 s per git process), 8 at a time a fraction of it.
+      const rows = [...low, ...high.filter((h) => typeof h === "string")] as string[];
+      for (let i = 0; i < rows.length; i += 8) {
+        await Promise.all(rows.slice(i, i + 8).map(async (command) => expect(await tierAsync("Bash", { command }, { cwd, bashCwdPinned: true }), command).toBe(tier("Bash", { command }, { cwd, bashCwdPinned: true }))));
       }
-    }, 300_000);
+    }, 600_000);
 
     it("an include.path into the worktree, a relative gpg.program and a relative hooksPath written as an absolute path inside are refused", () => {
       for (const [k, v] of [["include.path", "../extra.cfg"], ["gpg.program", "./gpg.sh"]] as const) {

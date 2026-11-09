@@ -50,7 +50,7 @@ afterEach(() => setGitRunner(undefined));
  * Every test here runs dozens of git processes (submodules spawn more): ~15 s on Windows under a full suite, where a process start
  * is slow. A timed-out test also leaves its git calls running into the next test's `pushes()`, so the whole file gets the long timeout.
  */
-const SPAWN_HEAVY = 120_000;
+const SPAWN_HEAVY = 360_000;
 vi.setConfig({ testTimeout: SPAWN_HEAVY });
 
 describe("gitBranch", () => {

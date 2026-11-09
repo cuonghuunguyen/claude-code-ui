@@ -768,7 +768,11 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     mkdirSync(project, { recursive: true });
     const d = await boot({ root, script: ["text"], data: { sessions: [row(project)], messages: { ses_own: messages } } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
-    await d.ok({ type: "session.list" });
+    // The list answers with the Claude items while OpenCode is still starting (seconds under load): wait until the OpenCode session is in it.
+    for (let i = 0; i < 2400; i++) {
+      if ((await d.ok({ type: "session.list" })).sessions.some((x: { id: string }) => x.id === "ses_own")) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
     return d;
   }
 
