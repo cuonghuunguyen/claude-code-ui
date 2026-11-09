@@ -52,6 +52,7 @@ When("I open the actions of the branch {string} in the branch popup", async ({ p
 });
 
 Then("the branch popup actions offer {string}", async ({ page }, name: string) => {
+  await expect(page.getByTestId("branch-popup-sub").getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("branch-popup-sub").getByRole("menuitem", { name, exact: true })).toHaveCount(1);
 });
 
