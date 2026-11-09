@@ -143,6 +143,8 @@ export default {
   "app.toolbar.modelsConnect": "Kết nối nhà cung cấp…",
   "app.toolbar.modelsFailed": "Không tải được danh sách mô hình: {message}",
   "app.toolbar.modelsRetry": "Thử lại",
+  "app.toolbar.modelSearch": "Tìm model",
+  "app.toolbar.modelSearchEmpty": "Không có model nào khớp",
   "app.toolbar.thinkingEffort": "Mức suy nghĩ",
   "app.toolbar.sessionSettings": "Cài đặt phiên",
   "app.toolbar.sessionSettingsLabel": "{visible}, cài đặt phiên: {mode}, {model}",
