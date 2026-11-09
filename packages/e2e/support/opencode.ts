@@ -53,6 +53,7 @@ export async function createOpenCodeSession(bin: string, run: string, cwd: strin
 
 /** The OpenCode server the daemon `daemonPid` started (POSIX): the descendant that listens on a port and holds the server password. Found through `ps` and `lsof`, so the test asks the same server the app uses. */
 export function daemonOpenCodeServer(daemonPid: number): { url: string; auth: string } {
+  if (process.platform === "win32") return windowsOpenCodeServer(daemonPid);
   const rows = execFileSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n").map((l) => l.trim().split(/\s+/).map(Number));
   const todo = [daemonPid];
   for (let i = 0; i < todo.length; i++) for (const [pid, ppid] of rows) if (ppid === todo[i] && !todo.includes(pid!)) todo.push(pid!);
@@ -68,4 +69,67 @@ export function daemonOpenCodeServer(daemonPid: number): { url: string; auth: st
     if (port) return { url: `http://127.0.0.1:${port}`, auth: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
   }
   throw new Error("the daemon has no OpenCode server yet");
+}
+
+/** Reads the environment block of a process (x64 PEB: ProcessParameters at 0x20, Environment at 0x80, EnvironmentSize at 0x3F0), then finds the listening port of the daemon's OpenCode descendants. */
+const WINDOWS_PROBE = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class PEnv {
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint a, bool b, int pid);
+  [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, byte[] pbi, int len, out int ret);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  public static string Env(int pid) {
+    IntPtr h = OpenProcess(0x0410, false, pid);
+    if (h == IntPtr.Zero) return null;
+    try {
+      byte[] pbi = new byte[48]; int ret;
+      if (NtQueryInformationProcess(h, 0, pbi, 48, out ret) != 0) return null;
+      long peb = BitConverter.ToInt64(pbi, 8);
+      byte[] b = new byte[8]; IntPtr r;
+      if (!ReadProcessMemory(h, (IntPtr)(peb + 0x20), b, (IntPtr)8, out r)) return null;
+      long pp = BitConverter.ToInt64(b, 0);
+      if (!ReadProcessMemory(h, (IntPtr)(pp + 0x80), b, (IntPtr)8, out r)) return null;
+      long env = BitConverter.ToInt64(b, 0);
+      if (!ReadProcessMemory(h, (IntPtr)(pp + 0x3F0), b, (IntPtr)8, out r)) return null;
+      long sz = BitConverter.ToInt64(b, 0);
+      if (sz <= 0 || sz > 1048576) return null;
+      byte[] e = new byte[sz];
+      if (!ReadProcessMemory(h, (IntPtr)env, e, (IntPtr)sz, out r)) return null;
+      return Encoding.Unicode.GetString(e);
+    } finally { CloseHandle(h); }
+  }
+}
+'@
+$rows = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
+$todo = New-Object System.Collections.ArrayList
+[void]$todo.Add([int]$env:DAEMON_PID)
+for ($i = 0; $i -lt $todo.Count; $i++) { foreach ($r in $rows) { if ($r.ParentProcessId -eq $todo[$i] -and -not $todo.Contains([int]$r.ProcessId)) { [void]$todo.Add([int]$r.ProcessId) } } }
+$password = $null; $port = $null
+foreach ($p in $todo | Select-Object -Skip 1) {
+  $e = [PEnv]::Env($p)
+  if (-not $e) { continue }
+  $m = [regex]::Match($e, 'OPENCODE_SERVER_PASSWORD=([^\x00]+)')
+  if (-not $m.Success) { continue }
+  $password = $m.Groups[1].Value
+  break
+}
+if ($password) {
+  foreach ($p in $todo | Select-Object -Skip 1) {
+    $c = Get-NetTCPConnection -State Listen -OwningProcess $p -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { $port = $c.LocalPort; break }
+  }
+}
+if ($password -and $port) { Write-Output "$port $password" }
+`;
+
+function windowsOpenCodeServer(daemonPid: number): { url: string; auth: string } {
+  const command = Buffer.from(WINDOWS_PROBE, "utf16le").toString("base64");
+  const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", command], { encoding: "utf8", env: { ...process.env, DAEMON_PID: String(daemonPid) }, windowsHide: true }).trim();
+  const m = /^(\d+) (\S+)$/m.exec(out);
+  if (!m) throw new Error("the daemon has no OpenCode server yet");
+  return { url: `http://127.0.0.1:${m[1]}`, auth: `Basic ${Buffer.from(`opencode:${m[2]}`).toString("base64")}` };
 }
