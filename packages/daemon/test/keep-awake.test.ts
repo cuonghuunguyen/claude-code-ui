@@ -1,3 +1,4 @@
+import { delimiter, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,9 +22,9 @@ describe("inhibitorFor", () => {
   });
   it("Linux runs systemd-inhibit from PATH with cat on the daemon's pipe", () => {
     const seen: string[] = [];
-    const exists = (p: unknown) => (seen.push(String(p)), p === "/usr/bin/systemd-inhibit");
-    expect(inhibitorFor("linux", 1, "bin:/usr/bin:/opt", exists)).toEqual({ cmd: "/usr/bin/systemd-inhibit", args: ["--what=idle:sleep", "--who=claude-ui", "--why=Session running", "cat"] });
-    expect(seen).not.toContain("bin/systemd-inhibit");
+    const exists = (p: unknown) => (seen.push(String(p)), p === join("/usr/bin", "systemd-inhibit"));
+    expect(inhibitorFor("linux", 1, ["bin", "/usr/bin", "/opt"].join(delimiter), exists)).toEqual({ cmd: join("/usr/bin", "systemd-inhibit"), args: ["--what=idle:sleep", "--who=claude-ui", "--why=Session running", "cat"] });
+    expect(seen).not.toContain(join("bin", "systemd-inhibit"));
   });
   it("Linux without systemd-inhibit and Windows are unsupported", () => {
     expect(inhibitorFor("linux", 1, "/usr/bin", () => false)).toBeUndefined();
