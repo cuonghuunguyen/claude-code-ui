@@ -252,7 +252,8 @@ describe("findInFiles", () => {
     for (let i = 0; i < 1500; i++) put(d, `g${i % 30}/f${i}.txt`, big);
     const t0 = Date.now();
     const r = await run(d, "zzzz", {}, { limits: { ms: 20 } });
-    expect(Date.now() - t0).toBeLessThan(2000);
+    // Stopped by the 20 ms limit, not by the 5 s default. The kill takes a while on Windows (taskkill of the git tree): 2.4-2.9 s measured there.
+    expect(Date.now() - t0).toBeLessThan(process.platform === "win32" ? 4500 : 2000);
     expect(["time", undefined]).toContain(r.stopped);
   });
 
