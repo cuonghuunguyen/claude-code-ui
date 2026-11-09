@@ -253,6 +253,7 @@ export default {
   "sidebar.git.createdCheckedOut": "Created and checked out {target}",
   "sidebar.git.creating": "Creating {target}…",
   "sidebar.git.newBranchFrom": "New branch from {from}…",
+  "sidebar.git.newBranch": "New Branch…",
   "sidebar.git.newBranchHead": "New branch from HEAD…",
   "sidebar.git.newBranchTitle": "New branch",
   "sidebar.git.newBranchText": "Creates a branch at {from}.",

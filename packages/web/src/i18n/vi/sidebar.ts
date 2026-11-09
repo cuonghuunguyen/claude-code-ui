@@ -255,6 +255,7 @@ export default {
   "sidebar.git.createdCheckedOut": "Đã tạo và checkout {target}",
   "sidebar.git.creating": "Đang tạo {target}…",
   "sidebar.git.newBranchFrom": "Nhánh mới từ {from}…",
+  "sidebar.git.newBranch": "Nhánh mới…",
   "sidebar.git.newBranchHead": "Nhánh mới từ HEAD…",
   "sidebar.git.newBranchTitle": "Nhánh mới",
   "sidebar.git.newBranchText": "Tạo nhánh tại {from}.",

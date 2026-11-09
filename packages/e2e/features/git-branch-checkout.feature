@@ -93,5 +93,5 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     When I open the Graph tab of the side panel
     And I select the commit row "local work"
     And I open the branch menu on the chip "refs/heads/main" in the commit details
-    Then the branch menu offers a new branch from the short hash of "main"
+    Then the branch menu offers a new branch from "main"
     And I capture "details-chip-new-branch"

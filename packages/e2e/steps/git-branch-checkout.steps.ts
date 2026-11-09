@@ -78,6 +78,6 @@ When("I open the branch menu on the chip {string} in the commit details", async 
   await expect(menu.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
 });
 
-Then("the branch menu offers a new branch from the short hash of {string}", async ({ page, project }, branch: string) => {
-  await expect(page.getByTestId("branch-new")).toHaveText(`New branch from ${git(project.path, "rev-parse", branch).slice(0, 7)}…`);
+Then("the branch menu offers a new branch from {string}", async ({ page }, branch: string) => {
+  await expect(page.getByTestId("branch-new")).toHaveText(`New branch from ${branch}…`);
 });

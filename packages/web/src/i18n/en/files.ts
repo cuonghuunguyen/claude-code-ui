@@ -275,6 +275,12 @@ export default {
   // git-graph-panel.tsx
   "files.graph.textOrHash": "Text or hash",
   "files.graph.branch": "Branch",
+  "files.graph.local": "Local",
+  "files.graph.remote": "Remote",
+  "files.graph.searchBranches": "Search branches",
+  "files.graph.currentBranch": "Current branch",
+  "files.graph.branchActions": "Actions of {branch}",
+  "files.graph.noBranch": "No matching branch",
   "files.graph.allBranches": "All branches",
   "files.graph.author": "Author",
   "files.graph.fetched": "Fetched all remotes",

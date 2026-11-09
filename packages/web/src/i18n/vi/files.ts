@@ -277,6 +277,12 @@ export default {
   // git-graph-panel.tsx
   "files.graph.textOrHash": "Văn bản hoặc hash",
   "files.graph.branch": "Nhánh",
+  "files.graph.local": "Cục bộ",
+  "files.graph.remote": "Từ xa",
+  "files.graph.searchBranches": "Tìm nhánh",
+  "files.graph.currentBranch": "Nhánh hiện tại",
+  "files.graph.branchActions": "Thao tác của {branch}",
+  "files.graph.noBranch": "Không có nhánh khớp",
   "files.graph.allBranches": "Mọi nhánh",
   "files.graph.author": "Tác giả",
   "files.graph.fetched": "Đã fetch mọi remote",
