@@ -4,6 +4,8 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, Gi
 import type {
   ContextUsage,
   CreateResult,
+  AgentInfo,
+  AgentsResult,
   CommandsResult,
   DefaultModeResult,
   Effort,
@@ -76,7 +78,7 @@ import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
-import { GHOST, ModePicker, modesOf, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
+import { GHOST, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
@@ -924,8 +926,8 @@ export function App() {
       setInfos((i) => {
         const old = i[from] ?? listRef.current.find((x) => x.id === from);
         if (i[to] || !old) return i;
-        const { cwd, state, model, permissionMode, effort, permissionModes, capabilities } = old;
-        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, permissionModes, capabilities } };
+        const { cwd, state, model, permissionMode, effort, agent, permissionModes, capabilities } = old;
+        return { ...i, [to]: { id: to, cwd, state, model, permissionMode, effort, ...(agent !== undefined && { agent }), permissionModes, capabilities } };
       });
       // The daemon titles an unprompted heir "New session" (the tab shows that, not "Untitled", until the list or the reply).
       setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
@@ -1857,8 +1859,8 @@ export function App() {
     setDraftCwd((d) => (d === project ? path : d));
   }
 
-  /** session.setModel, session.setPermissionMode, session.setEffort: the reply carries the new SessionInfo. */
-  async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" }>) {
+  /** session.setModel, session.setPermissionMode, session.setEffort, session.setAgent: the reply carries the new SessionInfo. */
+  async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" | "session.setAgent" }>) {
     setError(undefined);
     try {
       const before = viewsRef.current[msg.sessionId]?.permissionMode ?? infos[msg.sessionId]?.permissionMode;
@@ -2145,6 +2147,7 @@ export function App() {
                         models={modelsOf(s.engine ?? "claude", s.cwd)}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
+                        onAgent={(agent) => configure({ type: "session.setAgent", sessionId: s.id, agent })}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
                         onPrompt={(text, images) => {
@@ -4116,6 +4119,7 @@ export function App() {
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd, engine) => client.current!.request<CommandsResult>({ type: "session.commands", cwd, engine }).then((r) => r.commands)}
+                  onAgents={(cwd, engine) => client.current!.request<AgentsResult>({ type: "session.agents", cwd, engine }).then((r) => r.agents)}
                   onStart={createSession}
                   onDialog={openDialog}
                   inputRef={newPrompt}
@@ -4776,7 +4780,7 @@ export async function startSession(
   request: Client["request"],
   created: { current?: SessionInfo },
   cwd: string,
-  { model, mode, effort, draft, engine }: StartOptions,
+  { model, mode, effort, draft, engine, agent }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
   /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
@@ -4790,6 +4794,7 @@ export async function startSession(
   // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
   for (const msg of [
     reused && model !== session.model && { type: "session.setModel" as const, sessionId: session.id, model },
+    agent && agent !== session.agent && { type: "session.setAgent" as const, sessionId: session.id, agent },
     mode !== session.permissionMode && { type: "session.setPermissionMode" as const, sessionId: session.id, mode },
     effort !== session.effort && { type: "session.setEffort" as const, sessionId: session.id, effort },
   ])
@@ -4889,6 +4894,7 @@ export function NewSession({
   onUpload,
   onSearch,
   onCommands,
+  onAgents,
   commandsRev,
   onStart,
   onDialog,
@@ -4919,6 +4925,8 @@ export function NewSession({
   onSearch: (cwd: string) => (query: string) => Promise<string[]>;
   /** Commands and skills of a project for the `/` menu (no session exists yet). */
   onCommands: (cwd: string, engine: Engine) => Promise<SlashCommand[]>;
+  /** The primary agents of a project's folder (Engines with `agents`) for the agent chooser. */
+  onAgents?: (cwd: string, engine: Engine) => Promise<AgentInfo[]>;
   /** Changes on any config.changed (a user-wide change shows in every project): the commands are asked again. */
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
@@ -4938,7 +4946,7 @@ export function NewSession({
   const [engineError, setEngineError] = useState<string>();
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
-    return onStart(c, { model, mode, effort, engine: draft.engine }, first).catch((e: RequestError) => {
+    return onStart(c, { model, mode, effort, engine: draft.engine, ...(agent && { agent }) }, first).catch((e: RequestError) => {
       // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
       if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
       throw e;
@@ -4951,6 +4959,15 @@ export function NewSession({
   const NEW_WT = "\0worktree";
   const creating = worktreeJob && !worktreeJob.error;
   // The project's commands, asked when the tab shows or the project changes; until they arrive only the dialog commands are listed.
+  // The agents of the folder (OpenCode), asked when the tab shows an Engine with agents; the draft starts as build (else the first).
+  const [agentList, setAgentList] = useState<AgentInfo[]>([]);
+  useEffect(() => {
+    if (!cwd || !connected || !caps?.agents) return setAgentList([]);
+    let stale = false;
+    onAgents?.(cwd, engine).then((l) => !stale && setAgentList(l), () => !stale && setAgentList([]));
+    return () => void (stale = true);
+  }, [cwd, connected, engine, caps?.agents]);
+  const agent = caps?.agents ? (draft.agent && agentList.some((a) => a.name === draft.agent) ? draft.agent : (agentList.find((a) => a.name === "build") ?? agentList[0])?.name) : undefined;
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   useEffect(() => {
     if (!cwd || !connected) return setCommands([]);
@@ -4977,6 +4994,9 @@ export function NewSession({
           mode={mode}
           modes={modes}
           onMode={(m) => onDraft({ ...draft, mode: m })}
+          agent={agent}
+          agentList={agentList}
+          onAgent={(a) => onDraft({ ...draft, agent: a })}
           onUpload={onUpload}
           onSearch={cwd ? onSearch(cwd) : async () => []}
           onPrompt={(text, images) => (cwd ? start(cwd, { text, images }) : Promise.reject(new Error("no project")))}
@@ -5105,7 +5125,7 @@ function EngineIcon({ engine }: { engine: Engine }) {
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
-export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string; engine?: Engine };
+export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string; engine?: Engine; /** OpenCode: the agent the session starts as. */ agent?: string };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
@@ -5157,6 +5177,7 @@ export function SessionPane({
   models,
   onModel,
   onMode,
+  onAgent,
   onEffort,
   onUpload,
   onPrompt,
@@ -5227,6 +5248,7 @@ export function SessionPane({
   models: ModelInfo[];
   onModel: (model: string) => void;
   onMode: (mode: PermissionMode) => void;
+  onAgent?: (agent: string) => void;
   onEffort: (effort: Effort) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
@@ -5648,6 +5670,9 @@ export function SessionPane({
               modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))}
               caps={capabilitiesOf(session)}
               onMode={onMode}
+              agent={view.agent ?? session.agent}
+              agentList={view.agents}
+              onAgent={onAgent}
               onUpload={onUpload}
               onPrompt={onPrompt}
               onQueue={onQueue}
@@ -5709,6 +5734,9 @@ function PromptBox({
   modes,
   caps,
   onMode,
+  agent,
+  agentList,
+  onAgent,
   onUpload,
   onPrompt,
   onQueue,
@@ -5755,6 +5783,10 @@ function PromptBox({
   /** The session's Engine flags; none (new-session draft) = all. */
   caps?: EngineCapabilities;
   onMode: (mode: PermissionMode) => void;
+  /** Engines with agents (OpenCode): the agent, the primary agents, the choice; Shift+Tab cycles them instead of the permission mode. */
+  agent?: string;
+  agentList?: AgentInfo[];
+  onAgent?: (agent: string) => void;
   /** Stores a non-image attachment in the daemon; resolves to its absolute path. */
   onUpload: (file: File) => Promise<string>;
   /** Rejects when the prompt was not taken; the prompt box then gets the text back. */
@@ -6126,9 +6158,14 @@ function PromptBox({
       e.preventDefault();
       return setBash(false);
     }
-    // Claude Code: Shift+Tab cycles the permission mode.
+    // Claude Code: Shift+Tab cycles the permission mode; an Engine with agents (OpenCode) cycles its agents.
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
+      if (caps?.agents && agentList?.length && onAgent) {
+        const names = agentList.map((a) => a.name);
+        const nextA = nextAgent(names, agent ?? "build");
+        return nextA !== agent && onAgent(nextA);
+      }
       const next = nextMode(modes, mode);
       return next !== mode && onMode(next);
     }
@@ -6317,6 +6354,9 @@ function PromptBox({
         mode={mode}
         modes={modes}
         onMode={onMode}
+        agent={agent}
+        agentList={agentList}
+        onAgent={onAgent}
         onAttach={(f) => void attach(f)}
         agents={agents}
         usage={usage}

@@ -1,12 +1,12 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { ArrowUpIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
 import type { SendMode } from "./send-mode.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ALL_CAPABILITIES, permissionModesFor, type ContextUsage, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, permissionModesFor, type AgentInfo, type ContextUsage, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode } from "@claude-ui/protocol";
 import { usePhone } from "./lib/use-narrow.ts";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
@@ -36,6 +36,12 @@ export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
   const cycle: PermissionMode[] = modes.filter((m) => m !== "dontAsk");
   return cycle[(cycle.indexOf(mode) + 1) % cycle.length] ?? mode;
 };
+
+/** OpenCode shows agent names capitalized (build -> Build). */
+export const agentLabel = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+
+/** Shift+Tab in a session with agents: the next agent in the Engine's order, wrapping around; an unknown current agent gives the first. */
+export const nextAgent = (agents: string[], agent: string) => (agents.length ? agents[(agents.indexOf(agent) + 1) % agents.length]! : agent);
 
 /** "Default (recommended)" -> "Default model": the picker label on a phone, where the toolbar has no room for the note. Only that note goes; one that names the model (a context size) stays. "Default" alone would read like the effort chooser beside it. */
 export const shortModel = (name: string) => {
@@ -143,18 +149,35 @@ export function Chooser<T extends string>({
 }
 
 /** Permission mode chooser: in the prompt toolbar and in the tray of the permission and question panels (GH-145). */
-export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortcut = true }: { mode: PermissionMode; modes: PermissionMode[]; onMode: (mode: PermissionMode) => void; className?: string; /** Shift+Tab cycles the mode only in the prompt textarea: the panels pass false. */ shortcut?: boolean }) {
+export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortcut = true, cycles = true }: { mode: PermissionMode; modes: PermissionMode[]; onMode: (mode: PermissionMode) => void; className?: string; /** Shift+Tab cycles the mode only in the prompt textarea: the panels pass false. */ shortcut?: boolean; /** False when Shift+Tab cycles agents instead (the Engine has agents): the name drops "(Shift+Tab)". */ cycles?: boolean }) {
   const t = useT();
   const all = modes.includes(mode) ? modes : [mode, ...modes];
   const Mode = MODE_LABEL[mode].Icon;
   return (
     <Chooser
-      label={shortcut ? t("app.toolbar.permissionModeKey") : t("app.toolbar.permissionMode")}
+      label={shortcut && cycles ? t("app.toolbar.permissionModeKey") : t("app.toolbar.permissionMode")}
       testId="mode-select"
       value={mode}
       onChange={onMode}
       icon={<Mode className="size-4" />}
       items={all.map((m) => ({ value: m, label: t(MODE_LABEL[m].label), trigger: <span><span className="@2xl:hidden">{t(MODE_LABEL[m].short)}</span><span className="hidden @2xl:inline">{t(MODE_LABEL[m].label)}</span></span> }))}
+      className={className}
+    />
+  );
+}
+
+/** Agent chooser (Engines with `agents`, OpenCode): the primary agents the session can run as. Shift+Tab cycles them in the prompt box. */
+export function AgentPicker({ agent, agents, onAgent, className = "shrink-0", shortcut = true }: { agent: string; agents: AgentInfo[]; onAgent: (agent: string) => void; className?: string; shortcut?: boolean }) {
+  const t = useT();
+  const all = agents.some((a) => a.name === agent) ? agents : [{ name: agent }, ...agents];
+  return (
+    <Chooser
+      label={shortcut ? t("app.toolbar.agentKey") : t("app.toolbar.agent")}
+      testId="agent-select"
+      value={agent}
+      onChange={onAgent}
+      icon={<BotIcon className="size-4" />}
+      items={all.map((a) => ({ value: a.name, label: agentLabel(a.name), description: (a as AgentInfo).description }))}
       className={className}
     />
   );
@@ -171,6 +194,10 @@ export function PromptToolbar(props: {
   mode: PermissionMode;
   modes: PermissionMode[];
   onMode: (mode: PermissionMode) => void;
+  /** OpenCode agents (Engine flag `agents`): the agent the session runs as, the primary agents to choose from, the choice. The chooser shows when the list is not empty. */
+  agent?: string;
+  agentList?: AgentInfo[];
+  onAgent?: (agent: string) => void;
   onAttach: (files: File[]) => void;
   /** Agents button (session view), after the choosers. */
   agents?: ReactNode;
@@ -199,6 +226,7 @@ export function PromptToolbar(props: {
   const models = props.models.some((m) => m.value === props.model) ? props.models : [{ value: props.model, displayName: props.model, description: "" }, ...props.models];
   const efforts = effortOptions(props.models, props.model, props.caps);
   const phone = usePhone();
+  const showAgents = !!props.onAgent && !!props.agentList?.length && !!props.caps?.agents;
   const effort = efforts.includes(props.effort) ? props.effort : "default";
   const modelItems = models.map((m) => ({
     value: m.value,
@@ -242,10 +270,11 @@ export function PromptToolbar(props: {
           }}
         />
         {phone ? (
-          <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelItems={modelItems} />
+          <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelItems={modelItems} showAgents={showAgents} />
         ) : (
           <>
-            <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} />
+            {showAgents && <AgentPicker agent={props.agent ?? "build"} agents={props.agentList!} onAgent={props.onAgent!} />}
+            <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} cycles={!showAgents} />
             <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
           </>
@@ -266,16 +295,16 @@ function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { e
 }
 
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
-function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems }: {
+function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, showAgents, agent = "build", agentList = [], onAgent }: {
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
-  efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[];
+  efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[]; showAgents: boolean; agent?: string; agentList?: AgentInfo[]; onAgent?: (a: string) => void;
 }) {
   const t = useT();
   const Mode = MODE_LABEL[mode].Icon;
   const name = models.find((m) => m.value === model)?.displayName ?? model;
-  const visible = `${t(MODE_LABEL[mode].short)} · ${shortModel(name)}`;
+  const visible = `${showAgents ? `${agentLabel(agent)} · ` : ""}${t(MODE_LABEL[mode].short)} · ${shortModel(name)}`;
   // The name starts with the visible text (WCAG 2.5.3), then lists every setting the chip opens.
-  const label = `${t("app.toolbar.sessionSettingsLabel", { visible, mode: t(MODE_LABEL[mode].label), model: name })}${efforts.length ? t("app.toolbar.sessionSettingsEffort", { effort: t(EFFORT_LABEL[effort]) }) : ""}`;
+  const label = `${t("app.toolbar.sessionSettingsLabel", { visible, mode: t(MODE_LABEL[mode].label), model: name })}${efforts.length ? t("app.toolbar.sessionSettingsEffort", { effort: t(EFFORT_LABEL[effort]) }) : ""}${showAgents ? t("app.toolbar.sessionSettingsAgent", { agent: agentLabel(agent) }) : ""}`;
   const wide = "w-full max-w-none justify-start max-sm:h-11!";
   return (
     <Popover.Root>
@@ -290,6 +319,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
             aria-label={t("app.toolbar.sessionSettings")}
             className="flex w-64 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col gap-1 rounded-2xl border bg-popover p-1 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
           >
+            {showAgents && <AgentPicker agent={agent} agents={agentList} onAgent={onAgent!} shortcut={false} className={wide} />}
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
             <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}

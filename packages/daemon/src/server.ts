@@ -34,7 +34,7 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
+import { createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents } from "./opencode-engine.ts";
 import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -1219,7 +1219,7 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
-    openCodeAgents: async (cwd) => (await openCode.request<{ name: string; mode?: string; hidden?: boolean }[]>("/agent", { directory: cwd, timeoutMs: 0 })).filter((a) => !a.hidden && a.mode !== "subagent").map((a) => a.name),
+    openCodeAgents: async (cwd) => primaryAgents(await openCodeEngine.agents(cwd)).map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
     openCodeModels: () => openCodeModels(openCode),
@@ -1364,8 +1364,11 @@ export function createDaemon(opts: {
         for (const row of list) {
           const loaded = sessions.get(row.id);
           const saved = linked.get(row.id);
-          const mode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
-          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: "opencode" as const };
+          const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
+          // Plan is the plan agent (GH-684): a saved plan mode lists as default + agent plan.
+          const mode = savedMode === "plan" ? "default" : savedMode;
+          const agent = savedMode === "plan" ? "plan" : (saved?.agent ?? "build");
+          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, agent, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: "opencode" as const };
           openCodeMeta.set(row.id, { cwd, title: row.title });
           out.ids.add(row.id);
           out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
@@ -2229,6 +2232,15 @@ export function createDaemon(opts: {
             return fail("commands_failed", (e as Error).message);
           }
         }
+        case "session.agents": {
+          const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          try {
+            return reply({ agents: msg.engine === "opencode" ? primaryAgents(await openCodeEngine.agents(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })) : [] });
+          } catch (e) {
+            return fail("agents_failed", (e as Error).message);
+          }
+        }
         case "session.subscribe": {
           const span = perfMon.span("session.open");
           try {
@@ -2385,6 +2397,18 @@ export function createDaemon(opts: {
             await s.setModel(msg.model);
           } catch (e) {
             return fail("set_model_failed", (e as Error).message);
+          }
+          return reply({ session: s.info() });
+        }
+        case "session.setAgent": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (typeof msg.agent !== "string" || !msg.agent || msg.agent.length > 200) return fail("bad_agent", "agent must be a non-empty string");
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          try {
+            await s.setAgent(msg.agent);
+          } catch (e) {
+            return fail("set_failed", (e as Error).message);
           }
           return reply({ session: s.info() });
         }

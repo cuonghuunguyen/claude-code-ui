@@ -171,6 +171,24 @@ it("Shift+Tab cycles the permission mode like Claude Code, also while the picker
   expect(onMode).toHaveBeenLastCalledWith("default");
 });
 
+it("GH-684: Shift+Tab in a session with agents cycles build, plan, review, build and leaves the permission mode alone", async () => {
+  const onMode = vi.fn();
+  const onAgent = vi.fn();
+  const caps = { ...ALL_CAPABILITIES, permissionModes: ["default", "acceptEdits"] as never, agents: true };
+  const agents = [{ name: "build" }, { name: "plan" }, { name: "review" }];
+  const session = { id: "s1", cwd: "/tmp", state: "idle" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default", "acceptEdits"] as never, capabilities: caps, agent: "build" };
+  const { box, rerender } = await render({ onMode, onAgent, session }, { ...emptySession(), agents });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("plan");
+  await rerender({ session: { ...session, agent: "plan" } });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("review");
+  await rerender({ session: { ...session, agent: "review" } });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("build");
+  expect(onMode).not.toHaveBeenCalled();
+});
+
 it("Shift+Tab sends nothing when no other mode is known", async () => {
   const onMode = vi.fn();
   const { box } = await render({ onMode, session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] } });

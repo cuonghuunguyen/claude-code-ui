@@ -23,6 +23,8 @@ export type Part = { parentId?: string } & (
   | { type: "session_model"; id: string; model: string }
   | { type: "session_permission_mode"; id: string; mode: string }
   | { type: "session_effort"; id: string; effort: string }
+  | { type: "session_agent"; id: "session_agent"; agent: string }
+  | { type: "agents"; id: "agents"; agents: { name: string; description?: string }[] }
   | { type: "commands"; id: "commands"; commands: { name: string; description: string; argumentHint: string; aliases?: string[] }[] }
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }
   | { type: "context_usage"; id: "context_usage"; usage: { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number; kind: "used" | "free" | "buffer" }[] } }

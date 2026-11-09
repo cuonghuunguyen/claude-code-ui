@@ -340,15 +340,15 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => !!s.last(`${s.id}:shell_failed`) && s.states().at(-1) === "idle");
   });
 
-  it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
+  it("modes: the plan mode is the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to build", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
-    const created = d.requests("POST", "/session")[0]!.body.permission as { permission: string; pattern: string; action: string }[];
-    expect(created.map((r) => `${r.permission}:${r.pattern}:${r.action}`)).toEqual(["claude-ui:mode:default:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:build:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     for (const mode of ["auto", "dontAsk", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
-    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
-    const plan = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as { permission: string; pattern: string; action: string }[];
-    expect(plan.map((r) => `${r.permission}:${r.pattern}:${r.action}`)).toEqual(["claude-ui:mode:plan:allow", "bash:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
+    expect(reply.session).toMatchObject({ permissionMode: "default", agent: "plan" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:plan:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     await s.prompt("plan it");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
@@ -357,10 +357,96 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const buildMessage = (id: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent: "build", sessionID: s.id } } });
     // OpenCode repeats message.updated: one block only.
     await d.fake("/__emit", { events: [buildMessage("msg_fromtui"), buildMessage("msg_fromtui")] });
-    await until(() => s.find("session_permission_mode")?.mode === "default");
+    await until(() => s.find("session_agent")?.agent === "build");
     await new Promise((r) => setTimeout(r, 300));
     expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches + 1);
-    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[0].pattern).toBe("mode:default");
+    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[1].pattern).toBe("agent:build");
+  });
+
+  it("agents: the agents part lists build, docs and plan; setAgent writes a block with the agent's denials and prompts as it; an unknown or subagent name is refused", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    expect(s.find("agents")!.agents).toEqual([{ name: "build" }, { name: "docs", description: "Writes docs" }, { name: "plan" }]);
+    const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    expect((await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" })).session.agent).toBe("docs");
+    expect(s.find("session_agent")?.agent).toBe("docs");
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:docs:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    // Edit automatically: the agent's denial still comes after the allow.
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "acceptEdits" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).filter((r) => r.startsWith("edit:"))).toEqual(["edit:*:allow", "edit:*:deny"]);
+    await s.prompt("write docs");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("docs");
+    for (const agent of ["general", "title", "nope"]) expect(await d.request({ type: "session.setAgent", sessionId: s.id, agent })).toMatchObject({ type: "error" });
+    const claude = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
+    expect(await d.request({ type: "session.setAgent", sessionId: claude, agent: "docs" })).toMatchObject({ type: "error" });
+  });
+
+  it("session.agents lists a folder's primary agents for the draft; Claude gets none", async () => {
+    const d = await boot();
+    expect((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents.map((a: { name: string }) => a.name)).toEqual(["build", "docs", "plan"]);
+    expect((await d.ok({ type: "session.agents", cwd: d.project })).agents).toEqual([]);
+    expect(await d.request({ type: "session.agents", cwd: join(d.root, "..", "elsewhere"), engine: "opencode" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+  });
+
+  it("the chosen agent is saved and survives a daemon restart; a saved plan mode opens as the plan agent", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const first = await boot({ root });
+    const s = await first.open();
+    await first.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    const saved = JSON.parse(readFileSync(join(root, "sessions.json"), "utf8"))[s.id];
+    expect(saved).toMatchObject({ agent: "docs", permissionMode: "default" });
+    first.ws.close();
+    first.http.close();
+    const project = join(root, "project");
+    const block = (agent: string) => [{ permission: "claude-ui", pattern: "mode:default", action: "allow" }, { permission: "claude-ui", pattern: `agent:${agent}`, action: "allow" }, { permission: "claude-ui", pattern: "always", action: "allow" }];
+    const row = (id: string, permission: object[]) => ({ id, slug: id, projectID: "global", directory: project, title: id, version: "1.18.34", time: { created: 1, updated: 2 }, permission });
+    writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_old: saved, ses_legacy: { permissionMode: "plan" } }));
+    const legacy = [{ permission: "claude-ui", pattern: "mode:plan", action: "allow" }, { permission: "claude-ui", pattern: "always", action: "allow" }];
+    const d = await boot({ root, script: ["text", "text"], data: { sessions: [row("ses_old", block("docs")), row("ses_legacy", legacy)] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const one = await d.ok({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    expect(one.session).toMatchObject({ agent: "docs", permissionMode: "default" });
+    await d.ok({ type: "session.prompt", sessionId: "ses_old", text: "hi" });
+    await until(() => d.requests("POST", "/session/ses_old/prompt_async").length === 1);
+    expect(d.requests("POST", "/session/ses_old/prompt_async")[0]!.body.agent).toBe("docs");
+    const two = await d.ok({ type: "session.subscribe", sessionId: "ses_legacy", sinceSeq: 0 });
+    expect(two.session).toMatchObject({ agent: "plan", permissionMode: "default" });
+    await d.ok({ type: "session.prompt", sessionId: "ses_legacy", text: "hi" });
+    await until(() => d.requests("POST", "/session/ses_legacy/prompt_async").length === 1);
+    const log = d.log().filter((l) => l.type === "request" && l.path.startsWith("/session/ses_legacy"));
+    const patch = log.findIndex((l) => l.method === "PATCH");
+    expect(patch).toBeGreaterThanOrEqual(0);
+    expect(log[patch]!.body.permission[1].pattern).toBe("agent:plan");
+    expect(patch).toBeLessThan(log.findIndex((l) => l.path.endsWith("/prompt_async")));
+    expect(d.requests("POST", "/session/ses_legacy/prompt_async")[0]!.body.agent).toBe("plan");
+  });
+
+  it("a user message of another visible agent from OpenCode's UI switches the agent; a hidden agent's does not", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const msg = (id: string, agent: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent, sessionID: s.id } } });
+    await d.fake("/__emit", { events: [msg("msg_a", "docs")] });
+    await until(() => s.find("session_agent")?.agent === "docs");
+    await d.fake("/__emit", { events: [msg("msg_b", "title")] });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.find("session_agent")?.agent).toBe("docs");
+  });
+
+  it("an agent gone from OpenCode's list runs the prompt as build with a notice", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    await d.fake("/__agents", { agents: [{ name: "build", mode: "primary", permission: [] }] });
+    // A dropped event stream is a reconnect: the agent lists are read again.
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/agent").length >= 2);
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("build");
+    expect(s.parts().some((p) => p.type === "notice" && p.id.endsWith("agent_missing"))).toBe(true);
   });
 
   it("bypass is offered and applied only with the daemon flag", async () => {
@@ -981,6 +1067,19 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
     expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], agent: "docs", model: { providerID: "opencode", modelID: "alpha" } });
     expect(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[w.sessionId]).toMatchObject({ agent: "docs" });
+  });
+
+  it("GH-684: a worker started in mode plan runs as the plan agent with the default permission mode, whatever agent it names", async () => {
+    const d = await boot({ script: ["text"] });
+    await on(d);
+    const coord: string = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
+    await d.ok({ type: "session.setPermissionMode", sessionId: coord, mode: "default" });
+    const r = (await d.http.orchestration.tools(coord).find((t) => t.name === "worker_start")!.handler({ name: "pl", cwd: d.project, prompt: "go", engine: "opencode", mode: "plan", agent: "docs" } as never, {})) as { content: { text: string }[] };
+    const w = JSON.parse(r.content[0]!.text);
+    expect((await d.ok({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 })).session).toMatchObject({ agent: "plan", permissionMode: "default" });
+    expect(d.requests("POST", "/session").at(-1)!.body.permission.map((x: { pattern: string }) => x.pattern)).toContain("agent:plan");
+    await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
+    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body.agent).toBe("plan");
   });
 });
 

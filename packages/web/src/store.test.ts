@@ -150,6 +150,21 @@ describe("applyEvent", () => {
   });
 });
 
+describe("OpenCode agents (GH-684)", () => {
+  it("session_agent and agents parts set the view's agent and list; a session_agent older than the settings read is ignored", () => {
+    const list = [{ name: "build" }, { name: "plan", description: "Plans" }];
+    let s = [ev(1, { type: "agents", id: "agents", agents: list }), ev(2, { type: "session_agent", id: "session_agent", agent: "plan" })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: list, order: [] });
+    s = withSubscribe(s, { logEpoch: "e", seq: 5, session: { id: "s", cwd: "/", state: "idle", model: "m", permissionMode: "default", effort: "default", agent: "build", permissionModes: [] } });
+    expect(s.agent).toBe("build");
+    // A replayed change older than the reply's values must not win.
+    s = applyEvent(s, ev(3, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("build");
+    s = applyEvent(s, ev(6, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("plan");
+  });
+});
+
 describe("withSubscribe", () => {
   const filled = (): SessionView => ({ ...[ev(1, text("a", "x")), ev(2, text("b", "y"))].reduce(applyEvent, emptySession()), logEpoch: "e1" });
   const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };
