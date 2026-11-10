@@ -63,3 +63,15 @@ When("I disable orchestration in Settings", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("settings-dialog")).toBeHidden();
 });
+
+// An opened session leaves the first-prompt composer of the project in the DOM (disabled, hidden): talk to the visible pair only.
+When("I send {string} in the opened session", async ({ page }, text: string) => {
+  await page.getByRole("combobox", { name: /^(First prompt|Prompt)$/ }).locator("visible=true").first().fill(text);
+  const send = page.locator('[data-testid="send"]:visible');
+  await expect(send).toBeEnabled();
+  await send.click();
+});
+
+Then("the opened session's turn has finished", async ({ page }) => {
+  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
+});

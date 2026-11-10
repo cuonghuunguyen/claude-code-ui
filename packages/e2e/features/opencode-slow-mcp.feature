@@ -39,10 +39,14 @@ Feature: OpenCode in folders with slow MCP servers and turns OpenCode ends on it
     And I choose the engine "OpenCode"
     And the OpenCode server of the daemon is running
     When I disable orchestration in Settings
-    And another client cuts OpenCode's MCP load in the project
-    And I send the first prompt "Reply with exactly: OK"
+    And an OpenCode session "Coordinator" with the messages "Hello from the seed" is created outside the app
+    And I reload the page
+    And I open the OpenCode session "Coordinator"
+    Then the conversation shows the user message "Hello from the seed"
+    When another client cuts OpenCode's MCP load in the project
+    And I send "Reply with exactly: OK" in the opened session
     Then I see the warning "OpenCode ended this turn on its own"
-    And the turn has finished
+    And the opened session's turn has finished
     And the turn footer says error
     And I capture "self aborted turn"
 
