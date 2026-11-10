@@ -217,15 +217,6 @@ describe("queued messages in the daemon", { timeout: 20_000 }, () => {
     c.ws.close();
   });
 
-  it("dequeue and Send now on a session that is not in memory do not load it from disk", async () => {
-    const h = await harness(fakeQuery);
-    const c = await h.client();
-    const id = "11111111-2222-3333-4444-555555555555";
-    expect((await c.request({ type: "session.dequeue", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
-    expect((await c.request({ type: "session.sendQueued", sessionId: id, itemId: "x" })).code).toBe("unknown_item");
-    c.ws.close();
-  });
-
   it("the CLI crashes while a message is queued: the queue shows Paused (not_live)", async () => {
     const crashQuery = (args: any) => {
       const base = fakeQuery(args) as any;

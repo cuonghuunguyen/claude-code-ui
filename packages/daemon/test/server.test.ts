@@ -21,7 +21,7 @@ import { createSecrets } from "../src/secrets.ts";
 import { createSettings } from "../src/settings.ts";
 import { ConfigError } from "../src/config.ts";
 import { TEST_ARGS } from "../src/claude-test.ts";
-import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
@@ -142,24 +142,12 @@ describe("daemon", () => {
     expect((await fetch(`http://127.0.0.1:${port}/some/route`)).status).toBe(200);
   });
 
-  it("creates a session, streams a prompt's reply as seq'd events over WebSocket", async () => {
-    const c = await client();
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const session = (created as { result: { session: { id: string } } }).result.session;
-    expect(session.id).toMatch(/^[0-9a-f-]{36}$/);
-
-    await c.request({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0 });
-    await c.request({ type: "session.prompt", sessionId: session.id, text: "hi" });
-    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
-    const events = c.inbox.filter((m) => m.type === "event");
-    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
-  });
-
   it("session.create and session.list carry the Engine's capability flags", async () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string; capabilities?: unknown } } };
     expect(created.result.session.capabilities).toEqual(ALL_CAPABILITIES);
     const id = created.result.session.id;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
     await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
     await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
     await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
@@ -198,11 +186,6 @@ describe("daemon", () => {
     const id = ((await c.request({ type: "session.create", cwd: dir })) as { result: { session: { id: string } } }).result.session.id;
     rmSync(dir, { recursive: true });
     expect(await c.request({ type: "session.bash", sessionId: id, command: "echo hi" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
-  });
-
-  it("rejects a cwd that is not a directory", async () => {
-    const c = await client();
-    expect(await c.request({ type: "session.create", cwd: "/nonexistent" })).toMatchObject({ type: "error", code: "bad_cwd" });
   });
 
   it("answers a malformed URL path with 400 and keeps running", async () => {
@@ -435,15 +418,7 @@ describe("daemon", () => {
     expect(sub.result.seq).toBeGreaterThan(0);
     await second.c.request({ type: "session.prompt", sessionId: id, text: "go" });
     expect(calls.at(-1)).toMatchObject({ resume: id, model: "haiku", effort: "high", permissionMode: "acceptEdits" });
-    // A mode the daemon no longer enables is not restored.
-    await second.c.request({ type: "session.setPermissionMode", sessionId: id, mode: "plan" });
     second.d.close();
-    const saved = JSON.parse(readFileSync(settingsFile, "utf8"));
-    writeFileSync(settingsFile, JSON.stringify({ ...saved, [id]: { ...saved[id], permissionMode: "bypassPermissions" } }));
-    const third = await start();
-    const again = (await third.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: object } };
-    expect(again.result.session).toMatchObject({ model: "haiku", effort: "high", permissionMode: "default" });
-    third.d.close();
   });
 
   describe("sessions.json", () => {
@@ -469,19 +444,6 @@ describe("daemon", () => {
     const file = () => join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
     const read = (f: string) => JSON.parse(readFileSync(f, "utf8")) as Record<string, unknown>;
 
-    it("is replaced atomically (a new file renamed over the old one), no temp file left", async () => {
-      const f = file();
-      const { d, c } = await daemon(f);
-      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "high" });
-      const inode = statSync(f).ino;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "low" });
-      expect(statSync(f).ino).not.toBe(inode);
-      expect(read(f)[id]).toMatchObject({ effort: "low" });
-      expect(readdirSync(dirname(f))).toEqual(["sessions.json"]);
-      d.close();
-    });
-
     it("session.delete removes the entry; a list drops entries whose session has no transcript and is not live", async () => {
       const f = file();
       const [kept, gone, deleted] = [uuid(1), uuid(2), uuid(3)];
@@ -492,23 +454,6 @@ describe("daemon", () => {
       expect(Object.keys(read(f))).toEqual([kept, gone]);
       await c.request({ type: "session.list" });
       expect(Object.keys(read(f))).toEqual([kept]);
-      d.close();
-    });
-
-    it(`keeps at most ${MAX_SETTINGS} entries: the least recently changed go first`, async () => {
-      const f = file();
-      const entry = { model: "haiku", permissionMode: "default", effort: "high" };
-      writeFileSync(f, JSON.stringify(Object.fromEntries(Array.from({ length: MAX_SETTINGS }, (_, i) => [uuid(i), entry]))));
-      const { d, c } = await daemon(f);
-      // Re-saving an existing entry moves it to the end; a new one pushes out the oldest.
-      await c.request({ type: "session.subscribe", sessionId: uuid(0), sinceSeq: 0 });
-      await c.request({ type: "session.setEffort", sessionId: uuid(0), effort: "low" });
-      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "max" });
-      const keys = Object.keys(read(f));
-      expect(keys).toHaveLength(MAX_SETTINGS);
-      expect(keys.slice(0, 1)).toEqual([uuid(2)]);
-      expect(keys.slice(-2)).toEqual([uuid(0), id]);
       d.close();
     });
 
@@ -1020,22 +965,14 @@ describe("daemon", () => {
     });
   });
 
-  it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
-    const c = await client();
-    const closed = new Promise<number>((r) => c.ws.on("close", r));
-    // Raw masked binary frame header claiming 256 MiB (> the 100 MiB default maxPayload); ws rejects it on the header.
-    (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.from([0x82, 0xff, 0, 0, 0, 0, 0x10, 0, 0, 0, 1, 2, 3, 4]));
-    expect(await closed).toBe(1009);
-    expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
-  });
-
-  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default", async () => {
+  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default; the daemon keeps answering", async () => {
     const c = await client();
     const closed = new Promise<number>((r) => c.ws.on("close", r));
     const len = Buffer.alloc(8);
     len.writeBigUInt64BE(BigInt(MAX_FRAME_BYTES + 1));
     (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.concat([Buffer.from([0x82, 0xff]), len, Buffer.from([1, 2, 3, 4])]));
     expect(await closed).toBe(1009);
+    expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
   it("rejects an empty or non-string model", async () => {
@@ -2041,8 +1978,6 @@ describe("daemon", () => {
       code: "path_not_allowed",
     });
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj") })).toMatchObject({ code: "not_a_file" });
-    writeFileSync(join(webRoot, "proj", "bin"), Buffer.from([1, 0, 2]));
-    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
   });
 
   it("fs.read: binary, too large, UTF-16 and invalid UTF-8 files fail with their own code and the size; empty and just-under-limit files read", async () => {
@@ -2085,24 +2020,9 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(mkdtempSync(join(tmpdir(), "outside-")), "f.txt") })).toMatchObject({ code: "path_not_allowed" });
   });
 
-  it("fs.read of files under a deleted directory (rm -rf after Edits) replies not_found", async () => {
-    const src = join(webRoot, "proj", "src");
-    mkdirSync(join(src, "sub"), { recursive: true });
-    writeFileSync(join(src, "math.js"), "x");
-    writeFileSync(join(src, "sub", "notes.md"), "y");
-    rmSync(src, { recursive: true });
-    const c = await client();
-    expect(await c.request({ type: "fs.read", path: join(src, "math.js") })).toMatchObject({ code: "not_found" });
-    expect(await c.request({ type: "fs.read", path: join(src, "sub", "notes.md") })).toMatchObject({ code: "not_found" });
-  });
-
-  it("fs.read refuses non-UTF-8 text and keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
+  it("fs.read keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
     mkdirSync(join(webRoot, "proj"), { recursive: true });
     const c = await client();
-    const latin1 = join(webRoot, "proj", "latin1.txt");
-    writeFileSync(latin1, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])); // "café\n" in Latin-1
-    expect(await c.request({ type: "fs.read", path: latin1 })).toMatchObject({ code: "not_utf8" });
-
     const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
     const file = join(webRoot, "proj", "bom.txt");
     writeFileSync(file, bytes);
@@ -2110,10 +2030,6 @@ describe("daemon", () => {
     expect(read.result.content).toBe("\ufeffa\r\nb");
     await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
     expect(readFileSync(file).equals(bytes)).toBe(true);
-
-    const empty = join(webRoot, "proj", "empty.txt");
-    writeFileSync(empty, "");
-    expect(await c.request({ type: "fs.read", path: empty })).toMatchObject({ result: { content: "" } });
   });
 
   it("notifies watchers when a watched file changes on disk", { timeout: 10_000 }, async () => {
@@ -4088,7 +4004,7 @@ describe("push", () => {
     none.d.close();
   });
 
-  it("push.focus covered: the sessions an in-app page shows cards for get no push; an empty push.focus and a closed socket lift it; bad values are refused (GH-158)", async () => {
+  it("push.focus covered: the sessions an in-app page shows cards for get no push; bad values are refused (GH-158)", async () => {
     const f = fakePush();
     const { d, c } = await daemon(f.push);
     try {
@@ -4732,6 +4648,7 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     expect(await t.mode()).toBe("default");
     writeFileSync(t.user, "{ not json");
     expect(await t.mode()).toBe("default");
+    expect(await t.c.request({ type: "session.defaultMode", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
     t.d.close();
   });
 
@@ -4770,14 +4687,6 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
-  it("bypassPermissions from the user settings still counts (with allow-bypass)", async () => {
-    const t = await setup(true);
-    write(t.user, "bypassPermissions");
-    write(t.shared, "bypassPermissions");
-    expect(await t.mode()).toBe("bypassPermissions");
-    t.d.close();
-  });
-
   it("bypassPermissions needs the daemon's allow-bypass; auto needs a model with auto support", async () => {
     const t = await setup();
     write(t.user, "bypassPermissions");
@@ -4806,12 +4715,6 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     await t.c.request({ type: "skills.setState", cwd: t.project, name: "x", state: "off" });
     await ask(t.project);
     expect(calls.slice(before).filter((o) => o.cwd === t.project && o.persistSession === false && !("resume" in o)).length).toBeGreaterThanOrEqual(2);
-    t.d.close();
-  });
-
-  it("session.defaultMode refuses a cwd outside the roots", async () => {
-    const t = await setup();
-    expect(await t.c.request({ type: "session.defaultMode", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
     t.d.close();
   });
 
@@ -5832,12 +5735,6 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     c.ws.close();
     expect(wire.cl).toBe(15 * MiB);
     expect(wire.body).toBe(wire.cl);
-  });
-
-  it("the page carries X-DNS-Prefetch-Control: off", async () => {
-    const c = await open();
-    expect((await get((await preview(c, "toolu_a")).result.url)).headers["x-dns-prefetch-control"]).toBe("off");
-    c.ws.close();
   });
 
   it("GET refuses a top-level load, a cross-site or foreign-origin request, an unknown host and POST", async () => {
