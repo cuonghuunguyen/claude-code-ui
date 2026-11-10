@@ -11,6 +11,7 @@ import { createDaemon } from "../src/server.ts";
 import { createSettings } from "../src/settings.ts";
 import type { Launcher, OpenCommand } from "../src/open-external.ts";
 import { permissionQuery } from "./fake-query.ts";
+import { canSymlink, needsLinks } from "./symlink-support.ts";
 
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "oe-")));
@@ -19,7 +20,7 @@ const root = join(dir, "root");
 mkdirSync(join(root, "sub"), { recursive: true });
 writeFileSync(join(root, "a.txt"), "x");
 writeFileSync(join(outside, "o.txt"), "x");
-symlinkSync(join(outside, "o.txt"), join(root, "link.txt"));
+if (canSymlink) symlinkSync(join(outside, "o.txt"), join(root, "link.txt"));
 
 const run = vi.fn<(c: OpenCommand) => Promise<void>>(async () => {});
 const editors = new Map<"code", Launcher>([["code", { cli: "/bin/code" }]]);
@@ -55,7 +56,8 @@ describe("fs.openExternal", () => {
     const req = await client(port);
     expect(await req(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "reply", result: {} });
     expect(run).toHaveBeenCalledOnce();
-    expect(run.mock.calls[0]![0].args).toContain(process.platform === "linux" ? root : join(root, "a.txt"));
+    const file = join(root, "a.txt");
+    expect(run.mock.calls[0]![0].args).toContain(process.platform === "linux" ? root : process.platform === "win32" ? `/select,"${file}"` : file);
     expect(await req(open(join(root, "a.txt"), "code"))).toMatchObject({ type: "reply" });
     expect(run.mock.calls[1]![0]).toMatchObject({ cmd: "/bin/code", args: [root, join(root, "a.txt")] });
     expect(await req(open(join(root, "sub"), "reveal"))).toMatchObject({ type: "reply" });
@@ -66,11 +68,14 @@ describe("fs.openExternal", () => {
     expect(await req(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "not_local" });
     expect(run).not.toHaveBeenCalled();
   });
+  it.skipIf(!canSymlink)(needsLinks("refuses a link inside the root that leads out of it"), async () => {
+    const req = await client(port);
+    expect(await req(open(join(root, "link.txt"), "reveal"))).toMatchObject({ code: "path_not_allowed" });
+  });
   it("refuses bad input", async () => {
     run.mockClear();
     const req = await client(port);
     expect(await req(open(join(outside, "o.txt"), "reveal"))).toMatchObject({ code: "path_not_allowed" });
-    expect(await req(open(join(root, "link.txt"), "reveal"))).toMatchObject({ code: "path_not_allowed" });
     expect(await req(open("rel.txt", "reveal"))).toMatchObject({ code: "path_not_allowed" });
     expect(await req(open(join(root, "gone.txt"), "reveal"))).toMatchObject({ code: "not_found" });
     expect(await req(open(join(root, "a.txt"), "reveal", outside))).toMatchObject({ code: "cwd_not_allowed" });

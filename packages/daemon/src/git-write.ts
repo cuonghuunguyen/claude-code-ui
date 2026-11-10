@@ -585,6 +585,9 @@ export async function gitRollbackHunk(cwd: string, o: { path: unknown; hunk: unk
           writeFileSync(tmp, bom ? `\uFEFF${next}` : next, { flag: "wx", mode: st.mode & 0o7777 });
           chmodSync(tmp, st.mode & 0o7777);
           if (!sameFile(fd, file)) throw Object.assign(new Error("changed during the request"), { code: "ECHANGED" });
+          // Windows refuses to replace a file that is still open (EPERM): the identity check is done, release it first.
+          closeSync(fd);
+          fd = undefined;
           renameSync(tmp, file);
         } catch (e) {
           rmSync(tmp, { force: true });

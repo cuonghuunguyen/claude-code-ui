@@ -405,9 +405,15 @@ it("breadcrumb: the folders of the path below cwd, the file last with aria-curre
   await act(async () => nav.querySelector("button")!.click());
   expect(onToggleTree).toHaveBeenCalledOnce();
   await t.show({ showTree: true });
-  await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
-  expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("true");
-  expect(document.activeElement).toBe(t.row("/p/src"));
+  // The reveal takes more than one frame when the machine is busy: wait for the result, not for one rAF.
+  await vi.waitFor(
+    async () => {
+      await act(async () => void (await new Promise((r) => requestAnimationFrame(r))));
+      expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(t.row("/p/src"));
+    },
+    { timeout: 10_000, interval: 20 },
+  );
   act(() => t.root.render(null));
 });
 

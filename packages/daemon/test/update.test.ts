@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compareVersions, createUpdater, installedVersions, installVersion, latestNewer, parseRegistry, pruneVersions, RESTART_CODE, runCommand, winQuote, type Runner } from "../src/update.ts";
+// Windows, full suite: this file's git-heavy tests (npm pack of a folder: 13 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
 const answer = (body: unknown, ok = true) => (async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
 

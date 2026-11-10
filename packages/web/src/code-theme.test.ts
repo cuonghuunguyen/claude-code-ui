@@ -108,12 +108,14 @@ const gapCache: Partial<Record<"light" | "dark", Promise<Set<string>>>> = {};
 /** Every token Shiki colours that the editor colours differently, as `sample line:col token`. Computed once per mode, whichever test asks first. */
 function gapsFor(mode: "light" | "dark") {
   return (gapCache[mode] ??= (async () => {
+    // tokenizeTimeLimit 0: Shiki stops tokenizing a line after 500 ms by default and returns the rest of it as one token; on a busy machine that made the css sample
+    // differ from the editor in a place it never does otherwise (one token "auto !important; --v: ... } }").
     const gaps = new Set<string>();
     const h = await createHighlighter({ themes: [adjustedTheme(mode)], langs: ["ts", "tsx", "json", "markdown", "css"], engine: createJavaScriptRegexEngine() });
     for (const [name, s] of Object.entries(SAMPLES)) {
       const cm = await lezerColors(s.file, s.code, mode);
       let offset = 0;
-      for (const [row, line] of h.codeToTokens(s.code, { lang: s.lang as never, theme: adjustedTheme(mode).name! }).tokens.entries()) {
+      for (const [row, line] of h.codeToTokens(s.code, { lang: s.lang as never, theme: adjustedTheme(mode).name!, tokenizeTimeLimit: 0 }).tokens.entries()) {
         const lineStart = s.code.split(String.fromCharCode(10)).slice(0, row).reduce((n, l) => n + l.length + 1, 0);
         for (const tok of line) {
           const text = tok.content;

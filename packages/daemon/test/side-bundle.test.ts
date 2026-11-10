@@ -363,7 +363,7 @@ describe("pruneCache and markUsed", () => {
     const target = folder(tmp("target-"), "precious", 100);
     folder(c, "0.8.0", 100);
     writeFileSync(join(c, "loose-file"), "x");
-    symlinkSync(target, join(c, "link"), "dir");
+    symlinkSync(target, join(c, "link"), "junction");
     pruneCache(c, "1.0.0");
     expect(existsSync(join(target, "part"))).toBe(true);
     expect(existsSync(join(outside, "part"))).toBe(true);

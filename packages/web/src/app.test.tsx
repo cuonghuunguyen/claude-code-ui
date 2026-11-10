@@ -2184,6 +2184,8 @@ it("Changes and Graph show the repository chosen for the project; a pick in eith
       await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
       await wait();
     };
+    // The Files tree reads one git.diff per repository for its marks while it is shown (a slow start sends them before the switch): only what follows the switch is the Changes read.
+    gits.length = 0;
     await pickSide(/changes/i);
     await wait();
     expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);
@@ -6222,11 +6224,16 @@ describe("GH-401 docked session", () => {
     await remount();
     await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
     await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "Alpha beta", streaming: false } }));
-    document.getSelection()!.selectAllChildren(inDock('[data-testid="assistant-text"] p')!);
-    await act(async () => {
-      document.dispatchEvent(new Event("selectionchange"));
-      await new Promise((r) => setTimeout(r, 160));
-    });
+    // The timeline renders its markdown late (slower under load) and a re-render replaces the selected node, which drops the selection and the button
+    // with it: select again until the button shows (the button needs the selection to survive its 150 ms delay).
+    for (let i = 0; i < 40 && !document.querySelector('[data-testid="quote-button"]'); i++) {
+      const p = inDock('[data-testid="assistant-text"] p');
+      if (p) document.getSelection()!.selectAllChildren(p);
+      await act(async () => {
+        document.dispatchEvent(new Event("selectionchange"));
+        await new Promise((r) => setTimeout(r, 160));
+      });
+    }
     await act(async () => document.querySelector<HTMLElement>('[data-testid="quote-button"]')!.click());
     expect((prompt(S3) as HTMLTextAreaElement).value).toBe("> Alpha beta\n\n");
     const main = el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!;
