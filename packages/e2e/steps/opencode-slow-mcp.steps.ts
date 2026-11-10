@@ -1,28 +1,39 @@
 // GH-682 / GH-681: slow MCP folders and turns OpenCode ends on its own.
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
 import { daemonOpenCodeServer } from "../support/opencode.ts";
 import { RECONNECT_MS, TURN_MS, waitConnected } from "../support/ui.ts";
 import { runDir } from "../support/paths.ts";
-import { ownDaemon } from "./opencode-engine.steps.ts";
+import { ownDaemon, slowMcpStarted } from "./opencode-engine.steps.ts";
 import { Then, When } from "./fixtures.ts";
 
 /**
  * Another client of the daemon's OpenCode server does what the old daemon did to the folder: resets it, then drops its first read
- * (`GET /command`) after 4 s (the folder needs about 2 s to bootstrap before the MCP load starts; a 2 s cut landed before it on a loaded machine and nothing was interrupted), in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
+ * (`GET /command`) in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
+ * The cut waits for the load itself, not for a time: the folder first bootstraps (its length depends on the machine), then OpenCode starts the
+ * slow MCP server, which writes its marker file. The cut comes right after that, while the server holds the load (8 s).
  */
 When("another client cuts OpenCode's MCP load in the project", async ({ project }) => {
   const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
   const q = `?directory=${encodeURIComponent(project.path)}`;
   const dispose = await fetch(`${url}/instance/dispose${q}`, { method: "POST", headers: { authorization: auth } });
   expect(dispose.ok).toBe(true);
-  await fetch(`${url}/command${q}`, { headers: { authorization: auth }, signal: AbortSignal.timeout(4000) }).then(
-    () => {
-      throw new Error("GET /command answered within 4 s: the MCP load was not slow, nothing was cut");
-    },
+  // A marker of a server started before the dispose says nothing about the next load.
+  rmSync(slowMcpStarted(), { force: true });
+  const cut = new AbortController();
+  let answered = false;
+  const read = fetch(`${url}/command${q}`, { headers: { authorization: auth }, signal: cut.signal }).then(
+    () => void (answered = true),
     () => undefined,
   );
+  await expect(() => {
+    expect(answered, "GET /command answered before the MCP server started: the load was not slow, nothing was cut").toBe(false);
+    expect(existsSync(slowMcpStarted())).toBe(true);
+  }).toPass({ timeout: 60_000, intervals: [100] });
+  cut.abort();
+  await read;
+  expect(answered, "GET /command answered before the cut: nothing was cut").toBe(false);
 });
 
 When("I restart the daemon of the OpenCode scenario", async ({ page }) => {

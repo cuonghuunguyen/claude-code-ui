@@ -575,7 +575,8 @@ class OpenCodeSession implements EngineSession {
     const ways = this.stops.stop();
     this.session.interruptPending();
     if (!this.turnPosted) this.endStopped();
-    const abort = this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd });
+    // No caller timeout: a slow answer (a cold or loaded OpenCode) is no failed Stop; the reply does not wait for it. Only a real failure is shown.
+    const abort = this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd, timeoutMs: 0 });
     if (ways.length) {
       const prev = this.stale;
       const mine: Promise<void> = Promise.all([prev, this.cleanStale(ways, abort)]).then(() => {
@@ -583,8 +584,12 @@ class OpenCodeSession implements EngineSession {
       });
       this.stale = mine;
     }
-    await abort;
-    if (this.session.currentState() !== "idle" && (await this.idleInOpenCode())) this.endStopped();
+    void abort.then(
+      async () => {
+        if (this.session.currentState() !== "idle" && (await this.idleInOpenCode())) this.endStopped();
+      },
+      (err) => this.notice(`stop_failed:${ascending("msg")}`, `Could not stop the turn in OpenCode: ${(err as Error).message}`),
+    );
   }
 
   /** The stopped turn ends here: one interrupted marker, no result, idle. Not a turn begun after the Stop (a prompt sent after it). */
@@ -615,7 +620,7 @@ class OpenCodeSession implements EngineSession {
       void this.idleInOpenCode().then((none) => none || busy());
       // OpenCode stores the prompt and starts its loop a moment after it answered the request: watched that long.
       if (!(await Promise.race([started, sleep(STALE_WATCH_MS).then(() => false)]))) return;
-      await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd }).catch(() => {});
+      await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd, timeoutMs: 0 }).catch(() => {});
       await Promise.race([ended, sleep(TURN_END_WAIT_MS)]);
     } finally {
       this.quiet = undefined;

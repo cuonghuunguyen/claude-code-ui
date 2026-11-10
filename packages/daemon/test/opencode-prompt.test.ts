@@ -1327,6 +1327,34 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(s.parts().some((p) => p.type === "turn_result" && p.isError)).toBe(false);
   });
 
+  it("Stop when OpenCode answers the abort after 4 s: no error, the Stop is answered at once, the turn ends with one marker (acceptance round 6)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_ABORT_ANSWER_MS: "4000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    const t = Date.now();
+    const r = await d.request({ type: "session.interrupt", sessionId: s.id });
+    expect(r.type).toBe("reply");
+    expect(Date.now() - t).toBeLessThan(2000);
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 4500)); // the abort answers meanwhile
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+    expect(markers(s)).toBe(1);
+    await s.prompt("say DONE");
+    await until(() => !!s.find("turn_result"));
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a Stop whose abort OpenCode refuses shows that as a notice", async () => {
+    const d = await boot({ script: ["abort"] });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.fake("/__fail", { path: `/session/${s.id}/abort` });
+    expect((await d.request({ type: "session.interrupt", sessionId: s.id })).type).toBe("reply");
+    await until(() => s.parts().some((p) => p.type === "notice" && /Could not stop the turn in OpenCode/.test(p.text)));
+  });
+
   it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
     const d = await boot();
     await on(d); // the other session attaches at its open: that read of the broken folder reloads it
