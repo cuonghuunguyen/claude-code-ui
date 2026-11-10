@@ -13,7 +13,7 @@ import { Then, When } from "./fixtures.ts";
  * (`GET /command`) after 2 s, in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
  */
 When("another client cuts OpenCode's MCP load in the project", async ({ project }) => {
-  const { url, auth } = daemonOpenCodeServer(runDir());
+  const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
   const q = `?directory=${encodeURIComponent(project.path)}`;
   const dispose = await fetch(`${url}/instance/dispose${q}`, { method: "POST", headers: { authorization: auth } });
   expect(dispose.ok).toBe(true);
@@ -96,7 +96,7 @@ Then("the transcript has exactly {int} replies from Claude", async ({ page }, n:
 });
 
 Then("OpenCode stored the user prompt {string} and never {string}", async ({ project }, wanted: string, dropped: string) => {
-  const { url, auth } = daemonOpenCodeServer(runDir());
+  const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
   const q = `directory=${encodeURIComponent(project.path)}`;
   const get = async <T>(path: string): Promise<T> => {
     const res = await fetch(`${url}${path}${path.includes("?") ? "&" : "?"}${q}`, { headers: { authorization: auth } });

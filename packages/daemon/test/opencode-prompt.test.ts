@@ -1240,6 +1240,71 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
+  const markers = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "turn_interrupted").length;
+  const at = (d: Boot, f: (l: Record<string, any>) => boolean) => d.log().findIndex(f);
+
+  it("Stop during a slow prompt_async whose turn OpenCode already runs: one interrupted marker, running until OpenCode's turn ends, the next prompt after it (review 3 #1)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_DELAY_MS: "4000", FAKE_OPENCODE_ABORT_DELAY_MS: "1500" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await Promise.all([d.ok({ type: "session.interrupt", sessionId: s.id }), s.prompt("say DONE")]);
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2 && !!s.find("turn_result"), 20_000);
+    // The prompt sent after Stop reached OpenCode only after the aborted turn ended there: it never joined it.
+    const aborted = at(d, (l) => l.type === "aborted");
+    expect(aborted).toBeGreaterThanOrEqual(0);
+    expect(at(d, (l) => l.type === "request" && l.path === `/session/${s.id}/prompt_async` && l.body.parts[0].text === "say DONE")).toBeGreaterThan(aborted);
+    expect(markers(s)).toBe(1);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
+  it("Stop during a slow prompt_async while OpenCode asks a question: one interrupted marker (review 3 #1, the reviewer's probe)", async () => {
+    const d = await boot({ script: ["question"], env: { FAKE_OPENCODE_PROMPT_DELAY_MS: "3000" } });
+    const s = await d.open();
+    await s.prompt("ask me");
+    await until(() => !!s.find("question"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 4000)); // the prompt_async answers meanwhile
+    expect(markers(s)).toBe(1);
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
+  it("Stop while the permission block is written ends the turn at once; the prompt is never sent (review 3 #3)", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_PATCH_DELAY_MS: "5000" } });
+    await on(d); // the first prompt writes a block that allows the session's MCP tools
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => d.requests("PATCH", `/session/${s.id}`).some((r) => !!r.body.permission));
+    const t = Date.now();
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    expect(Date.now() - t).toBeLessThan(2000);
+    await new Promise((r) => setTimeout(r, 4000)); // the PATCH answers meanwhile
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+  });
+
+  it("a stopped prompt that reaches OpenCode only after the abort is aborted again without a second marker; the prompt sent after Stop waits for that and gets its reply", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_LATE_MS: "2500" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    await s.prompt("say DONE");
+    await until(() => !!s.find("turn_result"), 20_000);
+    const prompts = d.requests("POST", `/session/${s.id}/prompt_async`);
+    expect(prompts.map((r) => r.body.parts[0].text)).toEqual(["long essay", "say DONE"]);
+    const aborts = d.log().flatMap((l, i) => (l.type === "request" && l.path === `/session/${s.id}/abort` ? [i] : []));
+    expect(aborts).toHaveLength(2);
+    expect(at(d, (l) => l.type === "request" && l.path === `/session/${s.id}/prompt_async` && l.body.parts[0].text === "say DONE")).toBeGreaterThan(aborts[1]!);
+    expect(markers(s)).toBe(1);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
   it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
     const d = await boot();
     await on(d); // the other session attaches at its open: that read of the broken folder reloads it

@@ -15,7 +15,7 @@ const popup = (page: Page) => page.locator("[data-aside-popup]");
 
 /** A request to the OpenCode server of this scenario's daemon (the one the app uses). */
 async function opencode<T>(path: string, directory: string): Promise<T> {
-  const { url, auth } = daemonOpenCodeServer(runDir());
+  const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
   const res = await fetch(`${url}${path}${path.includes("?") ? "&" : "?"}directory=${encodeURIComponent(directory)}`, { headers: { authorization: auth } });
   if (!res.ok) throw new Error(`${path} answered ${res.status}`);
   return (await res.json()) as T;
@@ -23,7 +23,7 @@ async function opencode<T>(path: string, directory: string): Promise<T> {
 
 // The daemon lists OpenCode sessions only once its OpenCode server runs (picking the engine loads its models: no model turn).
 Then("the OpenCode server of the daemon is running", async () => {
-  await expect(async () => void daemonOpenCodeServer(runDir())).toPass({ timeout: 60_000 });
+  await expect(async () => void daemonOpenCodeServer(runDir(), ownDaemon())).toPass({ timeout: 60_000 });
 });
 
 When("I open the rewind panel of the message {string}", async ({ page }, text: string) => {

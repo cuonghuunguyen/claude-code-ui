@@ -9,6 +9,7 @@ import { MAX_WAIT_MS } from "./orchestration.ts";
 import { ascending } from "./opencode-id.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
+import { StopControl } from "./opencode-stop.ts";
 import { mapLimit } from "./session-scan.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
@@ -137,6 +138,9 @@ export function splitLabels(value: string, labels: string[]): string[] {
 type TurnEnd = { done: Promise<void>; resolve: () => void };
 /** The longest a prompt sent after Stop waits for the aborted turn to end. */
 const TURN_END_WAIT_MS = 10_000;
+/** How long a prompt request that answered after a Stop is watched for the turn it may start in OpenCode. */
+const STALE_WATCH_MS = 1000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Commands the daemon itself runs for an OpenCode session (OpenCode's web app has them as session commands, not server commands). */
 const LOCAL_COMMANDS: SlashCommand[] = [
   { name: "compact", description: "Summarize the conversation to free context", argumentHint: "" },
@@ -182,10 +186,16 @@ class OpenCodeSession implements EngineSession {
   private attaching: Promise<void> | undefined;
   /** The assistant message OpenCode aborted on its own in this turn (no Stop, no `session.error`). */
   private selfAbort: string | undefined;
-  /** Counts Stops. A send() that began before a Stop is dropped by it, whatever prompt came after (`stopped` is reset by every prompt). */
-  private stopEpoch = 0;
-  /** Ends every wait of a send() for the stream, the attach or the prompt's answer (Stop). */
-  private readonly stopWakes = new Set<() => void>();
+  /** Where each send() is (preparing, posting, posted, dropped): what a Stop does to it (opencode-stop.ts). */
+  private readonly stops = new StopControl();
+  /** The Stop mark of the running turn (`stops.count` when it began): a turn begun after the last Stop has the current count. */
+  private turnStop = 0;
+  /** Something of the running turn may have reached OpenCode (a request posted, or the turn found busy there). */
+  private turnPosted = true;
+  /** Settles when the prompt requests an earlier Stop left on their way can no longer start a turn in OpenCode: a new prompt waits for it. */
+  private stale: Promise<void> | undefined;
+  /** While set, OpenCode's events of a stopped prompt that reached it late are not this session's turn: `busy` and `idle` report them. */
+  private quiet: { busy: () => void; idle: () => void } | undefined;
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -274,7 +284,7 @@ class OpenCodeSession implements EngineSession {
         void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
-        if (h.busy && state === "idle") (this.turnAt = Date.now(), this.openTurnEnd(), this.session.setState("running"));
+        if (h.busy && state === "idle" && !this.quiet) (this.turnAt = Date.now(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt just sent may not be busy in OpenCode yet.
         else if (!h.busy && state === "running" && Date.now() - this.sentAt > 3000) this.finish();
       })
@@ -416,6 +426,7 @@ class OpenCodeSession implements EngineSession {
     if (!steer) {
       this.sentAt = Infinity;
       this.beginTurn();
+      this.turnPosted = false;
       this.session.setState("running");
     }
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
@@ -429,34 +440,37 @@ class OpenCodeSession implements EngineSession {
   private agent = () => (this.permissionMode === "plan" ? "plan" : (this.opts.agent?.(this.id) ?? "build"));
 
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
+    const run = this.stops.begin();
     // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
     try {
-      // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
-      // Stop ends this wait, not the attach: its requests wait for OpenCode's MCP load (30-300 s) and are never cancelled (see brokenMcp).
-      const epoch = this.stopEpoch;
-      const dropped = () => this.stopEpoch !== epoch;
-      // The first send() to notice a Stop ends the turn; the ones that steered it are dropped silently (the turn is idle by then).
-      const interrupted = () => {
-        if (this.session.currentState() === "idle") return;
-        this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-        this.toIdle();
-      };
-      await this.unlessStopped(Promise.all([this.server.streamReady(), this.attach()]), epoch);
-      if (dropped()) return interrupted();
-      if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
-      const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
-      if (dropped()) return interrupted();
+      // Preparing: OpenCode does not know the prompt; a Stop ends each of these waits at once and the prompt is never sent (interrupt() ends the turn).
+      // Events of the turn must find the stream open; the attach waits for OpenCode's MCP load (30-300 s) and is never cancelled (see brokenMcp);
+      // prompts an earlier Stop left on their way must not start a turn this prompt would join.
+      if (!(await run.prepare(Promise.all([this.server.streamReady(), this.attach(), this.stale])))) return;
+      // A block of a mode the session was restored with (or the first one) goes in before the turn.
+      if ((this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) && !(await run.prepare(this.writeBlock(this.permissionMode)))) return;
+      const levels = this.effort !== "default" ? this.engine.effortLevels(this.model) : Promise.resolve([] as EffortLevel[]);
+      if (!(await run.prepare(levels))) return;
+      // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
+      const variant = this.effort !== "default" && (await levels).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       const [providerID, ...rest] = this.model.split("/");
       const agent = this.agent();
-      // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
+      this.turnPosted = true;
+      const stops = this.stops.count;
+      // A failure after a Stop is no failed prompt: the Stop ended the turn.
+      const unlessStopped = (err: unknown) => (this.stops.count !== stops ? undefined : Promise.reject(err));
       if (command) {
         // The turn runs inside this request: no timeout.
-        await this.server.request(`/session/${this.id}/command`, {
-          method: "POST",
-          directory: this.cwd,
-          timeoutMs: 0,
-          body: { messageID, command: command.name, arguments: command.args, agent, ...variant, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
-        });
+        await run
+          .post(
+            this.server.request(`/session/${this.id}/command`, {
+              method: "POST",
+              directory: this.cwd,
+              timeoutMs: 0,
+              body: { messageID, command: command.name, arguments: command.args, agent, ...variant, ...(this.model !== "default" && { model: this.model }), parts: images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })) },
+            }),
+          )
+          .catch(unlessStopped);
         return;
       }
       const parts = [
@@ -464,32 +478,20 @@ class OpenCodeSession implements EngineSession {
         ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
       ];
       // No caller timeout: a slow answer (a cold folder) is not a failed prompt; the turn runs whatever the answer's delay.
-      // Stop ends this wait too (the request is not cancelled; interrupt() aborts the session in OpenCode).
-      await this.unlessStopped(
-        this.server.request(`/session/${this.id}/prompt_async`, {
-          method: "POST",
-          directory: this.cwd,
-          timeoutMs: 0,
-          body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
-        }),
-        epoch,
-      );
-      if (dropped()) interrupted();
+      // A Stop meanwhile leaves this wait as it is: OpenCode may run the turn already (interrupt() tells by its status).
+      await run
+        .post(
+          this.server.request(`/session/${this.id}/prompt_async`, {
+            method: "POST",
+            directory: this.cwd,
+            timeoutMs: 0,
+            body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+          }),
+        )
+        .catch(unlessStopped);
     } finally {
+      run.end();
       this.sentAt = Date.now();
-    }
-  }
-
-  /** Waits for `p`, or until a Stop that came after `epoch`. `p` is never cancelled; a later failure of it is dropped. */
-  private async unlessStopped(p: Promise<unknown>, epoch: number) {
-    p.catch(() => {});
-    if (this.stopEpoch !== epoch) return;
-    let wake!: () => void;
-    const stop = new Promise<void>((r) => this.stopWakes.add((wake = r)));
-    try {
-      await Promise.race([p, stop]);
-    } finally {
-      this.stopWakes.delete(wake);
     }
   }
 
@@ -504,6 +506,8 @@ class OpenCodeSession implements EngineSession {
   private beginTurn() {
     this.turnEnd = undefined;
     this.openTurnEnd();
+    this.turnStop = this.stops.count;
+    this.turnPosted = true;
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
@@ -541,13 +545,66 @@ class OpenCodeSession implements EngineSession {
     this.turnEnd = undefined;
   }
 
+  /**
+   * Stop. Each send() of the turn is handled by its phase (opencode-stop.ts); the turn then ends where it really ends:
+   * - nothing of the turn reached OpenCode (every send was preparing): it ends here at once, one interrupted marker;
+   * - else OpenCode's abort ends it: a running turn with its events (session.error, session.idle -> finish()); OpenCode's status idle after
+   *   the abort means it ran nothing (the abort of an idle session sends no event): it ends here;
+   * - a prompt request still on its way can reach OpenCode after the abort and start a turn there: `stale` (cleanStale()) aborts that one
+   *   without showing it, and a prompt sent after Stop waits for it (never joins it).
+   * Until the turn ended, a prompt sent after Stop waits for it (prompt(): `afterStop`).
+   */
   async interrupt() {
     if (this.session.currentState() === "idle") return;
     this.stopped = true;
-    this.stopEpoch++;
-    this.stopWakes.forEach((wake) => wake());
+    const ways = this.stops.stop();
     this.session.interruptPending();
-    await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd });
+    if (!this.turnPosted) this.endStopped();
+    const abort = this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd });
+    if (ways.length) {
+      const prev = this.stale;
+      const mine: Promise<void> = Promise.all([prev, this.cleanStale(ways, abort)]).then(() => {
+        if (this.stale === mine) this.stale = undefined;
+      });
+      this.stale = mine;
+    }
+    await abort;
+    if (this.session.currentState() !== "idle" && (await this.idleInOpenCode())) this.endStopped();
+  }
+
+  /** The stopped turn ends here: one interrupted marker, no result, idle. Not a turn begun after the Stop (a prompt sent after it). */
+  private endStopped() {
+    if (this.session.currentState() === "idle" || this.turnStop >= this.stops.count) return;
+    if (!this.aborted) this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
+    this.aborted = true;
+    this.finish();
+  }
+
+  /** OpenCode runs nothing for this session; false when it runs something or its status cannot be read. */
+  private async idleInOpenCode() {
+    const status = await this.server.request<Record<string, Status>>("/session/status", { directory: this.cwd }).catch(() => undefined);
+    return !!status && (status[this.id]?.type ?? "idle") === "idle";
+  }
+
+  /** Prompt requests a Stop left on their way: once they settled, a turn one of them started in OpenCode is aborted without showing it. */
+  private async cleanStale(ways: Promise<void>[], abort: Promise<unknown>) {
+    await Promise.all([abort.catch(() => {}), ...ways]);
+    // The stopped turn still runs here: OpenCode runs it, and the abort's events end it (a late prompt joined it there and ends with it).
+    if (this.session.currentState() !== "idle" && this.turnStop < this.stops.count) return;
+    let busy!: () => void;
+    let idle!: () => void;
+    const started = new Promise<boolean>((r) => (busy = () => r(true)));
+    const ended = new Promise<void>((r) => (idle = r));
+    this.quiet = { busy, idle };
+    try {
+      void this.idleInOpenCode().then((none) => none || busy());
+      // OpenCode stores the prompt and starts its loop a moment after it answered the request: watched that long.
+      if (!(await Promise.race([started, sleep(STALE_WATCH_MS).then(() => false)]))) return;
+      await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd }).catch(() => {});
+      await Promise.race([ended, sleep(TURN_END_WAIT_MS)]);
+    } finally {
+      this.quiet = undefined;
+    }
   }
 
   /** One event of the server for this session or one of its subagent sessions. */
@@ -564,7 +621,7 @@ class OpenCodeSession implements EngineSession {
         }
         if (root) this.noteUsage(info);
         // OpenCode aborted the turn on its own (no session.error, not our Stop): say so instead of ending silently.
-        if (root && info.role === "assistant" && info.error?.name === "MessageAbortedError" && info.time?.completed && !this.aborted && !this.stopped && this.session.currentState() !== "idle" && this.selfAbort !== info.id) {
+        if (root && info.role === "assistant" && info.error?.name === "MessageAbortedError" && info.time?.completed && !this.aborted && !this.stopped && !this.quiet && this.session.currentState() !== "idle" && this.selfAbort !== info.id) {
           this.selfAbort = info.id;
           this.failed = true;
           this.notice(`aborted:${info.id}`, SELF_ABORT);
@@ -589,15 +646,19 @@ class OpenCodeSession implements EngineSession {
       case "session.status": {
         if (!root) return;
         const s = p.status as Status;
+        if (s.type === "busy" && this.quiet) return this.quiet.busy();
         if (s.type === "busy" && this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
         else if (s.type === "retry") this.notice("retry", `Retrying (attempt ${s.attempt ?? 1}): ${s.message ?? ""}`);
         return;
       }
       case "session.idle":
+        if (root && this.quiet) return this.quiet.idle();
         return root ? this.finish() : undefined;
       case "session.error": {
         if (!root) return;
         if (p.error?.name === "MessageAbortedError") {
+          // One marker per turn (interrupt() may have ended it already); none for a stopped prompt that reached OpenCode late.
+          if (this.quiet || this.session.currentState() === "idle" || this.aborted) return;
           this.aborted = true;
           return this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
         }

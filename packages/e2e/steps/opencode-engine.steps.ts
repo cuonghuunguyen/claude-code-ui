@@ -42,9 +42,10 @@ Given("OpenCode is set up in a scratch project", async ({ page, project, $test, 
   // The run's OpenCode state is shared by its scenarios: a server stopped with an earlier scenario's daemon can leave its lock (a folder with a
   // heartbeat), and the next server waits about a minute for it to go stale. No OpenCode of this run is running here.
   rmSync(join(run, "opencode-state", "opencode", "locks"), { recursive: true, force: true });
-  // The info file of an earlier scenario names a server that is gone.
-  rmSync(openCodeInfoFile(run), { force: true });
-  own = await startDaemon(run, 2000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: opencodeEnv(run) });
+  const port = await freePort(ownerPorts(), "");
+  // The info file of an earlier scenario on this port names a server that is gone.
+  rmSync(openCodeInfoFile(run, port), { force: true });
+  own = await startDaemon(run, 2000 + $testInfo.workerIndex, { port, env: opencodeEnv(run, port) });
   await openApp(page, own);
   // The binary path is a Settings value, set like a user does.
   await setOpenCodePath(page, BIN());
