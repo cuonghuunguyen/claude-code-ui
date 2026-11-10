@@ -1213,65 +1213,70 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: ws, query: "fresh" })).toMatchObject({ result: { paths: ["fresh.txt"] } });
   });
 
-  it("answers git.status for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.status", cwd: webRoot })).toMatchObject({ result: { status: null } });
-    expect(await c.request({ type: "git.status", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-  });
-
-  it("answers git.fetch for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.fetch", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
-  });
-
-  it("answers git.commitFiles for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const m = { type: "git.commitFiles", paths: ["a.txt"], message: "m" };
-    expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: { committed: null } });
-    expect(await c.request({ ...m, cwd: webRoot, message: " " })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.rollbackPreview, git.rollback and git.rollbackHunk for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const hunk = { newStart: 1, lines: ["-a", "+b"] };
-    const ms = [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { type: "git.rollback", paths: ["a.txt"], token: "t" }, { type: "git.rollbackHunk", path: "a.txt", hunk }];
-    const nulls = [{ preview: null }, { rolledBack: null }, { rolledBack: null }];
-    for (const [i, m] of ms.entries()) {
-      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: nulls[i] });
-    }
-    expect(await c.request({ ...ms[0]!, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...ms[1]!, cwd: webRoot, token: 5 })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...ms[2]!, cwd: webRoot, hunk: { newStart: 1, lines: [] } })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.merge, git.rebase, git.continue, git.abort and git.operation for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const outside = join(webRoot, "..");
+  describe("git requests check the cwd against the roots and their arguments", () => {
     const hash = "a".repeat(40);
+    const ref = "refs/heads/main";
     const write = { ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] };
-    const msgs = [{ type: "git.merge", ...write }, { type: "git.rebase", ...write }, { type: "git.continue", kind: "merge" }, { type: "git.abort", kind: "merge" }, { type: "git.operation" }];
-    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write })).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.continue", cwd: webRoot, kind: "merge" })).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.operation", cwd: webRoot })).toMatchObject({ result: { operation: null } });
-    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write, local: "nope" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
-  });
+    const hunk = { newStart: 1, lines: ["-a", "+b"] };
+    // [message, reply for a cwd inside the roots; undefined: only the outside check]
+    const inRoots: [Record<string, unknown>, object | undefined][] = [
+      [{ type: "git.status" }, { status: null }],
+      [{ type: "git.fetch" }, { remote: null }],
+      [{ type: "git.commitFiles", paths: ["a.txt"], message: "m" }, { committed: null }],
+      [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { preview: null }],
+      [{ type: "git.rollback", paths: ["a.txt"], token: "t" }, { rolledBack: null }],
+      [{ type: "git.rollbackHunk", path: "a.txt", hunk }, { rolledBack: null }],
+      [{ type: "git.merge", ...write }, { written: null }],
+      [{ type: "git.rebase", ...write }, undefined],
+      [{ type: "git.continue", kind: "merge" }, { written: null }],
+      [{ type: "git.abort", kind: "merge" }, undefined],
+      [{ type: "git.operation" }, { operation: null }],
+      [{ type: "git.stashList" }, { stashes: null }],
+      [{ type: "git.stashPush" }, { written: null }],
+      [{ type: "git.stashApply", index: 0, hash }, { written: null }],
+      [{ type: "git.stashPop", index: 0, hash }, { written: null }],
+      [{ type: "git.stashDrop", index: 0, hash }, { written: null }],
+      [{ type: "git.branchCreate", name: "x" }, { written: null }],
+      [{ type: "git.checkout", ref: "refs/heads/x" }, { written: null }],
+      [{ type: "git.branch", ref }, { branch: null }],
+      [{ type: "git.push", ref, local: hash, argv: [] }, { remote: null }],
+      [{ type: "git.pull", ref, local: hash, argv: [] }, { remote: null }],
+      [{ type: "git.log" }, { log: null }],
+      [{ type: "git.diff", base: "head" }, { diff: null }],
+      [{ type: "git.commit", hash, path: "x" }, undefined],
+      [{ type: "git.fileAt", hash, path: "x" }, undefined],
+    ];
+    it.each(inRoots)("%j: a cwd outside the roots is refused, one inside is answered", async (m, inside) => {
+      const c = await client();
+      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      if (inside) expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: inside });
+    });
 
-  it("answers git.stashList, git.stashPush, git.stashApply, git.stashPop and git.stashDrop for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const outside = join(webRoot, "..");
-    const hash = "a".repeat(40);
-    const msgs = [{ type: "git.stashList" }, { type: "git.stashPush" }, { type: "git.stashApply", index: 0, hash }, { type: "git.stashPop", index: 0, hash }, { type: "git.stashDrop", index: 0, hash }];
-    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.stashList", cwd: webRoot })).toMatchObject({ result: { stashes: null } });
-    for (const m of msgs.slice(1)) expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.stashDrop", cwd: webRoot, index: -1, hash })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.stashPush", cwd: webRoot, message: 5 })).toMatchObject({ code: "bad_request" });
+    const badArgs: Record<string, unknown>[] = [
+      { type: "git.commitFiles", paths: ["a.txt"], message: " " },
+      { type: "git.commitFiles", paths: ["../x"], message: "m" },
+      { type: "git.rollbackPreview", paths: ["../x"] },
+      { type: "git.rollback", paths: ["a.txt"], token: 5 },
+      { type: "git.rollbackHunk", path: "a.txt", hunk: { newStart: 1, lines: [] } },
+      { type: "git.merge", ...write, local: "nope" },
+      { type: "git.abort", kind: "nope" },
+      { type: "git.stashDrop", index: -1, hash },
+      { type: "git.stashPush", message: 5 },
+      { type: "git.checkout", ref: "HEAD" },
+      { type: "git.branchCreate", name: "-x" },
+      { type: "git.push", ref, local: "nope", argv: [] },
+      { type: "git.pull", ref, local: 5, argv: [] },
+      { type: "git.push", ref, local: hash },
+      { type: "git.push", ref, local: hash, argv: [], tracking: "nothex" },
+      { type: "git.pull", ref, local: hash, argv: [], tracking: "nothex" },
+      { type: "git.pull", ref, local: hash, argv: [1] },
+      { type: "git.branch", ref: 7 },
+      { type: "git.branch", ref: "HEAD" },
+    ];
+    it.each(badArgs)("%j is refused as bad_request", async (m) => {
+      const c = await client();
+      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ code: "bad_request" });
+    });
   });
 
   it("git.commitMessage: checked arguments, the reply, and a cancel that stops only this connection's generation", async () => {
@@ -1322,15 +1327,8 @@ describe("daemon", () => {
     }
   });
 
-  it("answers git.branchCreate and git.checkout for a cwd inside the roots only, with checked arguments and the local_changes code", async () => {
+  it("git.checkout with local changes that the branch would overwrite replies local_changes", async () => {
     const c = await client();
-    const outside = join(webRoot, "..");
-    for (const m of [{ type: "git.branchCreate", name: "x" }, { type: "git.checkout", ref: "refs/heads/x" }]) {
-      expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-      expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
-    }
-    expect(await c.request({ type: "git.checkout", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branchCreate", cwd: webRoot, name: "-x" })).toMatchObject({ code: "bad_request" });
     const repo = join(webRoot, "coproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
@@ -1346,31 +1344,8 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.checkout", cwd: repo, ref: "refs/heads/other" })).toMatchObject({ code: "local_changes" });
   });
 
-  it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
+  it("git.log, git.commit, git.fileAt and git.blame read a repository inside the roots", async () => {
     const c = await client();
-    const ref = "refs/heads/main";
-    const local = "a".repeat(40);
-    const outside = join(webRoot, "..");
-    for (const m of [{ type: "git.branch", ref }, { type: "git.push", ref, local, argv: [] }, { type: "git.pull", ref, local, argv: [] }]) {
-      expect(await c.request({ ...m, cwd: outside })).toMatchObject({ code: "cwd_not_allowed" });
-    }
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref })).toMatchObject({ result: { branch: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope", argv: [] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5, argv: [] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [1] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: 7 })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.log, git.commit and git.fileAt for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.log", cwd: webRoot })).toMatchObject({ result: { log: null } });
-    for (const type of ["git.log", "git.commit", "git.fileAt"]) expect(await c.request({ type, cwd: join(webRoot, ".."), hash: "a".repeat(40), path: "x" })).toMatchObject({ code: "cwd_not_allowed" });
     const repo = join(webRoot, "gitproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
@@ -1648,10 +1623,8 @@ describe("daemon", () => {
     });
   });
 
-  it("answers git.diff for a cwd inside the roots only", async () => {
+  it("git.diff reads a repository inside the roots; a bad base is refused", async () => {
     const c = await client();
-    expect(await c.request({ type: "git.diff", cwd: webRoot, base: "head" })).toMatchObject({ result: { diff: null } });
-    expect(await c.request({ type: "git.diff", cwd: join(webRoot, ".."), base: "head" })).toMatchObject({ code: "cwd_not_allowed" });
     const repo = join(webRoot, "diffproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
