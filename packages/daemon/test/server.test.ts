@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { ALL_CAPABILITIES, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
+import { VISUALIZE_CSP, VISUALIZE_SHELL } from "../src/visualize.ts";
 import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
@@ -5712,6 +5713,17 @@ describe("artifact.preview and /artifact (GH-175)", () => {
       req.on("error", reject);
       req.end();
     });
+
+  it("GET /visualize serves the shell with its own CSP to an iframe only (GH-690)", async () => {
+    await listening;
+    const ok = await get("/visualize");
+    expect(ok.status).toBe(200);
+    expect(ok.headers["content-security-policy"]).toBe(VISUALIZE_CSP);
+    expect(ok.body.toString()).toBe(VISUALIZE_SHELL);
+    expect((await get("/visualize", { "sec-fetch-dest": "script" })).status).toBe(403);
+    expect((await get("/visualize", { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await get("/visualize", {}, "POST")).status).toBe(405);
+  });
 
   it("replies a nonce URL for a done publish outside the roots; GET serves the bytes with the sandbox headers", async () => {
     const c = await open();

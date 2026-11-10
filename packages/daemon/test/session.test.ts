@@ -511,6 +511,19 @@ describe("Session", () => {
     ]);
   });
 
+  describe("Inline visualizations (GH-690)", () => {
+    it("loads the plugin folder when the setting gives one", () => {
+      started({ query: fakeQuery as never, visualizePlugin: () => "/x/plugins/visualize" });
+      expect(calls.at(-1)!.plugins).toEqual([{ type: "local", path: "/x/plugins/visualize" }]);
+    });
+    it("no plugins when the setting is off or absent", () => {
+      started({ query: fakeQuery as never, visualizePlugin: () => undefined });
+      expect(calls.at(-1)!).not.toHaveProperty("plugins");
+      started({ query: fakeQuery as never });
+      expect(calls.at(-1)!).not.toHaveProperty("plugins");
+    });
+  });
+
   describe("Claude in Chrome (GH-514)", () => {
     it("runs the CLI with --chrome when the setting is on", () => {
       started({ query: fakeQuery as never, chrome: () => true });

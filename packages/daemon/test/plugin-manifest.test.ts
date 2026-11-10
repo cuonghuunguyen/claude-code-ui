@@ -24,12 +24,13 @@ describe("orchestration plugin", () => {
     const m = json(join(root, ".claude-plugin/marketplace.json"));
     const p = json(join(plugin, ".claude-plugin/plugin.json"));
     expect(m.name).toBe("claude-ui");
-    expect(m.plugins.map((e: { name: string }) => e.name)).toEqual(["orchestration", "addons"]);
+    expect(m.plugins.map((e: { name: string }) => e.name)).toEqual(["orchestration", "addons", "visualize"]);
     expect(m.plugins[0]).toMatchObject({ name: "orchestration", source: "./plugins/orchestration" });
     expect(p).toMatchObject({ name: "orchestration", license: "MIT", homepage: "https://github.com/cuonghuunguyen/claude-code-ui" });
     // GH-541: every listed plugin's manifest has its name and version.
     for (const e of m.plugins) expect(json(join(root, e.source, ".claude-plugin/plugin.json")), e.name).toMatchObject({ name: e.name, version: e.version, license: "MIT" });
     expect(readFileSync(join(root, "plugins/addons/skills/write-addon/SKILL.md"), "utf8")).toMatch(/^---\nname: write-addon\ndescription: /);
+    expect(readFileSync(join(root, "plugins/visualize/skills/visualize/SKILL.md"), "utf8")).toMatch(/^---\nname: visualize\ndescription: /);
     expect(json(join(root, ".claude/settings.json")).enabledPlugins["orchestration@claude-ui"]).toBe(true);
   });
 

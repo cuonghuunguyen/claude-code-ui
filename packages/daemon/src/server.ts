@@ -64,6 +64,7 @@ import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
+import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 /** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
@@ -411,6 +412,7 @@ export function createDaemon(opts: {
     plan,
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
+    visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
       const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
@@ -1880,6 +1882,12 @@ export function createDaemon(opts: {
     if (rawPath.startsWith("/artifact/")) {
       const m = /^\/artifact\/([0-9a-f]{32})\/(.*)$/.exec(rawPath);
       return m ? serveArtifact(req, res, m[1]!, m[2]!) : void res.writeHead(404).end();
+    }
+    if (rawPath === "/visualize") {
+      if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+      const dest = req.headers["sec-fetch-dest"];
+      if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
+      return void res.writeHead(200, VISUALIZE_HEADERS).end(req.method === "HEAD" ? undefined : VISUALIZE_SHELL);
     }
     if (rawPath.startsWith("/addon/")) {
       const m = /^\/addon\/([0-9a-f]{32})\/([a-z0-9-]{1,64})\/(.+)$/.exec(rawPath);
