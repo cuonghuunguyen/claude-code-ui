@@ -2,8 +2,9 @@
 # Runs before ssh-side.feature (alphabetical, one worker); that feature writes its own config again.
 Feature: SSH hosts from the ssh config and the Add SSH host dialog
 
-  Scenario: Hosts of Include'd files are listed once, wildcard and negated patterns are skipped
-    Given an ssh config with an Include and patterns
+  Scenario Outline: Hosts of Include'd files are listed once and wildcard patterns skipped, and the Add SSH host dialog previews the command, writes a Host block, refuses an existing alias and selects the new host at <width>x<height>
+    Given the viewport is <width>x<height>
+    And an ssh config with an Include and patterns
     When I open the app
     And I list the SSH hosts in Open project
     Then the SSH host list shows "main-a" once
@@ -14,13 +15,7 @@ Feature: SSH hosts from the ssh config and the Add SSH host dialog
     And the SSH host list does not show "!neg-y"
     And the SSH host list does not show "*.wild"
     And I capture "ssh-include-hosts"
-
-  Scenario Outline: Add SSH host dialog previews the command, writes a Host block, refuses an existing alias and selects the new host at <width>x<height>
-    Given the viewport is <width>x<height>
-    And an ssh config with an Include and patterns
-    When I open the app
-    And I list the SSH hosts in Open project
-    And I open the Add SSH host dialog
+    When I open the Add SSH host dialog
     Then the Add SSH host dialog fits the viewport
     When I type the Add SSH host command "ssh deploy@build.example.com -p 2222"
     Then the Add SSH host preview shows "host" as "build.example.com"
