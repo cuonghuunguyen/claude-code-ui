@@ -62,3 +62,19 @@ Feature: OpenCode model picker (GH-679)
     And every model chooser option is at least 44px high
     And the page has no horizontal scroll
     And I capture "picker 44px"
+
+  Scenario Outline: The picker footer is visible without scrolling the list at <width>x<height>
+    Given the viewport is <width>x<height>
+    And OpenCode is set up in a scratch project
+    When I choose the engine "OpenCode"
+    And I open the model chooser
+    Then the group "OpenCode" of the model chooser lists a model matching "deepseek"
+    And the model chooser has at least 8 options
+    And the model chooser footer is visible inside the viewport without scrolling the list
+    And the model chooser footer offers "Connect a provider"
+    And I capture "footer visible <width>"
+
+    Examples:
+      | width | height |
+      | 1440  | 900    |
+      | 390   | 844    |
