@@ -1149,6 +1149,25 @@ describe("git frames", () => {
     return { proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess, exit };
   };
 
+  it("the side's own GIT_* environment never reaches git, only what the hub sent", async () => {
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    vi.stubEnv("GIT_WORK_TREE", "/elsewhere");
+    try {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const git = vi.fn(async () => ({ stdout: Buffer.from(""), stderr: "" }));
+      runSide({ input, output, accept: () => {}, git });
+      input.write(JSON.stringify({ g: 1, git: { cwd: "/r", args: ["status"], env: { GIT_TERMINAL_PROMPT: "0" } } }) + "\n");
+      await vi.waitFor(() => expect(git).toHaveBeenCalled());
+      const env = (git.mock.calls[0] as unknown as [{ env: Record<string, string> }])[0].env;
+      expect(env.GIT_DIR).toBeUndefined();
+      expect(env.GIT_WORK_TREE).toBeUndefined();
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a ready side runs git for the hub: stdout bytes, stdin input, git errors", async () => {
     const repo = dir("gitframe-");
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
@@ -1207,11 +1226,14 @@ describe("git frames", () => {
     const side = gitSide(() => new Promise(() => {}));
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     expect(s.wslReady("Ubuntu")).toBeUndefined();
-    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toBeInstanceOf(SideGone);
+    const notReady = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
+    await expect(notReady).rejects.toBeInstanceOf(SideGone);
+    await expect(notReady).rejects.toMatchObject({ sent: false });
     await s.start("wsl:Ubuntu");
     const pending = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
     side.exit.emit("exit", 1);
     await expect(pending).rejects.toBeInstanceOf(SideGone);
+    await expect(pending).rejects.toMatchObject({ sent: true });
     expect(s.wslReady("Ubuntu")).toBeUndefined();
   });
 
