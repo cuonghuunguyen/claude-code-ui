@@ -1161,7 +1161,7 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
-  it("concurrent lists share one GET /session; a folder that stays slow gives one refresh push, not a loop", async () => {
+  it("concurrent lists share one GET /session; one slow read gives one refresh push", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const project = join(root, "project");
     mkdirSync(project, { recursive: true });
@@ -1207,5 +1207,68 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     await new Promise((r) => setTimeout(r, 4000));
     expect(s.find("turn_result")).toMatchObject({ isError: false });
     expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+  });
+
+  it("Stop drops every prompt waiting for the attach, steering ones included: only the prompt sent after it reaches OpenCode", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_MCP_LOAD_MS: "5000" } });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("first");
+    await until(() => s.states().at(-1) === "running");
+    await s.prompt("second"); // steers the turn that still waits for the attach
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle", 3000);
+    await s.prompt("third");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length >= 1, 15_000);
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body.parts[0].text)).toEqual(["third"]);
+    expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
+  });
+
+  it("Stop ends the wait for a slow prompt_async at once: the session leaves running, the request is not cancelled", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_PROMPT_DELAY_MS: "5000" } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    const t = Date.now();
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_interrupted"), 3000);
+    expect(Date.now() - t).toBeLessThan(2500);
+    // The request goes on to its answer: no notice about a failed prompt, nothing disposed.
+    await new Promise((r) => setTimeout(r, 5000));
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
+    const d = await boot();
+    await on(d); // the other session attaches at its open: that read of the broken folder reloads it
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    await d.fake("/__break", { directory: d.project });
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: "ses_other", status: { type: "busy" } } }] });
+    await s.prompt("hi");
+    await until(() => abortNotices(s).some((n) => /reloads the folder when the turn running in it ends/.test(n.text)));
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: "ses_other", status: { type: "idle" } } }] });
+    const other = await d.open();
+    await until(() => !!other.find("commands"));
+    await until(() => abortNotices(s).some((n) => /reloaded the folder in OpenCode\. Send the prompt again/.test(n.text)));
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+  });
+
+  it("a busy broken folder that is healthy again when the turn ends: the notice says it works again, nothing is disposed", async () => {
+    const d = await boot({ script: ["question"] });
+    const busy = await d.open();
+    await busy.prompt("ask me");
+    await until(() => !!busy.find("question"));
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    await d.fake("/__break", { directory: d.project });
+    await s.prompt("hi");
+    await until(() => abortNotices(s).some((n) => /reloads the folder when the turn running in it ends/.test(n.text)));
+    await d.fake("/__heal", { directory: d.project });
+    await d.ok({ type: "session.interrupt", sessionId: busy.id });
+    await until(() => abortNotices(s).some((n) => /work again\. Send the prompt again/.test(n.text)), 10_000);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 });

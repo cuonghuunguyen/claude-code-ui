@@ -1337,7 +1337,7 @@ export function createDaemon(opts: {
       const read = readOpenCodeList(cwds, linked, links);
       const r = await Promise.race([read, late]);
       // The list that did not wait: clients ask again once OpenCode answered.
-      // One push per late read: lists that join the same read, and the list the push starts, add none.
+      // No pile-up: one read per folder is in flight and it has at most one push. A folder that stays slow for several reads can push once per read.
       if (!r.ran && openCodeListError?.endsWith("in time") && !lateRefresh) lateRefresh = read.then((x) => x.ran && broadcast({ type: "sessions.changed" })).finally(() => (lateRefresh = undefined));
       return r;
     } finally {

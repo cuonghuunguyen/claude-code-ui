@@ -30,6 +30,7 @@ const ANSWERED = "Answered in OpenCode";
 const brokenMcp = (err: unknown) => err instanceof OpenCodeHttpError && err.status === 499;
 const SELF_ABORT = "OpenCode ended this turn on its own before the model answered (MessageAbortedError); claude-ui did not stop it.";
 const MCP_RELOADED = "OpenCode's MCP servers for this folder had failed to load, so claude-ui reloaded the folder in OpenCode. Send the prompt again.";
+const MCP_HEALTHY = "OpenCode's MCP servers for this folder work again. Send the prompt again.";
 const MCP_BROKEN_BUSY = "OpenCode's MCP servers for this folder failed to load; claude-ui reloads the folder when the turn running in it ends. Send the prompt again then.";
 /** The name of a session's orchestration MCP server in OpenCode; its tool keys are `<name>_<tool>` (fit OpenCode's tool name limit). */
 export const mcpName = (id: string) => `orchestration-${id.slice(-10)}`;
@@ -181,8 +182,10 @@ class OpenCodeSession implements EngineSession {
   private attaching: Promise<void> | undefined;
   /** The assistant message OpenCode aborted on its own in this turn (no Stop, no `session.error`). */
   private selfAbort: string | undefined;
-  /** Ends the wait of send() for the stream and the attach (Stop). */
-  private stopWake: (() => void) | undefined;
+  /** Counts Stops. A send() that began before a Stop is dropped by it, whatever prompt came after (`stopped` is reset by every prompt). */
+  private stopEpoch = 0;
+  /** Ends every wait of a send() for the stream, the attach or the prompt's answer (Stop). */
+  private readonly stopWakes = new Set<() => void>();
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -430,21 +433,19 @@ class OpenCodeSession implements EngineSession {
     try {
       // Events of the turn must find the stream open; a block of a mode the session was restored with (or the first one) goes in before the turn.
       // Stop ends this wait, not the attach: its requests wait for OpenCode's MCP load (30-300 s) and are never cancelled (see brokenMcp).
-      const stop = new Promise<void>((r) => ((this.stopWake = r), this.stopped && r()));
-      const ready = Promise.all([this.server.streamReady(), this.attach()]);
-      ready.catch(() => {});
-      await Promise.race([ready, stop]);
-      this.stopWake = undefined;
-      if (this.stopped) {
+      const epoch = this.stopEpoch;
+      const dropped = () => this.stopEpoch !== epoch;
+      // The first send() to notice a Stop ends the turn; the ones that steered it are dropped silently (the turn is idle by then).
+      const interrupted = () => {
+        if (this.session.currentState() === "idle") return;
         this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-        return this.toIdle();
-      }
+        this.toIdle();
+      };
+      await this.unlessStopped(Promise.all([this.server.streamReady(), this.attach()]), epoch);
+      if (dropped()) return interrupted();
       if (this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) await this.writeBlock(this.permissionMode);
       const variant = this.effort !== "default" && (await this.engine.effortLevels(this.model)).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
-      if (this.stopped) {
-        this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
-        return this.toIdle();
-      }
+      if (dropped()) return interrupted();
       const [providerID, ...rest] = this.model.split("/");
       const agent = this.agent();
       // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
@@ -463,14 +464,32 @@ class OpenCodeSession implements EngineSession {
         ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
       ];
       // No caller timeout: a slow answer (a cold folder) is not a failed prompt; the turn runs whatever the answer's delay.
-      await this.server.request(`/session/${this.id}/prompt_async`, {
-        method: "POST",
-        directory: this.cwd,
-        timeoutMs: 0,
-        body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
-      });
+      // Stop ends this wait too (the request is not cancelled; interrupt() aborts the session in OpenCode).
+      await this.unlessStopped(
+        this.server.request(`/session/${this.id}/prompt_async`, {
+          method: "POST",
+          directory: this.cwd,
+          timeoutMs: 0,
+          body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+        }),
+        epoch,
+      );
+      if (dropped()) interrupted();
     } finally {
       this.sentAt = Date.now();
+    }
+  }
+
+  /** Waits for `p`, or until a Stop that came after `epoch`. `p` is never cancelled; a later failure of it is dropped. */
+  private async unlessStopped(p: Promise<unknown>, epoch: number) {
+    p.catch(() => {});
+    if (this.stopEpoch !== epoch) return;
+    let wake!: () => void;
+    const stop = new Promise<void>((r) => this.stopWakes.add((wake = r)));
+    try {
+      await Promise.race([p, stop]);
+    } finally {
+      this.stopWakes.delete(wake);
     }
   }
 
@@ -512,7 +531,7 @@ class OpenCodeSession implements EngineSession {
     const fixed = await this.engine.repairMcp(this.cwd);
     this.notice(`aborted:${messageID}`, `${SELF_ABORT} ${fixed ? MCP_RELOADED : MCP_BROKEN_BUSY}`);
     // A turn still runs in the folder: the folder is reloaded when a turn of ours there ends (finish()), and the notice then says so.
-    if (!fixed) this.engine.reloadWhenIdle(this.cwd, () => this.notice(`aborted:${messageID}`, `${SELF_ABORT} ${MCP_RELOADED}`));
+    if (!fixed) this.engine.reloadWhenIdle(this.cwd, (how) => this.notice(`aborted:${messageID}`, `${SELF_ABORT} ${how === "reloaded" ? MCP_RELOADED : MCP_HEALTHY}`));
   }
 
   /** The turn is over: idle, and a prompt waiting for the end of an aborted turn goes on. */
@@ -525,7 +544,8 @@ class OpenCodeSession implements EngineSession {
   async interrupt() {
     if (this.session.currentState() === "idle") return;
     this.stopped = true;
-    this.stopWake?.();
+    this.stopEpoch++;
+    this.stopWakes.forEach((wake) => wake());
     this.session.interruptPending();
     await this.server.request(`/session/${this.id}/abort`, { method: "POST", directory: this.cwd });
   }
@@ -851,19 +871,22 @@ class OpenCodeEngineImpl implements Engine {
   }
   private readonly repairs = new Map<string, Promise<boolean>>();
   /** Folders found broken while a turn ran in them (not disposed then): what to tell the sessions once they are reloaded. */
-  private readonly pendingReload = new Map<string, (() => void)[]>();
-  reloadWhenIdle(cwd: string, done: () => void) {
+  private readonly pendingReload = new Map<string, ((how: "reloaded" | "healthy") => void)[]>();
+  reloadWhenIdle(cwd: string, done: (how: "reloaded" | "healthy") => void) {
     this.pendingReload.set(cwd, [...(this.pendingReload.get(cwd) ?? []), done]);
+  }
+  private flushReload(cwd: string, how: "reloaded" | "healthy") {
+    const waiting = this.pendingReload.get(cwd);
+    this.pendingReload.delete(cwd);
+    waiting?.forEach((f) => f(how));
   }
   /** A turn of a session of the folder ended: a folder marked broken is reloaded now when it is still broken and nothing runs in it any more. */
   async folderIdle(cwd: string) {
-    const waiting = this.pendingReload.get(cwd);
-    if (!waiting) return;
+    if (!this.pendingReload.has(cwd)) return;
     const broken = await this.server.request("/mcp", { directory: cwd, timeoutMs: 0 }).then(() => false, brokenMcp);
-    if (!broken) return void this.pendingReload.delete(cwd);
-    if (!(await this.repairMcp(cwd))) return; // still busy: the next turn end tries again
-    this.pendingReload.delete(cwd);
-    waiting.forEach((f) => f());
+    // Healthy again (another path reloaded it, or OpenCode did): the notices say that. Else dispose now; busy: the next turn end tries again.
+    if (!broken) this.flushReload(cwd, "healthy");
+    else await this.repairMcp(cwd); // a successful repair flushes the notices
   }
   /** Disposes the folder's OpenCode instance so its MCP state loads again (see brokenMcp); not while a session of the folder runs a turn in OpenCode (dispose cancels it). True when disposed. One at a time per folder. */
   repairMcp(cwd: string): Promise<boolean> {
@@ -874,6 +897,8 @@ class OpenCodeEngineImpl implements Engine {
       if (Object.values(status).some((s) => s.type !== "idle")) return false;
       await this.server.request("/instance/dispose", { method: "POST", directory: cwd, timeoutMs: 0 });
       this.commandLists.delete(cwd);
+      // Whoever disposed it (another session's open or attach included): the sessions that wait for the reload hear of it.
+      this.flushReload(cwd, "reloaded");
       return true;
     })()
       .catch(() => false)

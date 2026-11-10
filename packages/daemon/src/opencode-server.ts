@@ -1,7 +1,7 @@
 // The OpenCode server of this daemon (docs/spec.md "OpenCode engine"): one `opencode serve` child, started on first use, stopped with the daemon.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
@@ -69,6 +69,18 @@ export type OpenCodeServerOpts = {
 };
 
 type Up = { url: string; auth: string; version: string };
+
+/**
+ * E2E harness only: when `CLAUDE_UI_E2E_OPENCODE_INFO` names a file, the daemon writes `{url, auth}` of its OpenCode server there (mode 600) each time the
+ * server is up, so a test can talk to the same server the app uses. Never logged. Without the variable nothing is written.
+ */
+function shareWithE2e(up: { url: string; auth: string }) {
+  const file = process.env.CLAUDE_UI_E2E_OPENCODE_INFO;
+  if (!file) return;
+  try {
+    writeFileSync(file, JSON.stringify({ url: up.url, auth: up.auth }), { mode: 0o600 });
+  } catch {}
+}
 
 export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const now = o.now ?? Date.now;
@@ -161,6 +173,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       ]);
       if (!health.healthy) throw new Error("health says not healthy");
       up = { url: url.replace(/\/$/, ""), auth, version };
+      shareWithE2e(up);
       lastError = undefined;
       return up;
     } catch (err) {
