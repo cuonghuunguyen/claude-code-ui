@@ -148,6 +148,8 @@ describe("git-runner", () => {
       gitRunnerConfig.killCommand = k.command;
       try {
         await fn(k);
+        // Every case here goes through the kill path.
+        expect(await k.invoked()).toBe(true);
       } finally {
         await k.finish();
         gitRunnerConfig.killCommand = undefined;

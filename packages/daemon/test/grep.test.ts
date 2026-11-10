@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gitRunnerConfig, setGitRunner } from "../src/git-runner.ts";
+import { gitRunnerConfig, setGitRunner, threadRunner } from "../src/git-runner.ts";
+import type { GitRunOptions } from "../src/git-runner.ts";
 import { cutLine, findInFiles, grepArgs, GrepError, matcher, parseGlobs, parseGrep, rangesOf } from "../src/grep.ts";
 import { slowKill } from "./slow-kill.ts";
 
@@ -253,12 +254,20 @@ describe("findInFiles", () => {
     for (let i = 0; i < 1500; i++) put(d, `g${i % 30}/f${i}.txt`, big);
     // The kill of git's tree is held back until the reply came: the search answers at its deadline and does not wait for the kill
     // (on Windows a taskkill process of 0.5-5 s, which made the reply about 5 s late in a loaded full run).
+    // The kill path is forced: the limit is long enough that git always starts (a short one can run out in the checks before it),
+    // and the runner's timeout, the deadline left, is cut to 1 ms, which git (a 30 MB tree) always outlives.
     const k = slowKill();
     gitRunnerConfig.killCommand = k.command;
+    const calls: GitRunOptions[] = [];
+    setGitRunner((o) => (calls.push(o), threadRunner({ ...o, timeout: 1 })));
     try {
-      const r = await run(d, "zzzz", {}, { limits: { ms: 20 } });
+      const r = await run(d, "zzzz", {}, { limits: { ms: 60_000 } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ killTree: true, idempotent: true });
+      expect(calls[0]!.timeout).toBeLessThanOrEqual(60_000);
       expect(r.stopped).toBe("time");
       expect(k.killed()).toBe(false);
+      expect(await k.invoked()).toBe(true);
     } finally {
       await k.finish();
       gitRunnerConfig.killCommand = undefined;
