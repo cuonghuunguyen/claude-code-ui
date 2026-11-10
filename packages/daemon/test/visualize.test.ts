@@ -56,4 +56,10 @@ it("the written prefix paints the page with the host colours and color-scheme be
   new Function("parent", "addEventListener", "document", "ResizeObserver", inner)(p2, (t: string, h: (e: unknown) => void) => t === "message" && listeners.push(h), { documentElement: { scrollHeight: 0, getBoundingClientRect: () => ({ height: 0 }), style: { setProperty: (k: string, v: string) => (style[k] = v) } } }, class { observe() {} });
   listeners[0]!({ source: p2, data: { v: 1, type: "theme", vars: { "--background": "#fff", "--scheme": "light", "--bad": "a;b" } } });
   expect(style).toEqual({ "--background": "#fff", "--scheme": "light" });
+  // Height is the root box: scrollHeight never falls below the frame height, so the frame could not shrink.
+  let sent: unknown;
+  const content = { height: 50 };
+  const shrink = new Function("parent", "addEventListener", "document", "ResizeObserver", inner);
+  shrink({ postMessage: (m: unknown) => (sent = m) }, (t: string, h: () => void) => t === "load" && h(), { documentElement: { scrollHeight: 432, getBoundingClientRect: () => content, style: {} } }, class { observe() {} });
+  expect(sent).toEqual({ v: 1, type: "height", height: 50 });
 });
