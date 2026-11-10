@@ -203,7 +203,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const up = await boot({ engine: "opencode", sessionsJson: entry });
     await d_list(up);
     expect(Object.keys(JSON.parse(readFileSync(join(up.root, "sessions.json"), "utf8")))).not.toContain("ses_gone");
-  }, 15_000);
+  }, 60_000); // two daemons and one OpenCode server start, which takes seconds on a loaded Windows machine
 
   it("session.list answers in the list wait while OpenCode does not start, with the Claude items and the OpenCode entry of sessions.json kept", async () => {
     const entry = { ses_gone: { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
