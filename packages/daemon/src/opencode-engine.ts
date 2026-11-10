@@ -186,6 +186,8 @@ class OpenCodeSession implements EngineSession {
   private attaching: Promise<void> | undefined;
   /** The assistant message OpenCode aborted on its own in this turn (no Stop, no `session.error`). */
   private selfAbort: string | undefined;
+  /** The user messages of the running turn (its prompt, steering ones): only an answer to one of them can be a self-abort of this turn. */
+  private turnUsers = new Set<string>();
   /** Where each send() is (preparing, posting, posted, dropped): what a Stop does to it (opencode-stop.ts). */
   private readonly stops = new StopControl();
   /** The Stop mark of the running turn (`stops.count` when it began): a turn begun after the last Stop has the current count. */
@@ -233,7 +235,7 @@ class OpenCodeSession implements EngineSession {
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
-    if (this.history.busy) (this.turnAt = Date.now()), this.openTurnEnd();
+    if (this.history.busy) (this.turnAt = Date.now(), this.openTurnEnd(), this.noteLastUser(this.history.messages));
     this.requests(this.history);
     // Events between the history read and the stream connecting are lost: read again once it is open.
     void this.server.streamReady().then(() => this.resync());
@@ -284,7 +286,7 @@ class OpenCodeSession implements EngineSession {
         void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
-        if (h.busy && state === "idle" && !this.quiet) (this.turnAt = Date.now(), this.openTurnEnd(), this.session.setState("running"));
+        if (h.busy && state === "idle" && !this.quiet) (this.turnAt = Date.now(), this.openTurnEnd(), this.noteLastUser(h.messages), this.session.setState("running"));
         // A prompt just sent may not be busy in OpenCode yet.
         else if (!h.busy && state === "running" && Date.now() - this.sentAt > 3000) this.finish();
       })
@@ -429,6 +431,7 @@ class OpenCodeSession implements EngineSession {
       this.turnPosted = false;
       this.session.setState("running");
     }
+    this.turnUsers.add(messageID);
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     void this.send(messageID, text, images, !steer && cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
       this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
@@ -512,7 +515,19 @@ class OpenCodeSession implements EngineSession {
     this.aborted = false;
     this.failed = false;
     this.selfAbort = undefined;
+    this.turnUsers = new Set();
     this.mapper.resetTurn();
+  }
+
+  /** An assistant message answers a user message of the running turn (a message without a parent cannot be placed: taken as this turn's). */
+  private ofTurn(info: OpenCodeMessage["info"]) {
+    return !info.parentID || this.turnUsers.has(info.parentID);
+  }
+
+  /** A turn found running (restore, resync): its user message is the last one stored. */
+  private noteLastUser(messages: OpenCodeMessage[]) {
+    const user = [...messages].reverse().find((m) => m.info.role === "user");
+    if (user) this.turnUsers.add(user.info.id);
   }
 
   /** The turn ended (session idle): its result, then idle. */
@@ -620,8 +635,10 @@ class OpenCodeSession implements EngineSession {
           void this.setPermissionMode("default").catch(() => {}).finally(() => (this.leavingPlan = false));
         }
         if (root) this.noteUsage(info);
+        // A prompt of this turn sent elsewhere (OpenCode's own UI, a compaction); ours are noted when sent (a late update of a stopped one is not this turn's).
+        if (root && info.role === "user" && !this.mapper.own.has(info.id) && this.session.currentState() !== "idle" && !this.quiet) this.turnUsers.add(info.id);
         // OpenCode aborted the turn on its own (no session.error, not our Stop): say so instead of ending silently.
-        if (root && info.role === "assistant" && info.error?.name === "MessageAbortedError" && info.time?.completed && !this.aborted && !this.stopped && !this.quiet && this.session.currentState() !== "idle" && this.selfAbort !== info.id) {
+        if (root && info.role === "assistant" && info.error?.name === "MessageAbortedError" && info.time?.completed && !this.aborted && !this.stopped && !this.quiet && this.session.currentState() !== "idle" && this.selfAbort !== info.id && this.ofTurn(info)) {
           this.selfAbort = info.id;
           this.failed = true;
           this.notice(`aborted:${info.id}`, SELF_ABORT);
@@ -793,6 +810,7 @@ class OpenCodeSession implements EngineSession {
     this.stopped = false;
     this.sentAt = Infinity;
     this.beginTurn();
+    this.turnUsers.add(messageID);
     this.session.setState("running");
     const model = this.model.split("/");
     const done = () => (this.sentAt = Date.now());

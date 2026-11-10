@@ -1305,6 +1305,28 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(s.states().at(-1)).toBe("idle");
   });
 
+  it("the stopped message's late aborted update, arriving while the next prompt's turn runs, is no self-abort of that turn (acceptance round 5)", async () => {
+    const d = await boot({ script: ["abort", "question"] });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle");
+    await s.prompt("next");
+    await until(() => !!s.find("question"));
+    // OpenCode stores the stopped assistant message as aborted a moment later: the update comes during the new turn.
+    const stoppedUser = s.parts().find((p) => p.type === "user_text" && p.text === "long essay")!.id;
+    const info = { id: "msg_stopped_reply", sessionID: s.id, role: "assistant", parentID: stoppedUser, agent: "build", providerID: "opencode", modelID: "big-pickle", time: { created: 2, completed: 3 }, error: { name: "MessageAbortedError", data: { message: "Aborted" } } };
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "message.updated", properties: { sessionID: s.id, info } }] });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(abortNotices(s)).toHaveLength(0);
+    expect(s.states().at(-1)).toBe("needs_input"); // the new turn goes on (its question waits)
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    expect(abortNotices(s)).toHaveLength(0);
+    expect(s.parts().some((p) => p.type === "turn_result" && p.isError)).toBe(false);
+  });
+
   it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
     const d = await boot();
     await on(d); // the other session attaches at its open: that read of the broken folder reloads it
