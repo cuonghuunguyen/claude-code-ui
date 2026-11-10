@@ -89,6 +89,8 @@ function unwatchChildren(w: (cp: ChildProcess) => ChildHook) {
 
 const RESOLUTION = 50;
 const TICK_MS = 10_000;
+/** No tick for this long: the machine slept (Windows' clock runs on in sleep; macOS and Linux monotonic clocks stop). */
+const SLEEP_GAP_MS = 60_000;
 const WATCH_MS = 20;
 const STALL_MS = 50;
 const WORST_MAX = 50;
@@ -138,6 +140,26 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
   const flight: { id: number; type: string; cwd?: string }[] = [];
   const open = new Map<number, { name: PerfSpanName; parent?: number; t0: number; elu0: EluValue }>();
 
+  // Sleep gaps: a request, span or process across a sleep counts only its awake time, a window with one records no delay.
+  // shortcut: a main thread blocked 60 s or more looks the same as a sleep (no callback runs either way); the worst list then misses it.
+  // The gap starts at the last beat (a tick or an end), up to 10 s before the sleep did: up to 10 s of awake time may be left out.
+  const gaps: { from: number; to: number }[] = [];
+  let beat: number | undefined;
+  const noteGap = (t: number) => {
+    if (beat !== undefined && t - beat >= SLEEP_GAP_MS) {
+      gaps.push({ from: beat, to: t });
+      if (gaps.length > 20) gaps.shift();
+    }
+    beat = t;
+  };
+  /** ms from `t0` to now without the sleep gaps in it. */
+  const awake = (t0: number) => {
+    const t1 = now();
+    noteGap(t1);
+    let ms = t1 - t0;
+    for (const g of gaps) ms -= Math.max(0, Math.min(t1, g.to) - Math.max(t0, g.from));
+    return ms;
+  };
   const own = (fn: () => void) => {
     const t = now();
     try {
@@ -177,7 +199,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
     if (!s) return;
     open.delete(id);
     if (open.size === 0) (clearTimeout(watch), (watch = undefined));
-    const ms = now() - s.t0;
+    const ms = awake(s.t0);
     const name = timeout ? (`${s.name}.timeout` as PerfSpanName) : s.name;
     record(hist(st.spans, name), ms);
     if (ms >= (o.worstMs ?? 100)) addWorst({ kind: "span", at: Date.now(), name, id, parent: s.parent, ms, elu: elu(s.elu0).utilization });
@@ -187,6 +209,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
     for (const [id, s] of open) if (SPAN_MAX[s.name] !== undefined && t - s.t0 >= SPAN_MAX[s.name]!) endSpan(id, true);
     const late = t - expected;
     expected = t + WATCH_MS;
+    if (late >= SLEEP_GAP_MS) return void noteGap(t);
     if (late >= STALL_MS && open.size > 0) addWorst({ kind: "stall", at: Date.now(), ms: late, spans: [...open].map(([id, s]) => ({ name: s.name, id })) });
   };
   const startWatch = () => {
@@ -205,7 +228,13 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
   const tick = () =>
     own(() => {
       if (o.poll?.() === false) return void setEnabled(false);
-      if (eld && eld.max > 0) {
+      const t = now();
+      const gapsBefore = gaps.length;
+      noteGap(t);
+      // The window held a sleep: its delay and CPU share are not the daemon's.
+      const slept = gaps.length > gapsBefore || (gaps.length > 0 && gaps.at(-1)!.to >= t - TICK_MS);
+      if (slept) eld?.reset();
+      if (!slept && eld && eld.max > 0) {
         const p50 = eld.percentile(50);
         idleP50 = idleP50 === undefined ? p50 : Math.min(idleP50, p50);
         record(st.excess, Math.max(0, eld.percentile(95) - idleP50));
@@ -219,7 +248,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       const m = memoryOf();
       // Process CPU, worker threads included: a scan off the main thread shows neither in event-loop delay nor in ELU.
       const cpuNow = { usage: (o.cpu ?? process.cpuUsage)(), at: now() };
-      const cpu = prevCpu && cpuNow.at > prevCpu.at ? Math.round(((cpuNow.usage.user + cpuNow.usage.system - prevCpu.usage.user - prevCpu.usage.system) / 1000 / (cpuNow.at - prevCpu.at)) * 100) : undefined;
+      const cpu = !slept && prevCpu && cpuNow.at > prevCpu.at ? Math.round(((cpuNow.usage.user + cpuNow.usage.system - prevCpu.usage.user - prevCpu.usage.system) / 1000 / (cpuNow.at - prevCpu.at)) * 100) : undefined;
       prevCpu = cpuNow;
       st.memory.push({ at: Date.now(), rss: m.rss, heapUsed: m.heapUsed, ...(cpu !== undefined && { cpu }) });
       if (st.memory.length > MEMORY_MAX) st.memory.shift();
@@ -237,7 +266,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       own(() => {
         if (done) return;
         done = true;
-        const ms = now() - t0;
+        const ms = awake(t0);
         recordChild({ cmd, sub, ms: ms > LONG_LIVED ? (heldMs ?? 0) : ms, heldMs, thread: "main", request, exit });
       });
     return {
@@ -265,6 +294,8 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       enabledAt = now();
       prevElu = undefined;
       prevCpu = undefined;
+      beat = undefined;
+      gaps.length = 0;
       idleP50 = undefined;
       tickTimer = setInterval(tick, TICK_MS);
       tickTimer.unref();
@@ -298,7 +329,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
           const i = flight.indexOf(e);
           if (i < 0) return;
           flight.splice(i, 1);
-          const ms = now() - t0;
+          const ms = awake(t0);
           record(hist(st.handlers, e.type), ms);
           if (ms >= (o.worstMs ?? 100)) addWorst({ kind: "handler", at: Date.now(), request: e.type, ms });
         });
@@ -324,7 +355,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       const request = attribute(c.cwd);
       const cmd = cmdLabel(c.cmd);
       const sub = cmd === "git" ? gitSub(c.args ?? []) : undefined;
-      return (exit) => own(() => recordChild({ cmd, sub, ms: now() - t0, thread: c.thread, request, exit }));
+      return (exit) => own(() => recordChild({ cmd, sub, ms: awake(t0), thread: c.thread, request, exit }));
     },
     syncChild(cmd, args, fn) {
       if (!on) return fn();
