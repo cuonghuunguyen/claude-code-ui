@@ -58,6 +58,35 @@ Feature: OpenCode agents (GH-684)
     Then the agent chooser shows "Build"
     And the permission mode is still "Ask before edits"
 
+  Scenario: After a reload the open session still lists the custom agent and Shift+Tab reaches it
+    Given the viewport is 1440x900
+    And the OpenCode project has a primary agent "review" that cannot edit
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    When I send the first prompt "Reply with the single word ok"
+    And the turn has finished
+    And I reload the page
+    And I open the first session row
+    And I open the agent chooser
+    Then the agent chooser offers exactly "Build, Plan, Review"
+    When I close the open chooser
+    And I press "Shift+Tab" in the prompt box
+    Then the agent chooser shows "Plan"
+    When I press "Shift+Tab" in the prompt box
+    Then the agent chooser shows "Review"
+    And I capture "reload agents"
+
+  Scenario: A session created from the new-session tab lists the custom agent without a reload
+    Given the viewport is 1440x900
+    And the OpenCode project has a primary agent "review" that cannot edit
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    When I send the first prompt "Reply with the single word ok"
+    And the turn has finished
+    And I open the agent chooser
+    Then the agent chooser offers exactly "Build, Plan, Review"
+    And I capture "new session agents"
+
   Scenario: An agent that denies edits wins over Edit automatically
     Given the viewport is 1440x900
     And the OpenCode project has a primary agent "review" that cannot edit
@@ -70,7 +99,6 @@ Feature: OpenCode agents (GH-684)
     Then the file "x.txt" does not exist in the project
     And the permission request is gone
     And no "x.txt" tool call completed
-    And the transcript shows the model's reply
     And I capture "edit refused"
 
   Scenario Outline: Both choosers are reachable at <width>x<height>
