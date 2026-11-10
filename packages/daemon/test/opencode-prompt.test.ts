@@ -405,8 +405,6 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_old: saved, ses_legacy: { permissionMode: "plan" } }));
     const legacy = [{ permission: "claude-ui", pattern: "mode:plan", action: "allow" }, { permission: "claude-ui", pattern: "always", action: "allow" }];
     const d = await boot({ root, script: ["text", "text"], data: { sessions: [row("ses_old", block("docs")), row("ses_legacy", legacy)] } });
-    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
-    await d.ok({ type: "session.list" });
     const one = await d.ok({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
     expect(one.session).toMatchObject({ agent: "docs", permissionMode: "default" });
     await d.ok({ type: "session.prompt", sessionId: "ses_old", text: "hi" });
