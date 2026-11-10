@@ -70,17 +70,13 @@ describe("auto start of a saved side", () => {
     return seen;
   };
 
-  it("a legacy entry without a key starts once with the bundle only", async () => {
-    expect(await modes(parseSaved(["wsl:A"]))).toEqual([{ setup: "needed", bundleOnly: true }]);
-  });
-  it("the current key starts with setup never", async () => {
-    expect(await modes([{ id: "wsl:A", key: "k2" }])).toEqual([{ setup: "never", bundleOnly: undefined }]);
-  });
-  it("another key and update on: needed + bundleOnly", async () => {
-    expect(await modes([{ id: "wsl:A", key: "old" }])).toEqual([{ setup: "needed", bundleOnly: true }]);
-  });
-  it("another key and update off: never", async () => {
-    expect(await modes([{ id: "wsl:A", key: "old", update: false }])).toEqual([{ setup: "never", bundleOnly: undefined }]);
+  it.each([
+    ["a legacy entry without a key starts once with the bundle only", parseSaved(["wsl:A"]), { setup: "needed", bundleOnly: true }],
+    ["the current key starts with setup never", [{ id: "wsl:A", key: "k2" }], { setup: "never", bundleOnly: undefined }],
+    ["another key and update on: needed + bundleOnly", [{ id: "wsl:A", key: "old" }], { setup: "needed", bundleOnly: true }],
+    ["another key and update off: never", [{ id: "wsl:A", key: "old", update: false }], { setup: "never", bundleOnly: undefined }],
+  ] as [string, SavedSide[], object][])("%s", async (_n, saved, mode) => {
+    expect(await modes(saved)).toEqual([mode]);
   });
 
   it("a start that ends not_installed: off, update true, no retry", async () => {
