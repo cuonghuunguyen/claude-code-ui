@@ -10,16 +10,16 @@ import { Then, When } from "./fixtures.ts";
 
 /**
  * Another client of the daemon's OpenCode server does what the old daemon did to the folder: resets it, then drops its first read
- * (`GET /command`) after 2 s, in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
+ * (`GET /command`) after 4 s (the folder needs about 2 s to bootstrap before the MCP load starts; a 2 s cut landed before it on a loaded machine and nothing was interrupted), in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
  */
 When("another client cuts OpenCode's MCP load in the project", async ({ project }) => {
   const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
   const q = `?directory=${encodeURIComponent(project.path)}`;
   const dispose = await fetch(`${url}/instance/dispose${q}`, { method: "POST", headers: { authorization: auth } });
   expect(dispose.ok).toBe(true);
-  await fetch(`${url}/command${q}`, { headers: { authorization: auth }, signal: AbortSignal.timeout(2000) }).then(
+  await fetch(`${url}/command${q}`, { headers: { authorization: auth }, signal: AbortSignal.timeout(4000) }).then(
     () => {
-      throw new Error("GET /command answered within 2 s: the MCP load was not slow, nothing was cut");
+      throw new Error("GET /command answered within 4 s: the MCP load was not slow, nothing was cut");
     },
     () => undefined,
   );
