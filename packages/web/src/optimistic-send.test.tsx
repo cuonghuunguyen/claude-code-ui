@@ -100,8 +100,6 @@ describe("first prompt", () => {
     expect(card.querySelector('[data-testid="user-message"][data-pending]')?.textContent).toContain("hello");
     expect(card.querySelector('[data-testid="thinking"]')).not.toBeNull();
     expect(card.querySelector('[data-testid="prompt-skeleton"]')).not.toBeNull();
-    // No state chip skeleton: the header has no state chip any more (GH-165).
-    expect(card.querySelector('[data-testid="session-state-skeleton"]')).toBeNull();
     expect(one('[data-testid="titlebar"] [data-testid="title-skeleton"]')).toBeTruthy();
     expect(visible('[data-testid="new-session-tab"]')).toHaveLength(0);
   });

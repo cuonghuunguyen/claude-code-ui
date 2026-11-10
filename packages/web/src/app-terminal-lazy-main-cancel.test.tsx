@@ -67,8 +67,6 @@ const { App } = await import("./App.tsx");
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 afterEach(() => (act(() => root.unmount()), el.remove(), localStorage.clear()));
-const press = (init: KeyboardEventInit) => act(async () => void document.body.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
-const strip = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"] [role="tab"]`);
 const TERM = `terminal:${ID}`;
 async function start(layout: unknown) {
   localStorage.setItem("claude-ui.layout", JSON.stringify(layout));

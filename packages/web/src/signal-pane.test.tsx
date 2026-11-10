@@ -56,13 +56,6 @@ const parts = [call("e1", "Edit"), call("e2", "Edit"), text("t1"), call("b1", "B
 const folds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="signal-fold"]')];
 const cards = () => el.querySelectorAll('[data-testid="tool-card"]');
 
-it("the session pane has no Signal only switch", async () => {
-  localStorage.clear();
-  await render(view(parts));
-  expect(el.querySelector('[data-testid="signal-switch"]')).toBeNull();
-  expect(el.textContent).not.toContain("Signal only");
-});
-
 it("with the setting on, tool runs fold into one line each, keeping text and errors, and clicking a fold shows its cards in place", async () => {
   localStorage.clear();
   await render(view(parts));

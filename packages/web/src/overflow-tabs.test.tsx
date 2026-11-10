@@ -2,7 +2,8 @@
 // GH-512: a tab row shows the tabs that fit; the rest are in a `…` menu; the selected tab stays a tab.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fitTabs } from "./overflow-tabs.ts";
 import { OverflowTabs } from "./overflow-tabs.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -74,8 +75,6 @@ it("all tabs show when the row is wide", () => {
 });
 
 it("a menu item selects its key and keeps data-testid / data-command", async () => {
-  mount("changes");
-  expect(tabs()).toEqual(["changes", "files"].slice(0, 2));
   const onSelect = mount("changes");
   await act(async () => more()!.click());
   const items = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
@@ -91,4 +90,13 @@ it("a keyboard-opened menu focuses its first item", async () => {
   });
   await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
   expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+});
+
+describe("fitTabs", () => {
+  it("all fit", () => expect(fitTabs([60, 60, 60], 200, 4, 32, 0)).toEqual([0, 1, 2]));
+  it("undefined width shows all", () => expect(fitTabs([60, 60, 60], undefined, 4, 32, 0)).toEqual([0, 1, 2]));
+  it("prefix leaves room for the more button", () => expect(fitTabs([60, 60, 60, 60, 60], 200, 4, 32, -1)).toEqual([0, 1]));
+  it("a selected tab past the fit replaces the last shown ones, order kept", () => expect(fitTabs([60, 60, 60, 60, 60], 200, 4, 32, 4)).toEqual([0, 4]));
+  it("selected wider than the budget still shows alone", () => expect(fitTabs([300], 100, 4, 32, 0)).toEqual([0]));
+  it("no selection keeps at least the first tab", () => expect(fitTabs([300, 50], 100, 4, 32, -1)).toEqual([0]));
 });

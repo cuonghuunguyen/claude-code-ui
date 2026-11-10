@@ -170,11 +170,9 @@ it("touch (pointer: coarse, the repo's pointer-coarse rule): autocomplete rows, 
 });
 
 it("the tree follows showTree; the Files button asks to toggle it", async () => {
-  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
+  const { el, root, show: render } = treePanel();
   const onToggleTree = vi.fn();
-  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={onToggleTree} />));
+  const show = (showTree: boolean) => render({ showTree, onToggleTree });
   await show(false);
   const btn = () => el.querySelector('[data-testid="toggle-tree"]')!;
   expect(el.querySelector('[data-testid="file-tree"]')).toBeNull();
@@ -194,10 +192,8 @@ it("the tree follows showTree; the Files button asks to toggle it", async () => 
 });
 
 it("the header shows Collapse all and Reveal buttons only while the tree shows; Reveal needs an open file", async () => {
-  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={() => {}} />));
+  const { el, root, show: render } = treePanel();
+  const show = (showTree: boolean) => render({ showTree });
   await show(false);
   expect(el.querySelector("[aria-label='Collapse all folders']")).toBeNull();
   expect(el.querySelector("[aria-label='Reveal active file in tree']")).toBeNull();

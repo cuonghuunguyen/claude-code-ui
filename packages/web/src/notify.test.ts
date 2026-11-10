@@ -119,7 +119,7 @@ it("reconcile moves a card to the session's other waiting request when one settl
   expect(out).toEqual([card({ kind: "question", requestId: "q2" })]);
 });
 
-it("reconcile drops cards of the shown session, of an archived or unlisted one, all of them on the Focus page and when in-app is off", () => {
+it("reconcile drops cards of the shown session, of an archived or unlisted one, all request cards on the Focus page and all cards when in-app is off", () => {
   const views = { a: view([perm("r1")]), b: view([perm("r2")]) };
   const cards = [card({ sessionId: "a", requestId: "r1" }), card({ sessionId: "b", requestId: "r2" })];
   expect(reconcile(cards, ctx(views, { shown: (id) => id === "a" })).map((c) => c.sessionId)).toEqual(["b"]);

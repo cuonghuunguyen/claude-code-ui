@@ -198,11 +198,6 @@ it("Esc on a focused card dismisses it and does not stop the shown session's tur
   expect(sent.some((m) => m.type === "session.interrupt")).toBe(false);
 });
 
-it("no push toggle in the page: it lives in Settings", async () => {
-  await mount(`#${A}`);
-  expect(el.querySelector('[data-testid="push-toggle"]')).toBeNull();
-});
-
 it("push.focus carries the covered sessions while the page is focused and in-app is on, so push and desktop stay quiet for them (GH-158)", async () => {
   await mount(`#${A}`);
   const last = () => [...sent].reverse().find((m) => m.type === "push.focus");

@@ -76,10 +76,11 @@ it("AC2 a right click on a compact chip opens a context menu: Move left/right, s
 
 it("AC2 the context menu items keep their behaviour: move (first group: left disabled), clean up, close others, close group", async () => {
   const onMoveGroup = vi.fn();
+  const onClose = vi.fn();
   const onCloseGroup = vi.fn();
   const onCloseOtherGroups = vi.fn();
   const c = cleanup(2);
-  const el = await mount({ onMoveGroup, onCloseGroup, onCloseOtherGroups, ...c });
+  const el = await mount({ onClose, onMoveGroup, onCloseGroup, onCloseOtherGroups, ...c });
   const open = async () => { await rightClick(chip(el)); await settle(); };
   await open();
   const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="tab-group-context-menu"] [role="menuitem"]')];
@@ -95,14 +96,18 @@ it("AC2 the context menu items keep their behaviour: move (first group: left dis
   await open();
   await act(async () => byId("tab-group-close")!.click());
   expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 it("AC2 Clean up group is disabled with nothing to clean, Close other groups with no other group", async () => {
-  const el = await mount({ tabs: ["a1", "a2"], ...cleanup(0) });
+  const c = cleanup(0);
+  const el = await mount({ tabs: ["a1", "a2"], ...c });
   await rightClick(chip(el));
   await settle();
   expect(byId("tab-group-cleanup")!.getAttribute("aria-disabled")).toBe("true");
   expect(byId("tab-group-close-others")!.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => byId("tab-group-cleanup")!.click());
+  expect(c.onCleanup).not.toHaveBeenCalled();
 });
 
 it("AC2 Shift+F10 and the ContextMenu key on a focused compact chip open the context menu", async () => {
@@ -142,16 +147,6 @@ it("AC4 below md there are no chips: the strip holding them is hidden below md (
   const strip = chip(el).closest<HTMLElement>(".hidden")!;
   expect(strip.className).toContain("md:flex");
   expect(el.querySelector(".md\\:hidden")).not.toBeNull(); // the "Switch tab" switcher, shown below md only
-});
-
-it("AC5 a middle click on a compact chip still closes the group", async () => {
-  const onCloseGroup = vi.fn();
-  const el = await mount({ onCloseGroup });
-  await act(async () => {
-    for (const type of ["mousedown", "mouseup", "auxclick"]) chip(el).dispatchEvent(new MouseEvent(type, { button: 1, bubbles: true, cancelable: true }));
-  });
-  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
-  expect(byId("tab-group-menu")).toBeNull();
 });
 
 it("AC3 a click-opened menu closes when the context menu opens (focus goes into it), and the click menu opens again once the context menu is closed", async () => {

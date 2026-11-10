@@ -251,6 +251,8 @@ it("GH-360 right click opens the menu of the row under it: file, folder, empty s
   await t.render();
   await ctxMenu(t.row("/p/README.md"));
   expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  expect(menuItem("rename").getAttribute("aria-keyshortcuts")).toBe("F2");
+  expect(menuItem("delete").className).toContain("text-destructive");
   await closeMenu();
   await ctxMenu(t.row("/p/src"));
   expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
@@ -314,6 +316,8 @@ it("GH-360 Shift+F10 and the ContextMenu key open the focused row's menu; F10 al
   for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
     await t.key(t.row("/p/README.md"), init.key, init);
     expect(menuIds()).toContain("open");
+    await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("open")));
+    expect(document.activeElement!.getAttribute("role")).toBe("menuitem");
     await closeMenu();
     expect(document.activeElement).toBe(t.row("/p/README.md"));
   }
@@ -582,31 +586,6 @@ it("GH-360 Rename while a filter is active clears the filter, reveals the row an
   await act(async () => {});
   expect(filter.value).toBe("");
   expect(nameInput()!.value).toBe("app.ts");
-  t.unmount();
-});
-
-it("GH-360 file menu has Rename F2, Duplicate and Delete with the shortcut hints; a folder has New file and New folder", async () => {
-  const t = setup();
-  await t.render();
-  await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
-  expect(menuItem("rename").getAttribute("aria-keyshortcuts")).toBe("F2");
-  expect(menuItem("delete").className).toContain("text-destructive");
-  await closeMenu();
-  await ctxMenu(t.row("/p/src"));
-  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
-  await closeMenu();
-  t.unmount();
-});
-
-it("GH-360 Shift+F10 on a focused row moves focus to the menu's first enabled item", async () => {
-  const t = setup();
-  await t.render();
-  t.row("/p/src").focus();
-  await t.key(t.row("/p/src"), "F10", { shiftKey: true });
-  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("newFile")));
-  expect(document.activeElement!.getAttribute("role")).toBe("menuitem");
-  await closeMenu();
   t.unmount();
 });
 

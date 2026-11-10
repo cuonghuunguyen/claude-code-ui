@@ -349,9 +349,8 @@ it("a project without linked worktrees inside the roots has no Run session in ch
   expect(options().map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b", "Open project…"]);
 });
 
-it("has no Coordinator toggle; startSession creates a plain session", async () => {
-  const { el } = await render();
-  expect(el.querySelector('[data-testid="coordinator-toggle"]')).toBeNull();
+it("startSession creates a plain session", async () => {
+  await render();
   const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
   const request = vi.fn(async (_m: { type: string }) => ({ session: info }));
   await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });

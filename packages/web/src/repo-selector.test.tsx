@@ -121,15 +121,6 @@ it("keyboard: arrows, Home/End, ←/→, type-ahead, Enter selects and closes, S
   expect(onSelect).toHaveBeenCalledTimes(2);
 });
 
-it("Escape closes and focus returns to the trigger", async () => {
-  await show();
-  await open();
-  await key("Escape");
-  await flush();
-  expect(document.querySelector("[role=tree]")).toBeNull();
-  expect(document.activeElement).toBe(trigger());
-});
-
 it("the filter shows only above 10 entries and narrows the tree", async () => {
   await show();
   await open();
@@ -174,37 +165,34 @@ it("narrow: the tree opens in a full-width sheet with 44px rows", async () => {
   expect(trigger().className).toContain("h-11 w-full");
 });
 
-it("←/→ inside the tree do not reach the document listener", async () => {
-  await show();
-  await open();
-  const seen = vi.fn();
-  document.addEventListener("keydown", seen);
-  await key("ArrowLeft");
-  await key("ArrowRight");
-  document.removeEventListener("keydown", seen);
-  expect(seen).not.toHaveBeenCalled();
-});
-
 const many = (n: number) => [main, ...Array.from({ length: n }, (_, i) => R(`m${i}`, "nested", "/p"))];
 
-it("Escape in the filter field closes the selector and focus returns to the trigger", async () => {
-  await show({ list: many(11), selected: main });
+// "tree": the focus is on a tree row; "filter field": the list is long enough for the filter, which has the focus.
+const FIELDS = [
+  ["tree", {}],
+  ["filter field", { list: many(11), selected: main }],
+] as const;
+
+it.each(FIELDS)("Escape in the %s closes the selector and focus returns to the trigger", async (name, props) => {
+  await show(props);
   await open();
-  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]")!;
-  expect(document.activeElement).toBe(input);
-  await key("Escape", input);
+  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]");
+  if (name === "filter field") expect(document.activeElement).toBe(input);
+  await key("Escape", name === "filter field" ? input! : undefined);
   await flush();
   expect(document.querySelector("[role=tree]")).toBeNull();
   expect(document.activeElement).toBe(trigger());
 });
 
-it("←/→ in the filter field do not reach the document listener", async () => {
-  await show({ list: many(11), selected: main });
+it.each(FIELDS)("←/→ in the %s do not reach the document listener", async (name, props) => {
+  await show(props);
   await open();
-  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]")!;
+  const input = document.querySelector<HTMLInputElement>("[data-testid=repo-filter]");
   const seen = vi.fn();
   document.addEventListener("keydown", seen);
-  await key("ArrowLeft", input);
+  const target = name === "filter field" ? input! : undefined;
+  await key("ArrowLeft", target);
+  if (name === "tree") await key("ArrowRight", target);
   document.removeEventListener("keydown", seen);
   expect(seen).not.toHaveBeenCalled();
 });
