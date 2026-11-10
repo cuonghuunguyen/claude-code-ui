@@ -16,6 +16,8 @@ export default defineConfig({
   test: {
     // Default workers = all cores; with a second suite or other agents running, jsdom files starve and hit the 5 s default.
     maxWorkers: "50%",
+    // One run-scoped temp root for everything the tests create, removed at the end.
+    globalSetup: ["vitest.global.ts"],
     projects: [
       {
         extends: true,

@@ -4,16 +4,18 @@
 // test that sets autocrlf itself still wins) pins it off for the git processes the tests and the code under test start. The user's real
 // global config is never read or written.
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Normally set by vitest.global.ts (inside the run's temp root, removed at the end). A file run without it (an IDE runner) makes its own and removes it on exit.
 if (process.env.GIT_CONFIG_GLOBAL === undefined) {
   const dir = mkdtempSync(join(tmpdir(), "vitest-gitcfg-"));
   const file = join(dir, "gitconfig");
   writeFileSync(file, "[core]\n\tautocrlf = false\n");
   process.env.GIT_CONFIG_GLOBAL = file;
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
 }
 
 // The Claude CLI exports this in its own shells (and so in an agent's): the daemon passes it on to a worker's query only, and a test that
