@@ -325,16 +325,22 @@ it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the col
   const want = h.codeToTokens(code, { lang: lang as never, themes: { light: "github-light", dark: "github-dark" } }).tokens.map((line) =>
     line.flatMap((t) => [...t.content].map((ch) => (ch.trim() ? `${t.htmlStyle?.color}|${t.htmlStyle?.["--shiki-dark"]}` : ""))),
   );
-  const lines = [...block!.querySelectorAll("code > span")];
-  const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
-  for (const hl of highlights.values())
-    for (const r of hl) {
-      const i = lines.findIndex((l) => l.contains(r.startContainer));
-      if (i < 0) continue;
-      for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
-    }
-  let chars = 0, same = 0;
-  want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+  // The block is painted in slices: `painted()` is true after the first, so compare again until every character has its color (a slow machine had 947 of 1320 at the first look).
+  const compare = () => {
+    const lines = [...block!.querySelectorAll("code > span")];
+    const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
+    for (const hl of highlights.values())
+      for (const r of hl) {
+        const i = lines.findIndex((l) => l.contains(r.startContainer));
+        if (i < 0) continue;
+        for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
+      }
+    let chars = 0, same = 0;
+    want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+    return { chars, same };
+  };
+  await slotsUntil(() => compare().same === compare().chars).catch(() => {});
+  const { chars, same } = compare();
   expect(`${same} of ${chars}`).toBe(`${chars} of ${chars}`);
 });
 
