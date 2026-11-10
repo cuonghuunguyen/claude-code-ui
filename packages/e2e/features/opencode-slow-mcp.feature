@@ -97,3 +97,16 @@ Feature: OpenCode in folders with slow MCP servers and turns OpenCode ends on it
     Then I see at least 2 replies from Claude
     And the turn has finished
     And I capture "after restart plain folder"
+
+  # GH-682: no warm-up step. The first request of the run starts OpenCode's server, so POST /session of the new session is a cold folder's first call (it used to give up at 3 s).
+  Scenario: Right after choosing OpenCode on a cold server the first prompt gets a reply
+    Given the viewport is 1440x900
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    When I disable orchestration in Settings
+    And I send the first prompt "Reply with exactly: OK"
+    Then I see my prompt in the transcript
+    And I see a reply from Claude
+    And the turn has finished
+    And I see no notice "ended this turn on its own"
+    And I capture "cold server first prompt"
