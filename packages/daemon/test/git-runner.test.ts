@@ -112,8 +112,8 @@ describe("git-runner", () => {
       const p = runGit(sleeper(ctl.signal)).then(() => undefined, (e) => e as Error);
       setTimeout(() => ctl.abort(), 300);
       expect(await p, name).toBeInstanceOf(Error);
-      // The point: the abort ends the run, which sleeps 10 s. On Windows the kill is a taskkill process (2.4-2.9 s measured alone, 3.2 s in a full suite).
-      expect(Date.now() - t0).toBeLessThan(8000);
+      // The point: the abort ends the run, which sleeps 10 s. On Windows the kill is a taskkill process (2.4-2.9 s measured alone, 3.2 s in a full suite); elsewhere the kill is a signal and 3 s stays.
+      expect(Date.now() - t0).toBeLessThan(process.platform === "win32" ? 8000 : 3000);
     };
 
     it("kills a killTree run in the thread runner", () => abortLater("thread"));

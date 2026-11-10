@@ -2,10 +2,12 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS } from "../src/settings.ts";
 import { gitDiff, gitStatus, listRepos, parseGitmodules, type ListReposOptions } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
+// Windows, full suite: this file's git-heavy tests (submodule setups, dozens of git processes: 34 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "protocol.file.allow=always", ...args], { cwd, env: ENV, stdio: "pipe" }).toString();

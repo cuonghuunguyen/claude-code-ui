@@ -356,7 +356,7 @@ describe("gitReadOnly", () => {
       for (let i = 0; i < rows.length; i += 8) {
         await Promise.all(rows.slice(i, i + 8).map(async (command) => expect(await tierAsync("Bash", { command }, { cwd, bashCwdPinned: true }), command).toBe(tier("Bash", { command }, { cwd, bashCwdPinned: true }))));
       }
-    }, 600_000);
+    }, process.platform === "win32" ? 600_000 : 300_000);
 
     it("an include.path into the worktree, a relative gpg.program and a relative hooksPath written as an absolute path inside are refused", () => {
       for (const [k, v] of [["include.path", "../extra.cfg"], ["gpg.program", "./gpg.sh"]] as const) {

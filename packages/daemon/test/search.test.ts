@@ -225,8 +225,9 @@ describe("searchFiles in nested repositories and submodules", () => {
     const repos = await reposOf(dir);
     const all = await searchFiles(dir, "", 1000, repos);
     // git on Windows sees a junction as a folder and lists it "link/"; elsewhere a symlink is "link".
-    expect(all.some((p) => p === "link" || p === "link/")).toBe(true);
-    expect(all.some((p) => p.startsWith("link/") && p !== "link/")).toBe(false);
+    const listed = process.platform === "win32" ? ["link", "link/"] : ["link"];
+    expect(all.some((p) => listed.includes(p))).toBe(true);
+    expect(all.some((p) => p.startsWith("link/") && !listed.includes(p))).toBe(false);
   });
 
   it("a nested .git file pointing outside lists nothing of it", async () => {

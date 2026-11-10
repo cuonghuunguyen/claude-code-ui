@@ -24,7 +24,7 @@ const until = async (cond: () => boolean, ms = 8000) => {
   expect(cond()).toBe(true);
 };
 /** The first request of a boot waits for the daemon to spawn the fake OpenCode, a process start that takes seconds on Windows under load: replies are bounded by the test timeout, not by 8 s. */
-const REPLY_MS = 60_000;
+const REPLY_MS = process.platform === "win32" ? 60_000 : 8000;
 const TEST_MS = process.platform === "win32" ? 90_000 : 30_000;
 const lastOf = <T,>(a: T[], f: (x: T) => boolean): T | undefined => [...a].reverse().find(f);
 const cleanups: (() => void)[] = [];

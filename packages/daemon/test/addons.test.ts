@@ -52,7 +52,8 @@ beforeAll(() => {
   first = commitAddon();
   git(work, "tag", "v1");
   git(work, "push", "-q", "origin", "v1");
-});
+  // About ten git processes (0.44 s each on Windows when idle, over the 10 s default in a full suite).
+}, process.platform === "win32" ? 60_000 : undefined);
 
 const http = createDaemon({ webRoot, roots: [webRoot], token, addonsDir });
 await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));

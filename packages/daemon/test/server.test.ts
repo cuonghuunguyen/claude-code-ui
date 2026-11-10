@@ -2662,7 +2662,7 @@ describe("daemon", () => {
       await c.request({ type: "fs.read", path: join(webRoot, "no-such-file") }).catch(() => {});
       expect(scans).toBe(1);
       release.shift()!();
-      await vi.waitFor(() => expect(scans).toBe(2), { timeout: 10_000 });
+      await vi.waitFor(() => expect(scans).toBe(2), { timeout: process.platform === "win32" ? 10_000 : 1000 });
       release.shift()!();
       const titles = (r: unknown) => (r as { result: { sessions: { title: string }[] } }).result.sessions.map((s) => s.title);
       expect(titles(await first)).toEqual(["scan 1"]);
@@ -4162,7 +4162,7 @@ describe("push", () => {
       await c.request({ type: "session.subscribe", sessionId: second, sinceSeq: 0 });
       await c.request({ type: "session.prompt", sessionId: second, text: "again" });
       const needs = () => f.sent.filter((p) => p.sessionId === second);
-      await vi.waitFor(() => expect(needs()).toHaveLength(1), { timeout: 10_000 });
+      await vi.waitFor(() => expect(needs()).toHaveLength(1), { timeout: process.platform === "win32" ? 10_000 : 1000 });
       expect(needs()[0]).toEqual({ sessionId: second, title: basename(webRoot), body: "Needs input · Bash: npm test" });
     } finally {
       d.close();

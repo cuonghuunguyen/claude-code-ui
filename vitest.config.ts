@@ -1,15 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 const win = process.platform === "win32";
-// Windows starts a process several times slower: tests that spawn many git processes need more under a full suite.
-// Measured alone on Windows: git-heavy tests take 12-25 s (worktree-scan, git-repos 51 s); in the full suite, with every core busy, 3x that or more (up to 125 s seen).
-const testTimeout = win ? 180_000 : 15_000;
-// The same for a beforeAll that builds a git repository (addons.test.ts: about ten git processes, 0.4-0.9 s each on Windows, over the 10 s default under load).
-const hookTimeout = win ? 60_000 : 10_000;
+// Windows starts a process several times slower: tests that spawn many git processes need more under a full suite (files that need more than this say so themselves).
+const testTimeout = win ? 60_000 : 15_000;
 const shared = {
   setupFiles: ["vitest.env.ts", "packages/web/src/vitest.setup.ts"],
   testTimeout,
-  hookTimeout,
 };
 export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./packages/web/src", import.meta.url)) } },
