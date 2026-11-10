@@ -88,6 +88,7 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
+import { VisualizeContext } from "./visualize-block.tsx";
 import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, logAllowed, useAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
@@ -499,6 +500,8 @@ export function App() {
   /** GH-523: Keep computer awake; undefined until settings.get answers or on an older daemon. */
   /** GH-514: Claude in Chrome setting; undefined on a daemon without it. */
   const [chromeOn, setChromeOn] = useState<boolean>();
+  /** GH-690: Settings › Chat › Inline visualizations; a daemon without the setting counts as off. */
+  const [visualizeOn, setVisualizeOn] = useState(false);
   /** Claude account (GH-615): the setting, the saved token accounts (no tokens) and whether Default is a token of the daemon's environment. */
   const [claudeAccount, setClaudeAccount] = useState("");
   const [claudeAccounts, setClaudeAccounts] = useState<{ id: string; name: string }[]>([]);
@@ -1461,7 +1464,7 @@ export function App() {
       },
       onPlanUsage: setPlan,
       onOpenCodeProviders: dropOpenCodeModels,
-      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1489,7 +1492,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -3649,6 +3652,7 @@ export function App() {
     <OpenExternalContext value={openExternal}>
     <ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
+    <VisualizeContext value={visualizeOn}>
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
     <AddonCommandContext value={runAddonCommand}>
@@ -4603,6 +4607,7 @@ export function App() {
     </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
+    </VisualizeContext>
     </AddonsContext>
     </ClaudeLoginContext>
     </OpenExternalContext>

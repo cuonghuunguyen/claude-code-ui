@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { ALL_CAPABILITIES, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
+import { VISUALIZE_CSP, VISUALIZE_SHELL } from "../src/visualize.ts";
 import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
@@ -2702,6 +2703,45 @@ describe("daemon", () => {
       writeFileSync(join(dir, "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
       await c.request({ type: "session.list" });
       expect(scans).toBe(3);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a listed transcript that changed is read again alone (getSessionInfo), not every transcript", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const id = "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, "{}\n");
+    const entry = (summary: string, lastModified: number) => ({ sessionId: id, summary, lastModified, cwd: webRoot, fileSize: 3 });
+    let scans = 0;
+    const infos: string[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      modelListWaitMs: 0,
+      history: {
+        listSessions: (async () => (scans++, [entry("Old title", 1)])) as never,
+        getSessionInfo: (async (sid: string) => (infos.push(sid), entry("New title", 2))) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "project.open", cwd: webRoot });
+      await c.request({ type: "session.list" });
+      writeFileSync(file, "{}\n{}\n");
+      const r = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(scans).toBe(1);
+      expect(infos).toEqual([id]);
+      expect(r.result.sessions.find((s) => s.id === id)?.title).toBe("New title");
     } finally {
       d.close();
     }
@@ -5680,6 +5720,17 @@ describe("artifact.preview and /artifact (GH-175)", () => {
       req.on("error", reject);
       req.end();
     });
+
+  it("GET /visualize serves the shell with its own CSP to an iframe only (GH-690)", async () => {
+    await listening;
+    const ok = await get("/visualize");
+    expect(ok.status).toBe(200);
+    expect(ok.headers["content-security-policy"]).toBe(VISUALIZE_CSP);
+    expect(ok.body.toString()).toBe(VISUALIZE_SHELL);
+    expect((await get("/visualize", { "sec-fetch-dest": "script" })).status).toBe(403);
+    expect((await get("/visualize", { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await get("/visualize", {}, "POST")).status).toBe(405);
+  });
 
   it("replies a nonce URL for a done publish outside the roots; GET serves the bytes with the sandbox headers", async () => {
     const c = await open();

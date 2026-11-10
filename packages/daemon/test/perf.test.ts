@@ -57,6 +57,32 @@ describe("event loop", () => {
     expect(r.eld.excessP95).toBeGreaterThan(150);
     expect(r.eld.excessMax).toBeGreaterThan(350);
   });
+  it("cpu: process CPU per 10 s window in % of one core, from the second sample", () => {
+    let used = 0;
+    const { p } = make({ cpu: () => ({ user: used, system: 0 }) });
+    p.setEnabled(true);
+    tick(10_000);
+    used += 15e6;
+    tick(10_000);
+    expect(p.report().memory.map((m) => m.cpu)).toEqual([undefined, 150]);
+  });
+  it("a sleep (clock jumps, no tick ran) is left out of request times, the delay and the CPU of its window", () => {
+    const e = fakeEld();
+    const { p } = make({ eld: () => e, cpu: () => ({ user: 0, system: 0 }) });
+    p.setEnabled(true);
+    tick(10_000);
+    const end = p.request("session.list");
+    clock += 3_600_000; // asleep: monotonic time ran on (Windows), no timer fired
+    Object.defineProperty(e, "max", { value: 3_600_000, configurable: true });
+    end();
+    tick(10_000);
+    Object.defineProperty(e, "max", { value: 16, configurable: true });
+    const r = p.report();
+    expect(r.handlers["session.list"]!.max).toBeLessThan(15_000);
+    expect(r.eld.excessMax ?? 0).toBeLessThan(1_000);
+    expect(r.memory.at(-1)!.cpu).toBeUndefined();
+    expect(r.worst.some((w) => w.ms >= 60_000)).toBe(false);
+  });
   it("memory keeps the last 60 samples", () => {
     const { p } = make();
     p.setEnabled(true);

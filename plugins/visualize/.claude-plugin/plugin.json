@@ -1,0 +1,8 @@
+{
+  "name": "visualize",
+  "version": "0.1.0",
+  "description": "Draw charts, diagrams and small interactive widgets inline in claude-ui replies: the visualize skill.",
+  "author": { "name": "claude-ui" },
+  "license": "MIT",
+  "homepage": "https://github.com/cuonghuunguyen/claude-code-ui"
+}

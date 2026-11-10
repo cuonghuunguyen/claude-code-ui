@@ -66,5 +66,8 @@ export default {
   "addons.commandNotReady": "Addon {name} chưa nạp xong bộ xử lý lệnh. Thử lại sau giây lát.",
   "addons.showRaw": "Hiện bản gốc",
   "addons.showAddon": "Hiện bản của {name}",
+  "visualize.showCode": "Hiện mã",
+  "visualize.showVisual": "Hiện hình vẽ",
+  "visualize.frameTitle": "Hình vẽ",
   "addons.refused": "Addon {name} bị từ chối: {type}",
 } satisfies Partial<Messages>;

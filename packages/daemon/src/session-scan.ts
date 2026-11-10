@@ -113,18 +113,18 @@ export const listSessionsOffThread: typeof listSessions = (options) => {
   });
 };
 
-/** Names, sizes and mtimes of every transcript under `projectsDir`, read without blocking the event loop; undefined when unreadable. */
-export async function transcriptStamp(projectsDir: string): Promise<string | undefined> {
+/** `size:mtime` of every transcript under `projectsDir` by `<project dir>/<file>`, read without blocking the event loop; undefined when unreadable. */
+export async function transcriptStamp(projectsDir: string): Promise<Map<string, string> | undefined> {
   try {
-    const parts: string[] = [];
+    const parts = new Map<string, string>();
     for (const dir of (await readdir(projectsDir, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (!dir.isDirectory()) continue;
       const path = join(projectsDir, dir.name);
       const names = (await readdir(path).catch(() => [] as string[])).filter((f) => f.endsWith(".jsonl")).sort();
       const stats = await Promise.all(names.map((f) => stat(join(path, f)).catch(() => undefined)));
-      names.forEach((f, i) => stats[i] && parts.push(`${dir.name}/${f}:${stats[i].size}:${stats[i].mtimeMs}`));
+      names.forEach((f, i) => stats[i] && parts.set(`${dir.name}/${f}`, `${stats[i].size}:${stats[i].mtimeMs}`));
     }
-    return parts.join("\n");
+    return parts;
   } catch {
     return undefined;
   }
