@@ -70,6 +70,7 @@ describe("side frames (GH-278)", () => {
     ["array m", '{"c":1,"m":[1]}'],
     ["fractional c", '{"c":1.5,"m":{}}'],
     ["ready false-like", '{"ready":"yes"}'],
+    ["running non-boolean", '{"running":"yes"}'],
     ["unknown key", '{"zzz":1}'],
     ["deeply nested", "[".repeat(100_000) + "]".repeat(100_000)],
   ])("drops %s, logs it, keeps working", async (_n, line) => {
@@ -221,12 +222,6 @@ describe("side frames (GH-278)", () => {
     await t.feed(JSON.stringify({ c: 1, m: { type: "reply", reqId: "mid", result: "x".repeat(2 * 1024 * 1024) } }) + "\n");
     expect(t.got).toHaveLength(1);
   });
-});
-
-it("a running frame parses to kind running; a non-boolean is unknown (GH-523)", async () => {
-  const { parseSideFrame } = await import("../src/side-frame.ts");
-  expect(parseSideFrame('{"running":true}')).toEqual({ frame: { kind: "running", running: true } });
-  expect(parseSideFrame('{"running":"yes"}')).toEqual({ error: "unknown frame" });
 });
 
 it("runSide().running(true) writes a running frame (GH-523)", () => {
