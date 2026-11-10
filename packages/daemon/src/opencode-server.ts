@@ -91,12 +91,12 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     return o.command ?? lookup(env());
   };
 
-  /** Binary and version, never a server: throws OpenCodeError. */
+  /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
   async function check() {
     const cmd = argv();
     if (!cmd) throw missing();
     const out = await new Promise<string>((resolve, reject) =>
-      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: 10_000, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
+      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
