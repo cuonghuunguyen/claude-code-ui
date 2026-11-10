@@ -189,6 +189,26 @@ it("GH-684: Shift+Tab in a session with agents cycles build, plan, review, build
   expect(onMode).not.toHaveBeenCalled();
 });
 
+it("GH-684: Shift+Tab in an OpenCode session before the agent list arrives, or after it failed, cycles the known agents and never the permission mode", async () => {
+  const onMode = vi.fn();
+  const onAgent = vi.fn();
+  const caps = { ...ALL_CAPABILITIES, permissionModes: ["default", "acceptEdits"] as never, agents: true };
+  const session = { id: "s1", cwd: "/tmp", state: "idle" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default", "acceptEdits"] as never, capabilities: caps, agent: "build" };
+  // The list is unknown (no agents part yet): build and plan are always there.
+  const { box, rerender } = await render({ onMode, onAgent, session }, emptySession());
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("plan");
+  // The list failed: the same.
+  await rerender({ session: { ...session, agent: "plan" }, view: { ...emptySession(), agents: [], agentsFailed: true } });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("build");
+  // A custom agent chosen before the list arrived stays in the cycle.
+  await rerender({ session: { ...session, agent: "review" }, view: emptySession() });
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(onAgent).toHaveBeenLastCalledWith("build");
+  expect(onMode).not.toHaveBeenCalled();
+});
+
 it("Shift+Tab sends nothing when no other mode is known", async () => {
   const onMode = vi.fn();
   const { box } = await render({ onMode, session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] } });

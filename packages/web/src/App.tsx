@@ -6176,8 +6176,9 @@ function PromptBox({
     // Claude Code: Shift+Tab cycles the permission mode; an Engine with agents (OpenCode) cycles its agents.
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
-      if (caps?.agents && agentList?.length && onAgent) {
-        const names = agentList.map((a) => a.name);
+      // Never the permission cycle here, also while the list is unknown or failed: then the agents known so far (the current one, build and plan).
+      if (caps?.agents && onAgent) {
+        const names = agentList?.length ? agentList.map((a) => a.name) : [...new Set([agent ?? "build", "build", "plan"])];
         const nextA = nextAgent(names, agent ?? "build");
         return nextA !== agent && onAgent(nextA);
       }
