@@ -597,6 +597,8 @@ class OpenCodeSession implements EngineSession {
     const { usage, cost } = this.mapper.turn();
     const shell = this.shellRun;
     this.shellRun = false;
+    // A Stop hit this turn and OpenCode ended it without an abort error (it sends none while it waits to retry): the Stop's one marker, no result.
+    if (this.turnStop < this.stops.count && !this.aborted) (this.aborted = true, this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` }));
     if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
     void this.emitUsage();

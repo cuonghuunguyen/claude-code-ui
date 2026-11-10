@@ -1587,6 +1587,20 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
   });
 
+  it("Stop during the retry wait ends interrupted (one marker, no result) although OpenCode sends no abort error", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    await until(() => !!retries(s).at(-1));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(retries(s).at(-1)).toBeNull();
+  });
+
   it("a stream drop during a retry keeps the turn running and its retry state", async () => {
     const d = await boot();
     const s = await d.open();

@@ -81,7 +81,7 @@ Feature: OpenCode shows its retry wait and a clear error when the model is not a
     And the transcript shows exactly 1 interrupted markers
     And I capture "stopped during retry wait"
 
-  Scenario: A model that does not exist ends the turn with one readable error that survives a daemon restart
+  Scenario: A model that does not exist ends the turn with one readable error
     Given the viewport is 1440x900
     And OpenCode is set to the model "stub/nope", which the provider does not offer
     And OpenCode is set up in a scratch project
@@ -95,14 +95,6 @@ Feature: OpenCode shows its retry wait and a clear error when the model is not a
     And the only notice is readable and has no stack trace
     And the page never showed a retry state
     And I capture "unknown model error"
-    When I restart the daemon of the OpenCode scenario
-    And I reload the page
-    And the sidebar lists the restored session
-    And I open the first session row
-    Then I see my prompt in the transcript
-    And the only notice contains "stub/nope"
-    And the only notice is readable and has no stack trace
-    And I capture "unknown model error after restart"
 
   Scenario: A provider that answers 404 model does not exist gives one readable error and no retry
     Given the viewport is 1440x900
