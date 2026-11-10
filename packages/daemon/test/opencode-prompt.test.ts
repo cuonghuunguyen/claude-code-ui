@@ -986,7 +986,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
 
 describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () => {
   const on = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
-  const done = (s: { states: () => string[]; find: (t: "turn_result") => unknown }, turns = 1) => until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 10_000 + turns);
+  const done = (s: { states: () => string[]; find: (t: "turn_result") => unknown }) => until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 10_000);
   /** A root whose project path is known before the fake OpenCode starts (it is broken from its start). */
   const brokenRoot = () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
@@ -1022,7 +1022,7 @@ describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () =
     await d.fake("/__break", { directory: d.project });
     await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: "ses_other", status: { type: "busy" } } }] });
     await s.prompt("hi");
-    await until(() => abortNotices(s).some((n) => /reloads the folder when no OpenCode turn runs in it/.test(n.text)));
+    await until(() => abortNotices(s).some((n) => /reloads the folder when the turn running in it ends/.test(n.text)));
     await until(() => s.states().at(-1) === "idle");
     expect(s.find("turn_result")).toMatchObject({ isError: true });
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
@@ -1082,15 +1082,22 @@ describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () =
   });
 
   it("closing a session does not wait for the MCP disconnect and does not cut it off", async () => {
-    const d = await boot({ env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" } });
+    const d = await boot({ env: { FAKE_OPENCODE_DISCONNECT_DELAY_MS: "4000" }, script: ["text"] });
     await on(d);
     const s = await d.open();
-    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)), 12_000);
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)));
+    const t = Date.now();
     await d.ok({ type: "session.delete", sessionId: s.id });
+    expect(Date.now() - t).toBeLessThan(2500);
     await until(() => d.requests("POST", `/mcp/${mcpName(s.id)}/disconnect`).length === 1);
-    await new Promise((r) => setTimeout(r, 3500));
-    await d.fake("/__emit", { directory: d.project, events: [] });
+    // The disconnect (4 s) is not cut off at 3 s: the folder is not broken, so a session opened now lists its commands without a reload.
+    await new Promise((r) => setTimeout(r, 4500));
+    const next = await d.open();
+    await until(() => !!next.find("commands"));
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    await next.prompt("hi");
+    await done(next);
+    expect(next.find("turn_result")).toMatchObject({ isError: false });
   });
 });
 
@@ -1131,5 +1138,74 @@ describe("OpenCode on a cold folder: slow GET /session and POST /session lose no
     await until(() => d.requests("GET", "/session").length >= 1);
     const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_cold", sinceSeq: 0, paged: true });
     expect(sub.snapshot.page.parts.map((p: any) => p.id)).toContain("msg_u");
+  });
+});
+
+describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow prompt_async (GH-682 review)", { timeout: 40_000 }, () => {
+  const on = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
+
+  it("Stop while send() waits for the attach ends the turn as interrupted at once; the attach request is not cancelled", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_MCP_LOAD_MS: "6000" } });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "running");
+    await new Promise((r) => setTimeout(r, 300));
+    const t = Date.now();
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => !!s.find("turn_interrupted") && s.states().at(-1) === "idle", 3000);
+    expect(Date.now() - t).toBeLessThan(2000);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+    // The attach goes on and ends: its POST /mcp comes after the load, nothing was cut off.
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(s.id)), 12_000);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("concurrent lists share one GET /session; a folder that stays slow gives one refresh push, not a loop", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_cold", slug: "c", projectID: "global", directory: project, title: "Cold", version: "1.18.34", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, env: { FAKE_OPENCODE_SESSION_DELAY_MS: "9000" }, data: { sessions: [row], messages: { ses_cold: [] } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const changed = () => d.inbox.filter((m) => m.type === "sessions.changed").length;
+    const before = changed();
+    // Lists queue one behind the other (each waits up to 3 s for OpenCode): sent without the helper's 8 s wait.
+    const ids = ["la", "lb", "lc", "ld"];
+    for (const reqId of ids) d.ws.send(JSON.stringify({ type: "session.list", reqId }));
+    await until(() => ids.every((id) => d.inbox.some((m) => m.type === "reply" && m.reqId === id)), 25_000);
+    expect(d.requests("GET", "/session")).toHaveLength(1);
+    await until(() => changed() > before, 15_000);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(changed() - before).toBe(1);
+    expect(d.requests("GET", "/session")).toHaveLength(1);
+    const listed = await d.ok({ type: "session.list" });
+    expect(listed.sessions.filter((x: any) => x.engine === "opencode").map((x: any) => x.id)).toEqual(["ses_cold"]);
+  });
+
+  it("a folder found broken while a turn of ours runs in it is reloaded when that turn ends, and the notice says so", async () => {
+    const d = await boot({ script: ["question"] });
+    const busy = await d.open();
+    await busy.prompt("ask me");
+    await until(() => !!busy.find("question"));
+    const s = await d.open();
+    await until(() => !!s.find("commands"));
+    await d.fake("/__break", { directory: d.project });
+    await s.prompt("hi");
+    await until(() => abortNotices(s).some((n) => /reloads the folder when the turn running in it ends/.test(n.text)));
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    await d.ok({ type: "session.interrupt", sessionId: busy.id });
+    await until(() => abortNotices(s).some((n) => /reloaded the folder in OpenCode\. Send the prompt again/.test(n.text)), 10_000);
+    expect(d.requests("POST", "/instance/dispose").map((r) => r.query.directory)).toEqual([d.project]);
+  });
+
+  it("a prompt_async that answers after 4 s is not a failed prompt: no notice, the turn gets its reply", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_PROMPT_DELAY_MS: "4000" } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
   });
 });

@@ -1337,17 +1337,27 @@ export function createDaemon(opts: {
       const read = readOpenCodeList(cwds, linked, links);
       const r = await Promise.race([read, late]);
       // The list that did not wait: clients ask again once OpenCode answered.
-      if (!r.ran && openCodeListError?.endsWith("in time")) void read.then((x) => x.ran && broadcast({ type: "sessions.changed" }));
+      // One push per late read: lists that join the same read, and the list the push starts, add none.
+      if (!r.ran && openCodeListError?.endsWith("in time") && !lateRefresh) lateRefresh = read.then((x) => x.ran && broadcast({ type: "sessions.changed" })).finally(() => (lateRefresh = undefined));
       return r;
     } finally {
       clearTimeout(timer);
     }
   }
+  /** The late push of a list that did not wait is pending. */
+  let lateRefresh: Promise<unknown> | undefined;
+  /** The `GET /session` of a folder in flight: concurrent lists, and a list that starts while an earlier one still waits, share it (the requests are never aborted, so they would pile up on a slow OpenCode). */
+  const sessionReads = new Map<string, Promise<OpenCodeSessionRow[]>>();
+  const readSessions = (cwd: string) => {
+    let p = sessionReads.get(cwd);
+    if (!p) sessionReads.set(cwd, (p = openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd, timeoutMs: 0 }).finally(() => sessionReads.delete(cwd))));
+    return p;
+  };
   async function readOpenCodeList(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
     const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
     try {
       // No timeout: a cold OpenCode answers after its folder's first load (> 3 s). `list()` waits `listWaitMs` for it; the late answer is pushed as `sessions.changed` (listOpenCode).
-      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd, timeoutMs: 0 })] as const);
+      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await readSessions(cwd)] as const);
       openCodeListError = undefined;
       out.ran = true;
       for (const [cwd, list] of rows)

@@ -10,7 +10,7 @@
 // MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state.
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -212,6 +212,10 @@ const server = createServer(async (req, res) => {
     return json(200, map);
   }
   m3 = /^\/mcp\/([^/]+)\/disconnect$/.exec(url.pathname);
+  if (m3 && req.method === "POST" && process.env.FAKE_OPENCODE_DISCONNECT_DELAY_MS && (await mcpGate(dir, res))) {
+    const left = new Promise((r) => res.on("close", () => r(!res.writableEnded)));
+    if (await Promise.race([sleep(Number(process.env.FAKE_OPENCODE_DISCONNECT_DELAY_MS)).then(() => false), left])) return broken.add(dir ?? "");
+  }
   if (m3 && req.method === "POST") return (await mcpGate(dir, res)) ? (((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true)) : undefined;
   if (url.pathname === "/command" && !(await mcpGate(dir, res))) return;
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
@@ -301,10 +305,13 @@ const server = createServer(async (req, res) => {
     const file = broken.has(dir ?? "") ? undefined : scripts.shift();
     if (broken.has(dir ?? "")) play(selfAbort(++aborts), s.id, dir, body.messageID);
     else if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
+    await sleep(Number(process.env.FAKE_OPENCODE_PROMPT_DELAY_MS ?? 0));
     res.writeHead(204);
     return res.end();
   }
   if (m && m[2] === "/abort" && req.method === "POST") {
+    // Like OpenCode: aborting a session that runs nothing answers true and sends no event.
+    if (!busy.has(m[1]) && !current?.on) return json(200, true);
     generation++;
     asks = [];
     busy.delete(m[1]);
