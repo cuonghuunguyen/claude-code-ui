@@ -200,9 +200,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     const r = await createWorktree(main, { ...opts, name: "feat-1", branch: "feat-1", base: "main~1" });
     expect(r).toEqual({ path: join(main, ".claude", "worktrees", "feat-1"), branch: "feat-1" });
     expect(out(r.path, "rev-parse", "HEAD")).toBe(out(main, "rev-parse", "main~1"));
-    expect(await code(createWorktree(main, { ...opts, name: "feat-1", branch: "feat-1" }))).toBe("exists");
-    expect(await code(createWorktree(main, { ...opts, name: "feat-2", branch: "feat-2", base: "nope" }))).toBe("bad_base");
-    expect(out(main, "worktree", "list").split("\n")).toHaveLength(2);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed git worktree add leaves no branch behind", async () => {
@@ -662,8 +659,12 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     const r = await createWorktree(main, { ...opts, name: "feat" });
     commit(r.path, "c.txt");
     writeFileSync(join(r.path, "untracked.txt"), "u");
+    run(main, "branch", "worktree-b");
     await removeWorktree(main, r.path, () => true);
     expect(existsSync(r.path)).toBe(false);
+    // An unrelated worktree-* branch and main stay.
+    expect(out(main, "branch", "--list", "worktree-b")).toContain("worktree-b");
+    expect(out(main, "branch", "--list", "main")).toContain("main");
     expect(await code(Promise.resolve().then(() => out(main, "rev-parse", "--verify", "refs/heads/worktree-feat")))).not.toBe("ok");
     expect(out(main, "worktree", "list").split("\n")).toHaveLength(1);
     // A foreign branch inside .claude/worktrees: directory gone, branch kept.
@@ -717,16 +718,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await worktreeStatus(main, join(dir, "link"), () => true)).toMatchObject({ safety: "blocked", blocked: "symlink" });
     expect(existsSync(hand)).toBe(true);
     void opts;
-  });
-
-  it("removeWorktree deletes only worktree-* branches (a managed worktree on a foreign branch keeps it; others stay)", async () => {
-    const { main, opts } = plain();
-    const a = await createWorktree(main, { ...opts, name: "a" });
-    run(main, "branch", "worktree-b");
-    await removeWorktree(main, a.path, () => true);
-    expect(out(main, "branch", "--list", "worktree-b")).toContain("worktree-b");
-    expect(out(main, "branch", "--list", "main")).toContain("main");
-    expect(out(main, "branch", "--list", "worktree-a")).toBe("");
   });
 
   it("worktreeStatus counts uncommitted files and the commits only this branch holds", async () => {

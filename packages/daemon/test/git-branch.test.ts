@@ -54,7 +54,7 @@ const SPAWN_HEAVY = process.platform === "win32" ? 360_000 : 120_000;
 vi.setConfig({ testTimeout: SPAWN_HEAVY });
 
 describe("gitBranch", () => {
-  it("shows upstream, tracking, ahead/behind and the exact argv", async () => {
+  it("shows upstream, tracking, ahead/behind and the exact argv, which carries the hardening prefix (pull runs with it too)", async () => {
     const { a, inside } = diverged();
     const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
     expect(i.upstreamHash).toBe(sha(a, "origin/main"));
@@ -64,6 +64,9 @@ describe("gitBranch", () => {
     expect(i.forcePush).toEqual([...PUSH, `--force-with-lease=refs/heads/main:${tracking}`, "origin", "refs/heads/main:refs/heads/main"]);
     expect(i.pull).toEqual([...HARD, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", "origin", "refs/heads/main"]);
     expect(i.why).toEqual({ merge: "This is the current branch", rebase: "This is the current branch" });
+    const calls = pushes();
+    await gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside }).catch(() => undefined);
+    expect(calls.find((c) => c.includes("pull"))?.slice(0, 4)).toEqual(HARD);
   });
 
   it("a branch without upstream pushes with --set-upstream to origin; no pull, no force push", async () => {
@@ -378,18 +381,5 @@ describe("what a push sends and runs", () => {
     await gitPush(a, { ref: MAIN, local: i.local, tracking: i.trackingHash, argv: i.push!, allowed: inside });
     expect(sha(bare, "main")).toBe(sha(a));
     expect(tryRun(bare, "rev-parse", "--verify", "-q", "refs/tags/v9")).toMatch(/^ERR/);
-  });
-
-  it("every argv carries Fetch's hardening prefix and the no-submodule, no-tags switches", async () => {
-    const { a, b, inside } = diverged();
-    void b;
-    const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
-    const hard = HARD;
-    expect(i.push).toEqual([...hard, "push", "--no-recurse-submodules", "--no-follow-tags", "origin", MAIN + ":" + MAIN]);
-    expect(i.forcePush!.slice(0, 7)).toEqual([...hard, "push", "--no-recurse-submodules", "--no-follow-tags"]);
-    expect(i.pull).toEqual([...hard, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", "origin", MAIN]);
-    const calls = pushes();
-    await gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside }).catch(() => undefined);
-    expect(calls.find((c) => c.includes("pull"))?.slice(0, 4)).toEqual(hard);
   });
 });
