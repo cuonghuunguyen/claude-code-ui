@@ -580,10 +580,9 @@ export function createDaemon(opts: {
   /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
   async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
     // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
+    const permission = await openCodeEngine.block(initial.permissionMode, cwd); // may reject: before the counter goes up
     openCodeCreating++;
-    const row = await openCode
-      .request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } })
-      .finally(() => openCodeCreating--);
+    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, body: { permission } }).finally(() => openCodeCreating--);
     if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
     openCodeMeta.set(s.id, { cwd, title: row.title });

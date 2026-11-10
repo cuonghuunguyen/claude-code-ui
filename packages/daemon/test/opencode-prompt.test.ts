@@ -1617,6 +1617,17 @@ describe("OpenCode model list: provider reads are never cut off and a broken pro
     await creating;
   });
 
+  it("a session creation that fails before OpenCode is asked (the mode's rules cannot be read) does not block a later restart", async () => {
+    const d = await boot();
+    await models(d);
+    await d.ok({ type: "settings.set", patch: { sessions: { defaultMode: "plan" } } });
+    await d.fake("/__fail", { path: "/agent" });
+    expect(await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error" });
+    await d.fake("/__break_providers", { global: true });
+    expect(values(await models(d, d.project)).length).toBeGreaterThan(2);
+    expect(starts(d)).toBe(2);
+  });
+
   it("two clients that hit a server-wide broken provider state share one restart", async () => {
     const d = await boot();
     await models(d);
