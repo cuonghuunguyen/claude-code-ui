@@ -19,6 +19,27 @@ Feature: OpenCode in folders with slow MCP servers and turns OpenCode ends on it
     And I see no notice "ended this turn on its own"
     And I capture "second prompt answered"
 
+  # GH-682 review: Stop ends the wait for the folder's MCP load at once, and the stopped prompt is dropped for good.
+  Scenario: Stop while the prompt waits for the MCP attach ends the turn, and the next prompt runs alone
+    Given the viewport is 1440x900
+    And OpenCode has an MCP server that takes 8 seconds to load
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    And the OpenCode server of the daemon is running
+    When I enable orchestration in Settings
+    And I send the first prompt "Reply with exactly: STOPPEDPROMPT"
+    And I stop the turn as soon as it can be stopped
+    Then the turn is interrupted within 5 seconds
+    And the transcript shows the interrupted divider
+    And I see no notice "ended this turn on its own"
+    And I capture "stopped during attach wait"
+    When I send "Reply with exactly: SECONDPROMPT"
+    Then I see a reply from Claude
+    And the turn has finished
+    And the transcript has exactly 1 replies from Claude
+    And OpenCode stored the user prompt "SECONDPROMPT" and never "STOPPEDPROMPT"
+    And I capture "only the second prompt ran"
+
   Scenario: With orchestration off, a prompt in a slow-MCP folder gets a reply
     Given the viewport is 1440x900
     And OpenCode has an MCP server that takes 8 seconds to load

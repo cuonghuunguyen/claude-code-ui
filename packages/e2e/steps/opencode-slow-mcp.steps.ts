@@ -75,3 +75,40 @@ When("I send {string} in the opened session", async ({ page }, text: string) => 
 Then("the opened session's turn has finished", async ({ page }) => {
   await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
 });
+
+// GH-682 review: Stop while send() waits for the attach (the folder's MCP load runs for 8 s).
+let stoppedAt = 0;
+When("I stop the turn as soon as it can be stopped", async ({ page }) => {
+  const stop = page.getByTestId("toolbar-stop");
+  await expect(stop).toBeVisible({ timeout: 30_000 });
+  stoppedAt = Date.now();
+  await stop.click();
+});
+
+Then("the turn is interrupted within {int} seconds", async ({ page }, s: number) => {
+  await expect(page.getByTestId("turn-interrupted")).toBeVisible({ timeout: s * 1000 });
+  console.log(`interrupted ${Date.now() - stoppedAt} ms after Stop`);
+  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: s * 1000 });
+});
+
+Then("the transcript has exactly {int} replies from Claude", async ({ page }, n: number) => {
+  await expect(page.getByTestId("assistant-text")).toHaveCount(n);
+});
+
+Then("OpenCode stored the user prompt {string} and never {string}", async ({ project }, wanted: string, dropped: string) => {
+  const { url, auth } = daemonOpenCodeServer(runDir());
+  const q = `directory=${encodeURIComponent(project.path)}`;
+  const get = async <T>(path: string): Promise<T> => {
+    const res = await fetch(`${url}${path}${path.includes("?") ? "&" : "?"}${q}`, { headers: { authorization: auth } });
+    if (!res.ok) throw new Error(`${path} answered ${res.status}`);
+    return (await res.json()) as T;
+  };
+  const sessions = await get<{ id: string }[]>("/session?roots=true");
+  const texts: string[] = [];
+  for (const s of sessions) {
+    const messages = await get<{ info: { role: string }; parts: { type: string; text?: string }[] }[]>(`/session/${s.id}/message`);
+    for (const m of messages) if (m.info.role === "user") texts.push(m.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join(""));
+  }
+  expect(texts.some((t) => t.includes(wanted)), `user messages: ${JSON.stringify(texts)}`).toBe(true);
+  expect(texts.some((t) => t.includes(dropped)), `user messages: ${JSON.stringify(texts)}`).toBe(false);
+});
