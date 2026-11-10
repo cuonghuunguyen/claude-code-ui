@@ -29,6 +29,12 @@ const ANSWERED = "Answered in OpenCode";
  * disconnect, `GET /config/providers`) is never aborted (`timeoutMs: 0`). A caller that must not wait long races it against a timer and leaves the
  * request running; it never passes a signal that fires.
  */
+/** A provider read still answered 499 after the folder's instance was disposed: OpenCode's provider state is broken server-wide (only a restart clears it). */
+export class ProviderStateBroken extends Error {
+  constructor() {
+    super("OpenCode's provider state is broken for the whole server");
+  }
+}
 export const brokenState = (err: unknown) => err instanceof OpenCodeHttpError && err.status === 499;
 const SELF_ABORT = "OpenCode ended this turn on its own before the model answered (MessageAbortedError); claude-ui did not stop it.";
 const MCP_RELOADED = "OpenCode's MCP servers for this folder had failed to load, so claude-ui reloaded the folder in OpenCode. Send the prompt again.";
@@ -1001,7 +1007,9 @@ class OpenCodeEngineImpl implements Engine {
     let hit = this.providerLists.get(key);
     if (!hit) {
       const read = () => this.server.request<ProviderList>("/config/providers", { ...(cwd && { directory: cwd }), timeoutMs: 0 });
-      const mine: Promise<ProviderList> = (hit = read().catch(async (err) => (brokenState(err) && (await this.repairFolder(cwd)) ? read() : Promise.reject(err))));
+      // Repaired and still 499: the break is not the folder's (ProviderStateBroken). A refused repair (busy, status read failed) says nothing about the server: the 499 stays as it is.
+      const again = () => read().catch((e) => Promise.reject(brokenState(e) ? new ProviderStateBroken() : e));
+      const mine: Promise<ProviderList> = (hit = read().catch(async (err) => (brokenState(err) && (await this.repairFolder(cwd)) ? again() : Promise.reject(err))));
       this.providerLists.set(key, mine);
       mine.catch(() => this.providerLists.get(key) === mine && this.providerLists.delete(key));
     }

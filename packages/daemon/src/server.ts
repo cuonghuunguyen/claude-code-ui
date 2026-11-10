@@ -34,7 +34,7 @@ import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff,
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
+import { brokenState, createOpenCodeEngine, ProviderStateBroken, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels } from "./opencode-engine.ts";
 import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -547,16 +547,32 @@ export function createDaemon(opts: {
     // Clients drop their OpenCode model list only after OpenCode read the new providers.
     await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
   }
-  /** OpenCode's model list; a server-wide broken provider state (499 after the folder repair) restarts OpenCode's server when no OpenCode session is busy (nothing else clears it). */
+  /** OpenCode sessions being created (POST /session in flight): a restart of OpenCode's server would lose them. */
+  let openCodeCreating = 0;
+  let openCodeRestarts = 0;
+  let openCodeRestart: Promise<void> | undefined;
+  /**
+   * OpenCode's model list. Only a read that still answers 499 after the folder's instance was disposed means the provider state is broken server-wide
+   * (nothing else clears it): then OpenCode's server restarts, unless a turn, an OAuth login or a session creation would be lost. A refused or failed
+   * folder repair, or a busy server, is `models_failed` with the reason. One restart at a time; a caller that saw the break before a restart reads again.
+   */
   async function openCodeModelsRepaired(cwd?: string): Promise<ModelInfo[]> {
+    const seen = openCodeRestarts;
     try {
       return await openCodeModels(openCodeEngine, cwd);
     } catch (err) {
-      if (!brokenState(err)) throw err;
-      if (openCodeBusy()) throw new Error(PROVIDERS_BROKEN_BUSY);
-      await openCode.reset(); // the next request starts it again; open sessions resync on the new event stream
-      openCodeEngine.dropLimits();
-      return openCodeModels(openCodeEngine, cwd);
+      if (err instanceof ProviderStateBroken) {
+        if (seen === openCodeRestarts) {
+          if (openCodeBusy() || oauthWaits.size || openCodeCreating) throw new Error(PROVIDERS_BROKEN_BUSY);
+          await (openCodeRestart ??= (async () => {
+            await openCode.reset(); // the next request starts it again; open sessions resync on the new event stream
+            openCodeEngine.dropLimits();
+            openCodeRestarts++;
+          })().finally(() => (openCodeRestart = undefined)));
+        } else await openCodeRestart;
+        return openCodeModels(openCodeEngine, cwd);
+      }
+      throw brokenState(err) ? new Error(PROVIDERS_BROKEN_BUSY) : err;
     }
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
@@ -564,7 +580,10 @@ export function createDaemon(opts: {
   /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
   async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
     // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
-    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } });
+    openCodeCreating++;
+    const row = await openCode
+      .request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, body: { permission: await openCodeEngine.block(initial.permissionMode, cwd) } })
+      .finally(() => openCodeCreating--);
     if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
     openCodeMeta.set(s.id, { cwd, title: row.title });

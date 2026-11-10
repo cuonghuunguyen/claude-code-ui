@@ -1584,6 +1584,49 @@ describe("OpenCode model list: provider reads are never cut off and a broken pro
     expect(providerReads(d)).toHaveLength(4);
   });
 
+  it("one broken folder whose repair is refused (busy in OpenCode) does not restart OpenCode's server (review of GH-679)", async () => {
+    const d = await boot();
+    await models(d);
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: "ses_other", status: { type: "busy" } } }] });
+    await d.fake("/__break_providers", { directory: d.project });
+    expect(await models(d, d.project)).toMatchObject({ type: "error", code: "models_failed", message: expect.stringMatching(/provider list is broken/) });
+    expect(starts(d)).toBe(1);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("a server-wide broken provider state does not restart OpenCode's server while an OAuth login waits", async () => {
+    const d = await boot();
+    await models(d);
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    d.ws.send(JSON.stringify({ type: "opencode.loginFinish", provider: "fakeprov", method: 0, reqId: "fin" }));
+    await until(() => d.requests("POST", "/provider/fakeprov/oauth/callback").length === 1);
+    await d.fake("/__break_providers", { global: true });
+    expect(await models(d, d.project)).toMatchObject({ type: "error", code: "models_failed", message: expect.stringMatching(/provider list is broken/) });
+    expect(starts(d)).toBe(1);
+    await d.fake("/__oauth", { result: "success" });
+  });
+
+  it("a server-wide broken provider state does not restart OpenCode's server while a session is being created", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_SESSION_DELAY_MS: "3000" } });
+    await models(d);
+    const creating = d.open();
+    await until(() => d.requests("POST", "/session").length === 1);
+    await d.fake("/__break_providers", { global: true });
+    expect(await models(d, d.project)).toMatchObject({ type: "error", code: "models_failed", message: expect.stringMatching(/provider list is broken/) });
+    expect(starts(d)).toBe(1);
+    await creating;
+  });
+
+  it("two clients that hit a server-wide broken provider state share one restart", async () => {
+    const d = await boot();
+    await models(d);
+    await d.fake("/__break_providers", { global: true });
+    const [a, b] = await Promise.all([models(d, d.project), models(d, d.project)]);
+    expect(values(a).length).toBeGreaterThan(2);
+    expect(values(b).length).toBeGreaterThan(2);
+    expect(starts(d)).toBe(2);
+  });
+
   it("a failed provider read is reported as models_failed, is not cached, and Retry (the next models.list) reads again and answers", async () => {
     const d = await boot();
     await models(d); // starts the fake OpenCode
