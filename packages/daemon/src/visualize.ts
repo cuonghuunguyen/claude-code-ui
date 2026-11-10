@@ -32,8 +32,9 @@ export const VISUALIZE_HEADERS = {
   "x-dns-prefetch-control": "off",
 } as const;
 
+// Height = the root box (content height); scrollHeight would never fall below the frame height, so a narrower viewport could not shrink it.
 // Runs inside the written document (document.open drops the shell's listeners): reports its height, applies theme updates.
-const INNER = `(function(){var p=parent,H=function(){p.postMessage({v:1,type:"height",height:document.documentElement.scrollHeight},"*")};new ResizeObserver(H).observe(document.documentElement);addEventListener("load",H);addEventListener("message",function(e){var d=e.data;if(e.source===p&&d&&d.v===1&&d.type==="theme"&&d.vars)for(var k in d.vars)if(OK(k,d.vars[k]))document.documentElement.style.setProperty(k,d.vars[k])})})();`;
+const INNER = `(function(){var p=parent,H=function(){p.postMessage({v:1,type:"height",height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};new ResizeObserver(H).observe(document.documentElement);addEventListener("load",H);addEventListener("message",function(e){var d=e.data;if(e.source===p&&d&&d.v===1&&d.type==="theme"&&d.vars)for(var k in d.vars)if(OK(k,d.vars[k]))document.documentElement.style.setProperty(k,d.vars[k])})})();`;
 
 /** The shell: waits for the host's render message, then replaces its document with the fence HTML after a style and script prefix. */
 export const VISUALIZE_SHELL = `<!doctype html><meta charset="utf-8"><title>visualization</title><script>

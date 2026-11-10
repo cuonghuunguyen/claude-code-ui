@@ -6,7 +6,7 @@ Claude can draw a chart, a diagram or a small interactive widget right in its re
 
 1. Ask for a picture: "visualize monthly sales as a bar chart".
 2. Claude answers with a drawing in the chat. While it is written you see the code; the drawing appears when the block is complete.
-3. **Show code** under the drawing swaps it for its source.
+3. **Show code** above the drawing swaps it for its source.
 
 Switch it off in [Settings › Sessions › Chat](../reference/settings#chat). It applies to sessions started or resumed after the change. Off: the drawings show as code.
 
