@@ -44,20 +44,6 @@ Feature: Manage background shells: list, view output, kill
     And the shell has no Kill button
     And I capture "finished-output"
 
-  Scenario: Kill with confirm stops a running shell
-    Given the viewport is 1440x900
-    When I ask Claude to run "for i in $(seq 1 300); do echo tick-$i; sleep 1; done" in the background
-    And I open the shells list from the status bar
-    And I open the "tick-" shell
-    Then the shell output shows "tick-"
-    When I kill the shell and confirm
-    Then the shell details show "Killed"
-    And the shell has no Kill button
-    And the status bar shows no shells
-    And I capture "killed"
-    When I close the shells list
-    Then the "tick-" tool call is killed
-
   Scenario: The new session after /clear shows the output of a shell started before it
     Given the viewport is 1440x900
     When I ask Claude to run "for i in $(seq 1 90); do echo keep-$i; sleep 1; done" in the background
@@ -78,11 +64,16 @@ Feature: Manage background shells: list, view output, kill
     When I ask Claude to run "for i in $(seq 1 300); do echo tick-$i; sleep 1; done" in the background
     And I open the shells list from the status bar
     And I open the "tick-" shell
-    And I kill the shell and confirm
+    Then the shell output shows "tick-"
+    When I kill the shell and confirm
     Then the shell details show "Killed"
+    And the shell has no Kill button
+    And the status bar shows no shells
     And the shell details show "Claude will be told on your next message"
+    And I capture "killed"
     When I close the shells list
-    And I send "Reply with one word: ok"
+    Then the "tick-" tool call is killed
+    When I send "Reply with one word: ok"
     Then the turn has finished
     And I capture "notification-next-message"
 
