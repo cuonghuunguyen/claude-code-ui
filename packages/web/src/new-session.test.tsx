@@ -323,15 +323,20 @@ it("GH-684: an OpenCode draft shows the agent chooser with Build before the list
   expect(chooser().textContent).toContain("Build");
   // A project change asks again; that answer fails: the chooser stays and offers Retry.
   await rerender({ cwd: "/p/b" });
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
   expect(chooser().textContent).toContain("Build");
-  await act(async () => chooser().click());
   const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")].map((o) => o.textContent);
-  expect(rows()).toEqual(["Build", "Retry loading agents"]);
+  const open = async () => {
+    await act(async () => chooser().click());
+    return rows();
+  };
+  // The failed request is settled when the picker lists the Retry entry (no fixed wait): reopen until it does.
+  await vi.waitFor(async () => {
+    expect(await open()).toEqual(["Build", "Retry loading agents"]);
+  });
   await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")][1]!.click());
-  await act(async () => new Promise((r) => setTimeout(r, 20)));
-  await act(async () => chooser().click());
-  expect(rows()).toEqual(["Build", "Plan"]);
+  await vi.waitFor(async () => {
+    expect(await open()).toEqual(["Build", "Plan"]);
+  });
 });
 
 it("GH-684: startSession sets the picked agent before the first prompt, only when it differs from the session's", async () => {
