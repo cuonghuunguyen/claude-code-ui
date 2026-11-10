@@ -61,17 +61,11 @@ describe("Session", () => {
     await s.close();
   });
 
-  it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {
-    const s = new Session("/tmp", { query: fakeQuery as never });
-    expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
-    s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ sessionId: s.id, cwd: "/tmp", includePartialMessages: true });
-  });
-
-  it("starts no CLI for a new session before its first prompt: a closed throwaway lists the commands, without hooks", async () => {
+  it("a new session has a UUID and starts no CLI before its first prompt: a closed throwaway lists the commands, without hooks", async () => {
     const before = calls.length;
     const closedBefore = closed;
     const s = new Session("/tmp", { query: fakeQuery as never });
+    expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "commands");
@@ -81,7 +75,7 @@ describe("Session", () => {
     expect(closed).toBe(closedBefore + 1);
     s.prompt("hi");
     expect(calls.length).toBe(before + 2);
-    expect(calls.at(-1)).toMatchObject({ sessionId: s.id });
+    expect(calls.at(-1)).toMatchObject({ sessionId: s.id, cwd: "/tmp", includePartialMessages: true });
   });
 
   it("logs user_text, running, streamed parts, turn_result, idle with increasing seq", async () => {
@@ -438,13 +432,17 @@ describe("Session", () => {
     expect(saved.at(-1)).toMatchObject({ model: "haiku" });
   });
 
-  it("setModel on a restored session before its first prompt applies when the query resumes", async () => {
+  it("model, mode and effort chosen on a restored session before its first prompt apply when the query resumes", async () => {
     const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
     const before = setModelCalls.length;
+    const controlBefore = controlCalls.length;
     await s.setModel("haiku");
+    await s.setPermissionMode("acceptEdits");
+    await s.setEffort("low");
     expect(setModelCalls.length).toBe(before);
+    expect(controlCalls.length).toBe(controlBefore);
     s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku" });
+    expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku", permissionMode: "acceptEdits", effort: "low" });
   });
 
   it("starts in default permission mode and model default effort; bypass only when the daemon enables it", () => {
@@ -467,16 +465,6 @@ describe("Session", () => {
     expect(lastPart(events, "session_effort")).toEqual({ type: "session_effort", id: "session_effort", effort: "default" });
     expect(s.info()).toMatchObject({ permissionMode: "plan", effort: "default" });
     await expect(s.setPermissionMode("bypassPermissions")).rejects.toThrow("not enabled");
-  });
-
-  it("a restored session not yet resumed starts with the chosen mode and effort", async () => {
-    const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
-    const before = controlCalls.length;
-    await s.setPermissionMode("acceptEdits");
-    await s.setEffort("low");
-    expect(controlCalls.length).toBe(before);
-    s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ resume: s.id, permissionMode: "acceptEdits", effort: "low" });
   });
 
   it("follows a permission mode change the CLI reports in system/status (plan approved)", async () => {
@@ -638,16 +626,11 @@ describe("Session", () => {
       expect(events.some((e) => e.part.type === "session_state" && e.part.state === "running" && e.seq > events.find((x) => x.part.id === req.id)!.seq)).toBe(true);
     });
 
-    it("Yes with edited input sends it as updatedInput (full input object)", async () => {
-      const { s, req, answered } = await ask();
-      s.respond(req.requestId, { decision: "allow", updatedInput: { command: "npm test -- --run" } });
-      expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test -- --run" } });
-    });
-
-    it("an edited accept shows the applied input, marked as the user's edit, on the tool call and the settled request", async () => {
-      const { s, events, req } = await ask();
+    it("an edited accept sends the full input as updatedInput and shows it, marked as the user's edit, on the tool call and the settled request", async () => {
+      const { s, events, req, answered } = await ask();
       const applied = { command: "npm test -- --run" };
       s.respond(req.requestId, { decision: "allow", updatedInput: applied });
+      expect(await answered()).toEqual({ behavior: "allow", updatedInput: applied });
       expect(lastPart(events, req.toolUseId)).toMatchObject({ type: "tool_call", input: applied, editedByUser: true });
       expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "allow", input: applied, editedByUser: true });
       await until(events, (e) => e.part.type === "turn_result");

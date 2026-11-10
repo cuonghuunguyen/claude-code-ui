@@ -1806,7 +1806,7 @@ describe("daemon", () => {
       expect(readdirSync(d)).toEqual(["ln"]);
     });
 
-    it("GH-360: refuses a UNC path on Windows with no file system call", async () => {
+    it("GH-360, GH-282: refuses a UNC path on Windows with no file system call", async () => {
       const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
       const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
       const native = vi.spyOn(fs.realpathSync, "native");
@@ -1815,11 +1815,12 @@ describe("daemon", () => {
       const c = await client();
       Object.defineProperty(process, "platform", { value: "win32" });
       try {
-        for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate"]) {
+        for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate", "fs.read"]) {
           for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
             native.mockClear();
             exists.mockClear();
-            expect(await c.request({ type, path, name: "y" }), `${type} ${path}`).toMatchObject({ type: "error" });
+            const reply = await c.request({ type, path, name: "y" });
+            expect(reply, `${type} ${path}`).toMatchObject({ type: "error", ...(type === "fs.read" && { code: "path_not_allowed" }) });
             expect(native, `${type} ${path}`).not.toHaveBeenCalled();
             expect(exists, `${type} ${path}`).not.toHaveBeenCalled();
           }
@@ -1890,31 +1891,6 @@ describe("daemon", () => {
     writeFileSync(join(outsideDir, "f.txt"), "outside changed");
     await new Promise((r) => setTimeout(r, 2500));
     expect(c.inbox.some((m) => m.type === "fs.changed" && m.path === file)).toBe(false);
-  });
-
-  it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
-    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
-    // The CommonJS fs object: spying there and syncing makes the daemon's named imports call the spy.
-    const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
-    const native = vi.spyOn(fs.realpathSync, "native");
-    const exists = vi.spyOn(fs, "existsSync");
-    syncBuiltinESMExports();
-    const c = await client();
-    Object.defineProperty(process, "platform", { value: "win32" });
-    try {
-      for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
-        native.mockClear();
-        exists.mockClear();
-        expect(await c.request({ type: "fs.read", path }), path).toMatchObject({ code: "path_not_allowed" });
-        expect(native, path).not.toHaveBeenCalled();
-        expect(exists, path).not.toHaveBeenCalled();
-      }
-    } finally {
-      Object.defineProperty(process, "platform", orig);
-      native.mockRestore();
-      exists.mockRestore();
-      syncBuiltinESMExports();
-    }
   });
 
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
