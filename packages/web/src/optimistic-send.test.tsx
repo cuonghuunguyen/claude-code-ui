@@ -202,6 +202,21 @@ describe("later prompts", () => {
     expect(visible('[data-testid="user-message"]')).toHaveLength(1);
   });
 
+  it("a running session with a retry shows the retry line instead of Thinking; when it clears Thinking is back (GH-683)", async () => {
+    await open();
+    const part = (seq: number, p: object) => act(async () => emit({ type: "event", sessionId: OLD, seq, part: p }));
+    await part(1, { type: "session_state", id: "session_state", state: "running" });
+    expect(one('[data-testid="thinking"]')).toBeTruthy();
+    expect(one('[data-testid="retry-status"]')).toBeFalsy();
+    await part(2, { type: "model_retry", id: "model_retry", retry: { attempt: 2, message: "Rate limit reached for m1", next: Date.now() + 30_000 } });
+    expect(one('[data-testid="retry-status"]')?.textContent).toContain("Rate limit reached for m1");
+    expect(one('[data-testid="retry-countdown"]')?.textContent).toMatch(/^Retrying in \d+s · attempt 2$/);
+    expect(one('[data-testid="thinking"]')).toBeFalsy();
+    await part(3, { type: "model_retry", id: "model_retry", retry: null });
+    expect(one('[data-testid="retry-status"]')).toBeFalsy();
+    expect(one('[data-testid="thinking"]')).toBeTruthy();
+  });
+
   it("a prompt the Engine ran as its own command (reply local) leaves no bubble: nothing echoes it and no turn ends", async () => {
     const prompt = defer<unknown>();
     replies["session.prompt"] = () => prompt.promise;

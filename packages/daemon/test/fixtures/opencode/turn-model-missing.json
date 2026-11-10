@@ -1,0 +1,84 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1c44044b1001bO5V25tNmY32DS",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794293908657
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "stub",
+      "modelID": "m1"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Say hello",
+     "messageID": "msg_1c44044b1001bO5V25tNmY32DS",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1c44044b4001ZI7S2U2LCuser"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "session.error",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "error": {
+     "name": "UnknownError",
+     "data": {
+      "message": "Model not found: stub/nope."
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  },
+  {
+   "type": "session.error",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "error": {
+     "name": "UnknownError",
+     "data": {
+      "message": "ProviderModelNotFoundError: Model not found: stub/nope.\n    at <anonymous> (<path>/chunk-a.js:2:64699)\n    at SessionPrompt.getModel (<path>/chunk-b.js:50:11031)\n    at SessionPrompt.run (<path>/chunk-b.js:50:14576)"
+     }
+    }
+   }
+  }
+ ]
+}

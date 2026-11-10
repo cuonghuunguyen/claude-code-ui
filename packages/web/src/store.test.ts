@@ -59,6 +59,15 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "limit_stop", id: "limit_stop", stopped: false })).limitStop).toBeUndefined();
   });
 
+  it("model_retry sets and clears the view's retry and adds nothing to the order (GH-683)", () => {
+    const retry = { attempt: 2, message: "Rate limit reached", next: 9000 };
+    const s = applyEvent(emptySession(), ev(1, { type: "model_retry", id: "model_retry", retry }));
+    expect(s.retry).toEqual(retry);
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "model_retry", id: "model_retry", retry: { attempt: 3, message: "x" } })).retry).toEqual({ attempt: 3, message: "x" });
+    expect(applyEvent(s, ev(2, { type: "model_retry", id: "model_retry", retry: null })).retry).toBeUndefined();
+  });
+
   it("prompt_suggestion sets and clears the suggestion and adds no timeline item (GH-305)", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }));
     expect(s.suggestion).toBe("run the tests");

@@ -337,7 +337,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const s = await d.open();
     await d.fake("/__fail", { path: `/session/${s.id}/shell` });
     await d.ok({ type: "session.bash", sessionId: s.id, command: "echo x" });
-    await until(() => !!s.last(`${s.id}:shell_failed`) && s.states().at(-1) === "idle");
+    await until(() => s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:shell_failed:`)) && s.states().at(-1) === "idle");
   });
 
   it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
@@ -422,7 +422,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const s = await d.open();
     await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
     await s.prompt("hello");
-    await until(() => !!s.last(`${s.id}:prompt_failed`) && s.states().at(-1) === "idle");
+    await until(() => s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:prompt_failed:`)) && s.states().at(-1) === "idle");
     // A turn started in OpenCode's own UI; it ends while the stream is down: the reconnect read ends it (3 s after the failed send).
     await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "busy" } } }] });
     await until(() => s.states().at(-1) === "running");
@@ -525,7 +525,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.parts().filter((p) => p.type === "user_text").map((p: any) => p.text)).toEqual(["/review main"]);
 
     await s.prompt("/fail");
-    await until(() => !!s.find("notice", (n) => n.id.endsWith("prompt_failed")));
+    await until(() => !!s.find("notice", (n) => n.id.startsWith(`${s.id}:prompt_failed:`)));
     expect(s.states().at(-1)).toBe("idle");
 
     await s.prompt("/unknown x");
@@ -887,7 +887,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     const s = await d.open();
     await s.prompt("hi");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
-    expect(s.parts().some((p) => p.type === "notice" && p.id === `${s.id}:mcp_failed`)).toBe(false);
+    expect(s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:mcp_failed:`))).toBe(false);
     expect((await attached(d, s.id)).name).toBe(mcpName(s.id));
     const log = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
     expect(log.indexOf("POST /mcp")).toBeLessThan(log.indexOf(`POST /session/${s.id}/prompt_async`));
@@ -904,7 +904,7 @@ describe("OpenCode orchestration", { timeout: 30_000 }, () => {
     await d.fake("/__fail", { path: "/mcp" });
     await s.prompt("hi");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
-    expect(s.find("notice", (n) => n.id === `${s.id}:mcp_failed`)).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
+    expect(s.find("notice", (n) => n.id.startsWith(`${s.id}:mcp_failed:`))).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(1);
     expect(s.find("turn_result")).toMatchObject({ isError: false });
   });
@@ -1499,5 +1499,134 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     await d.ok({ type: "session.interrupt", sessionId: busy.id });
     await until(() => abortNotices(s).some((n) => /work again\. Send the prompt again/.test(n.text)), 10_000);
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+});
+
+/** The retry states of a session in order (`null` = cleared). */
+const retries = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "model_retry").map((p) => (p as Extract<Part, { type: "model_retry" }>).retry);
+const errorNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "notice" && p.id.startsWith("error:")) as Extract<Part, { type: "notice" }>[];
+const status = (id: string, status: object) => ({ type: "session.status", properties: { sessionID: id, status } });
+const RETRY_3 = { type: "retry", attempt: 3, message: "Rate limit reached", next: 4102444800000 };
+
+describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => {
+  it("a retry shows model_retry with attempt, reason and next; the next busy clears it; the reply ends the turn without a warning", async () => {
+    const d = await boot({ script: ["retry"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(retries(s)).toEqual([{ attempt: 1, message: "Rate limit reached for m1", next: 4102444800000 }, null]);
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
+    const d = await boot({ script: ["retry-fail", "retry-fail"] });
+    const s = await d.open();
+    await s.prompt("first");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
+    await s.prompt("second");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2 && s.states().at(-1) === "idle");
+    const order = s.parts().map((p) => p.id);
+    const users = s.parts().filter((p) => p.type === "user_text").map((p) => p.id);
+    const [a, b] = errorNotices(s);
+    expect(errorNotices(s).map((n) => n.id).filter((id, i, all) => all.indexOf(id) === i)).toHaveLength(2);
+    expect(a!.id).not.toBe(b!.id);
+    expect(order.indexOf(users[0]!)).toBeLessThan(order.indexOf(a!.id));
+    expect(order.indexOf(a!.id)).toBeLessThan(order.indexOf(users[1]!));
+    expect(order.indexOf(users[1]!)).toBeLessThan(order.lastIndexOf(b!.id));
+    for (const n of [a!, b!]) expect(n.text).toMatch(/HTTP 429.*gave up after 2 retries/);
+    expect(retries(s).at(-1)).toBeNull();
+    expect(s.parts().filter((p) => p.type === "turn_result").every((p) => (p as { isError: boolean }).isError)).toBe(true);
+  });
+
+  it("a retry in a later turn shows model_retry again and clears it at the reply", async () => {
+    const d = await boot({ script: ["retry-fail", "retry"] });
+    const s = await d.open();
+    await s.prompt("first");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
+    await s.prompt("second");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2 && s.states().at(-1) === "idle");
+    expect(retries(s).map((r) => r?.attempt ?? null)).toEqual([1, null, 2, null, 1, null]);
+    expect(new Set(errorNotices(s).map((n) => n.id)).size).toBe(1);
+  });
+
+  it("an unknown model ends the turn with one notice naming the model; the second error with the stack does not replace it", async () => {
+    const d = await boot({ script: ["model-missing"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await new Promise((r) => setTimeout(r, 300)); // the second session.error comes after idle
+    expect(errorNotices(s)).toHaveLength(1);
+    const text = errorNotices(s)[0]!.text;
+    expect(text).toContain("stub/nope");
+    expect(text).toContain("Settings › OpenCode");
+    expect(text).not.toContain("    at ");
+    expect(s.parts().filter((p) => p.type === "notice")).toHaveLength(1);
+    expect(s.find("turn_result")).toMatchObject({ isError: true });
+  });
+
+  it("a provider 404 model_not_found names the model the session uses", async () => {
+    const d = await boot({ script: ["model-404"] });
+    const s = await d.open({ model: "stub/m1" });
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(new Set(errorNotices(s).map((n) => n.id)).size).toBe(1);
+    expect(errorNotices(s).at(-1)!.text).toMatch(/stub\/m1.*not available.*HTTP 404/);
+  });
+
+  it("Stop during a retry clears the retry state and ends interrupted", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await until(() => !!retries(s).at(-1));
+    expect(s.states().at(-1)).toBe("running");
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    expect(retries(s).at(-1)).toBeNull();
+    expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
+  });
+
+  it("a stream drop during a retry keeps the turn running and its retry state", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await until(() => !!retries(s).at(-1));
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    const before = d.requests("GET", `/session/${s.id}/message`).length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/global/event").length === 2 && d.requests("GET", `/session/${s.id}/message`).length > before, 12000);
+    await new Promise((r) => setTimeout(r, 3300)); // past the 3 s a resync waits before it may end a turn
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/global/event").length === 3 && d.requests("GET", `/session/${s.id}/message`).length > before + 1, 12000);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states().at(-1)).toBe("running");
+    expect(retries(s).at(-1)).toMatchObject({ attempt: 3 });
+  });
+
+  it("a session restored while OpenCode retries is running with its retry state", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_retry", slug: "r", projectID: "global", directory: project, title: "Retrying", version: "1.19.5", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, data: { sessions: [row], messages: { ses_retry: [] }, statuses: { ses_retry: { type: "retry", attempt: 2, message: "Rate limit reached", next: 4102444800000 } } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_retry", sinceSeq: 0 });
+    expect(sub.session.state).toBe("running");
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
+    const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
+    expect(last).toMatchObject({ retry: { attempt: 2, message: "Rate limit reached" } });
+  });
+
+  it("a failed prompt has a notice id per turn, so a second failure does not update the first", async () => {
+    const d = await boot();
+    const s = await d.open();
+    for (const n of [1, 2]) {
+      await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
+      await s.prompt(`hello ${n}`);
+      await until(() => new Set(s.parts().filter((p) => p.type === "notice").map((p) => p.id)).size === n);
+      await until(() => s.states().at(-1) === "idle");
+    }
   });
 });
