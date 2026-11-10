@@ -33,6 +33,18 @@ const execFileSync = cp.execFileSync;
   } catch (e) {
     const x = e as Error & { status?: number | null; signal?: string | null; stderr?: unknown };
     x.message += ` [status=${x.status} signal=${x.signal} stderr=${String(x.stderr ?? "").slice(0, 300)}]`;
+    // A git that exits 1 and says nothing (also `commit -q` with nothing to commit, which some helpers cannot tell from a crash): the state of the folder at that moment.
+    const [file, args, opts] = a as [string, unknown, { cwd?: string }?];
+    if (file === "git" && x.status === 1 && !String(x.stderr ?? "").trim() && opts?.cwd) {
+      const probe = (...g: string[]) => {
+        try {
+          return String(execFileSync("git", g, { cwd: opts.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 })).trim().slice(0, 300);
+        } catch (e2) {
+          return `failed status=${(e2 as { status?: number }).status} ${String((e2 as { stderr?: unknown }).stderr ?? "").trim().slice(0, 200)}`;
+        }
+      };
+      x.message += ` [state: args=${JSON.stringify(args)} status=${JSON.stringify(probe("status", "--short"))} head=${JSON.stringify(probe("log", "-1", "--oneline"))}]`;
+    }
     throw e;
   }
 }) as typeof execFileSync;
