@@ -202,6 +202,8 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const q = s.find("question")!;
     expect(q.questions).toEqual([{ question: "Which color do you prefer: red or blue?", header: "Color preference", options: [{ label: "Red", description: "Prefer red" }, { label: "Blue", description: "Prefer blue" }], multiSelect: false }]);
     await d.ok({ type: "question.respond", requestId: q.requestId, answers: { [q.questions[0]!.question]: "Blue" } });
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("POST", `/question/${q.requestId}/reply`).length > 0);
     expect(d.requests("POST", `/question/${q.requestId}/reply`)[0]!.body).toEqual({ answers: [["Blue"]] });
     // Subagent: the task call is a subagent part, its child session's parts nest under the call.
     await until(() => !!s.find("permission_request"));
@@ -329,6 +331,8 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await s.prompt("run ls");
     await until(() => !!s.find("permission_request"));
     expect(await d.ok({ type: "session.bash", sessionId: s.id, command: "echo later" })).toHaveProperty("itemId");
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("POST", `/session/${s.id}/shell`).length > 0);
     expect(d.requests("POST", `/session/${s.id}/shell`)).toHaveLength(1);
   });
 
@@ -494,6 +498,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await until(() => !!s.find("question"));
     // "Blue, green" is the label Blue plus the user's own text "green": only the structure tells it from the label "Blue, green".
     await d.ok({ type: "question.respond", requestId: "que_multi", answers: { Q: "Blue, green" }, choices: { Q: ["Blue", "green"] } });
+    await until(() => d.requests("POST", "/question/que_multi/reply").length > 0); // the reply POST is not awaited by question.respond
     expect(d.requests("POST", "/question/que_multi/reply")[0]!.body).toEqual({ answers: [["Blue", "green"]] });
     expect(await d.request({ type: "question.respond", requestId: "x", answers: { Q: "a" }, choices: { Q: [1] } })).toMatchObject({ type: "error", code: "bad_request" });
   });
@@ -791,6 +796,8 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     expect(d.requests("PATCH", `/session/${session.id}`).findIndex((r) => r.body.permission)).toBeGreaterThan(-1);
     expect(link(d, session.id)).toMatchObject({ ownerId: "ses_own", readOnly: true });
     await d.ok({ type: "aside.close", sessionId: session.id });
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("DELETE", `/session/${session.id}`).length > 0);
     expect(d.requests("DELETE", `/session/${session.id}`)).toHaveLength(1);
     expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
   });
