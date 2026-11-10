@@ -144,7 +144,7 @@ Then("the side panel has no Changes {string} item", async ({ page }, item: strin
 
 When("I dismiss the open toasts", async ({ page }) => {
   const close = page.getByTestId("toast").getByRole("button", { name: "Dismiss" });
-  for (let n = await close.count(); n > 0; n = await close.count()) await close.first().click();
+  for (let n = await close.count(); n > 0; n = await close.count()) await close.first().click({ timeout: 2000 }).catch(() => {}); // a toast may expire mid-click; the count check below decides
   await expect(page.getByTestId("toast")).toHaveCount(0);
 });
 

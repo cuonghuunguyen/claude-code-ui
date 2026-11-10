@@ -9,6 +9,14 @@ Feature: The new-session tab shows the side and bottom panels
     Then the side panel shows
     And a terminal shows in the bottom panel
     And I capture "draft panels"
+    When I switch to the light theme
+    Then the side panel terminal toggle is pressed
+    And the side panel terminal toggle is quiet like the titlebar one
+    And I capture the side panel header as "light header"
+    When I switch to the dark theme
+    Then the side panel terminal toggle is pressed
+    And the side panel terminal toggle is quiet like the titlebar one
+    And I capture the side panel header as "dark header"
     When I note the panel layout
     And I send "Reply with exactly: OK"
     Then I see my prompt in the transcript
@@ -25,6 +33,9 @@ Feature: The new-session tab shows the side and bottom panels
     Then the side panel shows
     And the Changes tab shows its empty state
     And I capture "draft changes"
+    And the project name is shown in full
+    And the project chip is fully inside the viewport
+    And I capture "wide chip"
 
   Scenario: A remembered terminal starts no shell after a reload
     Given the viewport is 1440x900
@@ -53,5 +64,8 @@ Feature: The new-session tab shows the side and bottom panels
     And I open the scratch project
     And I start a new Haiku session
     Then no side or bottom panel shows
+    And the project name is cut short with an ellipsis
+    And the project chip is fully inside the viewport
+    And the project chip keeps the full path as its title
     And the page has no horizontal scroll
     And I capture "narrow draft"
