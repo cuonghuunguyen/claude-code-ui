@@ -62,6 +62,18 @@ function allPages(index: PartIndex) {
 }
 
 describe("PartIndex", () => {
+  it("GH-684: the agents part (and its latest version only) reaches a paged snapshot as a head, like commands", () => {
+    const { index } = build([
+      { type: "commands", id: "commands", commands: [] },
+      { type: "agents", id: "agents", agents: [], failed: true },
+      { type: "agents", id: "agents", agents: [{ name: "build" }, { name: "plan" }, { name: "review" }] },
+    ]);
+    const heads = index.heads().filter((h) => h.part.type === "agents");
+    expect(heads).toHaveLength(1);
+    expect(heads[0]!.part).toMatchObject({ agents: [{ name: "build" }, { name: "plan" }, { name: "review" }] });
+    expect(index.heads().some((h) => h.part.type === "commands")).toBe(true);
+  });
+
   it("pages concatenated oldest to newest equal the client fold of the whole log", () => {
     const parts = [
       ...turns(12),

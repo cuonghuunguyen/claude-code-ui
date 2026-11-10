@@ -433,6 +433,16 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     expect(s.find("session_agent")?.agent).toBe("docs");
   });
 
+  it("GH-684: a paged subscribe (the web's, also of a session created in the new-session tab, whose agents part came before the subscribe) carries the agents part", async () => {
+    const d = await boot();
+    const s = await d.open();
+    // The part is emitted at begin(): it is in the log before the paged subscribe below, as for a tab that opens the session after create.
+    await until(() => !!s.find("agents"));
+    const sub = await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0, paged: true });
+    const heads = sub.snapshot.heads as { part: { type: string; agents?: { name: string }[] } }[];
+    expect(heads.find((h) => h.part.type === "agents")?.part.agents?.map((a) => a.name)).toEqual(["build", "docs", "plan"]);
+  });
+
   it("GH-684: GET /agent that answers after 3 s is not cut off: the agents part arrives, the session.agents draft request waits for it", async () => {
     const d = await boot({ data: { delays: { "/agent": 4500 } } });
     const draft = d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" });

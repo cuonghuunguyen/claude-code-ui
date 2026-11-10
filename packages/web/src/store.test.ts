@@ -164,6 +164,16 @@ describe("OpenCode agents (GH-684)", () => {
     expect(s.agent).toBe("plan");
   });
 
+  it("GH-684: a paged subscribe snapshot with an agents head gives the view its agent list (and a failed one its flag)", () => {
+    const list = [{ name: "build" }, { name: "plan" }, { name: "review" }];
+    const info = { id: "s", cwd: "/", state: "idle" as const, model: "m", permissionMode: "default" as const, effort: "default" as const, agent: "plan", permissionModes: [] };
+    const snap = (part: Part) => ({ heads: [{ type: "event" as const, sessionId: "s", seq: 2, part }], attentionSeq: 0, page: { parts: [] }, aux: [] });
+    const ok = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: list }) } as never);
+    expect(ok).toMatchObject({ agent: "plan", agents: list, agentsFailed: false });
+    const failed = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: [], failed: true }) } as never);
+    expect(failed).toMatchObject({ agents: [], agentsFailed: true });
+  });
+
   it("a failed agents part keeps the agent and sets agentsFailed; the next list clears it", () => {
     let s = [ev(1, { type: "session_agent", id: "session_agent", agent: "plan" }), ev(2, { type: "agents", id: "agents", agents: [], failed: true })].reduce(applyEvent, emptySession());
     expect(s).toMatchObject({ agent: "plan", agents: [], agentsFailed: true });
