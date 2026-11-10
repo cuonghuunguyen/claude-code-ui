@@ -24,8 +24,9 @@ const alive = (pid: number) => {
     return false;
   }
 };
-const until = async (cond: () => boolean) => {
-  for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
+/** A poll bound (10 s default): a reply waits for the daemon to spawn the fake OpenCode, seconds on Windows under load (a 10 s wait was exceeded in a full suite). */
+const until = async (cond: () => boolean, ms = 10_000) => {
+  for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
   expect(cond()).toBe(true);
 };
 
@@ -75,7 +76,7 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
   const request = async (msg: object) => {
     const reqId = `r${++n}`;
     ws.send(JSON.stringify({ ...msg, reqId }));
-    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId));
+    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId), 60_000);
     return inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId) as { type: "reply"; result: any } | { type: "error"; code: string; message: string };
   };
   const log = () =>
