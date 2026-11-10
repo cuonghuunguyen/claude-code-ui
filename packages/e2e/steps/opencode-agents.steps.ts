@@ -124,3 +124,8 @@ Then("the permission mode is still {string}", async ({ page }, name: string) => 
   await settingsOpen(page);
   await expect(mode(page)).toContainText(name);
 });
+
+When("I close the open chooser", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+});

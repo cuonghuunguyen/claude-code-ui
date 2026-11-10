@@ -48,7 +48,11 @@ Feature: OpenCode agents (GH-684)
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Plan"
     And I capture "cycled plan"
-    When I press "Shift+Tab" in the prompt box
+    # Until OpenCode has answered, only the known agents (Build, Plan) cycle; Review is part of the cycle once the list has loaded.
+    When I open the agent chooser
+    Then the agent chooser offers exactly "Build, Plan, Review"
+    When I close the open chooser
+    And I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Review"
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Build"
