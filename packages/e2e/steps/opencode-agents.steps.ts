@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { waitConnected } from "../support/ui.ts";
+import { idleSend, TURN_MS, waitConnected } from "../support/ui.ts";
 import { ownDaemon } from "./opencode-engine.steps.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
@@ -105,4 +105,22 @@ Then("no {string} tool call completed", async ({ page }, text: string) => {
 
 Then("the transcript shows the model's reply", async ({ page }) => {
   await expect(page.getByTestId("assistant-text").first()).toBeVisible();
+});
+
+// The model may fall back to Bash when the agent has no write tool: its permission question is answered by denying it, until the turn ends.
+When("I deny every permission request until the turn has finished", async ({ page }) => {
+  await expect(page.locator('[data-testid="user-message"]:not([data-pending])').first()).toBeVisible({ timeout: TURN_MS });
+  const deny = page.getByTestId("permission-panel").getByRole("button", { name: "Deny" });
+  const idle = idleSend(page);
+  const end = Date.now() + TURN_MS;
+  while (!(await idle.isVisible())) {
+    if (Date.now() > end) throw new Error("the turn did not finish");
+    await Promise.race([idle.waitFor({ timeout: 10_000 }), deny.waitFor({ timeout: 10_000 })]).catch(() => undefined);
+    if (await deny.isVisible()) await deny.click();
+  }
+});
+
+Then("the permission mode is still {string}", async ({ page }, name: string) => {
+  await settingsOpen(page);
+  await expect(mode(page)).toContainText(name);
 });

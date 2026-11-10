@@ -44,6 +44,7 @@ Feature: OpenCode agents (GH-684)
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     Then the agent chooser shows "Build"
+    And the permission mode is still "Ask before edits"
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Plan"
     And I capture "cycled plan"
@@ -51,6 +52,7 @@ Feature: OpenCode agents (GH-684)
     Then the agent chooser shows "Review"
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Build"
+    And the permission mode is still "Ask before edits"
 
   Scenario: An agent that denies edits wins over Edit automatically
     Given the viewport is 1440x900
@@ -60,7 +62,7 @@ Feature: OpenCode agents (GH-684)
     When I pick the agent "Review"
     And I pick the permission mode "Edit automatically"
     And I send the first prompt "Create a file named x.txt with the text hi using the write tool"
-    And the turn has finished
+    And I deny every permission request until the turn has finished
     Then the file "x.txt" does not exist in the project
     And the permission request is gone
     And no "x.txt" tool call completed
