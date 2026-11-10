@@ -60,13 +60,6 @@ Then("the repository selector shows the name of the second scratch project", asy
   await expect(selector(page)).toHaveAttribute("aria-label", new RegExp(`^Repository: ${basename(second(project))}, branch `), { timeout: 30_000 });
 });
 
-Then("the repository selector shows the name {string}", async ({ page }, name: string) => {
-  const s = selector(page);
-  await expect(s.locator("svg[data-icon]").first()).toBeVisible();
-  await expect(s).toContainText(name);
-  await expect(s).toHaveAttribute("aria-label", new RegExp(`^Repository: ${name}`));
-});
-
 Then("the repository selector shows the name of the scratch project and a branch", async ({ page, project }) => {
   await expect(selector(page)).toContainText(project.name);
   await expect(selector(page)).toHaveAttribute("aria-label", /, branch \S+/);
@@ -105,11 +98,6 @@ Then("the focus is on the repository tree row {string}", async ({ page }, rel: s
 });
 
 When("I press {string}", async ({ page }, key: string) => {
-  await page.keyboard.press(key);
-});
-
-When("I press {string} on the repository tree row {string}", async ({ page }, key: string, rel: string) => {
-  await itemOf(page, rel).focus();
   await page.keyboard.press(key);
 });
 
@@ -199,9 +187,4 @@ Then("the scrollWidth of the page is {int}", async ({ page }, w: number) => {
   const m = await page.evaluate(() => ({ root: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
   expect(m.root).toBe(w);
   expect(m.body).toBeLessThanOrEqual(w);
-});
-
-Then("the stored repository choice of the browser has {int} project entry", async ({ page }, n: number) => {
-  const v = await page.evaluate(() => localStorage.getItem("claude-ui.repoChoice"));
-  expect(Object.keys(JSON.parse(v ?? "{}"))).toHaveLength(n);
 });
