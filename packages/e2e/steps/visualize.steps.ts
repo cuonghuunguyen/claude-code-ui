@@ -58,10 +58,12 @@ Then("the visualization frame is shown with a fitting height and a chart", async
   expect((await frame(page).boundingBox())!.height).toBeLessThanOrEqual(800);
 });
 
-const bgOf = (page: Page) => inner(page).locator("html").evaluate((e) => getComputedStyle(e).getPropertyValue("--background").trim());
+// The frame document's own painted background (not only the variable): a transparent one shows the embedder's canvas, which stays light in a dark app.
+const bgOf = (page: Page) => inner(page).locator("html").evaluate((e) => getComputedStyle(e).backgroundColor);
 Then("I note the background colour of the visualization frame", async ({ page }) => {
   bg = await bgOf(page);
   expect(bg).not.toBe("");
+  expect(bg).not.toBe("rgba(0, 0, 0, 0)");
 });
 Then("the background colour of the visualization frame changed", async ({ page }) => {
   await expect.poll(() => bgOf(page), { timeout: 10_000 }).not.toBe(bg);

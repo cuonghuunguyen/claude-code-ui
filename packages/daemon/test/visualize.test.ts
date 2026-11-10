@@ -34,3 +34,26 @@ it("the shell script is valid and renders only a render message from the parent"
   send(parent, { v: 1, type: "render", html: "<p>again</p>" }); // once only
   expect(written).toHaveLength(1);
 });
+
+it("the written prefix paints the page with the host colours and color-scheme before the fence HTML", () => {
+  const script = /<script>([\s\S]*)<\/script>/.exec(VISUALIZE_SHELL)![1]!;
+  const written: string[] = [];
+  const handlers: ((e: unknown) => void)[] = [];
+  const parent = { postMessage() {} };
+  new Function("parent", "addEventListener", "document", script)(parent, (_: string, h: (e: unknown) => void) => handlers.push(h), { open() {}, write: (s: string) => written.push(s), close() {} });
+  handlers[0]!({ source: parent, data: { v: 1, type: "render", html: "<p>x</p>", vars: { "--background": "#111", "--scheme": "dark" } } });
+  const doc = written[0]!;
+  expect(doc).toContain(":root{--background:#111;--scheme:dark;}");
+  expect(doc).toContain("html{color-scheme:var(--scheme,light)}");
+  expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);");
+  expect(doc).not.toContain("background:transparent");
+  expect(doc.indexOf("<style>")).toBeLessThan(doc.indexOf("<p>x</p>"));
+  // The theme listener of the written document sets the same variables, --scheme included, and refuses unsafe ones.
+  const inner = /<script>([\s\S]*)<\/script>/.exec(doc)![1]!;
+  const style: Record<string, string> = {};
+  const listeners: ((e: unknown) => void)[] = [];
+  const p2 = { postMessage() {} };
+  new Function("parent", "addEventListener", "document", "ResizeObserver", inner)(p2, (t: string, h: (e: unknown) => void) => t === "message" && listeners.push(h), { documentElement: { scrollHeight: 0, getBoundingClientRect: () => ({ height: 0 }), style: { setProperty: (k: string, v: string) => (style[k] = v) } } }, class { observe() {} });
+  listeners[0]!({ source: p2, data: { v: 1, type: "theme", vars: { "--background": "#fff", "--scheme": "light", "--bad": "a;b" } } });
+  expect(style).toEqual({ "--background": "#fff", "--scheme": "light" });
+});

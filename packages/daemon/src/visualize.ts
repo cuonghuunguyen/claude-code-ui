@@ -47,7 +47,7 @@ done=true;
 var vars="";for(var k in (d.vars||{}))if(OK(k,d.vars[k]))vars+=k+":"+d.vars[k]+";";
 var ok="var OK="+OK.toString()+";";
 document.open();
-document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html,body{margin:0;background:transparent;color:var(--foreground);font:13px ui-sans-serif,system-ui,sans-serif}</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
+document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html{color-scheme:var(--scheme,light)}html,body{margin:0;background:var(--background);color:var(--foreground);font:13px ui-sans-serif,system-ui,sans-serif}</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
 document.close();
 });
 parent.postMessage({v:1,type:"ready"},"*");

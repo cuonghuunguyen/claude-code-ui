@@ -14,7 +14,9 @@ export const VisualizeContext = createContext(false);
 const VARS = ["--background", "--foreground", "--primary", "--primary-foreground", "--muted", "--muted-foreground", "--border", "--accent"];
 const themeVars = () => {
   const cs = getComputedStyle(document.documentElement);
-  return Object.fromEntries(VARS.map((n) => [n, cs.getPropertyValue(n).trim()] as const).filter(([, v]) => v));
+  // --scheme feeds the frame's color-scheme: without it the frame keeps the light canvas in a dark app.
+  const scheme = document.documentElement.classList.contains("dark") ? "dark" : "light";
+  return { ...Object.fromEntries(VARS.map((n) => [n, cs.getPropertyValue(n).trim()] as const).filter(([, v]) => v)), "--scheme": scheme };
 };
 
 /** Streamdown renderer of the `visualize` fence: code while the fence streams, the frame once it is closed. */

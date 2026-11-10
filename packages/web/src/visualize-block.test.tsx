@@ -65,6 +65,20 @@ it("only the frame's own messages count: ready posts the code, height is clamped
   expect(frameOf(el).style.height).toBe("120px");
 });
 
+it("a theme change re-sends the colours with the scheme to the frame", async () => {
+  document.documentElement.classList.remove("dark");
+  const el = await mount(<VisualizeBlock code="<p>hi</p>" />);
+  const f = frameOf(el);
+  const post = vi.fn();
+  Object.defineProperty(f, "contentWindow", { value: { postMessage: post } });
+  await act(async () => {
+    document.documentElement.classList.add("dark");
+    await new Promise((r) => setTimeout(r, 0)); // MutationObserver
+  });
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ v: 1, type: "theme", vars: expect.objectContaining({ "--scheme": "dark" }) }), "*");
+  document.documentElement.classList.remove("dark");
+});
+
 it("Show code swaps the frame for the source and back", async () => {
   const el = await mount(<VisualizeBlock code="<p>src</p>" />);
   const btn = () => el.querySelector<HTMLElement>('[data-testid="visualize-show-code"]')!;
