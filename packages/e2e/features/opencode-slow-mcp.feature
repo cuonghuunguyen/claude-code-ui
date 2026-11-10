@@ -83,8 +83,15 @@ Feature: OpenCode in folders with slow MCP servers and turns OpenCode ends on it
     Then the turn has finished
     And the transcript shows the interrupted divider
     And I see no notice "ended this turn on its own"
+    And the transcript shows exactly 1 interrupted markers
     And I see no notice "claude-ui did not stop it"
     And I capture "stopped without warning"
+    When I send "Reply with exactly: AFTERSTOP"
+    Then I see at least 2 replies from Claude
+    And the turn has finished
+    And the transcript shows exactly 1 interrupted markers
+    And I see no notice "ended this turn on its own"
+    And I capture "after stop new prompt answered"
 
   Scenario: After a daemon restart the session restores and a new prompt gets a reply
     Given the viewport is 1440x900
