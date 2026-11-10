@@ -55,7 +55,9 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
     allowBypass: o.allowBypass,
-    opencode: { command: [process.execPath, BIN], env: () => env },
+    // session.list budget: no wait for the model list (fakeQuery has none) and a short wait for OpenCode, whose start (seconds under load) the helpers wait for themselves.
+    modelListWaitMs: 0,
+    opencode: { command: [process.execPath, BIN], env: () => env, listWaitMs: 500 },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -504,6 +506,8 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await d.ok({ type: "question.respond", requestId: s.find("question")!.requestId, answers: { [s.find("question")!.questions[0]!.question]: "Blue" } });
     await until(() => !!s.find("subagent"));
     await d.ok({ type: "session.stopSubagent", sessionId: s.id, subagentId: s.find("subagent")!.id });
+    // The abort POST is not awaited by session.stopSubagent: wait for it to arrive.
+    await until(() => d.requests("POST", `/session/${s.id}_child/abort`).length > 0);
     expect(d.requests("POST", `/session/${s.id}_child/abort`)).toHaveLength(1);
   });
 
