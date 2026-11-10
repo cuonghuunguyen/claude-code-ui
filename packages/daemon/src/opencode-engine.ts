@@ -415,6 +415,7 @@ class OpenCodeSession implements EngineSession {
     this.sentAt = Infinity;
     this.beginTurn();
     this.session.setState("running");
+    if (!(await this.afterStale())) return;
     this.server
       .request(`/session/${this.id}/summarize`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { providerID: picked.providerID, modelID: picked.modelID } })
       .then(
@@ -425,6 +426,19 @@ class OpenCodeSession implements EngineSession {
           this.toIdle();
         },
       );
+  }
+
+  /**
+   * A turn begun here by a request of its own (bash mode, /compact) waits, as send() does, for the prompt requests an earlier Stop left on
+   * their way: while they may start a turn in OpenCode, its events are hidden (quiet). False when a Stop came meanwhile (nothing is posted).
+   */
+  private async afterStale(): Promise<boolean> {
+    const mark = this.stops.count;
+    this.turnPosted = false;
+    await this.stale;
+    if (this.stops.count !== mark) return false;
+    this.turnPosted = true;
+    return true;
   }
 
   /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
@@ -580,8 +594,6 @@ class OpenCodeSession implements EngineSession {
     this.stopped = true;
     const ways = this.stops.stop();
     this.session.interruptPending();
-    // From now on, events of a stopped prompt that reaches OpenCode late are hidden once the stopped turn no longer shows here.
-    if (ways.length && !this.quiet) this.openQuiet();
     if (!this.turnPosted) this.endStopped();
     // No caller timeout: a slow answer (a cold or loaded OpenCode) is no failed Stop; the reply does not wait for it. Only a real failure is shown.
     const abort = this.abort();
@@ -646,6 +658,8 @@ class OpenCodeSession implements EngineSession {
    * OpenCode is aborted. While the stopped turn still shows, that is its end (its events, or the status read); else it is aborted unseen.
    */
   private async cleanStale(ways: Promise<void>[], abort: Promise<boolean>) {
+    // Opened at the Stop (interrupt() calls this before any await): from then on, events of a stopped prompt that reaches OpenCode late are
+    // hidden once the stopped turn no longer shows here.
     const q = (this.quiet ?? this.openQuiet()) as ReturnType<OpenCodeSession["openQuiet"]>;
     try {
       await Promise.all([Promise.race([abort, sleep(ABORT_WAIT_MS)]), ...ways]);
@@ -858,14 +872,17 @@ class OpenCodeSession implements EngineSession {
     this.session.setState("running");
     const model = this.model.split("/");
     const done = () => (this.sentAt = Date.now());
-    this.server
-      .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
-      .then(done, (err) => {
-        done();
-        this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
-        this.shellRun = false;
-        this.toIdle();
-      });
+    void this.afterStale().then((go) => {
+      if (!go) return void done();
+      this.server
+        .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
+        .then(done, (err) => {
+          done();
+          this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
+          this.shellRun = false;
+          this.toIdle();
+        });
+    });
   }
   subscribed() {}
   beforeStateEvent() {}

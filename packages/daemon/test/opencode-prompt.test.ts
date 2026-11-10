@@ -1438,6 +1438,37 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
   });
 
+  it("bash mode right after a Stop that left a prompt_async on its way waits for it, then shows its output and ends idle (review 5, PROBE5a)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_LATE_MS: "4000", FAKE_OPENCODE_PROMPT_DELAY_MS: "5000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    await d.ok({ type: "session.bash", sessionId: s.id, command: "echo after-stop" });
+    // The stopped request answers at 9 s and is aborted unseen; then the command runs and shows.
+    await until(() => !!s.find("tool_result") && s.states().at(-1) === "idle", 20_000);
+    const shell = d.requests("POST", `/session/${s.id}/shell`);
+    expect(shell).toHaveLength(1);
+    const aborts = d.log().flatMap((l, i) => (l.type === "request" && l.path === `/session/${s.id}/abort` ? [i] : []));
+    expect(aborts).toHaveLength(2);
+    expect(at(d, (l) => l.type === "request" && l.path === `/session/${s.id}/shell`)).toBeGreaterThan(aborts[1]!);
+    expect(markers(s)).toBe(1);
+  });
+
+  it("/compact right after a Stop that left a prompt_async on its way waits for it, then summarizes and ends idle (review 5)", async () => {
+    const d = await boot({ script: ["abort", "compact"], env: { FAKE_OPENCODE_PROMPT_LATE_MS: "4000", FAKE_OPENCODE_PROMPT_DELAY_MS: "5000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    await s.prompt("/compact");
+    await until(() => !!s.find("compaction") && !!s.find("turn_result") && s.states().at(-1) === "idle", 20_000);
+    expect(d.requests("POST", `/session/${s.id}/abort`).length).toBe(2);
+    expect(markers(s)).toBe(1);
+  });
+
   it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
     const d = await boot();
     await on(d); // the other session attaches at its open: that read of the broken folder reloads it
