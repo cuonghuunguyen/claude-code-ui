@@ -1002,6 +1002,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   performance: { monitor: boolean };
   /** Claude in Chrome (GH-514): new non-worker sessions run the CLI with --chrome; applies when a session's query (re)starts. */
   chrome: { enabled: boolean };
+  /** Inline visualizations (GH-690): the visualize skill is loaded into the CLI and ```visualize fences render in a sandboxed frame; applies when a session's query (re)starts. */
+  chat: { visualize: boolean };
   /** Claude account (GH-615): `""` = Default (the Daemon's environment), `"cli"` = the CLI login (no CLAUDE_CODE_OAUTH_TOKEN), else the id of a token account. Hub-local. */
   claude: { account: string };
   /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */

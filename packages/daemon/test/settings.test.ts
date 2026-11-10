@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -395,4 +395,13 @@ it("editor: defaults empty; accepts a command and a name; refuses newline, NUL, 
   for (const command of ["a\nb", "a\rb", "a\0b", 'a "b', '""', "   ", "x".repeat(1025)]) expect(() => s.set({ editor: { command } })).toThrow(/^Editor command must be/);
   expect(() => s.set({ editor: { name: "a\nb" } })).toThrow(/^Editor name must be/);
   expect(s.set({ editor: { command: "" } }).editor.command).toBe("");
+});
+
+it("chat.visualize defaults to on (also for a settings.json without chat), saves, refuses a non-boolean", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
+  const s = createSettings({ file: f });
+  expect(s.get().chat).toEqual({ visualize: true });
+  expect(s.set({ chat: { visualize: false } }).chat).toEqual({ visualize: false });
+  expect(() => s.set({ chat: { visualize: "yes" as never } })).toThrow("Inline visualizations must be on or off");
 });
