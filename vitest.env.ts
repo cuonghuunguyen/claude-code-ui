@@ -22,6 +22,10 @@ if (process.env.GIT_CONFIG_GLOBAL === undefined) {
 // compares a coordinator's env with a worker's must not inherit it from the shell that runs the suite.
 delete process.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR;
 
+// The read-only git checks behind the permission tiers fail closed after 5 s per git process (a failed check is "unsafe"/"high"). On Windows in a full suite one git call
+// stalled past that twice (tests that took 6.3 and 6.7 s and got the closed answer), so the tests give it 30 s there; the product default is untouched.
+if (process.platform === "win32") process.env.CLAUDE_UI_GIT_READONLY_TIMEOUT_MS ??= "30000";
+
 // A failing `execFileSync` (the git calls of the test setups) says only "Command failed: <cmd>" when the process left no stderr: it was killed or died at start.
 // Status, signal and stderr go into the message, so a failure shows which of the two it was.
 // The CommonJS object: the namespace of an ES import cannot be written to.
