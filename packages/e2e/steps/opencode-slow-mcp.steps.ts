@@ -12,7 +12,7 @@ import { Then, When } from "./fixtures.ts";
  * Another client of the daemon's OpenCode server does what the old daemon did to the folder: resets it, then drops its first read
  * (`GET /command`) in the middle of the MCP load. OpenCode keeps that interruption as the folder's state.
  * The cut waits for the load itself, not for a time: the folder first bootstraps (its length depends on the machine), then OpenCode starts the
- * slow MCP server, which writes its marker file. The cut comes right after that, while the server holds the load (8 s).
+ * slow MCP server in the project folder, which writes its marker file there. The cut comes right after that, while the server holds the load (8 s).
  */
 When("another client cuts OpenCode's MCP load in the project", async ({ project }) => {
   const { url, auth } = daemonOpenCodeServer(runDir(), ownDaemon());
@@ -20,7 +20,7 @@ When("another client cuts OpenCode's MCP load in the project", async ({ project 
   const dispose = await fetch(`${url}/instance/dispose${q}`, { method: "POST", headers: { authorization: auth } });
   expect(dispose.ok).toBe(true);
   // A marker of a server started before the dispose says nothing about the next load.
-  rmSync(slowMcpStarted(), { force: true });
+  rmSync(slowMcpStarted(project.path), { force: true });
   const cut = new AbortController();
   let answered = false;
   const read = fetch(`${url}/command${q}`, { headers: { authorization: auth }, signal: cut.signal }).then(
@@ -29,7 +29,7 @@ When("another client cuts OpenCode's MCP load in the project", async ({ project 
   );
   await expect(() => {
     expect(answered, "GET /command answered before the MCP server started: the load was not slow, nothing was cut").toBe(false);
-    expect(existsSync(slowMcpStarted())).toBe(true);
+    expect(existsSync(slowMcpStarted(project.path))).toBe(true);
   }).toPass({ timeout: 60_000, intervals: [100] });
   cut.abort();
   await read;

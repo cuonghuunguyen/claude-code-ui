@@ -29,12 +29,16 @@ export const openDrawer = async (page: Page) => {
 
 /** The OpenCode config of a scenario that needs an MCP server (the run's config home is shared by its OpenCode scenarios: removed after). */
 const slowConfig = () => join(configHome(runDir()), "opencode", "opencode.json");
-/** Written by the slow MCP server when OpenCode starts it: the folder's MCP load is running from then on. */
-export const slowMcpStarted = () => join(runDir(), "slow-mcp-started");
+/**
+ * Written by the slow MCP server when OpenCode starts it for a folder: that folder's MCP load is running from then on. OpenCode starts a local
+ * MCP server in the folder of its instance, so the marker is per scenario project (the config is shared by the run and its workers).
+ */
+export const MCP_MARKER = ".slow-mcp-started";
+export const slowMcpStarted = (folder: string) => join(folder, MCP_MARKER);
 Given("OpenCode has an MCP server that takes 8 seconds to load", async () => {
   mkdirSync(join(configHome(runDir()), "opencode"), { recursive: true });
   // A local server that never answers: OpenCode gives up on it after its own `timeout`, so the folder's MCP load takes 8 s. It marks its start.
-  const code = `require("fs").writeFileSync(${JSON.stringify(slowMcpStarted())}, String(process.pid));setInterval(()=>{},1000)`;
+  const code = `require("fs").writeFileSync(${JSON.stringify(MCP_MARKER)}, String(process.pid));setInterval(()=>{},1000)`;
   writeFileSync(slowConfig(), JSON.stringify({ mcp: { slow: { type: "local", command: [process.execPath, "-e", code], enabled: true, timeout: 8000 } } }));
 });
 

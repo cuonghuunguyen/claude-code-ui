@@ -1355,6 +1355,89 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     await until(() => s.parts().some((p) => p.type === "notice" && /Could not stop the turn in OpenCode/.test(p.text)));
   });
 
+  it("a prompt sent after Stop does not wait for a late abort answer: it is sent within a few seconds although the abort answers after 15 s (review 4 N2, PROBE4a)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_DELAY_MS: "3000", FAKE_OPENCODE_ABORT_ANSWER_MS: "15000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    const t = Date.now();
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 5000);
+    await s.prompt("say DONE");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2, 12_000);
+    // The stopped request (3 s) and the capped abort wait (3 s) and the 1 s watch: well before the abort's answer at 15 s.
+    expect(Date.now() - t).toBeLessThan(10_000);
+    await until(() => !!s.find("turn_result"), 10_000);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(markers(s)).toBe(1);
+  });
+
+  it("a stopped prompt that OpenCode starts after the turn ended here, before its prompt_async answers, is aborted unseen: idle, no reply shown (review 4 N1, PROBE4b)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_LATE_MS: "2500", FAKE_OPENCODE_PROMPT_DELAY_MS: "2000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    const states = s.states().length;
+    // OpenCode starts it at 2.5 s, answers at 4.5 s; the second abort follows.
+    await until(() => d.requests("POST", `/session/${s.id}/abort`).length === 2, 12_000);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(s.states().slice(states)).toEqual([]);
+    expect(s.states().at(-1)).toBe("idle");
+    expect(s.parts().some((p) => p.type === "thinking")).toBe(false);
+    expect(markers(s)).toBe(1);
+    await s.prompt("say DONE");
+    await until(() => !!s.find("turn_result"), 15_000);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a stopped prompt that reaches OpenCode after the abort while the abort answers late is still aborted: one marker, idle (review 4 #3)", async () => {
+    const d = await boot({ script: ["abort", "text"], env: { FAKE_OPENCODE_PROMPT_LATE_MS: "2500", FAKE_OPENCODE_ABORT_ANSWER_MS: "8000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 8000);
+    expect(d.requests("POST", `/session/${s.id}/abort`).length).toBeGreaterThanOrEqual(2);
+    await s.prompt("say DONE");
+    await until(() => !!s.find("turn_result"), 20_000);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+    expect(markers(s)).toBe(1);
+  });
+
+  it("a turn a resync finds busy after a Stop takes a fresh Stop state: Stop on it ends it with its own marker (review 4 N5)", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_MCP_LOAD_MS: "5000" } });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "running");
+    await d.ok({ type: "session.interrupt", sessionId: s.id }); // dropped while it waits for the attach
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle");
+    // The stream drops; meanwhile a turn starts in OpenCode's own UI; the reconnect's resync finds it busy.
+    await d.fake("/__drop");
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "busy" } } }] });
+    await until(() => s.states().at(-1) === "running", 15_000);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 2 && s.states().at(-1) === "idle", 8000);
+  });
+
+  it("Stop while the prompt waits for the effort levels ends the turn at once; the prompt is never sent (review 4)", async () => {
+    const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_PROVIDERS_DELAY_MS: "4000" } });
+    const s = await d.open();
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    const before = d.requests("GET", "/config/providers").length;
+    await s.prompt("hi");
+    await until(() => d.requests("GET", "/config/providers").length > before || before > 0);
+    await until(() => s.states().at(-1) === "running");
+    const t = Date.now();
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => markers(s) === 1 && s.states().at(-1) === "idle", 3000);
+    expect(Date.now() - t).toBeLessThan(1500);
+    await new Promise((r) => setTimeout(r, 4500)); // the providers answer (or the read times out) meanwhile
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(0);
+  });
+
   it("a busy broken folder that another session's open reloads first: the notice says it was reloaded", async () => {
     const d = await boot();
     await on(d); // the other session attaches at its open: that read of the broken folder reloads it

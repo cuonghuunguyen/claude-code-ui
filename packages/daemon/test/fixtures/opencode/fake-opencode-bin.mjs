@@ -10,7 +10,7 @@
 // MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
 // Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state, POST /__heal {directory} takes it out (OpenCode repaired itself).
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once and answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once, or nothing, and answers that late), FAKE_OPENCODE_PROVIDERS_DELAY_MS (GET /config/providers answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -175,6 +175,7 @@ const server = createServer(async (req, res) => {
     clients.add(res);
     return res.on("close", () => clients.delete(res));
   }
+  if (url.pathname === "/config/providers") await sleep(Number(process.env.FAKE_OPENCODE_PROVIDERS_DELAY_MS ?? 0));
   if (url.pathname === "/config/providers")
     return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" }, thinker: { name: "Thinker", variants: { none: {}, low: {}, high: {} } } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
   if (url.pathname === "/provider")
@@ -314,7 +315,9 @@ const server = createServer(async (req, res) => {
   }
   if (m && m[2] === "/abort" && req.method === "POST") {
     // Like OpenCode: aborting a session that runs nothing answers true and sends no event.
-    if (!busy.has(m[1]) && !current?.on) return json(200, true);
+    // FAKE_OPENCODE_ABORT_ANSWER_MS: the abort's answer comes that late (whatever it ended, the loop ends at once).
+    const answer = () => sleep(Number(process.env.FAKE_OPENCODE_ABORT_ANSWER_MS ?? 0)).then(() => json(200, true));
+    if (!busy.has(m[1]) && !current?.on) return answer();
     // FAKE_OPENCODE_ABORT_DELAY_MS: the aborted loop ends that late (OpenCode answers the abort first, the loop unwinds after it).
     const end = () => {
       generation++;
@@ -326,9 +329,7 @@ const server = createServer(async (req, res) => {
     };
     const late = Number(process.env.FAKE_OPENCODE_ABORT_DELAY_MS ?? 0);
     late ? setTimeout(end, late) : end();
-    // FAKE_OPENCODE_ABORT_ANSWER_MS: the abort's answer comes that late (the loop ends at once).
-    await sleep(Number(process.env.FAKE_OPENCODE_ABORT_ANSWER_MS ?? 0));
-    return json(200, true);
+    return answer();
   }
   if (m && s && !m[2] && req.method === "PATCH") {
     if (body.permission) await sleep(Number(process.env.FAKE_OPENCODE_PATCH_DELAY_MS ?? 0));
