@@ -68,6 +68,12 @@ export function connect(opts: {
   /** The current socket reported error or close; its readyState can lag behind (a browser fires error first). */
   let sockDown = false;
   let failures = 0;
+  /** Why the last socket went down: logged in the console now, sent to the daemon log once the next socket opens. */
+  let lastDrop: string | undefined;
+  const noteDrop = (why: string) => {
+    lastDrop = `${new Date().toISOString()} ${why}`;
+    console.warn("claude-ui: socket down:", lastDrop);
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let markOpen!: () => void;
   let ready = new Promise<void>((r) => (markOpen = r));
@@ -102,11 +108,18 @@ export function connect(opts: {
     sockDown = false;
     // A socket that is no longer the current one (replaced after a wake) must not touch the state.
     const current = () => sock === ws;
+    let openedAt = 0;
     sock.addEventListener("open", () => {
       if (!current()) return;
       isOpen = true;
       failures = 0;
+      openedAt = Date.now();
       markOpen();
+      if (lastDrop) {
+        const note = typeof document === "undefined" ? lastDrop : `${lastDrop}; ${navigator.onLine ? "online" : "offline"}, ${document.visibilityState}`;
+        lastDrop = undefined;
+        request({ type: "ping", note }).catch(() => {});
+      }
       opts.onStatus?.("connected");
       opts.onOpen?.();
     });
@@ -132,11 +145,12 @@ export function connect(opts: {
     });
     // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.
     let down = false;
-    const onDown = async () => {
+    const onDown = async (ev: { type: string; code?: number }) => {
       if (down || !current()) return;
       down = true;
       sockDown = true;
       const wasOpen = isOpen;
+      if (wasOpen && !closed) noteDrop(`${ev.type}${ev.code ? ` code ${ev.code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s open`);
       markDown();
       if (closed) return;
       if (!wasOpen && (await rejectsToken())) {
@@ -170,6 +184,7 @@ export function connect(opts: {
       .catch((e: Error) => {
         // Only silence is a zombie; "disconnected" is the normal down path already running.
         if (closed || sock !== ws || e.message !== "timed out") return;
+        noteDrop(`no ping reply in ${opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS}ms after hidden ${Math.round(hidFor / 1000)}s`);
         ws = undefined;
         sock.close();
         markDown();

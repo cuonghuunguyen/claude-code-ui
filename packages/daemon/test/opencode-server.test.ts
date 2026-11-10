@@ -24,8 +24,9 @@ const alive = (pid: number) => {
     return false;
   }
 };
-const until = async (cond: () => boolean) => {
-  for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
+/** A poll bound (10 s default): a reply waits for the daemon to spawn the fake OpenCode, seconds on Windows under load (a 10 s wait was exceeded in a full suite). */
+const until = async (cond: () => boolean, ms = 10_000) => {
+  for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
   expect(cond()).toBe(true);
 };
 
@@ -63,7 +64,8 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env, ...o.opencode },
+    // session.list waits listWaitMs (3 s by default) for the OpenCode server to start; a start takes longer on a loaded Windows machine and the list then answers without the OpenCode sessions the test is about. Tests of the wait itself pass their own.
+    opencode: { command: [process.execPath, BIN], env: () => env, ...(process.platform === "win32" && { listWaitMs: 60_000 }), ...o.opencode },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -75,7 +77,7 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
   const request = async (msg: object) => {
     const reqId = `r${++n}`;
     ws.send(JSON.stringify({ ...msg, reqId }));
-    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId));
+    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId), process.platform === "win32" ? 60_000 : 10_000);
     return inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId) as { type: "reply"; result: any } | { type: "error"; code: string; message: string };
   };
   const log = () =>
@@ -163,7 +165,8 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const pid = d.starts()[0]!.pid as number;
     process.kill(pid);
     await until(() => !alive(pid));
-    await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    // The create right after the crash must wait for the restarted server, not fail: the daemon may not have seen the exit yet (the pid is gone before the watcher's exit event arrives, a moment longer on Windows).
+    expect(await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "reply" });
     expect(d.starts()).toHaveLength(2);
   });
 
@@ -190,23 +193,25 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 
   it("an OpenCode entry of sessions.json survives a list while OpenCode is not reachable, and goes when OpenCode answered without it", async () => {
     const entry = { "ses_gone": { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
-    const down = await boot({ engine: "opencode", path: join(tmpdir(), "no-such-opencode-binary"), sessionsJson: entry });
+    // No binary: the list waits its whole listWaitMs for a server that never comes, so the short wait here.
+    const down = await boot({ engine: "opencode", path: join(tmpdir(), "no-such-opencode-binary"), sessionsJson: entry, opencode: { listWaitMs: 3000 } });
     await d_list(down);
     expect(Object.keys(JSON.parse(readFileSync(join(down.root, "sessions.json"), "utf8")))).toContain("ses_gone");
     const up = await boot({ engine: "opencode", sessionsJson: entry });
     await d_list(up);
     expect(Object.keys(JSON.parse(readFileSync(join(up.root, "sessions.json"), "utf8")))).not.toContain("ses_gone");
-  }, 15_000);
+  }, process.platform === "win32" ? 60_000 : 15_000); // two daemons and one OpenCode server start, which takes seconds on a loaded Windows machine
 
   it("session.list answers in the list wait while OpenCode does not start, with the Claude items and the OpenCode entry of sessions.json kept", async () => {
     const entry = { ses_gone: { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
     const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_HANG: "1" }, sessionsJson: entry, opencode: { listWaitMs: 300, startTimeoutMs: 20_000 } });
     const t = Date.now();
     const listed = (await d_list(d)).result;
-    expect(Date.now() - t).toBeLessThan(5000);
+    // The point: the list answers after its own wait, not after the 20 s start timeout (3.0 s alone, 5.1 s seen under a full suite).
+    expect(Date.now() - t).toBeLessThan(process.platform === "win32" ? 10_000 : 5000);
     expect(listed.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
     expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
-  }, 15_000);
+  }, 30_000);
 
   it("the OpenCode server ends with a daemon that is killed (SIGKILL)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));

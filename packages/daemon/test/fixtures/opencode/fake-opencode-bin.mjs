@@ -9,7 +9,7 @@
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state, POST /__heal {directory} takes it out (OpenCode repaired itself).
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state, POST /__heal {directory} takes it out (OpenCode repaired itself), POST /__deaf stops listening and drops every connection while the process stays (a dead server whose exit is not seen).
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once, or nothing, and answers that late), FAKE_OPENCODE_PROVIDERS_DELAY_MS (GET /config/providers answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -153,6 +153,8 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/__heal") broken.delete(body.directory);
     if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
+    // The process stays, the server is gone (a dead server whose exit the daemon has not seen): no new connection, every open one dropped.
+    if (url.pathname === "/__deaf") return void (res.end(), setTimeout(() => (server.close(), sockets.forEach((c) => c.destroy()), setInterval(() => {}, 1e9)), 50));
     return json(200, { ok: true });
   }
   const authed = req.headers.authorization === expected;
@@ -343,8 +345,19 @@ const server = createServer(async (req, res) => {
   if (m && s && req.method === "GET") return json(200, m[2] ? (data.messages[s.id] ?? []) : s);
   return json(404, { name: "NotFoundError", data: { message: `no route ${req.method} ${url.pathname}` } });
 });
+const sockets = new Set();
+server.on("connection", (c) => (sockets.add(c), c.on("close", () => sockets.delete(c))));
 server.listen(port, hostname, () => {
   log({ type: "start", pid: process.pid, argv: args, passwordSet: true, hostname, port: server.address().port });
   console.log(`opencode server listening on http://${hostname}:${server.address().port}`);
+  // Dies with its parent: a killed test run must not leave fakes behind (they lingered for tens of minutes and loaded the machine).
+  const parent = process.ppid;
+  setInterval(() => {
+    try {
+      process.kill(parent, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 2000).unref();
   if (process.env.FAKE_OPENCODE_CRASH === "1") (console.error("fake opencode crashed on purpose"), process.exit(1));
 });

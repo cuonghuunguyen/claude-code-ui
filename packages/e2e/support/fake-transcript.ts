@@ -74,3 +74,21 @@ export function writeTurnsTranscript(p: FakeTurns): string {
   writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
   return file;
 }
+
+export type FakeReply = { sessionId: string; cwd: string; configDir: string; run: string; prompt: string; /** The assistant's final text (markdown). */ reply: string };
+
+/** GH-690: a session of one prompt and one text reply (e.g. with a visualize fence); no model involved. Returns its path. */
+export function writeReplyTranscript(p: FakeReply): string {
+  const cwd = realpathSync(p.cwd);
+  const dir = join(projectsDirOf(p.configDir, p.run), slugOf(cwd));
+  mkdirSync(dir, { recursive: true });
+  const at = (s: number) => new Date(Date.now() - 3_600_000 + s * 1000).toISOString();
+  const base = { isSidechain: false, userType: "external", cwd, sessionId: p.sessionId, version: "2.0.0" };
+  const rows = [
+    { ...base, parentUuid: null, type: "user", uuid: "eeeeeeee-0000-4000-8000-000000000000", timestamp: at(0), message: { role: "user", content: p.prompt } },
+    { ...base, parentUuid: "eeeeeeee-0000-4000-8000-000000000000", type: "assistant", uuid: "eeeeeeee-0000-4000-8000-000000000001", timestamp: at(1), message: { id: "msg_fake_viz", type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "text", text: p.reply }], stop_reason: "end_turn" } },
+  ];
+  const file = join(dir, `${p.sessionId}.jsonl`);
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return file;
+}

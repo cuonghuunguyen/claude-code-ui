@@ -23,6 +23,9 @@ const until = async (cond: () => boolean, ms = 8000) => {
   for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
   expect(cond()).toBe(true);
 };
+/** The first request of a boot waits for the daemon to spawn the fake OpenCode, a process start that takes seconds on Windows under load: replies are bounded by the test timeout, not by 8 s. */
+const REPLY_MS = process.platform === "win32" ? 60_000 : 8000;
+const TEST_MS = process.platform === "win32" ? 90_000 : 30_000;
 const lastOf = <T,>(a: T[], f: (x: T) => boolean): T | undefined => [...a].reverse().find(f);
 /** The warnings of a turn OpenCode ended on its own (GH-682). */
 const abortNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "notice" && p.id.includes(":aborted:")) as Extract<Part, { type: "notice" }>[];
@@ -54,7 +57,9 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
     allowBypass: o.allowBypass,
-    opencode: { command: [process.execPath, BIN], env: () => env },
+    // session.list budget: no wait for the model list (fakeQuery has none) and a short wait for OpenCode, whose start (seconds under load) the helpers wait for themselves.
+    modelListWaitMs: 0,
+    opencode: { command: [process.execPath, BIN], env: () => env, listWaitMs: 500 },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -66,7 +71,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const request = async (msg: object) => {
     const reqId = `r${++n}`;
     ws.send(JSON.stringify({ ...msg, reqId }));
-    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId));
+    await until(() => inbox.some((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId), REPLY_MS);
     return inbox.find((m) => (m.type === "reply" || m.type === "error") && m.reqId === reqId) as { type: "reply"; result: any } | { type: "error"; code: string; message: string };
   };
   const ok = async (msg: object) => {
@@ -100,7 +105,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   return { root, project, http, ws, inbox, request, ok, log, requests, fake, open };
 }
 
-describe("OpenCode prompting", { timeout: 30_000 }, () => {
+describe("OpenCode prompting", { timeout: TEST_MS }, () => {
   it("plugins.reload counts no OpenCode session as reloaded", async () => {
     const d = await boot();
     await d.open();
@@ -199,6 +204,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     const q = s.find("question")!;
     expect(q.questions).toEqual([{ question: "Which color do you prefer: red or blue?", header: "Color preference", options: [{ label: "Red", description: "Prefer red" }, { label: "Blue", description: "Prefer blue" }], multiSelect: false }]);
     await d.ok({ type: "question.respond", requestId: q.requestId, answers: { [q.questions[0]!.question]: "Blue" } });
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("POST", `/question/${q.requestId}/reply`).length > 0);
     expect(d.requests("POST", `/question/${q.requestId}/reply`)[0]!.body).toEqual({ answers: [["Blue"]] });
     // Subagent: the task call is a subagent part, its child session's parts nest under the call.
     await until(() => !!s.find("permission_request"));
@@ -329,6 +336,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await s.prompt("run ls");
     await until(() => !!s.find("permission_request"));
     expect(await d.ok({ type: "session.bash", sessionId: s.id, command: "echo later" })).toHaveProperty("itemId");
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("POST", `/session/${s.id}/shell`).length > 0);
     expect(d.requests("POST", `/session/${s.id}/shell`)).toHaveLength(1);
   });
 
@@ -401,6 +410,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => d.requests("GET", "/session/ses_old/message").length >= 2);
     // The saved mode differs from OpenCode's last block after a mode change made elsewhere: the next prompt writes the block first.
     await d.ok({ type: "permission.respond", requestId: "per_old", decision: "allow" });
+    // The reply POST to OpenCode is not awaited by permission.respond: wait for it to arrive.
+    await until(() => d.requests("POST", "/permission/per_old/reply").length > 0);
     expect(d.requests("POST", "/permission/per_old/reply")[0]!.body).toEqual({ reply: "once" });
   });
 
@@ -492,6 +503,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await until(() => !!s.find("question"));
     // "Blue, green" is the label Blue plus the user's own text "green": only the structure tells it from the label "Blue, green".
     await d.ok({ type: "question.respond", requestId: "que_multi", answers: { Q: "Blue, green" }, choices: { Q: ["Blue", "green"] } });
+    await until(() => d.requests("POST", "/question/que_multi/reply").length > 0); // the reply POST is not awaited by question.respond
     expect(d.requests("POST", "/question/que_multi/reply")[0]!.body).toEqual({ answers: [["Blue", "green"]] });
     expect(await d.request({ type: "question.respond", requestId: "x", answers: { Q: "a" }, choices: { Q: [1] } })).toMatchObject({ type: "error", code: "bad_request" });
   });
@@ -504,6 +516,8 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
     await d.ok({ type: "question.respond", requestId: s.find("question")!.requestId, answers: { [s.find("question")!.questions[0]!.question]: "Blue" } });
     await until(() => !!s.find("subagent"));
     await d.ok({ type: "session.stopSubagent", sessionId: s.id, subagentId: s.find("subagent")!.id });
+    // The abort POST is not awaited by session.stopSubagent: wait for it to arrive.
+    await until(() => d.requests("POST", `/session/${s.id}_child/abort`).length > 0);
     expect(d.requests("POST", `/session/${s.id}_child/abort`)).toHaveLength(1);
   });
 
@@ -572,7 +586,7 @@ describe("OpenCode prompting", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode event stream", { timeout: 30_000 }, () => {
+describe("OpenCode event stream", { timeout: TEST_MS }, () => {
   it("after a drop a prompt waits for the reconnect instead of sending into a closed stream", async () => {
     const d = await boot();
     const s = await d.open();
@@ -587,7 +601,7 @@ describe("OpenCode event stream", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode restore", { timeout: 30_000 }, () => {
+describe("OpenCode restore", { timeout: TEST_MS }, () => {
   it("a restored busy session whose idle event was lost ends its turn when the stream connects", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const project = join(root, "project");
@@ -621,7 +635,7 @@ describe("OpenCode restore", { timeout: 30_000 }, () => {
 });
 
 
-describe("OpenCode rewind", { timeout: 30_000 }, () => {
+describe("OpenCode rewind", { timeout: TEST_MS }, () => {
   const diff = (file: string, additions: number, deletions: number) => ({ file, additions, deletions });
   const user = (id: string, text: string, diffs: object[] = []) => ({ info: { id, role: "user", sessionID: "ses_rw", agent: "build", summary: { diffs } }, parts: [{ id: `${id}_p`, sessionID: "ses_rw", messageID: id, type: "text", text }] });
   const messages = [user("msg_u1", "one"), user("msg_u2", "two", [diff("a.ts", 2, 1)]), user("msg_u3", "three", [diff("a.ts", 1, 0), diff("b.ts", 3, 0)]), user("msg_u4", "four")];
@@ -757,7 +771,7 @@ describe("OpenCode rewind", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
+describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
   const row = (project: string, id = "ses_own") => ({ id, slug: id, projectID: "global", directory: project, title: "Owner", version: "1.18.34", time: { created: 1, updated: 2 } });
   const msg = (id: string, info: object) => ({ info: { id, sessionID: "ses_own", ...info }, parts: [] });
   const done = { role: "assistant", time: { created: 1, completed: 2 } };
@@ -768,7 +782,11 @@ describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
     mkdirSync(project, { recursive: true });
     const d = await boot({ root, script: ["text"], data: { sessions: [row(project)], messages: { ses_own: messages } } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
-    await d.ok({ type: "session.list" });
+    // The list answers with the Claude items while OpenCode is still starting (seconds under load): wait until the OpenCode session is in it.
+    for (let i = 0; i < 2400; i++) {
+      if ((await d.ok({ type: "session.list" })).sessions.some((x: { id: string }) => x.id === "ses_own")) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
     return d;
   }
 
@@ -783,6 +801,8 @@ describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
     expect(d.requests("PATCH", `/session/${session.id}`).findIndex((r) => r.body.permission)).toBeGreaterThan(-1);
     expect(link(d, session.id)).toMatchObject({ ownerId: "ses_own", readOnly: true });
     await d.ok({ type: "aside.close", sessionId: session.id });
+    // Not awaited by the daemon call above: wait for the request to arrive.
+    await until(() => d.requests("DELETE", `/session/${session.id}`).length > 0);
     expect(d.requests("DELETE", `/session/${session.id}`)).toHaveLength(1);
     expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
   });
@@ -841,7 +861,7 @@ describe("OpenCode Aside and session management", { timeout: 30_000 }, () => {
   });
 });
 
-describe("OpenCode orchestration", { timeout: 30_000 }, () => {
+describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
   const on = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
   /** The bearer token of the session's attach (`POST /mcp`), once it came. */
   const attached = async (d: Boot, id: string) => {

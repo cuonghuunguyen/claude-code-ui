@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { join, relative, sep } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS } from "../src/settings.ts";
 import { gitDiff, gitStatus, listRepos, parseGitmodules, type ListReposOptions } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
+// Windows, full suite: this file's git-heavy tests (submodule setups, dozens of git processes: 34 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "protocol.file.allow=always", ...args], { cwd, env: ENV, stdio: "pipe" }).toString();
@@ -77,7 +79,7 @@ describe("listRepos", () => {
     fakeRepo(join(d, "vendor/r"));
     fakeRepo(join(d, "ignored-by-git/r"));
     writeFileSync(join(d, ".gitignore"), "ignored-by-git\n");
-    symlinkSync(outside, join(d, "link"));
+    symlinkSync(outside, join(d, "link"), "junction");
     const base = await rels(d, { repositoryScanMaxDepth: 2 });
     expect(base).toEqual(["nested:.hidden/r", "nested:ignored-by-git/r", "nested:vendor/r"]);
     expect(await rels(d, { repositoryScanMaxDepth: 2, repositoryScanIgnoredFolders: ["vendor"] })).toEqual(["nested:.hidden/r", "nested:ignored-by-git/r", "nested:node_modules/r"]);
@@ -113,7 +115,7 @@ describe("listRepos", () => {
     const out = tmp();
     fakeRepo(join(d, "vendor/deep/lib"));
     fakeRepo(join(out, "r"));
-    symlinkSync(out, join(d, "out"));
+    symlinkSync(out, join(d, "out"), "junction");
     expect(await rels(d, { scanRepositories: ["vendor/deep/lib", "out/r", "nothing"] })).toEqual(["nested:vendor/deep/lib"]);
     expect(await rels(d, { autoRepositoryDetection: "openEditors", scanRepositories: ["vendor/deep/lib"] })).toEqual([]);
   });
@@ -158,7 +160,7 @@ describe("listRepos", () => {
     execFileSync("rm", ["-rf", join(sup, "libs/none"), join(sup, ".git/modules/libs/none")]);
     mkdirSync(join(sup, "libs/none"));
     const r = (await list(sup, { repositoryScanMaxDepth: 0 })).repos;
-    expect(r.map((x) => `${x.kind}:${x.rel}:${x.parent ? relative(sup, x.parent) : ""}`)).toEqual(["main::", "submodule:libs/lib:", "submodule:libs/lib/sub/deep:libs/lib"]);
+    expect(r.map((x) => `${x.kind}:${x.rel}:${x.parent ? relative(sup, x.parent).replace(/\\/g, "/") : ""}`)).toEqual(["main::", "submodule:libs/lib:", "submodule:libs/lib/sub/deep:libs/lib"]);
     expect(none).toBeTruthy();
   });
 
@@ -173,7 +175,7 @@ describe("listRepos", () => {
     const d = repo(join(base, "top"));
     const out = tmp();
     fakeRepo(join(out, "x"));
-    symlinkSync(out, join(d, "ln"));
+    symlinkSync(out, join(d, "ln"), "junction");
     fakeRepo(join(base, "x"));
     const e = (name: string, path: string) => `[submodule "${name}"]\n\tpath = ${path}\n\turl = u\n`;
     writeFileSync(join(d, ".gitmodules"), e("a", out + "/x") + e("b", "../x") + e("c", "ln/x"));
@@ -208,7 +210,7 @@ describe("listRepos", () => {
     mkdirSync(join(y, ".git/objects/info"), { recursive: true });
     writeFileSync(join(y, ".git/objects/info/alternates"), join(outside, ".git/objects") + "\n");
     fakeRepo(join(d, "ok"));
-    const r = (await list(d, { repositoryScanMaxDepth: 1 }, { allowed: (p) => p === d || p.startsWith(d + "/") })).repos;
+    const r = (await list(d, { repositoryScanMaxDepth: 1 }, { allowed: (p) => p === d || p.startsWith(d + sep) })).repos;
     expect(r.map((x) => [x.rel, !!x.outsideRoots, x.branch])).toEqual([["ok", false, undefined], ["x", true, undefined], ["y", true, undefined]]);
   });
 
@@ -217,7 +219,7 @@ describe("listRepos", () => {
     const outside = tmp();
     const z = repo(join(d, "z"));
     writeFileSync(join(z, ".git/config"), `[include]\n\tpath = ${join(outside, "x.conf")}\n`);
-    const r = (await list(d, { repositoryScanMaxDepth: 1 }, { allowed: (p) => p === d || p.startsWith(d + "/") })).repos;
+    const r = (await list(d, { repositoryScanMaxDepth: 1 }, { allowed: (p) => p === d || p.startsWith(d + sep) })).repos;
     expect(r.map((x) => [x.rel, !!x.outsideRoots, x.branch])).toEqual([["z", true, undefined]]);
   });
 
@@ -304,7 +306,7 @@ describe("listRepos", () => {
     writeFileSync(join(d, ".gitmodules"), e("libs/z") + e("libs/a"));
     for (const p of ["libs/z", "libs/a", "b", "a", "libs/a/inner"]) fakeRepo(join(d, p));
     const r = (await list(d, { repositoryScanMaxDepth: 3 })).repos;
-    expect(r.map((x) => `${x.rel}<${x.parent ? relative(d, x.parent) : ""}`)).toEqual(["<", "libs/a<", "libs/a/inner<libs/a", "libs/z<", "a<", "b<"]);
+    expect(r.map((x) => `${x.rel}<${x.parent ? relative(d, x.parent).replace(/\\/g, "/") : ""}`)).toEqual(["<", "libs/a<", "libs/a/inner<libs/a", "libs/z<", "a<", "b<"]);
   });
 
   it("a workspace folder that is not a repository lists its top-level repositories as roots", async () => {

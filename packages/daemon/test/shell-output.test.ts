@@ -1,6 +1,6 @@
 import { linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readTail, taskDirs } from "../src/shell-output.ts";
 
@@ -75,7 +75,7 @@ describe("readTail files that look inside but are not", () => {
 describe("taskDirs", () => {
   const sid = "b9c5189a-5e6f-47aa-82c1-f84492fb8c6a";
   it("names the CLI task folder of the session; none for an odd session id", () => {
-    expect(taskDirs("/tmp/proj", sid, "/t")).toContain(join("/t", "claude", "-tmp-proj", sid, "tasks"));
+    expect(taskDirs("/tmp/proj", sid, "/t")).toContain(resolve("/t", "claude", "-tmp-proj", sid, "tasks"));
     expect(taskDirs("/tmp/proj", "../x", "/t")).toEqual([]);
   });
 });

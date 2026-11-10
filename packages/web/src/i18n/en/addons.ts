@@ -67,5 +67,8 @@ export default {
   "addons.commandNotReady": "Addon {name} has no command handler loaded yet. Try again in a moment.",
   "addons.showRaw": "Show raw",
   "addons.showAddon": "Show {name}'s view",
+  "visualize.showCode": "Show code",
+  "visualize.showVisual": "Show visualization",
+  "visualize.frameTitle": "Visualization",
   "addons.refused": "Addon {name} was refused: {type}",
 } as const;

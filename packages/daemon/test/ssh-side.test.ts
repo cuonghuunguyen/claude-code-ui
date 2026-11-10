@@ -339,7 +339,7 @@ describe("Include", () => {
   it("includeFiles: * and ? match within a segment, dot files only by a dot pattern", () => {
     const t = tree();
     for (const f of ["a1.conf", "a2.conf", "b.conf", ".hid.conf"]) t.w(`conf.d/${f}`, "");
-    const names = (p: string) => includeFiles(p, t.ssh, t.home).map((f) => f.slice(t.ssh.length + 1));
+    const names = (p: string) => includeFiles(p, t.ssh, t.home).map((f) => f.slice(t.ssh.length + 1).replaceAll("\\", "/"));
     expect(names("conf.d/a?.conf")).toEqual(["conf.d/a1.conf", "conf.d/a2.conf"]);
     expect(names("conf.d/*.conf")).toEqual(["conf.d/a1.conf", "conf.d/a2.conf", "conf.d/b.conf"]);
     expect(names("conf.d/.*.conf")).toEqual(["conf.d/.hid.conf"]);

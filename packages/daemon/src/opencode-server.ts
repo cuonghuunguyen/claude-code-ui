@@ -103,12 +103,12 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     return o.command ?? lookup(env());
   };
 
-  /** Binary and version, never a server: throws OpenCodeError. */
+  /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
   async function check() {
     const cmd = argv();
     if (!cmd) throw missing();
     const out = await new Promise<string>((resolve, reject) =>
-      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: 10_000, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
+      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
@@ -317,17 +317,48 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
     async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
-      const up = await ensure();
-      const url = new URL(path, `${up.url}/`);
-      if (r.directory) url.searchParams.set("directory", r.directory);
+      // The caller's timeout counts from each send (a start or restart of the server is not part of it, as before the merge of GH-685).
+      const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let rejectLate!: (err: Error) => void;
+      const late = new Promise<never>((_, reject) => (rejectLate = reject));
+      const sending = () => {
+        if (r.timeoutMs === 0) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => rejectLate(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms);
+      };
       const work = (async () => {
-        const res = await fetch(url, {
-          method: r.method ?? "GET",
-          headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
-          body: r.body === undefined ? undefined : JSON.stringify(r.body),
-          // Only the caller's own signal aborts. A timeout never does (below).
-          signal: r.signal,
-        });
+        // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the request meets a closed port or a pooled
+        // connection that is gone (a failure before anything was read). If the server does not answer a health probe either, drop it, start the next one and send the
+        // request once more. Any other failure, also a connection that broke while the answer was coming, is the caller's, and a live server is never restarted.
+        // `srv` is the server this request used: only when it is still the current one (`up`) is it dropped; a server another request restarted meanwhile is kept.
+        let res: Response;
+        for (let retry = true; ; retry = false) {
+          const srv = await ensure();
+          const url = new URL(path, `${srv.url}/`);
+          if (r.directory) url.searchParams.set("directory", r.directory);
+          sending();
+          try {
+            res = await fetch(url, {
+              method: r.method ?? "GET",
+              headers: { authorization: srv.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
+              body: r.body === undefined ? undefined : JSON.stringify(r.body),
+              // Only the caller's own signal aborts. A timeout never does (below).
+              signal: r.signal,
+            });
+            break;
+          } catch (err) {
+            // Nothing reached the server: the probe and a restart are not the caller's wait either.
+            if (retry && neverArrived(err)) clearTimeout(timer);
+            if (!retry || !neverArrived(err) || (await alive(srv))) throw err;
+            if (up === srv) {
+              stopRequested = true;
+              killSync();
+              child = undefined;
+              up = undefined;
+            }
+          }
+        }
         const text = await res.text();
         if (!res.ok) {
           let body: unknown;
@@ -345,12 +376,22 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       // commands) on the first request that needs it and caches the result of that load, an interruption included (1.19.5): a request the client
       // cut off during the load would leave the folder broken until its instance is disposed. See `brokenMcp` (opencode-engine.ts).
       work.catch(() => {});
-      const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms)));
+      late.catch(() => {});
       return Promise.race([work, late]).finally(() => clearTimeout(timer));
     },
   };
 }
+
+/** A fetch that failed before the server read anything: nothing listens (ECONNREFUSED) or the pooled connection was already closed (ECONNRESET on write). */
+const neverArrived = (err: unknown): boolean => {
+  const c = (err as { cause?: { code?: string; message?: string } } | undefined)?.cause;
+  return c?.code === "ECONNREFUSED" || (c?.code === "ECONNRESET" && /^write /.test(c.message ?? ""));
+};
+/** Whether the server answers its health check at all. */
+const alive = (srv: { url: string; auth: string }) =>
+  fetch(`${srv.url}/global/health`, { headers: { authorization: srv.auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
+    () => true,
+    () => false,
+  );
 
 export type OpenCodeServer = ReturnType<typeof createOpenCodeServer>;

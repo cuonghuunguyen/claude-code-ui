@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { ALL_CAPABILITIES, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
+import { VISUALIZE_CSP, VISUALIZE_SHELL } from "../src/visualize.ts";
 import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
@@ -2658,10 +2659,11 @@ describe("daemon", () => {
       const first = c.request({ type: "session.list" });
       await vi.waitFor(() => expect(scans).toBe(1));
       const burst = Array.from({ length: 10 }, () => c.request({ type: "session.list" }));
-      await new Promise((r) => setTimeout(r, 50));
+      // A request sent after the burst on the same socket: its answer shows the daemon took the burst in (a fixed 50 ms is too short for a loaded machine).
+      await c.request({ type: "fs.read", path: join(webRoot, "no-such-file") }).catch(() => {});
       expect(scans).toBe(1);
       release.shift()!();
-      await vi.waitFor(() => expect(scans).toBe(2));
+      await vi.waitFor(() => expect(scans).toBe(2), { timeout: process.platform === "win32" ? 10_000 : 1000 });
       release.shift()!();
       const titles = (r: unknown) => (r as { result: { sessions: { title: string }[] } }).result.sessions.map((s) => s.title);
       expect(titles(await first)).toEqual(["scan 1"]);
@@ -2701,6 +2703,45 @@ describe("daemon", () => {
       writeFileSync(join(dir, "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
       await c.request({ type: "session.list" });
       expect(scans).toBe(3);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a listed transcript that changed is read again alone (getSessionInfo), not every transcript", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const id = "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, "{}\n");
+    const entry = (summary: string, lastModified: number) => ({ sessionId: id, summary, lastModified, cwd: webRoot, fileSize: 3 });
+    let scans = 0;
+    const infos: string[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      modelListWaitMs: 0,
+      history: {
+        listSessions: (async () => (scans++, [entry("Old title", 1)])) as never,
+        getSessionInfo: (async (sid: string) => (infos.push(sid), entry("New title", 2))) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "project.open", cwd: webRoot });
+      await c.request({ type: "session.list" });
+      writeFileSync(file, "{}\n{}\n");
+      const r = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(scans).toBe(1);
+      expect(infos).toEqual([id]);
+      expect(r.result.sessions.find((s) => s.id === id)?.title).toBe("New title");
     } finally {
       d.close();
     }
@@ -4154,9 +4195,15 @@ describe("push", () => {
       await c.request({ type: "push.focus" });
       await c.request({ type: "permission.respond", requestId: req.part.requestId, decision: "allow" });
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle");
-      await c.request({ type: "session.prompt", sessionId, text: "again" });
-      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
-      expect(f.sent[0]).toEqual({ sessionId, title: basename(webRoot), body: "Needs input · Bash: npm test" });
+      // Not suppressed any more: a second session asks for input. A new session, because session 1's own "finished" push (FINISH_DELAY_MS 1.5 s after its idle,
+      // unless its next turn starts first) would make the daemon drop a second push for it for MIN_GAP_MS (5 s): whether that happens depends on how fast this
+      // test runs, so it must not be the session under test.
+      const second = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: second, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: second, text: "again" });
+      const needs = () => f.sent.filter((p) => p.sessionId === second);
+      await vi.waitFor(() => expect(needs()).toHaveLength(1), { timeout: process.platform === "win32" ? 10_000 : 1000 });
+      expect(needs()[0]).toEqual({ sessionId: second, title: basename(webRoot), body: "Needs input · Bash: npm test" });
     } finally {
       d.close();
     }
@@ -5673,6 +5720,17 @@ describe("artifact.preview and /artifact (GH-175)", () => {
       req.on("error", reject);
       req.end();
     });
+
+  it("GET /visualize serves the shell with its own CSP to an iframe only (GH-690)", async () => {
+    await listening;
+    const ok = await get("/visualize");
+    expect(ok.status).toBe(200);
+    expect(ok.headers["content-security-policy"]).toBe(VISUALIZE_CSP);
+    expect(ok.body.toString()).toBe(VISUALIZE_SHELL);
+    expect((await get("/visualize", { "sec-fetch-dest": "script" })).status).toBe(403);
+    expect((await get("/visualize", { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await get("/visualize", {}, "POST")).status).toBe(405);
+  });
 
   it("replies a nonce URL for a done publish outside the roots; GET serves the bytes with the sandbox headers", async () => {
     const c = await open();

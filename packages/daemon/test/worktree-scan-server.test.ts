@@ -14,6 +14,8 @@ import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
 import { setGitRunner, threadRunner, type GitRunOptions } from "../src/git-runner.ts";
 import { gitSub } from "../src/perf.ts";
+// Windows, full suite: this file's git-heavy tests (a scan of 20 worktrees: 32 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
