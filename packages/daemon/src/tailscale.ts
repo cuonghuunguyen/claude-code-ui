@@ -94,7 +94,7 @@ const stop = () => { try { if (posix) return void process.kill(-c.pid); } catch 
 process.stdin.on("close", stop).resume();
 // Ctrl+C or a closed terminal signals the watcher too (same foreground group), but not the detached serve: stop it before exiting.
 for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(s, () => (stop(), process.exit(1)));
-c.on("exit", (code) => process.exit(code ?? 1));
+c.on("exit", (code, sig) => (code === null && console.error("the process was ended by " + sig), process.exit(code ?? 1)));
 c.on("error", (e) => (console.error(e.message), process.exit(1)));`;
 
 /** Spawns the foreground serve (its config lives only while the process runs, which ends with this daemon); returns stop(). */
