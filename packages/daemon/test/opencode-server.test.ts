@@ -64,7 +64,8 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env, ...o.opencode },
+    // session.list waits listWaitMs (3 s by default) for the OpenCode server to start; a start takes longer on a loaded Windows machine and the list then answers without the OpenCode sessions the test is about. Tests of the wait itself pass their own.
+    opencode: { command: [process.execPath, BIN], env: () => env, listWaitMs: 60_000, ...o.opencode },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -195,7 +196,8 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 
   it("an OpenCode entry of sessions.json survives a list while OpenCode is not reachable, and goes when OpenCode answered without it", async () => {
     const entry = { "ses_gone": { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
-    const down = await boot({ engine: "opencode", path: join(tmpdir(), "no-such-opencode-binary"), sessionsJson: entry });
+    // No binary: the list waits its whole listWaitMs for a server that never comes, so the short wait here.
+    const down = await boot({ engine: "opencode", path: join(tmpdir(), "no-such-opencode-binary"), sessionsJson: entry, opencode: { listWaitMs: 3000 } });
     await d_list(down);
     expect(Object.keys(JSON.parse(readFileSync(join(down.root, "sessions.json"), "utf8")))).toContain("ses_gone");
     const up = await boot({ engine: "opencode", sessionsJson: entry });

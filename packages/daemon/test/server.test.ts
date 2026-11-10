@@ -4155,9 +4155,15 @@ describe("push", () => {
       await c.request({ type: "push.focus" });
       await c.request({ type: "permission.respond", requestId: req.part.requestId, decision: "allow" });
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle");
-      await c.request({ type: "session.prompt", sessionId, text: "again" });
-      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
-      expect(f.sent[0]).toEqual({ sessionId, title: basename(webRoot), body: "Needs input · Bash: npm test" });
+      // Not suppressed any more: a second session asks for input. A new session, because session 1's own "finished" push (FINISH_DELAY_MS 1.5 s after its idle,
+      // unless its next turn starts first) would make the daemon drop a second push for it for MIN_GAP_MS (5 s): whether that happens depends on how fast this
+      // test runs, so it must not be the session under test.
+      const second = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: second, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: second, text: "again" });
+      const needs = () => f.sent.filter((p) => p.sessionId === second);
+      await vi.waitFor(() => expect(needs()).toHaveLength(1), { timeout: 10_000 });
+      expect(needs()[0]).toEqual({ sessionId: second, title: basename(webRoot), body: "Needs input · Bash: npm test" });
     } finally {
       d.close();
     }
