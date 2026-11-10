@@ -6,8 +6,6 @@ import type { SkillRow, SlashCommand } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { SkillsDialog } from "./skills-dialog.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const skill = (name: string, over: Partial<SkillRow> = {}): SkillRow => ({ name, displayName: name, description: `${name} desc`, source: "user", tokens: 100, state: "on", advertised: true, handles: {}, ...over });
 const SKILLS: SkillRow[] = [
   skill("probe", { source: "project", tokens: 17 }),

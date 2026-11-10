@@ -8,12 +8,6 @@ import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
 import { resetPageForTests } from "./recommendations.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({

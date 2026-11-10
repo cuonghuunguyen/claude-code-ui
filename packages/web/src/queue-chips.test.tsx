@@ -6,7 +6,6 @@ import type { QueuedPrompt } from "@claude-ui/protocol";
 import { setLocalePref } from "./i18n.ts";
 import { QueueChips } from "./queue-chips.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let unmount = () => {};
 afterEach(() => (unmount(), setLocalePref("system")));
 

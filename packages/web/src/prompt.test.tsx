@@ -12,12 +12,6 @@ import { clearDrafts, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 
 const models: ModelInfo[] = [

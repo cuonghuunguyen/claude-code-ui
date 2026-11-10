@@ -6,8 +6,6 @@ import type { GitStatus, Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { backgroundShells, foregroundShells, StatusBar, tokens, totals } from "./status-bar.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function view(...parts: Part[]): SessionView {
   return parts.reduce((v, part, i) => applyEvent(v, { type: "event", sessionId: "s", seq: i + 1, part }), emptySession());
 }

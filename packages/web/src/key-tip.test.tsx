@@ -6,8 +6,6 @@ import { KeyTips } from "./key-tip.tsx";
 import { bind, resetAll } from "./keymap.ts";
 import { loadKeyTips, markKeyUsed, resetAllKeyTips, setKeyTipsOn } from "./key-tips.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 const onAssign = vi.fn();

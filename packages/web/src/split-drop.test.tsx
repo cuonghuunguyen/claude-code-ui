@@ -6,8 +6,6 @@ import { DOCKED_DRAG_TYPE, PANE_DRAG_TYPE } from "./dock-area.tsx";
 import type { Drag } from "./pane-drop.ts";
 import { useSplitDrop } from "./split-drop.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => act(() => root?.unmount()));
 

@@ -5,13 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AsidePopup } from "./aside-popup.tsx";
 import type { Rect } from "./aside.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);

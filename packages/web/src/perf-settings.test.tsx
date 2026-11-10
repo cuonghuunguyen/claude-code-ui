@@ -5,8 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PerformanceSection } from "./perf-settings.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const report = (): PerfReport => ({
   daemon: {
     pid: 1,

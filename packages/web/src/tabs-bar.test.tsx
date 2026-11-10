@@ -7,7 +7,6 @@ import { TabsBar, draggedTab, useGroupedTabs, type TabInfo } from "./tabs-bar.ts
 import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
 import { SideLabel } from "./sides.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One context menu per rendered tab: counts the tabs' renders.
 const tabRenders = vi.hoisted(() => ({ n: 0 }));
 vi.mock("@base-ui/react/context-menu", async (orig) => {

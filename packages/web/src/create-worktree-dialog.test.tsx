@@ -7,13 +7,6 @@ import type { Request } from "./client.ts";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { resetPageForTests, setRecommendationsOn } from "./recommendations.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const R = "/home/u/repo";
 const BRANCHES: BranchRow[] = [
   { name: "main", local: true, remote: "refs/remotes/origin/main", worktree: R },

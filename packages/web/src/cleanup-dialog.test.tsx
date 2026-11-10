@@ -6,13 +6,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import type { CleanupScope } from "./cleanup.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const NOW = Date.now();
 const item = (id: string, cwd: string, o: Partial<SessionListItem> = {}): SessionListItem => ({ id, cwd, title: id, lastActivity: NOW, archived: false, transcript: true, state: "idle", ...o }) as SessionListItem;
 const st = (o: Partial<WorktreeStatusResult> = {}): WorktreeStatusResult => ({ checkedAt: 0, uncommitted: 0, untracked: 0, commits: 0, ahead: 0, ignored: 0, branch: "b", branchMerged: false, running: 0, safety: "safe", ...o });

@@ -12,8 +12,6 @@ import type { TabGrouping } from "./tab-grouping.ts";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { WEB_VERSION } from "./version.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   act(() => root?.unmount());

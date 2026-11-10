@@ -10,8 +10,6 @@ import { saveShakeLocate, ringLocate } from "./locate.ts";
 import { ConfirmDialog } from "./session-actions.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const T = (title: string, cwd: string): TabInfo => ({ title, cwd, group: cwd, state: "idle", unread: false });
 const INFO: Record<string, TabInfo> = { [NEW_TAB]: { title: "New session", unread: false }, a1: T("First", "/p/alpha"), a2: T("Second", "/p/alpha"), b1: T("Beta one", "/p/beta") };
 const row = (id: string, title: string): SessionListItem => ({ id, cwd: "/p/alpha", title, state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [], lastActivity: Date.now(), archived: false, transcript: true });

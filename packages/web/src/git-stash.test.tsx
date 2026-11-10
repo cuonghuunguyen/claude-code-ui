@@ -6,7 +6,6 @@ import type { connect } from "./client.ts";
 import type { OpReply } from "./git-remote-ops.ts";
 import { StashSection } from "./git-stash.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);

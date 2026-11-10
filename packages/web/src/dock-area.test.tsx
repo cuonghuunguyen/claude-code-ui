@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DOCKED_DRAG_TYPE, DockHeader, DropStrip, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { DockArea, PaneId } from "./layout.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {

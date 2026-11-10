@@ -5,7 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { forgetRepoChoices, getRepoChoice, REPO_CHOICE_MAX, repoLabel, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, subscribeRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const KEY = "claude-ui.repoChoice";
 const r = (rel: string, kind: GitRepo["kind"], extra: Partial<GitRepo> = {}): GitRepo => ({ path: rel ? `/p/${rel}` : "/p", rel, kind, ...(kind !== "main" && { parent: "/p" }), ...extra });
 const main = r("", "main");

@@ -6,8 +6,6 @@ import type { Described, Card } from "./notify.ts";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const el = document.createElement("div");
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {

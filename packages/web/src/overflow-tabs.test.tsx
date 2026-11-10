@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fitTabs } from "./overflow-tabs.ts";
 import { OverflowTabs } from "./overflow-tabs.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const RO = globalThis.ResizeObserver;
 const offsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
 const clientWidth = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");

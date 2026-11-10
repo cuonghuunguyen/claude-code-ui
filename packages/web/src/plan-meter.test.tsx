@@ -8,8 +8,6 @@ import { t } from "./i18n.ts";
 
 const OAUTH_UNAVAILABLE = t("app.plan.oauthUnavailable");
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const now = Date.now();
 const usage: PlanUsage = {
   plan: "team",

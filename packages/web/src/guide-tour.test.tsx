@@ -5,13 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GuideTour, type GuideTourProps } from "./guide-tour.tsx";
 import type { GuideHost } from "./guide.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 let reduced = false;
 let coarse = false;
 let app: HTMLElement;

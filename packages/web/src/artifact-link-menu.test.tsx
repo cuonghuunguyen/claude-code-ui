@@ -9,8 +9,6 @@ import { FILE_LINK_PROPS } from "./file-links.tsx";
 import type { ToolCall } from "./store.ts";
 import { ToolCard } from "./tool-card.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const URL = "https://claude.ai/artifact/PoBGcADWcBidR9fyEttcXn";
 const call = (file = "/tmp/page.html"): ToolCall => ({ type: "tool_call", id: "p1", toolUseId: "p1", tool: "Artifact", input: { action: "publish", file_path: file, title: "T" }, status: "done" });
 const out = { type: "tool_result", toolUseId: "p1", output: `Published ${URL}`, isError: false } as never;

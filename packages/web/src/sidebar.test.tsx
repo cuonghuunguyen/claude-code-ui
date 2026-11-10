@@ -8,7 +8,6 @@ import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { setLocalePref } from "./i18n.ts";
 import { SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One actions menu per rendered row: counts the rows' renders by title.
 const rowRenders = vi.hoisted(() => [] as string[]);
 vi.mock("./session-actions.tsx", async (orig) => {

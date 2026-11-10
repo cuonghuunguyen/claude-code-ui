@@ -5,8 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);

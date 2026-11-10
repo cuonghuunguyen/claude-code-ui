@@ -6,8 +6,6 @@ import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@
 import { OpenProjectDialog } from "./open-project.tsx";
 import { setLabels } from "./labels.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const tree: Record<string, string[]> = { "/home/u": ["claude-ui", "api", ".git", "notes.txt"], "/home/u/claude-ui": ["packages", "docs"] };
 const list = vi.fn(async (path?: string): Promise<FsEntry[]> => {
   if (!path) return [{ name: "/home/u", path: "/home/u", isDir: true }];

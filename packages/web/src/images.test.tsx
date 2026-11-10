@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { ImageStrip } from "./images.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const png = "data:image/png;base64,iVBORw0KGgo=";
 
 describe("ImageStrip", () => {

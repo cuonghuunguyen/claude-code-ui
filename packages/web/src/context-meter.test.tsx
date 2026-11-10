@@ -6,8 +6,6 @@ import type { ContextUsage } from "@claude-ui/protocol";
 import { ContextMeter } from "./context-meter.tsx";
 import { applyEvent, emptySession, timeline } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const usage: ContextUsage = {
   totalTokens: 25815,
   maxTokens: 1000000,

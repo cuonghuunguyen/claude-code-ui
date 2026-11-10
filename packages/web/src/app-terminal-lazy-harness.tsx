@@ -6,12 +6,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 window.matchMedia = ((query: string) => ({
   get matches() {

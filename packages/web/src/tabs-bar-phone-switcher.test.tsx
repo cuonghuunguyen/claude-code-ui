@@ -7,8 +7,6 @@ import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB, replaceTab } from "./tabs.ts";
 import { resetPageForTests, seen, setRecommendationHost } from "./recommendations.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const INFO: Record<string, TabInfo> = {
   a: { title: "Alpha", cwd: "/p/a", state: "idle", unread: false },
   b: { title: "Beta", cwd: "/p/a", state: "idle", unread: false },

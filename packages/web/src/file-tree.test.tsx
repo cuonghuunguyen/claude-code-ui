@@ -8,8 +8,6 @@ import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
 import { OpenExternalContext } from "./open-external-menu.ts";
 import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const listings: Record<string, ReturnType<typeof ent>[]> = {
   "/p": [ent("/p/src", true), ent("/p/README.md"), ent("/p/package.json"), ent("/p/new.ts")],

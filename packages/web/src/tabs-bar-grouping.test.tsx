@@ -7,8 +7,6 @@ import { TabsBar, useGroupedTabs, type TabInfo } from "./tabs-bar.tsx";
 import { setLabels } from "./labels.ts";
 import { NEW_TAB } from "./tabs.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const INFO: Record<string, TabInfo> = {
   a: { title: "Fix login", cwd: "/home/u/web", state: "running", unread: false },
   b: { title: "Docs", cwd: "/home/u/docs", state: "needs_input", unread: true },

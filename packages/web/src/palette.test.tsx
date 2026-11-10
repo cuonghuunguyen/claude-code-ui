@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { CommandPalette, type PaletteItem } from "./palette.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollIntoView ??= () => {};
 
 let root: ReturnType<typeof createRoot> | undefined;

@@ -7,12 +7,6 @@ import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { duration, runOf, runsOf } from "./agents.tsx";
 import { emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 window.matchMedia = ((query: string) => ({
   matches: /min-width: (\d+)px/.test(query) ? 1440 >= +/min-width: (\d+)px/.exec(query)![1]! : false,

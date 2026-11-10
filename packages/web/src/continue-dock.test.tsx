@@ -5,8 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ContinueDock } from "./continue-dock.tsx";
 import { clockText } from "./plan-meter.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   act(() => root?.unmount());

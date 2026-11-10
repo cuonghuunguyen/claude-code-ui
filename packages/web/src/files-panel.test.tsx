@@ -6,8 +6,6 @@ import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { EditorSync, FilesPanel } from "./files-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 it("watches the extra paths (the changes tab's files) with its editor tabs, on its one fs.watch list", async () => {
   const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {}));
   const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;

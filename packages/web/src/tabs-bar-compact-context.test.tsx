@@ -6,8 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const A = "/p/alpha";
 const T = (title: string, cwd: string): TabInfo => ({ title, cwd, group: cwd, state: "idle", unread: false });
 const INFO: Record<string, TabInfo> = { [NEW_TAB]: { title: "New session", unread: false }, a1: T("First", A), a2: T("Second", A), b1: T("Beta one", "/p/beta") };

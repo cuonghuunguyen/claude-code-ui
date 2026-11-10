@@ -7,13 +7,6 @@ import { SessionPane } from "./App.tsx";
 import { saveSignalOnly, useSignalOnly } from "./signal.ts";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const noop = () => {};
 const call = (id: string, tool: string, status: "running" | "done" | "error" = "done"): Part => ({ type: "tool_call", id, toolUseId: id, tool, input: { command: "ls", file_path: "/p/a.ts" }, status });
 const text = (id: string): Part => ({ type: "assistant_text", id, text: `answer ${id}`, streaming: false });

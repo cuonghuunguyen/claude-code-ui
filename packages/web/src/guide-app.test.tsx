@@ -8,12 +8,6 @@ import { setFreshBrowser, GUIDE_KEY } from "./guide.ts";
 import { adapt, STEPS, type GuideStep } from "./guide-steps.ts";
 import { bind, resetAll } from "./keymap.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
