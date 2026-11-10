@@ -56,7 +56,9 @@ it("the footer is pinned outside the scrolling list: a sibling after it inside t
   const popup = document.querySelector<HTMLElement>('[data-slot="select-content"]')!;
   expect(footer.parentElement).toBe(popup);
   expect(footer.className).toContain("sticky");
-  expect(footer.className).toContain("bottom-0");
+  expect(footer.className).toContain("-bottom-0.5");
+  // It covers the popup's 2px padding below it, so no sliver of the next row shows under the footer line (GH-679).
+  expect(footer.className).toContain("pb-0.5");
   expect(footer.querySelector('[data-testid="models-connect"]')).not.toBeNull();
   expect(popup.querySelector('[role="listbox"]')!.contains(footer)).toBe(false);
 });

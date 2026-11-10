@@ -93,7 +93,7 @@ function SelectContent({
           <SelectScrollUpButton />
           <SelectPrimitive.List>{children}</SelectPrimitive.List>
           <SelectScrollDownButton />
-          {footer && <div data-slot="select-footer" className="sticky bottom-0 z-10 border-t bg-popover pt-0.5">{footer}</div>}
+          {footer && <div data-slot="select-footer" className="sticky -bottom-0.5 z-10 -mx-0.5 -mb-0.5 border-t bg-popover px-0.5 pt-0.5 pb-0.5">{footer}</div>}
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
     </SelectPrimitive.Portal>
