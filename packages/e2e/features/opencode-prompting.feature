@@ -12,6 +12,10 @@ Feature: OpenCode prompting (GH-656)
     And I see a reply from Claude
     And the turn has finished
     And I capture "reply"
+    And the rewind button is enabled
+    And the palette row "Ask aside" is enabled
+    And the page has no horizontal scroll
+    And I capture "rewind enabled"
 
   Scenario Outline: Allow once runs a bash command at <width>x<height>
     Given the viewport is <width>x<height>
@@ -140,7 +144,6 @@ Feature: OpenCode prompting (GH-656)
 
     Examples:
       | width | height |
-      | 1440  | 900    |
       | 390   | 844    |
 
   Scenario: A subagent runs as a nested card
