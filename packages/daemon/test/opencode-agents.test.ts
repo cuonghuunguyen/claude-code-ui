@@ -32,6 +32,17 @@ describe("OpenCode agents", () => {
     expect(denialsOf(review.permission)).toEqual([r("edit", "*", "deny")]);
   });
 
+  it("GH-684: an agent's own allow rules never reach the block (Ask before edits keeps asking); its denials, and the exceptions that follow a denial, do", () => {
+    const perm = [r("*", "*", "allow"), r("bash", "*", "allow"), r("bash", "rm *", "deny"), r("edit", "*", "ask")];
+    expect(denialsOf(perm)).toEqual([r("bash", "rm *", "deny")]);
+    // Ask before edits: bash asks for everything, the agent's rm deny still wins; nothing of the agent's allow-all is appended.
+    const block = modeBlock("default", [], denialsOf(perm), { agent: "ops" });
+    expect(flat(block.filter((x) => x.permission === "bash"))).toEqual(["bash:*:ask", "bash:rm *:deny"]);
+    expect(block.some((x) => x.action === "allow" && x.permission === "bash")).toBe(false);
+    // A carve-out after a denial stays with it (plan may write its plan files).
+    expect(denialsOf([r("edit", "*", "ask"), r("edit", "*", "deny"), r("edit", "plans/*.md", "allow"), r("webfetch", "*", "allow")])).toEqual([r("edit", "*", "deny"), r("edit", "plans/*.md", "allow")]);
+  });
+
   it("modeBlock puts the agent marker after the mode marker and the agent's denials after the mode rules", () => {
     expect(flat(modeBlock("acceptEdits", [], denialsOf(review.permission), { agent: "review" }))).toEqual([
       "claude-ui:mode:acceptEdits:allow",

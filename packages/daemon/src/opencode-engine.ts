@@ -24,10 +24,15 @@ export type Rule = { permission: string; pattern: string; action: "allow" | "ask
 export type OpenCodeAgent = { name: string; description?: string; mode?: string; hidden?: boolean | null; permission: Rule[] };
 /** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
 export const primaryAgents = (list: OpenCodeAgent[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
-/** The rules of `permission` that must win over the permission mode: every rule of each key that has a deny rule, in order. */
+/**
+ * The rules of `permission` that must win over the permission mode: for each key, its deny rules and the rules that follow its first deny (the
+ * exceptions to it: plan's plan-file `edit` allow). An agent's allow rules before that (`bash * allow`) are not appended: they would turn
+ * Ask before edits into allow, while the deny still wins.
+ */
 export const denialsOf = (permission: readonly Rule[]): Rule[] => {
-  const keys = new Set(permission.filter((r) => r.action === "deny").map((r) => r.permission));
-  return permission.filter((r) => keys.has(r.permission));
+  const first = new Map<string, number>();
+  permission.forEach((r, i) => r.action === "deny" && !first.has(r.permission) && first.set(r.permission, i));
+  return permission.filter((r, i) => i >= (first.get(r.permission) ?? Infinity));
 };
 const MARK = "claude-ui";
 const marker = (pattern: string): Rule => ({ permission: MARK, pattern, action: "allow" });
