@@ -125,7 +125,7 @@ export function Chooser<T extends string>({
       </SelectTrigger>
       {/* OpenCode menu-v2: 2px padding, radius 12 (Select popup); item 28px (44px on touch), padding 0 12px, radius 4; selected item weight 530 in the accent colour.
           `data-[selected]`: Base UI sets data-selected="", shadcn's data-selected: variant needs "true". */}
-      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="max-h-[min(20rem,var(--available-height))] w-auto min-w-44 p-0.5">
+      <SelectContent alignItemWithTrigger={false} side="top" align="start" className="max-h-[min(20rem,var(--available-height))] w-auto min-w-44 p-0.5" footer={footer?.(() => setOpen(false))}>
         {runs(items).map(([group, run]) => {
           const rows = run.map((i) => (
             <SelectItem
@@ -144,7 +144,6 @@ export function Chooser<T extends string>({
             </SelectGroup>
           );
         })}
-        {footer && <div className="mt-0.5 border-t pt-0.5">{footer(() => setOpen(false))}</div>}
       </SelectContent>
     </Select>
   );

@@ -60,13 +60,19 @@ const loadGroup = () => {
     return undefined;
   }
 };
-/** Settings opens at this group next time (also the Create worktree modal's "Open Settings › Jira"). */
-export const saveGroup = (id: string) => {
+const storeGroup = (id: string) => {
   try {
     localStorage.setItem(GROUP_KEY, id);
   } catch {
     // Storage blocked: the group lasts while the page is open.
   }
+};
+/** Set by `saveGroup`: the next open lands on the stored group's settings, not on the list of groups (below md). */
+let landOnGroup = false;
+/** Settings opens at this group next time, on its settings also below md (also the Create worktree modal's "Open Settings › Jira", the model picker's "Connect a provider…"). */
+export const saveGroup = (id: string) => {
+  storeGroup(id);
+  landOnGroup = true;
 };
 
 type Category = "App" | "Sessions" | "Integrations" | "System";
@@ -901,7 +907,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   useEffect(() => void (open && setPick(loadGroup())), [open]);
   // Below md: false shows the list of groups, true the settings of the selected group.
   const [drilled, setDrilled] = useState(false);
-  useEffect(() => void (open && setDrilled(false)), [open]);
+  useEffect(() => {
+    if (!open) return;
+    setDrilled(landOnGroup);
+    landOnGroup = false;
+  }, [open]);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const rk = (sec: string, key: string, part: "label" | "hint") => t(`settings.row.${sec}.${key}.${part}` as Key);
@@ -1118,7 +1128,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const selected = groups.find((g) => g.id === pick) ?? groups[0]!;
   const choose = (id: string, focus = false) => {
     setPick(id);
-    saveGroup(id);
+    storeGroup(id);
     if (focus) tabRefs.current.get(id)?.focus();
   };
   const onListKey = (e: KeyboardEvent) => {

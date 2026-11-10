@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { DockerState, Settings, SideInfo } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
-import { SettingsDialog } from "./settings-dialog.tsx";
+import { saveGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
 import { loadKeepAwake, saveKeepAwake } from "./keep-awake.ts";
 import { bind, resetAll } from "./keymap.ts";
@@ -1374,4 +1374,18 @@ it("Open in app group shows only when the daemon lists editors (GH-646)", async 
   document.body.innerHTML = "";
   const without = await render();
   expect(without.q("settings-group-open-in-app")).toBeNull();
+});
+
+it("opening Settings with a target group (saveGroup) lands on that group's settings below md; a plain open shows the list (GH-679)", async () => {
+  saveGroup("opencode");
+  const first = await render({ group: "opencode" });
+  expect(first.q("settings-groups")!.className).toContain("max-md:hidden");
+  expect(first.q("settings-panel")!.className).not.toContain("max-md:hidden");
+  expect(first.q("settings-opencode")).not.toBeNull();
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  // The target is used once: the next plain open (a stored group, no target) starts on the list again.
+  const second = await render({ group: "opencode" });
+  expect(second.q("settings-groups")!.className).not.toContain("max-md:hidden");
+  expect(second.q("settings-panel")!.className).toContain("max-md:hidden");
 });

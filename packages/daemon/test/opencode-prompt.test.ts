@@ -1584,6 +1584,17 @@ describe("OpenCode model list: provider reads are never cut off and a broken pro
     expect(providerReads(d)).toHaveLength(4);
   });
 
+  it("a failed provider read is reported as models_failed, is not cached, and Retry (the next models.list) reads again and answers", async () => {
+    const d = await boot();
+    await models(d); // starts the fake OpenCode
+    await d.fake("/__fail", { path: "/config/providers" });
+    const failed = await models(d, d.project);
+    expect(failed).toMatchObject({ type: "error", code: "models_failed", message: expect.stringContaining("failed on purpose") });
+    const reads = providerReads(d).length;
+    expect(values(await models(d, d.project)).map((m) => m.value)).toContain("opencode/big-pickle");
+    expect(providerReads(d)).toHaveLength(reads + 1);
+  });
+
   it("context usage after a slow provider load (4 s): the context_usage part arrives and the folder is not broken", async () => {
     const d = await boot({ script: ["text"], env: { FAKE_OPENCODE_PROVIDERS_MS: "4000" } });
     const s = await d.open();
