@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { gitRunnerConfig, runGit } from "../src/git-runner.ts";
+import type { GitRunOptions } from "../src/git-runner.ts";
+import { slowKill } from "./slow-kill.ts";
 
 const repo = () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "gr-")));
@@ -136,5 +138,75 @@ describe("git-runner", () => {
       await expect(runGit(sleeper(AbortSignal.abort()))).rejects.toMatchObject({ code: "ABORT_ERR" });
       expect(Date.now() - t0).toBeLessThan(500);
     });
+  });
+
+  // On Windows the tree kill is a taskkill process of 0.5-5 s (more under load): a search past its deadline waited for it (GH-685).
+  describe("a slow tree kill", () => {
+    const sleeper = (o: Partial<GitRunOptions> = {}): GitRunOptions => ({ cwd: tmpdir(), file: process.execPath, args: ["-e", "setTimeout(()=>{}, 30000)"], env: env(), killTree: true, timeout: 100, ...o });
+    const withSlowKill = async (fn: (k: ReturnType<typeof slowKill>) => Promise<void>) => {
+      const k = slowKill();
+      gitRunnerConfig.killCommand = k.command;
+      try {
+        await fn(k);
+        // Every case here goes through the kill path.
+        expect(await k.invoked()).toBe(true);
+      } finally {
+        await k.finish();
+        gitRunnerConfig.killCommand = undefined;
+      }
+    };
+    const direct = async (fn: () => Promise<void>) => {
+      const script = gitRunnerConfig.script;
+      gitRunnerConfig.script = "throw new Error('x')";
+      try {
+        await runGit({ cwd: tmpdir(), args: ["--version"], env: env() }).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 200));
+        expect(gitRunnerConfig.broken).toBe(true);
+        await fn();
+      } finally {
+        gitRunnerConfig.script = script;
+      }
+    };
+    const cases = (name: string, wrap: (fn: () => Promise<void>) => Promise<void>) => {
+      it(`${name}: a read past its timeout settles when the kill starts, before the kill ran`, () =>
+        wrap(() =>
+          withSlowKill(async (k) => {
+            const e = await runGit(sleeper({ idempotent: true })).then(() => undefined, (x: Error) => x);
+            expect(e).toMatchObject({ killed: true });
+            expect(k.killed()).toBe(false);
+          }),
+        ));
+      it(`${name}: an aborted read settles at the abort, before the kill ran`, () =>
+        wrap(() =>
+          withSlowKill(async (k) => {
+            const ctl = new AbortController();
+            const p = runGit(sleeper({ idempotent: true, timeout: 30_000, signal: ctl.signal })).then(() => undefined, (x: Error) => x);
+            setTimeout(() => ctl.abort(), 300);
+            expect(await p).toMatchObject({ code: "ABORT_ERR" });
+            expect(k.killed()).toBe(false);
+          }),
+        ));
+      it(`${name}: a call that is not a read settles only after its group was killed`, () =>
+        wrap(() =>
+          withSlowKill(async (k) => {
+            setTimeout(k.release, 500);
+            const e = await runGit(sleeper()).then(() => undefined, (x: Error) => x);
+            expect(e).toMatchObject({ killed: true });
+            expect(k.killed()).toBe(true);
+          }),
+        ));
+    };
+    cases("thread", (fn) => fn());
+    cases("child-process fallback", direct);
+
+    it("the git thread answers other calls while a kill runs", () =>
+      withSlowKill(async (k) => {
+        const p = runGit(sleeper()).then(() => undefined, (x: Error) => x);
+        await new Promise((r) => setTimeout(r, 300));
+        await runGit({ cwd: tmpdir(), file: process.execPath, args: ["-e", ""], env: env() });
+        expect(k.killed()).toBe(false);
+        k.release();
+        expect(await p).toMatchObject({ killed: true });
+      }));
   });
 });
