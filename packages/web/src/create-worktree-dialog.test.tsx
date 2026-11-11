@@ -7,13 +7,6 @@ import type { Request } from "./client.ts";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { resetPageForTests, setRecommendationsOn } from "./recommendations.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const R = "/home/u/repo";
 const BRANCHES: BranchRow[] = [
   { name: "main", local: true, remote: "refs/remotes/origin/main", worktree: R },
@@ -201,6 +194,7 @@ it("Ticket: typed text searches after a pause; the existing branch of PRJ-2 chec
   const { calls } = mount({ jira: true });
   await flush();
   await flush();
+  expect(q("rec-jira")).toBeNull(); // no hint when Jira is set up
   await type("create-worktree-ticket-search", "PRJ-2");
   await act(async () => void vi.advanceTimersByTime(400));
   await flush();
@@ -311,12 +305,6 @@ it("shows the Connect Jira hint once when Jira is not set up", async () => {
   el!.remove();
   resetPageForTests();
   mount();
-  await flush();
-  expect(q("rec-jira")).toBeNull();
-});
-
-it("no hint when Jira is set up", async () => {
-  mount({ jira: true });
   await flush();
   expect(q("rec-jira")).toBeNull();
 });

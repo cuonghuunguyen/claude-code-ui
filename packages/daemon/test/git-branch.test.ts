@@ -54,7 +54,7 @@ const SPAWN_HEAVY = process.platform === "win32" ? 360_000 : 120_000;
 vi.setConfig({ testTimeout: SPAWN_HEAVY });
 
 describe("gitBranch", () => {
-  it("shows upstream, tracking, ahead/behind and the exact argv", async () => {
+  it("shows upstream, tracking, ahead/behind and the exact argv, which carries the hardening prefix (pull runs with it too)", async () => {
     const { a, inside } = diverged();
     const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
     expect(i.upstreamHash).toBe(sha(a, "origin/main"));
@@ -64,6 +64,9 @@ describe("gitBranch", () => {
     expect(i.forcePush).toEqual([...PUSH, `--force-with-lease=refs/heads/main:${tracking}`, "origin", "refs/heads/main:refs/heads/main"]);
     expect(i.pull).toEqual([...HARD, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", "origin", "refs/heads/main"]);
     expect(i.why).toEqual({ merge: "This is the current branch", rebase: "This is the current branch" });
+    const calls = pushes();
+    await gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside }).catch(() => undefined);
+    expect(calls.find((c) => c.includes("pull"))?.slice(0, 4)).toEqual(HARD);
   });
 
   it("a branch without upstream pushes with --set-upstream to origin; no pull, no force push", async () => {
@@ -131,16 +134,6 @@ describe("gitPush", () => {
     expect(sha(bare, "main")).toBe(sha(a));
   }, SPAWN_HEAVY);
 
-  it("refuses a push when the local branch moved since the menu opened", async () => {
-    const { a, inside } = repos();
-    const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
-    commit(a, "a2");
-    const calls = pushes();
-    await expect(gitPush(a, { ref: MAIN, local: i.local, tracking: i.trackingHash, argv: i.push!, allowed: inside })).rejects.toMatchObject({ code: "stale" });
-    await expect(gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside })).rejects.toMatchObject({ code: "stale" });
-    expect(calls.filter((c) => c.includes("push") || c.includes("pull"))).toEqual([]);
-  });
-
   it("refuses a push to a folder remote outside the roots", async () => {
     const { a, root, inside } = repos();
     const outer = realpathSync(mkdtempSync(join(tmpdir(), "outer-")));
@@ -153,11 +146,17 @@ describe("gitPush", () => {
     expect(calls.filter((c) => c.includes("push"))).toEqual([]);
   });
 
-  it("bad arguments are bad_request", async () => {
+  it("bad arguments are bad_request; a push and a pull are refused when the local branch moved since the menu opened", async () => {
     const { a, inside } = repos();
     await expect(gitPush(a, { ref: "HEAD", local: sha(a), argv: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
     await expect(gitPush(a, { ref: MAIN, local: "nope", argv: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
     await expect(gitPush(a, { ref: MAIN, local: sha(a), argv: [], lease: "x", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+    const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
+    commit(a, "a2");
+    const calls = pushes();
+    await expect(gitPush(a, { ref: MAIN, local: i.local, tracking: i.trackingHash, argv: i.push!, allowed: inside })).rejects.toMatchObject({ code: "stale" });
+    await expect(gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside })).rejects.toMatchObject({ code: "stale" });
+    expect(calls.filter((c) => c.includes("push") || c.includes("pull"))).toEqual([]);
   });
 });
 
@@ -171,33 +170,25 @@ describe("the remote branch moved since the menu opened (GH-309)", () => {
     run(r.a, "fetch", "-q", "origin");
     return { ...r, i };
   }
-  it("a plain push is refused as stale, nothing runs", async () => {
-    const { a, inside, i } = await moved();
-    commit(a, "a2");
-    const j = (await gitBranch(a, MAIN, { allowed: inside }))!;
-    const calls = pushes();
-    await expect(gitPush(a, { ref: MAIN, local: j.local, argv: j.push!, tracking: i.trackingHash, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/origin\/main moved since the menu opened/) });
-    expect(calls.filter((c) => c.includes("push"))).toEqual([]);
-  });
-  it("a pull is refused as stale, nothing runs and HEAD stays", async () => {
+  it("a pull is refused as stale, nothing runs and HEAD stays; a plain push is refused as stale, nothing runs", async () => {
     const { a, inside, i } = await moved();
     const head = sha(a);
     const j = (await gitBranch(a, MAIN, { allowed: inside }))!;
     const calls = pushes();
     await expect(gitPull(a, { ref: MAIN, local: j.local, argv: j.pull!, tracking: i.upstreamHash, allowed: inside })).rejects.toMatchObject({ code: "stale" });
-    expect(calls.filter((c) => c.includes("pull"))).toEqual([]);
-    expect(sha(a)).toBe(head);
+    expect(calls.filter((c) => c.includes("pull")), "pull").toEqual([]);
+    expect(sha(a), "HEAD after pull").toBe(head);
+    commit(a, "a2");
+    const k = (await gitBranch(a, MAIN, { allowed: inside }))!;
+    await expect(gitPush(a, { ref: MAIN, local: k.local, argv: k.push!, tracking: i.trackingHash, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/origin\/main moved since the menu opened/) });
+    expect(calls.filter((c) => c.includes("push")), "push").toEqual([]);
   });
-  it("a push without the shown tracking hash while one exists is stale; a non-hex one is bad_request", async () => {
+  it("a push without the shown tracking hash while one exists is stale; a non-hex one is bad_request; refused from a detached HEAD: bad_request, nothing runs, the menu data never moves HEAD", async () => {
     const { a, inside } = repos();
     const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
     await expect(gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/reload/) });
     await expect(gitPull(a, { ref: MAIN, local: i.local, argv: i.pull!, allowed: inside })).rejects.toMatchObject({ code: "stale", message: expect.stringMatching(/reload/) });
     await expect(gitPush(a, { ref: MAIN, local: i.local, argv: i.push!, tracking: "x", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
-  });
-  it("refused from a detached HEAD: bad_request, nothing runs, the menu data never moves HEAD", async () => {
-    const { a, inside } = repos();
-    const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
     run(a, "checkout", "-q", "--detach");
     const calls = pushes();
     for (const f of [gitPush, gitPull]) await expect(f(a, { ref: "HEAD", local: i.local, argv: [], allowed: inside }), f.name).rejects.toMatchObject({ code: "bad_request", message: "Not a local branch" });
@@ -378,18 +369,5 @@ describe("what a push sends and runs", () => {
     await gitPush(a, { ref: MAIN, local: i.local, tracking: i.trackingHash, argv: i.push!, allowed: inside });
     expect(sha(bare, "main")).toBe(sha(a));
     expect(tryRun(bare, "rev-parse", "--verify", "-q", "refs/tags/v9")).toMatch(/^ERR/);
-  });
-
-  it("every argv carries Fetch's hardening prefix and the no-submodule, no-tags switches", async () => {
-    const { a, b, inside } = diverged();
-    void b;
-    const i = (await gitBranch(a, MAIN, { allowed: inside }))!;
-    const hard = HARD;
-    expect(i.push).toEqual([...hard, "push", "--no-recurse-submodules", "--no-follow-tags", "origin", MAIN + ":" + MAIN]);
-    expect(i.forcePush!.slice(0, 7)).toEqual([...hard, "push", "--no-recurse-submodules", "--no-follow-tags"]);
-    expect(i.pull).toEqual([...hard, "pull", "--no-recurse-submodules", "--no-rebase", "--ff-only", "origin", MAIN]);
-    const calls = pushes();
-    await gitPull(a, { ref: MAIN, local: i.local, tracking: i.upstreamHash, argv: i.pull!, allowed: inside }).catch(() => undefined);
-    expect(calls.find((c) => c.includes("pull"))?.slice(0, 4)).toEqual(hard);
   });
 });

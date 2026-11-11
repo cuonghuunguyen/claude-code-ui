@@ -85,12 +85,6 @@ vi.mock("@xterm/xterm", () => ({
 const fitted = vi.hoisted(() => ({ n: 0 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { fitted.n++; } } }));
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 // jsdom has no layout: an element is on screen unless it or an ancestor has the class "hidden" (display: none).
 Object.defineProperty(HTMLElement.prototype, "offsetParent", { get: function (this: HTMLElement) { return this.closest(".hidden") ? null : document.body; } });
 // jsdom has no layout: a box is 100x100 unless the test sets `size.w` to 0.

@@ -8,7 +8,6 @@ import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { setLocalePref } from "./i18n.ts";
 import { SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One actions menu per rendered row: counts the rows' renders by title.
 const rowRenders = vi.hoisted(() => [] as string[]);
 vi.mock("./session-actions.tsx", async (orig) => {
@@ -118,7 +117,7 @@ it("one group per working directory with the project name as header and the full
 
 it("rows show title and relative time; only running and needs input get a state, closed and idle none", async () => {
   const { rows, el, onOpen } = await render();
-  expect(rows().map((r) => r.textContent)).toEqual(["Fix loginClaude1m", "Old ideaClaude2h", "Docs passClaude5m", "RefactorClaude2d"]);
+  expect(rows().map((r) => r.textContent)).toEqual(["ClaudeFix login1m", "ClaudeOld idea2h", "ClaudeDocs pass5m", "ClaudeRefactor2d"]);
   expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Fix login, running", "Old idea, unread", "Docs pass, needs input", "Refactor"]);
   expect(rows().map((r) => r.querySelectorAll("svg").length)).toEqual([2, 1, 2, 1]);
   expect(el.textContent).not.toMatch(/closed|idle/);
@@ -145,7 +144,7 @@ it("groups collapse and the collapsed state survives a reload", async () => {
   let r = await render();
   await act(async () => r.toggle("/home/u/web").click());
   expect(r.toggle("/home/u/web").getAttribute("aria-expanded")).toBe("false");
-  expect(r.rows().map((x) => x.textContent?.slice(0, 4))).toEqual(["Docs", "Refa"]);
+  expect(r.rows().map((x) => x.textContent?.replace(/^Claude/, "").slice(0, 4))).toEqual(["Docs", "Refa"]);
   root!.unmount();
   r = await render();
   expect(r.toggle("/home/u/web").getAttribute("aria-expanded")).toBe("false");
@@ -158,7 +157,7 @@ it("search filters by session title and project name, also inside collapsed grou
   const { toggle, rows, search, el } = await render();
   await act(async () => toggle("/home/u/api").click());
   await search("refac");
-  expect(rows().map((r) => r.textContent?.slice(0, 8))).toEqual(["Refactor"]);
+  expect(rows().map((r) => r.textContent?.replace(/^Claude/, "").slice(0, 8))).toEqual(["Refactor"]);
   await search("web");
   expect(rows()).toHaveLength(2);
   await search("nothing");
@@ -201,12 +200,14 @@ it("project actions and Open project are visible and 44px on touch screens of an
     expect(el.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.className).toContain("pointer-coarse:size-11");
 });
 
-it("archived sessions are hidden; the archived filter shows only them and offers Unarchive", async () => {
+it("archived sessions are hidden; the archived filter shows only them under an \"Archived sessions\" caption and offers Unarchive", async () => {
   const { el, rows, onAction } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
   expect(rows().map((r) => r.textContent)).not.toContainEqual(expect.stringContaining("Shelved"));
+  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
   const filter = el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!;
   await act(async () => filter.click());
   expect(filter.getAttribute("aria-pressed")).toBe("true");
+  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
   expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Shelved"]);
   await act(async () => el.querySelector<HTMLElement>('[data-testid="session-menu"]')!.click());
   const archive = document.querySelector<HTMLElement>('[data-testid="action-archive"]')!;
@@ -275,13 +276,6 @@ it("rows, the … trigger, the archived filter and the menu items show the point
   expect(document.querySelector('[data-testid="action-delete"]')!.className).toMatch(/\bdata-disabled:cursor-not-allowed\b/);
 });
 
-it("the archived filter shows an \"Archived sessions\" caption above the list, so the mode is visible", async () => {
-  const { el } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
-  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
-  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
-});
-
 it("each project splits its sessions under OpenCode's day headers", async () => {
   const { groups } = await render({ list: [item("a", "/home/u/web", "New", 0), item("b", "/home/u/web", "Old", 4 * 1440), item("c", "/home/u/api", "Older", 5 * 1440)] });
   const days = (g: HTMLElement) => [...g.querySelectorAll('[data-testid="day-header"]')].map((h) => h.textContent);
@@ -290,7 +284,7 @@ it("each project splits its sessions under OpenCode's day headers", async () => 
 
 it("read titles use the base text colour like OpenCode, not the muted one", async () => {
   const { rows } = await render();
-  const title = rows()[3]!.querySelector("span")!;
+  const title = rows()[3]!.querySelector(":scope > span:not([data-testid])")!;
   expect(title.className).toContain("text-foreground");
   expect(rows()[3]!.className).not.toContain("text-muted-foreground");
 });
@@ -728,7 +722,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(trigger.getAttribute("aria-label")).toBe("Actions for web");
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
-    expect(document.querySelector('[data-testid="project-menu-new-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="project-menu-create-worktree"]')).not.toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-create-worktree"]')!.click());
     expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
@@ -742,7 +736,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     const g = group(el);
     expect(g.querySelector<HTMLElement>('[data-testid="group-toggle"]')!.className).toContain("max-md:pr-26");
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
-    expect(document.querySelector('[data-testid="project-menu-new-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="project-menu-create-worktree"]')).toBeNull();
     expect(document.querySelector('[data-testid="project-menu-remove"]')).not.toBeNull();
   });
 

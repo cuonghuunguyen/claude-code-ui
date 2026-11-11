@@ -38,7 +38,7 @@ try {
   console.log(files.filter((f) => !f.startsWith("dist/web/assets/")).join("\n"), `\n(${files.length} files)`);
   assert(files.every((f) => /^(dist\/|package\.json$|README\.md$|LICENSE$|THIRD_PARTY_NOTICES\.md$)/.test(f)), "tarball holds only dist/, package.json, README, LICENSE, notices (no tests, sources, dev-docs)");
   assert(files.includes("dist/cli.js") && files.includes("dist/launcher.js") && files.includes("dist/web/index.html"), "tarball holds dist/cli.js, dist/launcher.js and dist/web/index.html");
-  assert(files.includes("dist/plugins/visualize/skills/visualize/SKILL.md") && files.includes("dist/plugins/visualize/.claude-plugin/plugin.json"), "tarball holds the visualize plugin");
+  assert(["dist", "dist/side"].every((b) => ["skills/visualize/SKILL.md", ".claude-plugin/plugin.json"].every((f) => files.includes(`${b}/plugins/visualize/${f}`))), "tarball holds the visualize plugin in dist/ and dist/side/");
   assert(files.includes("README.md") && files.includes("LICENSE") && files.includes("THIRD_PARTY_NOTICES.md") && files.includes("dist/web/THIRD_PARTY_LICENSES.txt"), "tarball holds README, LICENSE, the third-party notices and bundled license texts");
 
   step("npm install <tarball> in a temp dir");

@@ -6,7 +6,6 @@ import type { QueuedPrompt } from "@claude-ui/protocol";
 import { setLocalePref } from "./i18n.ts";
 import { QueueChips } from "./queue-chips.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let unmount = () => {};
 afterEach(() => (unmount(), setLocalePref("system")));
 
@@ -33,11 +32,6 @@ it("lists the messages with a count, an image badge and three labelled buttons p
   expect(rows[0]!.querySelector('[aria-label="Send now: first message"]')).not.toBeNull();
   expect(rows[0]!.querySelector('[aria-label="Edit: first message"]')).not.toBeNull();
   expect(rows[0]!.querySelector('[aria-label="Delete: first message"]')).not.toBeNull();
-});
-
-it("renders nothing for an empty queue", async () => {
-  const el = await render(<QueueChips items={[]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
-  expect(el.querySelector("section")).toBeNull();
 });
 
 it("buttons call back with the item id", async () => {
@@ -67,7 +61,7 @@ it("shows why the queue is paused", async () => {
   expect(await held({ reason: "not_live" })).toBe("Paused: the session stopped with an error");
 });
 
-it("after Delete focus moves to the same button of the next row, else the previous row, else onEmpty", async () => {
+it("after Delete focus moves to the same button of the next row, else the previous row, else onEmpty; an empty queue renders nothing", async () => {
   const onEmpty = vi.fn();
   function Host() {
     const [items, setItems] = useState([item("a", "one"), item("b", "two"), item("c", "three")]);
@@ -80,6 +74,7 @@ it("after Delete focus moves to the same button of the next row, else the previo
   expect(document.activeElement).toBe(el.querySelector('[aria-label="Delete: one"]'));
   await click(el.querySelector('[aria-label="Delete: one"]'));
   expect(onEmpty).toHaveBeenCalled();
+  expect(el.querySelector("section")).toBeNull();
 });
 
 it("touch targets are 44px (size-11) below md and on coarse pointers; rows truncate", async () => {

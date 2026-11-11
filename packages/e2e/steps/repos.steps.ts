@@ -129,13 +129,6 @@ Then("the changes list has a row ending in {string}", async ({ page }, path: str
   await expect(page.locator(`[data-testid="changed-file"][data-path$="${path}"]`).first()).toBeVisible({ timeout: 30_000 });
 });
 
-Then("the side panel has a Graph tab", async ({ page }) => {
-  const re = /^graph/i;
-  const desktop = page.getByTestId("side-panel").getByRole("tab", { name: re });
-  const phone = page.getByRole("tablist", { name: "Panes" }).getByRole("tab", { name: re });
-  await expect(desktop.or(phone).first()).toBeVisible({ timeout: 30_000 });
-});
-
 Then("every list row button in Settings is at least 44px", async ({ page }) => {
   const id = row("repositoryScanIgnoredFolders");
   for (const t of [`${id}-edit`, `${id}-remove`, `${id}-add`]) {

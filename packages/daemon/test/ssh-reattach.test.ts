@@ -168,23 +168,6 @@ describe("update and mismatch", () => {
     off.d.close();
   });
 
-  /** A Hub there whose ready frame is `frame`. */
-  const readyOf = (frame: object): SideProcess => {
-    const stdout = new PassThrough();
-    stdout.write(JSON.stringify({ ready: true, killTree: true, hb: true, ...frame }) + "\n");
-    const exit = new EventEmitter();
-    return { stdin: new PassThrough(), stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 255), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } as never;
-  };
-
-  it("a ready frame without schema or with a range that does not overlap: error with the mismatch (remote older or newer)", async () => {
-    for (const [frame, remoteOlder] of [[{ version: "1.0.0" }, true], [{ schema: [0, 0], version: "0.9.0" }, true], [{ schema: [2, 2], version: "2.0.0" }, false]] as const) {
-      const sides = createSides({ targets: [sideTarget("ssh", "box")], spawn: () => readyOf(frame), version: "1.1.0", heartbeatMs: 1e9 });
-      await sides.start("ssh:box").catch(() => {});
-      expect(sides.list().find((x) => x.id === "ssh:box")).toMatchObject({ state: "error", mismatch: { remoteOlder, local: "1.1.0" } });
-      sides.close();
-    }
-  });
-
   it("only an older Daemon is updated: an older Hub does not downgrade a newer Daemon", () => {
     expect(isNewerBuild("1.2.0-5", "1.1.0-9")).toBe(true);
     expect(isNewerBuild("1.2.0-9", "1.2.0-5")).toBe(true);

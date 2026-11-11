@@ -436,10 +436,11 @@ describe.skipIf(!hasTar)("tar", () => {
     mkdirSync(side);
     for (const f of ["cli.js", "chunk-1.js", "THIRD_PARTY_LICENSES.txt"]) writeFileSync(join(side, f), f);
     writeFileSync(join(side, "side.json"), "{}");
+    for (const f of ["skills/visualize/SKILL.md", ".claude-plugin/plugin.json"]) (mkdirSync(join(side, "plugins/visualize", f, ".."), { recursive: true }), writeFileSync(join(side, "plugins/visualize", f), f));
     const partFiles = Object.fromEntries(["node.tar.gz", "node-pty.tgz", "claude.tgz"].map((f) => (writeFileSync(join(d, f), f), [f, join(d, f)])));
     const out = await assembleBundle({ partFiles, sideDir: side, version: "1.2.3", outDir: d });
     const names = execFileSync("tar", ["-tf", out], { encoding: "utf8" }).trim().split("\n").sort();
-    expect(names).toEqual(["app/dist/THIRD_PARTY_LICENSES.txt", "app/dist/chunk-1.js", "app/dist/cli.js", "app/package.json", "claude.tgz", "node-pty.tgz", "node.tar.gz"]);
+    expect(names).toEqual(["app/dist/THIRD_PARTY_LICENSES.txt", "app/dist/chunk-1.js", "app/dist/cli.js", "app/dist/plugins/visualize/.claude-plugin/plugin.json", "app/dist/plugins/visualize/skills/visualize/SKILL.md", "app/package.json", "claude.tgz", "node-pty.tgz", "node.tar.gz"]);
     const x = join(d, "x");
     mkdirSync(x);
     execFileSync("tar", ["-xf", out, "-C", x]);

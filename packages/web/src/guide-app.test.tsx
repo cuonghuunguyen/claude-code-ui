@@ -8,12 +8,6 @@ import { setFreshBrowser, GUIDE_KEY } from "./guide.ts";
 import { adapt, STEPS, type GuideStep } from "./guide-steps.ts";
 import { bind, resetAll } from "./keymap.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
@@ -97,22 +91,20 @@ const saved = () => JSON.parse(localStorage.getItem(GUIDE_KEY) ?? "null");
 const press = (init: KeyboardEventInit) => act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
 
 describe("first use", () => {
-  it("a fresh browser on a daemon with no projects gets the welcome card", async () => {
+  it("a fresh browser on a daemon with no projects gets the welcome card; Start tour moves on to the Add project step and Back returns; Ctrl+K opens no palette while the tour shows, and the app is inert", async () => {
     setFreshBrowser(true);
     await mount();
     expect(tour()?.textContent).toContain("Welcome to Claude UI");
     expect(tour()!.textContent).toContain("Step 1 of 6");
     expect(saved()).toMatchObject({ origin: "new", basics: "pending", session: "pending" });
-  });
-
-  it("Start tour moves on to the Add project step; Back returns", async () => {
-    setFreshBrowser(true);
-    await mount();
     await act(async () => [...tour()!.querySelectorAll("button")].find((b) => b.textContent === "Start tour")!.click());
     expect(tour()!.dataset.step).toBe("project");
     expect(tour()!.textContent).toContain("Step 2 of 6");
     await press({ key: "ArrowLeft" });
     expect(tour()!.dataset.step).toBe("welcome");
+    await press({ key: "k", ctrlKey: true });
+    expect(document.querySelector('[data-testid="palette"]')).toBeNull();
+    expect(el.hasAttribute("inert")).toBe(true);
   });
 
   it("a browser that has used the app (not fresh) gets no tour and is marked existing", async () => {
@@ -159,14 +151,6 @@ describe("first use", () => {
     await mount();
     expect(tour()!.dataset.step).toBe("new-session");
     expect(tour()!.textContent).toContain("Step 3 of 6");
-  });
-
-  it("Ctrl+K opens no palette while the tour shows, and the app is inert", async () => {
-    setFreshBrowser(true);
-    await mount();
-    await press({ key: "k", ctrlKey: true });
-    expect(document.querySelector('[data-testid="palette"]')).toBeNull();
-    expect(el.hasAttribute("inert")).toBe(true);
   });
 
   it("the end card's Add project opens the Open project dialog and finishes Basics", async () => {

@@ -8,13 +8,6 @@ import { editedInput, PermissionPanel, ruleLabel, type PermissionAnswer } from "
 import { PlanTabContext, ViewerContext, type ViewerTarget } from "./viewer.ts";
 import { applyEvent, emptySession, pendingPermission, type PermissionRequest } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const bash: PermissionUpdate = { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "npm test:*" }], behavior: "allow", destination: "localSettings" };
 const request = (over: Partial<PermissionRequest> = {}): PermissionRequest => ({
   type: "permission_request",

@@ -61,17 +61,11 @@ describe("Session", () => {
     await s.close();
   });
 
-  it("has a UUID before the first prompt and passes it to the SDK as sessionId", () => {
-    const s = new Session("/tmp", { query: fakeQuery as never });
-    expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
-    s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ sessionId: s.id, cwd: "/tmp", includePartialMessages: true });
-  });
-
-  it("starts no CLI for a new session before its first prompt: a closed throwaway lists the commands, without hooks", async () => {
+  it("a new session has a UUID and starts no CLI before its first prompt: a closed throwaway lists the commands, without hooks", async () => {
     const before = calls.length;
     const closedBefore = closed;
     const s = new Session("/tmp", { query: fakeQuery as never });
+    expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     await until(events, (e) => e.part.type === "commands");
@@ -81,7 +75,7 @@ describe("Session", () => {
     expect(closed).toBe(closedBefore + 1);
     s.prompt("hi");
     expect(calls.length).toBe(before + 2);
-    expect(calls.at(-1)).toMatchObject({ sessionId: s.id });
+    expect(calls.at(-1)).toMatchObject({ sessionId: s.id, cwd: "/tmp", includePartialMessages: true });
   });
 
   it("logs user_text, running, streamed parts, turn_result, idle with increasing seq", async () => {
@@ -126,14 +120,38 @@ describe("Session", () => {
     expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
-  it("forwards subagent text and enables TodoWrite and Artifact unless the user env says otherwise", () => {
-    vi.stubEnv("CLAUDE_CODE_ENABLE_TASKS", "1");
+  it("allows bypass permissions only when the daemon enables it", () => {
     started({ query: fakeQuery as never });
-    vi.unstubAllEnvs();
-    const opts = calls.at(-1)!;
-    expect(opts.forwardSubagentText).toBe(true);
-    expect(opts.env).toMatchObject({ CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "1", CLAUDE_CODE_ARTIFACT: "1" });
+    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: false });
+    started({ allowBypass: true, query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
   });
+
+  it("forwards subagent text and enables TodoWrite and Artifact; passes the chosen model to the SDK, default means no model option; starts in default permission mode and model default effort", () => {
+    {
+      vi.stubEnv("CLAUDE_CODE_ENABLE_TASKS", "1");
+      started({ query: fakeQuery as never });
+      vi.unstubAllEnvs();
+      const opts = calls.at(-1)!;
+      expect(opts.forwardSubagentText).toBe(true);
+      expect(opts.env).toMatchObject({ CLAUDE_CODE_ENABLE_TODO_TOOLS: "1", CLAUDE_CODE_ENABLE_TASKS: "1", CLAUDE_CODE_ARTIFACT: "1" });
+    }
+    {
+      const s = started({ model: "haiku", query: fakeQuery as never });
+      expect(calls.at(-1)!.model).toBe("haiku");
+      expect(s.info().model).toBe("haiku");
+      const d = started({ model: "default", query: fakeQuery as never });
+      expect(calls.at(-1)!.model).toBeUndefined();
+      expect(d.info().model).toBe("default");
+      expect(new Session("/tmp", { query: fakeQuery as never }).info().model).toBe("default");
+    }
+    {
+      const s = started({ query: fakeQuery as never });
+      expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
+      expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] });
+    }
+  });
+
 
   it("rejects a prompt once the query failed, and logs the failure reason", async () => {
     const failing = () =>
@@ -250,15 +268,6 @@ describe("Session", () => {
     expect(costs[1]).toBeCloseTo(0.1482896 - 0.121987);
   });
 
-  it("passes the chosen model to the SDK; 'default' means no model option", () => {
-    const s = started({ model: "haiku", query: fakeQuery as never });
-    expect(calls.at(-1)!.model).toBe("haiku");
-    expect(s.info().model).toBe("haiku");
-    const d = started({ model: "default", query: fakeQuery as never });
-    expect(calls.at(-1)!.model).toBeUndefined();
-    expect(d.info().model).toBe("default");
-    expect(new Session("/tmp", { query: fakeQuery as never }).info().model).toBe("default");
-  });
 
   it("setModel switches the live query and logs a session_model part", async () => {
     const s = started({ query: fakeQuery as never });
@@ -402,27 +411,33 @@ describe("Session", () => {
     expect(calls.at(-1)).toMatchObject({ allowedTools: ["Bash(ls \\(a\\):*)", "Read"], additionalDirectories: ["/tmp/up", "/tmp/x"] });
   });
 
-  it("a new session with a given id starts the query with that sessionId, not resume", () => {
-    const X = "3f2a1b4c-0000-4000-8000-0000000000aa";
-    const s = new Session("/tmp", { query: permissionQuery as never }, { id: X });
-    expect(s.id).toBe(X);
-    s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ sessionId: X });
-    expect(calls.at(-1)).not.toHaveProperty("resume");
+  it("a new session with a given id starts the query with that sessionId, not resume; uploadDir is asked with the session id; a query without session grants starts without allowedTools; loads user, project and local settings", () => {
+    {
+      const X = "3f2a1b4c-0000-4000-8000-0000000000aa";
+      const s = new Session("/tmp", { query: permissionQuery as never }, { id: X });
+      expect(s.id).toBe(X);
+      s.prompt("hi");
+      expect(calls.at(-1)).toMatchObject({ sessionId: X });
+      expect(calls.at(-1)).not.toHaveProperty("resume");
+    }
+    {
+      const asked: string[] = [];
+      const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: (id) => (asked.push(id), `/up/${id}`) });
+      s.prompt("hi");
+      expect(asked).toEqual([s.id]);
+      expect(calls.at(-1)).toMatchObject({ additionalDirectories: [`/up/${s.id}`] });
+    }
+    {
+      new Session("/tmp", { query: fakeQuery as never }).prompt("hi");
+      expect(calls.at(-1)).not.toHaveProperty("allowedTools");
+    }
+    {
+      started({ query: fakeQuery as never });
+      expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project", "local"] });
+    }
   });
 
-  it("uploadDir is asked with the session id", () => {
-    const asked: string[] = [];
-    const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: (id) => (asked.push(id), `/up/${id}`) });
-    s.prompt("hi");
-    expect(asked).toEqual([s.id]);
-    expect(calls.at(-1)).toMatchObject({ additionalDirectories: [`/up/${s.id}`] });
-  });
 
-  it("a query without session grants starts without allowedTools", () => {
-    new Session("/tmp", { query: fakeQuery as never }).prompt("hi");
-    expect(calls.at(-1)).not.toHaveProperty("allowedTools");
-  });
 
   it("setModel persists the new model even when the SDK refuses the fallback to default mode", async () => {
     const refuse = async (m: string) => {
@@ -438,22 +453,19 @@ describe("Session", () => {
     expect(saved.at(-1)).toMatchObject({ model: "haiku" });
   });
 
-  it("setModel on a restored session before its first prompt applies when the query resumes", async () => {
+  it("model, mode and effort chosen on a restored session before its first prompt apply when the query resumes", async () => {
     const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
     const before = setModelCalls.length;
+    const controlBefore = controlCalls.length;
     await s.setModel("haiku");
+    await s.setPermissionMode("acceptEdits");
+    await s.setEffort("low");
     expect(setModelCalls.length).toBe(before);
+    expect(controlCalls.length).toBe(controlBefore);
     s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku" });
+    expect(calls.at(-1)).toMatchObject({ resume: s.id, model: "haiku", permissionMode: "acceptEdits", effort: "low" });
   });
 
-  it("starts in default permission mode and model default effort; bypass only when the daemon enables it", () => {
-    const s = started({ query: fakeQuery as never });
-    expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
-    expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] });
-    started({ allowBypass: true, query: fakeQuery as never });
-    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
-  });
 
   it("setPermissionMode and setEffort change the live query and log parts", async () => {
     const s = started({ query: fakeQuery as never });
@@ -467,16 +479,6 @@ describe("Session", () => {
     expect(lastPart(events, "session_effort")).toEqual({ type: "session_effort", id: "session_effort", effort: "default" });
     expect(s.info()).toMatchObject({ permissionMode: "plan", effort: "default" });
     await expect(s.setPermissionMode("bypassPermissions")).rejects.toThrow("not enabled");
-  });
-
-  it("a restored session not yet resumed starts with the chosen mode and effort", async () => {
-    const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never });
-    const before = controlCalls.length;
-    await s.setPermissionMode("acceptEdits");
-    await s.setEffort("low");
-    expect(controlCalls.length).toBe(before);
-    s.prompt("hi");
-    expect(calls.at(-1)).toMatchObject({ resume: s.id, permissionMode: "acceptEdits", effort: "low" });
   });
 
   it("follows a permission mode change the CLI reports in system/status (plan approved)", async () => {
@@ -525,37 +527,35 @@ describe("Session", () => {
   });
 
   describe("Claude in Chrome (GH-514)", () => {
-    it("runs the CLI with --chrome when the setting is on", () => {
-      started({ query: fakeQuery as never, chrome: () => true });
-      expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null, "replay-user-messages": null });
-    });
-    it("no --chrome when the setting is off or absent", () => {
-      started({ query: fakeQuery as never, chrome: () => false });
-      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
-      started({ query: fakeQuery as never });
-      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
-    });
-    it("a worker never gets --chrome", () => {
-      started({ query: fakeQuery as never, chrome: () => true, worker: () => true });
-      expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
-    });
-    it("a worker query carries no PreToolUse hook (GH-628: the git hook asked in auto mode)", () => {
-      started({ query: fakeQuery as never, worker: () => true });
-      expect(calls.at(-1)).not.toHaveProperty("hooks");
-    });
-    it("reads the setting at each query start", () => {
-      let on = false;
-      const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never, chrome: () => on });
-      on = true;
-      s.prompt("hi");
-      expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null });
+    it("runs the CLI with --chrome when the setting is on; no --chrome when the setting is off or absent; a worker never gets --chrome; a worker query carries no PreToolUse hook; reads the setting at each query start", () => {
+      {
+        started({ query: fakeQuery as never, chrome: () => true });
+        expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null, "replay-user-messages": null });
+      }
+      {
+        started({ query: fakeQuery as never, chrome: () => false });
+        expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+        started({ query: fakeQuery as never });
+        expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+      }
+      {
+        started({ query: fakeQuery as never, chrome: () => true, worker: () => true });
+        expect(calls.at(-1)!.extraArgs).not.toHaveProperty("chrome");
+      }
+      {
+        started({ query: fakeQuery as never, worker: () => true });
+        expect(calls.at(-1)).not.toHaveProperty("hooks");
+      }
+      {
+        let on = false;
+        const s = Session.restore(randomUUID(), "/tmp", [], { query: fakeQuery as never, chrome: () => on });
+        on = true;
+        s.prompt("hi");
+        expect(calls.at(-1)!.extraArgs).toMatchObject({ chrome: null });
+      }
     });
   });
 
-  it("loads user, project and local settings like Claude Code: commands, skills, saved permission rules", () => {
-    started({ query: fakeQuery as never });
-    expect(calls.at(-1)).toMatchObject({ settingSources: ["user", "project", "local"] });
-  });
 
   it("logs the supportedCommands() list as a commands part before the first prompt", async () => {
     const s = new Session("/tmp", { query: fakeQuery as never });
@@ -638,16 +638,11 @@ describe("Session", () => {
       expect(events.some((e) => e.part.type === "session_state" && e.part.state === "running" && e.seq > events.find((x) => x.part.id === req.id)!.seq)).toBe(true);
     });
 
-    it("Yes with edited input sends it as updatedInput (full input object)", async () => {
-      const { s, req, answered } = await ask();
-      s.respond(req.requestId, { decision: "allow", updatedInput: { command: "npm test -- --run" } });
-      expect(await answered()).toEqual({ behavior: "allow", updatedInput: { command: "npm test -- --run" } });
-    });
-
-    it("an edited accept shows the applied input, marked as the user's edit, on the tool call and the settled request", async () => {
-      const { s, events, req } = await ask();
+    it("an edited accept sends the full input as updatedInput and shows it, marked as the user's edit, on the tool call and the settled request", async () => {
+      const { s, events, req, answered } = await ask();
       const applied = { command: "npm test -- --run" };
       s.respond(req.requestId, { decision: "allow", updatedInput: applied });
+      expect(await answered()).toEqual({ behavior: "allow", updatedInput: applied });
       expect(lastPart(events, req.toolUseId)).toMatchObject({ type: "tool_call", input: applied, editedByUser: true });
       expect(lastPart(events, req.id)).toMatchObject({ settled: true, decision: "allow", input: applied, editedByUser: true });
       await until(events, (e) => e.part.type === "turn_result");
@@ -1080,14 +1075,6 @@ describe("Session questions", () => {
     });
   });
 
-  it("AskUserQuestion through canUseTool logs a question part and sets needs_input", async () => {
-    const { s, events, q } = await ask();
-    expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });
-    expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
-    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
-    expect(s.info().state).toBe("needs_input");
-  });
-
   it("a question carries the time the daemon asked (Focus wait time)", async () => {
     const before = Date.now();
     const { q } = await ask();
@@ -1095,8 +1082,12 @@ describe("Session questions", () => {
     expect(q.at).toBeLessThanOrEqual(Date.now());
   });
 
-  it("answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
+  it("AskUserQuestion through canUseTool logs a question part and sets needs_input; answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
     const { s, events, q, answered } = await ask();
+    expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });
+    expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    expect(s.info().state).toBe("needs_input");
     const answers = { "Which package manager?": "pnpm" };
     expect(s.answer(q.requestId, answers)).toBe(true);
     expect(s.answer(q.requestId, { "Which package manager?": "npm" })).toBe(false);

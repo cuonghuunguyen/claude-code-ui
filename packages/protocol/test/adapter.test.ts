@@ -15,46 +15,50 @@ describe("adapter on recorded two-turn session", () => {
   const parts = run(messages);
   const texts = parts.filter((p) => p.type === "assistant_text");
 
-  it("streams assistant_text under one stable id per text block", () => {
-    const ids = [...new Set(texts.map((p) => p.id))];
-    expect(ids).toHaveLength(2);
-    expect(texts.filter((p) => p.id === ids[0]).length).toBeGreaterThan(10);
-  });
-
-  it("each update carries the full accumulated text, growing monotonically", () => {
-    for (const id of new Set(texts.map((p) => p.id))) {
-      const updates = texts.filter((p) => p.id === id);
-      for (let i = 1; i < updates.length; i++) expect(updates[i]!.text.startsWith(updates[i - 1]!.text)).toBe(true);
+  it("streams assistant_text under one stable id per text block; each update carries the full accumulated text, growing monotonically; final update per block is not streaming and equals the complete assistant message text", () => {
+    {
+      const ids = [...new Set(texts.map((p) => p.id))];
+      expect(ids).toHaveLength(2);
+      expect(texts.filter((p) => p.id === ids[0]).length).toBeGreaterThan(10);
+    }
+    {
+      for (const id of new Set(texts.map((p) => p.id))) {
+        const updates = texts.filter((p) => p.id === id);
+        for (let i = 1; i < updates.length; i++) expect(updates[i]!.text.startsWith(updates[i - 1]!.text)).toBe(true);
+      }
+    }
+    {
+      const finals = messages
+        .filter((m) => m.type === "assistant")
+        .flatMap((m) => m.message.content.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text));
+      const lastById = new Map(texts.map((p) => [p.id, p]));
+      expect([...lastById.values()].map((p) => p.text)).toEqual(finals);
+      for (const p of lastById.values()) expect(p.streaming).toBe(false);
     }
   });
 
-  it("final update per block is not streaming and equals the complete assistant message text", () => {
-    const finals = messages
-      .filter((m) => m.type === "assistant")
-      .flatMap((m) => m.message.content.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text));
-    const lastById = new Map(texts.map((p) => [p.id, p]));
-    expect([...lastById.values()].map((p) => p.text)).toEqual(finals);
-    for (const p of lastById.values()) expect(p.streaming).toBe(false);
+
+
+  it("emits one turn_result per turn with duration, tokens and cost; gives each turn its own cost (cumulative total_cost_usd); gives the same final parts when replayed without stream events (history)", () => {
+    {
+      const results = parts.filter((p) => p.type === "turn_result");
+      expect(results).toHaveLength(2);
+      expect(results[0]).toMatchObject({ type: "turn_result", isError: false, durationMs: 7131 });
+      expect(results[0]!.type === "turn_result" && results[0]!.costUsd).toBeCloseTo(0.121987);
+      expect(results[0]!.type === "turn_result" && results[0]!.usage.outputTokens).toBe(301);
+    }
+    {
+      const costs = parts.flatMap((p) => (p.type === "turn_result" ? [p.costUsd] : []));
+      expect(costs[1]).toBeCloseTo(0.1482896 - 0.121987);
+    }
+    {
+      const history = run(messages.filter((m) => m.type !== "stream_event")).filter((p) => p.type === "assistant_text");
+      const live = [...new Map(texts.map((p) => [p.id, p])).values()];
+      expect(history).toEqual(live);
+    }
   });
 
-  it("emits one turn_result per turn with duration, tokens and cost", () => {
-    const results = parts.filter((p) => p.type === "turn_result");
-    expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ type: "turn_result", isError: false, durationMs: 7131 });
-    expect(results[0]!.type === "turn_result" && results[0]!.costUsd).toBeCloseTo(0.121987);
-    expect(results[0]!.type === "turn_result" && results[0]!.usage.outputTokens).toBe(301);
-  });
 
-  it("gives each turn its own cost: the SDK's total_cost_usd is cumulative per query", () => {
-    const costs = parts.flatMap((p) => (p.type === "turn_result" ? [p.costUsd] : []));
-    expect(costs[1]).toBeCloseTo(0.1482896 - 0.121987);
-  });
-
-  it("gives the same final parts when replayed without stream events (history)", () => {
-    const history = run(messages.filter((m) => m.type !== "stream_event")).filter((p) => p.type === "assistant_text");
-    const live = [...new Map(texts.map((p) => [p.id, p])).values()];
-    expect(history).toEqual(live);
-  });
 });
 
 describe("adapter on user messages", () => {
@@ -96,46 +100,50 @@ describe("adapter on recorded tool session", () => {
   const last = <T extends Part["type"]>(type: T) =>
     [...new Map(parts.filter((p) => p.type === type).map((p) => [p.id, p])).values()] as Extract<Part, { type: T }>[];
 
-  it("streams thinking under one stable id per block, ending with the complete text", () => {
-    const thinking = parts.filter((p) => p.type === "thinking");
-    const finals = last("thinking");
-    expect(finals).toHaveLength(2);
-    expect(thinking.filter((p) => p.id === finals[0]!.id).length).toBeGreaterThan(2);
-    expect(finals[0]).toMatchObject({ streaming: false, text: expect.stringContaining("parallel") });
+  it("streams thinking under one stable id per block; tool_call goes pending -> running -> final status; emits one tool_result per call with output and isError", () => {
+    {
+      const thinking = parts.filter((p) => p.type === "thinking");
+      const finals = last("thinking");
+      expect(finals).toHaveLength(2);
+      expect(thinking.filter((p) => p.id === finals[0]!.id).length).toBeGreaterThan(2);
+      expect(finals[0]).toMatchObject({ streaming: false, text: expect.stringContaining("parallel") });
+    }
+    {
+      const calls = parts.filter((p) => p.type === "tool_call");
+      const first = calls.filter((p) => p.toolUseId === calls[0]!.toolUseId).map((p) => p.status);
+      expect(first).toEqual(["pending", "running", "done"]);
+      expect(last("tool_call").map((p) => [p.tool, p.status])).toEqual([
+        ["Read", "done"],
+        ["Read", "done"],
+        ["Read", "error"],
+        ["Bash", "denied"],
+      ]);
+      for (const p of last("tool_call")) expect(p.id).toBe(p.toolUseId);
+      expect(last("tool_call")[3]!.input).toMatchObject({ command: "touch /tmp/claude-ui-gh3-probe" });
+    }
+    {
+      const results = last("tool_result");
+      expect(results.map((p) => p.isError)).toEqual([false, false, true, true]);
+      expect(results[2]!.output).toMatch(/File does not exist/);
+      expect(new Set(results.map((p) => p.toolUseId))).toEqual(new Set(last("tool_call").map((p) => p.toolUseId)));
+    }
   });
 
-  it("tool_call goes pending -> running -> final status, keyed by toolUseId", () => {
-    const calls = parts.filter((p) => p.type === "tool_call");
-    const first = calls.filter((p) => p.toolUseId === calls[0]!.toolUseId).map((p) => p.status);
-    expect(first).toEqual(["pending", "running", "done"]);
-    expect(last("tool_call").map((p) => [p.tool, p.status])).toEqual([
-      ["Read", "done"],
-      ["Read", "done"],
-      ["Read", "error"],
-      ["Bash", "denied"],
-    ]);
-    for (const p of last("tool_call")) expect(p.id).toBe(p.toolUseId);
-    expect(last("tool_call")[3]!.input).toMatchObject({ command: "touch /tmp/claude-ui-gh3-probe" });
+
+
+  it("gives the same final thinking, tool and result parts when replayed without stream events (history); drops known noise instead of emitting raw parts", () => {
+    {
+      // Order may differ: live, a tool_call appears at its stream start, before earlier results.
+      const final = (ps: Part[]) =>
+        [...new Map(ps.filter((p) => ["thinking", "tool_call", "tool_result"].includes(p.type)).map((p) => [p.id, p])).values()]
+          .sort((a, b) => a.id.localeCompare(b.id));
+      expect(final(run(messages.filter((m) => m.type !== "stream_event")))).toEqual(final(parts));
+    }
+    {
+      expect(parts.filter((p) => p.type === "raw")).toEqual([]);
+    }
   });
 
-  it("emits one tool_result per call with output and isError", () => {
-    const results = last("tool_result");
-    expect(results.map((p) => p.isError)).toEqual([false, false, true, true]);
-    expect(results[2]!.output).toMatch(/File does not exist/);
-    expect(new Set(results.map((p) => p.toolUseId))).toEqual(new Set(last("tool_call").map((p) => p.toolUseId)));
-  });
-
-  it("gives the same final thinking, tool and result parts when replayed without stream events (history)", () => {
-    // Order may differ: live, a tool_call appears at its stream start, before earlier results.
-    const final = (ps: Part[]) =>
-      [...new Map(ps.filter((p) => ["thinking", "tool_call", "tool_result"].includes(p.type)).map((p) => [p.id, p])).values()]
-        .sort((a, b) => a.id.localeCompare(b.id));
-    expect(final(run(messages.filter((m) => m.type !== "stream_event")))).toEqual(final(parts));
-  });
-
-  it("drops known noise (init, status, thinking tokens, rate limits) instead of emitting raw parts", () => {
-    expect(parts.filter((p) => p.type === "raw")).toEqual([]);
-  });
 });
 
 describe("adapter on interrupts", () => {
@@ -166,18 +174,20 @@ describe("adapter turn cost", () => {
     ({ type: "result", uuid, terminal_reason, duration_ms: 1, total_cost_usd: total, usage: {}, is_error: false, permission_denials: [] });
   const costs = (parts: Part[]) => parts.flatMap((p) => (p.type === "turn_result" ? [p.costUsd] : []));
 
-  it("counts an aborted turn's spend in the base, not in the next turn", () => {
-    expect(costs(run([result("r1", 0.1), result("r2", 0.15, "aborted_streaming"), result("r3", 0.2)]))).toEqual([0.1, expect.closeTo(0.05)]);
+  it("counts an aborted turn's spend in the base, not in the next turn; takes a lower total as a reset; has no cost for the first turn of a resumed session", () => {
+    {
+      expect(costs(run([result("r1", 0.1), result("r2", 0.15, "aborted_streaming"), result("r3", 0.2)]))).toEqual([0.1, expect.closeTo(0.05)]);
+    }
+    {
+      expect(costs(run([result("r1", 0.3), result("r2", 0.02)]))).toEqual([0.3, 0.02]);
+    }
+    {
+      const adapter = createAdapter({ resumed: true });
+      expect(costs([result("r1", 0.5), result("r2", 0.6)].flatMap((m) => adapter.convert(m as never)))).toEqual([undefined, expect.closeTo(0.1)]);
+    }
   });
 
-  it("takes a lower total as a reset (a query resumed without a saved total, /clear)", () => {
-    expect(costs(run([result("r1", 0.3), result("r2", 0.02)]))).toEqual([0.3, 0.02]);
-  });
 
-  it("has no cost for the first turn of a resumed session: its total includes turns of an earlier query", () => {
-    const adapter = createAdapter({ resumed: true });
-    expect(costs([result("r1", 0.5), result("r2", 0.6)].flatMap((m) => adapter.convert(m as never)))).toEqual([undefined, expect.closeTo(0.1)]);
-  });
 });
 
 describe("adapter on known SDK noise", () => {
@@ -447,51 +457,55 @@ describe("adapter on recorded edit/todo/subagent session", () => {
   const parts = run(messages);
   const agentId = messages.find((m) => m.type === "system" && m.subtype === "task_started").tool_use_id as string;
 
-  it("turns each top-level TodoWrite into a todo_update with the full item list", () => {
-    const todos = parts.filter((p) => p.type === "todo_update");
-    expect(todos.map((p) => p.items.map((i) => i.status))).toEqual([
-      ["in_progress", "pending"],
-      ["completed", "in_progress"],
-      ["completed", "completed"],
-    ]);
-    expect(todos[0]!.items[0]).toEqual({ content: "Inspect value.ts", status: "in_progress", activeForm: "Inspecting value.ts" });
+  it("turns each top-level TodoWrite into a todo_update; turns the Agent call into a subagent part that ends done; tags the subagent's own messages with parentId, and nothing else", () => {
+    {
+      const todos = parts.filter((p) => p.type === "todo_update");
+      expect(todos.map((p) => p.items.map((i) => i.status))).toEqual([
+        ["in_progress", "pending"],
+        ["completed", "in_progress"],
+        ["completed", "completed"],
+      ]);
+      expect(todos[0]!.items[0]).toEqual({ content: "Inspect value.ts", status: "in_progress", activeForm: "Inspecting value.ts" });
+    }
+    {
+      const subs = parts.filter((p) => p.type === "subagent");
+      expect(parts.some((p) => p.type === "tool_call" && p.id === agentId)).toBe(false);
+      expect(subs.map((p) => p.status)).toEqual(["pending", "running", "done"]);
+      expect(subs.at(-1)).toMatchObject({ id: agentId, toolUseId: agentId, description: "Inspect value.ts" });
+    }
+    {
+      const children = parts.filter((p) => p.parentId === agentId);
+      expect(new Set(children.map((p) => p.type))).toEqual(
+        new Set(["user_text", "tool_call", "tool_result", "thinking", "assistant_text"]),
+      );
+      expect(children.filter((p) => p.type === "tool_call").at(-1)).toMatchObject({ tool: "Read", status: "done" });
+      expect(parts.filter((p) => p.parentId && p.parentId !== agentId)).toEqual([]);
+      expect(parts.find((p) => p.type === "tool_result" && p.toolUseId === agentId)?.parentId).toBeUndefined();
+    }
   });
 
-  it("turns the Agent call into a subagent part (no tool_call) that ends done", () => {
-    const subs = parts.filter((p) => p.type === "subagent");
-    expect(parts.some((p) => p.type === "tool_call" && p.id === agentId)).toBe(false);
-    expect(subs.map((p) => p.status)).toEqual(["pending", "running", "done"]);
-    expect(subs.at(-1)).toMatchObject({ id: agentId, toolUseId: agentId, description: "Inspect value.ts" });
+
+
+  it("keeps Edit and Write inputs on their tool_call for the diff; drops task lifecycle messages instead of emitting raw parts; puts the file before the first Edit/Write of a path on its tool_result", () => {
+    {
+      const calls = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.tool, p] as const] : [])));
+      expect(calls.get("Edit")!.input).toMatchObject({ old_string: "const b = 2;", new_string: "const b = 3;" });
+      expect(calls.get("Write")!.input).toMatchObject({ content: "hello\nworld\n" });
+    }
+    {
+      expect(parts.filter((p) => p.type === "raw")).toEqual([]);
+    }
+    {
+      const tool = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.toolUseId, p.tool] as const] : [])));
+      const originals = parts.flatMap((p) => (p.type === "tool_result" && "original" in p ? [[tool.get(p.toolUseId), p.original] as const] : []));
+      expect(originals).toEqual([
+        ["Edit", "const a = 1;\nconst b = 2;\nexport { a, b };\n"],
+        ["Write", null],
+      ]);
+    }
   });
 
-  it("tags the subagent's own messages with parentId, and nothing else", () => {
-    const children = parts.filter((p) => p.parentId === agentId);
-    expect(new Set(children.map((p) => p.type))).toEqual(
-      new Set(["user_text", "tool_call", "tool_result", "thinking", "assistant_text"]),
-    );
-    expect(children.filter((p) => p.type === "tool_call").at(-1)).toMatchObject({ tool: "Read", status: "done" });
-    expect(parts.filter((p) => p.parentId && p.parentId !== agentId)).toEqual([]);
-    expect(parts.find((p) => p.type === "tool_result" && p.toolUseId === agentId)?.parentId).toBeUndefined();
-  });
 
-  it("keeps Edit and Write inputs on their tool_call for the diff", () => {
-    const calls = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.tool, p] as const] : [])));
-    expect(calls.get("Edit")!.input).toMatchObject({ old_string: "const b = 2;", new_string: "const b = 3;" });
-    expect(calls.get("Write")!.input).toMatchObject({ content: "hello\nworld\n" });
-  });
-
-  it("drops task lifecycle messages instead of emitting raw parts", () => {
-    expect(parts.filter((p) => p.type === "raw")).toEqual([]);
-  });
-
-  it("puts the file before the first Edit/Write of a path on its tool_result: null for a created file", () => {
-    const tool = new Map(parts.flatMap((p) => (p.type === "tool_call" ? [[p.toolUseId, p.tool] as const] : [])));
-    const originals = parts.flatMap((p) => (p.type === "tool_result" && "original" in p ? [[tool.get(p.toolUseId), p.original] as const] : []));
-    expect(originals).toEqual([
-      ["Edit", "const a = 1;\nconst b = 2;\nexport { a, b };\n"],
-      ["Write", null],
-    ]);
-  });
 });
 
 // Live SDK 0.3.285 messages (development-docs/GH-112 probe): background run "Say hi" ends, SendMessage resumes it (task_started
@@ -824,43 +838,45 @@ describe("Bash call moved to the background (GH-440)", () => {
   const result = (id: string, content: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] } });
   const calls = (ps: Part[]) => ps.filter((p): p is Extract<Part, { type: "tool_call" }> => p.type === "tool_call");
 
-  it("a foreground Bash call moved to the background stays running until its task_notification (live SDK 0.3.285)", () => {
-    const messages = fixture("bash-backgrounded.jsonl");
-    const adapter = createAdapter();
-    const steps = messages.map((m) => adapter.convert(m as never));
-    const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
-    const last = (ps: Part[]) => calls(ps).at(-1)!;
-    expect(last(at((m) => m.subtype === "task_started"))).toMatchObject({ shell: "foreground", status: "running" });
-    expect(last(at((m) => m.subtype === "task_updated" && m.patch.is_backgrounded))).toMatchObject({ shell: "background", status: "running" });
-    // The placeholder tool_result keeps it running.
-    expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
-    expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ shell: "background", status: "done" });
+  it("a foreground Bash call moved to the background stays running until its task_notification; a subagent's foreground Bash call is a foreground task, moves to the background and ends by its task_notification; a subagent's moved shell ends stopped when the subagent run ends first", () => {
+    {
+      const messages = fixture("bash-backgrounded.jsonl");
+      const adapter = createAdapter();
+      const steps = messages.map((m) => adapter.convert(m as never));
+      const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
+      const last = (ps: Part[]) => calls(ps).at(-1)!;
+      expect(last(at((m) => m.subtype === "task_started"))).toMatchObject({ shell: "foreground", status: "running" });
+      expect(last(at((m) => m.subtype === "task_updated" && m.patch.is_backgrounded))).toMatchObject({ shell: "background", status: "running" });
+      // The placeholder tool_result keeps it running.
+      expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
+      expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ shell: "background", status: "done" });
+    }
+    {
+      const messages = fixture("bash-backgrounded-subagent.jsonl");
+      const adapter = createAdapter();
+      const steps = messages.map((m) => adapter.convert(m as never));
+      const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
+      const last = (ps: Part[]) => calls(ps).filter((p) => p.tool === "Bash").at(-1)!;
+      const agentId = steps[0]!.find((p) => p.type === "subagent")!.id;
+      expect(last(at((m) => m.subtype === "task_started" && m.task_type === "local_bash"))).toMatchObject({ parentId: agentId, shell: "foreground", status: "running" });
+      expect(last(at((m) => m.subtype === "task_updated"))).toMatchObject({ shell: "background", status: "running" });
+      expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
+      expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ parentId: agentId, shell: "background", status: "done", exitCode: 0 });
+    }
+    {
+      const adapter = createAdapter();
+      const msgs = [
+        { type: "assistant", parent_tool_use_id: "ag1", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "tb2", name: "Bash", input: { command: "ping -c 40 127.0.0.1" } }] } },
+        { type: "system", subtype: "task_started", task_id: "b2", owned_by_subagent: true, tool_use_id: "tb2", description: "x", is_backgrounded: false, task_type: "local_bash", uuid: "u1" },
+        { type: "system", subtype: "task_updated", task_id: "b2", patch: { is_backgrounded: true }, uuid: "u2" },
+        { type: "system", subtype: "task_notification", task_id: "b2", tool_use_id: "tb2", status: "stopped", output_file: "/tmp/b2.output", summary: "Background command \"x\" was stopped", uuid: "u3" },
+      ];
+      const parts = msgs.flatMap((m) => adapter.convert(m as never));
+      expect(calls(parts).filter((p) => p.tool === "Bash").at(-1)).toMatchObject({ parentId: "ag1", shell: "background", status: "stopped" });
+    }
   });
 
-  it("a subagent's foreground Bash call is a foreground task, moves to the background and ends by its task_notification (GH-492)", () => {
-    const messages = fixture("bash-backgrounded-subagent.jsonl");
-    const adapter = createAdapter();
-    const steps = messages.map((m) => adapter.convert(m as never));
-    const at = (pred: (m: (typeof messages)[number]) => boolean) => steps[messages.findIndex(pred)]!;
-    const last = (ps: Part[]) => calls(ps).filter((p) => p.tool === "Bash").at(-1)!;
-    const agentId = steps[0]!.find((p) => p.type === "subagent")!.id;
-    expect(last(at((m) => m.subtype === "task_started" && m.task_type === "local_bash"))).toMatchObject({ parentId: agentId, shell: "foreground", status: "running" });
-    expect(last(at((m) => m.subtype === "task_updated"))).toMatchObject({ shell: "background", status: "running" });
-    expect(calls(at((m) => m.type === "user")).map((p) => p.status)).not.toContain("done");
-    expect(last(at((m) => m.subtype === "task_notification"))).toMatchObject({ parentId: agentId, shell: "background", status: "done", exitCode: 0 });
-  });
 
-  it("a subagent's moved shell ends stopped when the subagent run ends first (GH-492)", () => {
-    const adapter = createAdapter();
-    const msgs = [
-      { type: "assistant", parent_tool_use_id: "ag1", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "tb2", name: "Bash", input: { command: "ping -c 40 127.0.0.1" } }] } },
-      { type: "system", subtype: "task_started", task_id: "b2", owned_by_subagent: true, tool_use_id: "tb2", description: "x", is_backgrounded: false, task_type: "local_bash", uuid: "u1" },
-      { type: "system", subtype: "task_updated", task_id: "b2", patch: { is_backgrounded: true }, uuid: "u2" },
-      { type: "system", subtype: "task_notification", task_id: "b2", tool_use_id: "tb2", status: "stopped", output_file: "/tmp/b2.output", summary: "Background command \"x\" was stopped", uuid: "u3" },
-    ];
-    const parts = msgs.flatMap((m) => adapter.convert(m as never));
-    expect(calls(parts).filter((p) => p.tool === "Bash").at(-1)).toMatchObject({ parentId: "ag1", shell: "background", status: "stopped" });
-  });
 
   it("a restored manually backgrounded Bash call is a background shell until its notification record", () => {
     const placeholder = "Command was manually backgrounded by user with ID: bg1. Output is being written to: /tmp/bg1.output. If it is still running after 30m in the background, it will be stopped and you will be notified.";
@@ -890,39 +906,41 @@ describe("Bash call moved to the background (GH-440)", () => {
   const live = (text: string) => ({ ...result("tb1", text), tool_use_result: { stdout: "", stderr: "", backgroundTaskId: "t1" } });
   const notice = (status: string, summary: string) => ({ type: "system", subtype: "task_notification", task_id: "t1", tool_use_id: "tb1", status, summary });
 
-  it("a run_in_background Bash call gets its output file, run time and exit code (live SDK 0.3.285)", () => {
-    const adapter = createAdapter();
-    adapter.convert(bgCall() as never);
-    adapter.convert(started as never);
-    const after = adapter.convert(live(placeholder()) as never);
-    expect(calls(after).at(-1)).toBeUndefined();
-    expect(adapter.outputFile("tb1")).toBe(OUT);
-    expect(adapter.openCalls().map((c) => c.id)).toContain("tb1");
-    const ended = adapter.convert(notice("failed", "Background command \"x\" failed with exit code 3") as never);
-    expect(calls(ended).at(-1)).toMatchObject({ status: "error", shell: "background", exitCode: 3 });
-    expect(calls(ended).at(-1)!.startedAt).toBeTypeOf("number");
-    expect(calls(ended).at(-1)!.endedAt).toBeTypeOf("number");
-  });
-
-  it("a killed background shell ends stopped without an exit code", () => {
-    const adapter = createAdapter();
-    for (const m of [bgCall(), started, live(placeholder())]) adapter.convert(m as never);
-    const ended = adapter.convert(notice("stopped", "ping -i 1 localhost") as never);
-    expect(calls(ended).at(-1)).toMatchObject({ status: "stopped" });
-    expect(calls(ended).at(-1)!.exitCode).toBeUndefined();
-  });
-
-  it("the exit code is the CLI's own ending of the summary, not a phrase inside the command", () => {
-    const code = (command: string, status: string, summary: string) => {
+  it("a run_in_background Bash call gets its output file, run time and exit code; a killed background shell ends stopped without an exit code; the exit code is the CLI's own ending of the summary", () => {
+    {
       const adapter = createAdapter();
-      adapter.convert({ type: "assistant", message: { id: "m", role: "assistant", content: [{ type: "tool_use", id: "tb1", name: "Bash", input: { command, run_in_background: true } }] } } as never);
+      adapter.convert(bgCall() as never);
       adapter.convert(started as never);
-      return calls(adapter.convert(notice(status, summary) as never)).at(-1)!.exitCode;
-    };
-    expect(code("echo exit code 5", "completed", 'Background command "echo exit code 5" completed (exit code 0)')).toBe(0);
-    expect(code("echo exit code 5", "failed", 'Background command "echo exit code 5" failed with exit code 2')).toBe(2);
-    expect(code("echo failed with exit code 5", "stopped", "echo failed with exit code 5")).toBeUndefined();
+      const after = adapter.convert(live(placeholder()) as never);
+      expect(calls(after).at(-1)).toBeUndefined();
+      expect(adapter.outputFile("tb1")).toBe(OUT);
+      expect(adapter.openCalls().map((c) => c.id)).toContain("tb1");
+      const ended = adapter.convert(notice("failed", "Background command \"x\" failed with exit code 3") as never);
+      expect(calls(ended).at(-1)).toMatchObject({ status: "error", shell: "background", exitCode: 3 });
+      expect(calls(ended).at(-1)!.startedAt).toBeTypeOf("number");
+      expect(calls(ended).at(-1)!.endedAt).toBeTypeOf("number");
+    }
+    {
+      const adapter = createAdapter();
+      for (const m of [bgCall(), started, live(placeholder())]) adapter.convert(m as never);
+      const ended = adapter.convert(notice("stopped", "ping -i 1 localhost") as never);
+      expect(calls(ended).at(-1)).toMatchObject({ status: "stopped" });
+      expect(calls(ended).at(-1)!.exitCode).toBeUndefined();
+    }
+    {
+      const code = (command: string, status: string, summary: string) => {
+        const adapter = createAdapter();
+        adapter.convert({ type: "assistant", message: { id: "m", role: "assistant", content: [{ type: "tool_use", id: "tb1", name: "Bash", input: { command, run_in_background: true } }] } } as never);
+        adapter.convert(started as never);
+        return calls(adapter.convert(notice(status, summary) as never)).at(-1)!.exitCode;
+      };
+      expect(code("echo exit code 5", "completed", 'Background command "echo exit code 5" completed (exit code 0)')).toBe(0);
+      expect(code("echo exit code 5", "failed", 'Background command "echo exit code 5" failed with exit code 2')).toBe(2);
+      expect(code("echo failed with exit code 5", "stopped", "echo failed with exit code 5")).toBeUndefined();
+    }
   });
+
+
 
   it("a restored run_in_background call stays running until its task-notification record, which gives its exit code", () => {
     const adapter = createAdapter();

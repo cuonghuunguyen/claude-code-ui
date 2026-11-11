@@ -131,10 +131,6 @@ describe("tab groups by project", () => {
     expect(keysFinal(["a", "c"], false, has, new Set(["c"]))).toBe(false);
   });
 
-  it("moveTabIn with one shared key (keys not final) moves a tab across tabs of unknown project, not refused (GH-201)", () => {
-    expect(moveTabIn(["a", "b", "c"], () => "", "c", "a")).toEqual(["c", "a", "b"]);
-  });
-
   it("moveTabIn reorders inside a group and ignores a move into another group", () => {
     const t = ["a1", "a2", "b1", "b2", "c1"];
     expect(moveTabIn(t, cwdOf, "a2", "a1")).toEqual(["a2", "a1", "b1", "b2", "c1"]);

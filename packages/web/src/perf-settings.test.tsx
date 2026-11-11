@@ -5,8 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PerformanceSection } from "./perf-settings.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const report = (): PerfReport => ({
   daemon: {
     pid: 1,
@@ -50,7 +48,7 @@ const mount = async (request: (m: { type: string }) => Promise<unknown>) => {
 };
 const text = () => host.textContent ?? "";
 
-it("shows excess delay, ELU, slowest requests and spans, processes, stalls, memory and cost", async () => {
+it("shows excess delay, ELU, slowest requests and spans, processes, stalls, memory and cost; p95 is — when n < 30; real tables named by their title", async () => {
   await mount(async () => report());
   expect(text()).toContain("1.5 ms");
   expect(text()).toContain("3.4 %");
@@ -63,26 +61,15 @@ it("shows excess delay, ELU, slowest requests and spans, processes, stalls, memo
   expect(host.querySelector('[data-testid="perf-memory"] svg')).toBeTruthy();
   expect(text()).toContain("120 MB");
   expect(text()).toMatch(/Monitor cost.*1\.5 ms/);
-});
-
-it("p95 shows — when n < 30", async () => {
-  await mount(async () => report());
+  // The cost hint does not state one platform's number.
+  expect(text()).not.toMatch(/11 ms/);
   const row = (name: string) => [...host.querySelectorAll('[data-testid="perf-slowest"] [data-row]')].find((r) => r.textContent?.includes(name))!;
   expect(row("session.subscribe").textContent).toContain("—");
   expect(row("git.log").textContent).toContain("30 ms");
-});
-
-it("the tables are real tables with column and row headers, named by their title", async () => {
-  await mount(async () => report());
   const t = host.querySelector('[data-testid="perf-slowest"] table')!;
   expect(t.getAttribute("aria-labelledby")).toBe("perf-slowest-title");
   expect([...t.querySelectorAll("thead th[scope=col]")].map((h) => h.textContent)).toEqual(["Name", "n", "p50", "p95", "Worst"]);
   expect(t.querySelector("tbody th[scope=row]")?.textContent).toBeTruthy();
-});
-
-it("the cost hint does not state one platform's number", async () => {
-  await mount(async () => report());
-  expect(text()).not.toMatch(/11 ms/);
 });
 
 it("says so when the monitor is off", async () => {

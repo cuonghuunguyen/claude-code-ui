@@ -7,7 +7,6 @@ import type { connect } from "./client.ts";
 import { ConflictBanner } from "./conflict-banner.tsx";
 import { forgetRemoteOps, remoteOpOf } from "./git-remote-ops.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
   forgetRemoteOps();
   document.body.innerHTML = "";

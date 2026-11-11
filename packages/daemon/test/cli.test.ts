@@ -36,30 +36,40 @@ describe("parseCli", () => {
     expect(PHONE_HINT).toContain("Add to Home Screen");
     expect(PHONE_HINT).toContain("Install app");
   });
-  it("help and version short-circuit", () => {
-    expect(parseCli(["--help"], {}, "/h").kind).toBe("help");
-    expect(parseCli(["-h"], {}, "/h").kind).toBe("help");
-    expect(parseCli(["--version"], {}, "/h").kind).toBe("version");
-    expect(parseCli(["-v"], {}, "/h").kind).toBe("version");
-  });
-  it("update subcommand and --no-update-check", () => {
-    expect(parseCli(["update"], {}, "/h")).toEqual({ kind: "update" });
-    expect(parseCli(["update", "x"], {}, "/h").kind).toBe("error");
-    expect(parseCli(["--no-update-check"], {}, "/h")).toMatchObject({ kind: "run", updateCheck: false });
-    expect(parseCli([], { CLAUDE_UI_UPDATE_CHECK: "0" }, "/h")).toMatchObject({ updateCheck: false });
-    expect(parseCli([], {}, "/h")).not.toHaveProperty("updateCheck");
-  });
-  it("rejects an invalid port, an unknown flag and a stray argument", () => {
-    for (const argv of [["--port", "abc"], ["--port", "70000"], ["--nope"], ["extra"]]) expect(parseCli(argv, {}, "/h").kind).toBe("error");
-    expect(parseCli([], { PORT: "x" }, "/h").kind).toBe("error");
+  it("help and version short-circuit; update subcommand and --no-update-check; invalid port, unknown flag and stray argument are errors", () => {
+    {
+      expect(parseCli(["--help"], {}, "/h").kind).toBe("help");
+      expect(parseCli(["-h"], {}, "/h").kind).toBe("help");
+      expect(parseCli(["--version"], {}, "/h").kind).toBe("version");
+      expect(parseCli(["-v"], {}, "/h").kind).toBe("version");
+    }
+    {
+      expect(parseCli(["update"], {}, "/h")).toEqual({ kind: "update" });
+      expect(parseCli(["update", "x"], {}, "/h").kind).toBe("error");
+      expect(parseCli(["--no-update-check"], {}, "/h")).toMatchObject({ kind: "run", updateCheck: false });
+      expect(parseCli([], { CLAUDE_UI_UPDATE_CHECK: "0" }, "/h")).toMatchObject({ updateCheck: false });
+      expect(parseCli([], {}, "/h")).not.toHaveProperty("updateCheck");
+    }
+    {
+      for (const argv of [["--port", "abc"], ["--port", "70000"], ["--nope"], ["extra"]]) expect(parseCli(argv, {}, "/h").kind).toBe("error");
+      expect(parseCli([], { PORT: "x" }, "/h").kind).toBe("error");
+    }
   });
 
-  it("--no-open / CLAUDE_UI_OPEN=0 turn opening the browser at start off", () => {
-    expect(parseCli(["--no-open"], {}, "/h")).toMatchObject({ kind: "run", open: false });
-    expect(parseCli([], { CLAUDE_UI_OPEN: "0" }, "/h")).toMatchObject({ kind: "run", open: false });
-    expect(parseCli([], {}, "/h")).not.toHaveProperty("open");
-    expect(parseCli(["status", "--no-open"], {}, "/h")).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
-    expect(HELP).toContain("--no-open");
+  it("--no-os-notify / CLAUDE_UI_OS_NOTIFY=0 turn the desktop notification off; --no-open / CLAUDE_UI_OPEN=0 turn opening the browser at start off", () => {
+    {
+      expect(parseCli(["--no-open"], {}, "/h")).toMatchObject({ kind: "run", open: false });
+      expect(parseCli([], { CLAUDE_UI_OPEN: "0" }, "/h")).toMatchObject({ kind: "run", open: false });
+      expect(parseCli([], {}, "/h")).not.toHaveProperty("open");
+      expect(parseCli(["status", "--no-open"], {}, "/h")).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
+      expect(HELP).toContain("--no-open");
+    }
+    {
+      expect(parseCli(["--no-os-notify"], {}, "/h")).toMatchObject({ kind: "run", osNotify: false });
+      expect(parseCli([], { CLAUDE_UI_OS_NOTIFY: "0" }, "/h")).toMatchObject({ kind: "run", osNotify: false });
+      expect(parseCli([], {}, "/h")).not.toHaveProperty("osNotify");
+      expect(HELP).toContain("--no-os-notify");
+    }
   });
 
   it("autoOpen: not after an update restart, over SSH or on a Linux without a display", () => {
@@ -74,12 +84,6 @@ describe("parseCli", () => {
     expect(autoOpen({ SSH_TTY: "/dev/pts/0" }, "darwin", false)).toBe(false);
   });
 
-  it("--no-os-notify / CLAUDE_UI_OS_NOTIFY=0 turn the desktop notification off", () => {
-    expect(parseCli(["--no-os-notify"], {}, "/h")).toMatchObject({ kind: "run", osNotify: false });
-    expect(parseCli([], { CLAUDE_UI_OS_NOTIFY: "0" }, "/h")).toMatchObject({ kind: "run", osNotify: false });
-    expect(parseCli([], {}, "/h")).not.toHaveProperty("osNotify");
-    expect(HELP).toContain("--no-os-notify");
-  });
 
   it("CLAUDE_UI_IDLE_CLOSE_MINUTES sets the idle close; default 10; invalid is an error", () => {
     expect(parseCli([], {}, "/h")).toMatchObject({ idleCloseMinutes: 10 });
@@ -121,20 +125,30 @@ describe("parseCli", () => {
     it("a command rejects daemon-only flags", () => {
       for (const f of [["--lan"], ["--roots", "/x"], ["--hostname", "h"], ["--tailscale"], ["--allow-bypass"], ["--no-update-check"], ["--no-os-notify"]]) expect(parseCli(["status", ...f], {}, "/h"), f[0]).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
     });
-    it("USAGE_HINT is short and points to --help", () => {
-      expect(USAGE_HINT.split("\n").length).toBeLessThanOrEqual(2);
-      expect(USAGE_HINT).toContain("--help");
-    });
-    it("HELP lists the commands", () => {
-      for (const c of ["status", "open", "sessions", "projects", "workers", "--token-file", "--json"]) expect(HELP).toContain(c);
+    it("USAGE_HINT is short and points to --help; HELP lists the commands", () => {
+      {
+        expect(USAGE_HINT.split("\n").length).toBeLessThanOrEqual(2);
+        expect(USAGE_HINT).toContain("--help");
+      }
+      {
+        for (const c of ["status", "open", "sessions", "projects", "workers", "--token-file", "--json"]) expect(HELP).toContain(c);
+      }
     });
   });
 });
 
 describe("saved launcher options (Settings › Launcher)", () => {
   const saved = { port: 4999, roots: ["/a", "/b"], tailscale: true, lan: true, allowBypass: true, updateCheck: false, osNotify: false, open: false };
-  it("saved launcher options apply with no flag or env", () => {
-    expect(parseCli([], {}, "/h", saved)).toEqual({ kind: "run", port: 4999, roots: ["/a", "/b"], hostname: undefined, lan: true, allowBypass: true, tailscale: true, idleCloseMinutes: 10, updateCheck: false, osNotify: false, open: false });
+  it("saved launcher options apply with no flag or env; empty saved roots mean the home directory; client commands ignore saved options", () => {
+    {
+      expect(parseCli([], {}, "/h", saved)).toEqual({ kind: "run", port: 4999, roots: ["/a", "/b"], hostname: undefined, lan: true, allowBypass: true, tailscale: true, idleCloseMinutes: 10, updateCheck: false, osNotify: false, open: false });
+    }
+    {
+      expect(parseCli([], {}, "/h", { ...saved, roots: [] })).toMatchObject({ roots: ["/h"] });
+    }
+    {
+      expect(parseCli(["status"], {}, "/h", saved)).toEqual(parseCli(["status"], {}, "/h"));
+    }
   });
   it("an env var wins over a saved option", () => {
     const r = parseCli([], { PORT: "5000", CLAUDE_UI_LAN: "0", CLAUDE_UI_UPDATE_CHECK: "1", CLAUDE_UI_ROOTS: "/e" }, "/h", saved);
@@ -150,12 +164,6 @@ describe("saved launcher options (Settings › Launcher)", () => {
     expect(r).toMatchObject({ kind: "run", hostname: "x.example.com" });
     expect(r).not.toHaveProperty("tailscale");
     expect(parseCli(["--tailscale"], { CLAUDE_UI_HOSTNAME: "x.example.com" }, "/h", saved)).toMatchObject({ kind: "error" });
-  });
-  it("empty saved roots mean the home directory", () => {
-    expect(parseCli([], {}, "/h", { ...saved, roots: [] })).toMatchObject({ roots: ["/h"] });
-  });
-  it("client commands ignore saved options", () => {
-    expect(parseCli(["status"], {}, "/h", saved)).toEqual(parseCli(["status"], {}, "/h"));
   });
   it("the LAN and bypass hints of Settings › Launcher match --help", async () => {
     const { default: en } = await import("../../web/src/i18n/en/settings.ts");

@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { NODE_MIN } from "@claude-ui/protocol";
@@ -324,16 +324,19 @@ export async function writeTar(out: string, entries: TarEntry[]) {
 
 /**
  * The bundle tar: the parts as they were downloaded (the container unpacks them), the side JS (`dist/side`, without its
- * side.json) under `app/dist/` and a package.json (name, version, ESM) under `app/`. Written to a new file in `outDir`.
+ * side.json) and its `plugins` folder (the visualize skill) under `app/dist/` and a package.json (name, version, ESM) under `app/`. Written to a new file in `outDir`.
  */
 export async function assembleBundle(o: { partFiles: Record<string, string>; sideDir: string; version: string; outDir: string }) {
   mkdirSync(o.outDir, { recursive: true });
   const out = join(o.outDir, `bundle-${process.pid}-${Date.now()}.tar`);
   const js = readdirSync(o.sideDir).filter((f) => f.endsWith(".js") || f === "THIRD_PARTY_LICENSES.txt").sort();
+  const pdir = join(o.sideDir, "plugins");
+  const plugins = existsSync(pdir) ? readdirSync(pdir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => relative(pdir, join(e.parentPath, e.name))).sort() : [];
   try {
     await writeTar(out, [
       ...Object.entries(o.partFiles).map(([name, path]) => ({ name, path })),
       ...js.map((f) => ({ name: `app/dist/${f}`, path: join(o.sideDir, f) })),
+      ...plugins.map((rel) => ({ name: `app/dist/plugins/${rel.split(sep).join("/")}`, path: join(o.sideDir, "plugins", rel) })),
       { name: "app/package.json", data: Buffer.from(JSON.stringify({ name: "claude-code-ui", version: o.version, type: "module" })) },
     ]);
   } catch (e) {

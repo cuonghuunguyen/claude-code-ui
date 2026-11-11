@@ -4,9 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { QuoteButton } from "./quote-button.tsx";
 
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 Range.prototype.getBoundingClientRect = () => new DOMRect(100, 200, 80, 20);
 
 const onQuote = vi.fn();

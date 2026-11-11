@@ -8,8 +8,6 @@ import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { FilesPanel, FileTab } from "./files-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const FILES: Record<string, string> = { "/p/a.ts": "a", "/p/b.md": "# b", "/o/x.ts": "x" };
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {

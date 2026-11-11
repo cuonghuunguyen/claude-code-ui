@@ -164,12 +164,6 @@ describe("listRepos", () => {
     expect(none).toBeTruthy();
   });
 
-  it("the scan finding a submodule keeps it a submodule", async () => {
-    const { sup } = superproject();
-    const r = (await list(sup, { repositoryScanMaxDepth: 3 })).repos;
-    expect(r.map((x) => `${x.kind}:${x.rel}`)).toEqual(["main:", "submodule:libs/lib", "submodule:libs/lib/sub/deep"]);
-  });
-
   it("a .gitmodules path that is absolute, has .., or leaves the top through a link is skipped", async () => {
     const base = tmp();
     const d = repo(join(base, "top"));
@@ -233,11 +227,14 @@ describe("listRepos", () => {
     expect(await rels(d)).toEqual([]);
   });
 
-  it("caps: entries, time and count stop the scan with truncated.scan", async () => {
+  it("caps: entries, time and count stop the scan with truncated.scan; the entries cap keeps the repositories found up to it", async () => {
     const d = tmp();
     for (let i = 0; i < 10; i++) fakeRepo(join(d, `r${i}`));
     const caps = { entries: 20_000, ms: 2_000, count: 50 };
-    expect((await list(d, {}, { caps: { ...caps, entries: 5 } })).truncated).toEqual({ scan: "entries" });
+    const e = await list(d, {}, { caps: { ...caps, entries: 5 } });
+    expect(e.truncated).toEqual({ scan: "entries" });
+    expect(e.repos.length).toBeGreaterThan(0);
+    expect(e.repos.length).toBeLessThanOrEqual(5);
     let t = 0;
     expect((await list(d, {}, { now: () => (t += 3000) })).truncated).toEqual({ scan: "time" });
     const c = await list(d, {}, { caps: { ...caps, count: 2 } });
@@ -284,15 +281,6 @@ describe("listRepos", () => {
     expect((await list(d, { ignoredRepositories: ["r3"] }, { caps })).truncated).toBeUndefined();
   });
 
-  it("a folder over the entries cap keeps the repositories found up to the cap", async () => {
-    const d = tmp();
-    for (let i = 0; i < 10; i++) fakeRepo(join(d, `r${i}`));
-    const r = await list(d, {}, { caps: { entries: 4, ms: 2_000, count: 50 } });
-    expect(r.truncated).toEqual({ scan: "entries" });
-    expect(r.repos.length).toBeGreaterThan(0);
-    expect(r.repos.length).toBeLessThanOrEqual(4);
-  });
-
   it("an ignoredRepositories entry the server refuses (UNC) is never resolved", async () => {
     const d = repo(tmp());
     const seen: string[] = [];
@@ -325,13 +313,13 @@ describe("listRepos", () => {
     expect((await list(d)).repos[0]!.branch).toBe(sha.slice(0, 7));
   });
 
-  it("no git process runs during listRepos", async () => {
+  it("no git process runs during listRepos; the scan finding a submodule keeps it a submodule", async () => {
     const { sup } = superproject();
     fakeRepo(join(sup, "n"));
     const calls: string[][] = [];
     setGitRunner((o) => (calls.push(o.args), threadRunner(o)));
     const r = await list(sup, { repositoryScanMaxDepth: 2 });
-    expect(r.repos.length).toBeGreaterThan(2);
+    expect(r.repos.map((x) => `${x.kind}:${x.rel}`)).toEqual(["main:", "submodule:libs/lib", "submodule:libs/lib/sub/deep", "nested:n"]);
     expect(calls).toEqual([]);
   });
 });

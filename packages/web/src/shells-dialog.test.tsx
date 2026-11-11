@@ -7,13 +7,6 @@ import { setLocalePref } from "./i18n.ts";
 import { ShellsDialog } from "./shells-dialog.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const bash = (id: string, input: object, status: "running" | "done" | "error" | "stopped", extra: object = {}): Part =>
   ({ type: "tool_call", id, toolUseId: id, tool: "Bash", input, status, shell: "background", ...extra }) as Part;
 const view = (...parts: Part[]): SessionView => parts.reduce((v, part, i) => applyEvent(v, { type: "event", sessionId: "s", seq: i + 1, part }), emptySession());

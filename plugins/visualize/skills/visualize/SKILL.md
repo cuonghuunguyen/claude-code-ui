@@ -15,6 +15,7 @@ Rules:
 - No `fetch`/XHR, no storage or cookies, no forms, no popups, no access to the page around the frame. All are blocked.
 - Colours: use the host CSS variables so the visual follows the light/dark theme: `--background`, `--foreground`, `--primary`, `--primary-foreground`, `--muted`, `--muted-foreground`, `--border`, `--accent`. Use them for text, axes, lines and the main series (`fill="var(--primary)"`); pick your own hex colours for further series, readable on both light and dark.
 - The page is transparent with 13px sans-serif text. The frame height follows the content; make the width fluid (`width:100%`, `viewBox`), height at most ~800px.
+- The frame is as tall as the root box: keep every element in normal flow inside it. No `position:absolute`/`fixed` content outside the root box, no negative margins pushing out, no `100vh`/`100%`-height layouts; give the root an explicit height when a chart library needs one.
 - Add one short sentence of text outside the fence about what the visual shows.
 
 Example:

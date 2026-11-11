@@ -25,16 +25,21 @@ describe("side kinds", () => {
 });
 
 describe("parseSshConfig", () => {
-  it("lists Host aliases: several per line, Host=, any case, comments, quotes, first occurrence only", () => {
-    const text = ["# Host nope", "Host box other # trailing", "  host=third", "HOST   \"quoted\"", "Host box", "Hostname 1.2.3.4", "Match host x"].join("\n");
-    expect(parseSshConfig(text)).toEqual(["box", "other", "third", "quoted"]);
+  it("parseSshConfig: lists Host aliases (several per line, Host=, any case, comments, quotes, first occurrence only); skips wildcards, negations, option-like and spaced tokens; listSshHosts reads no file as none", () => {
+    {
+      const text = ["# Host nope", "Host box other # trailing", "  host=third", "HOST   \"quoted\"", "Host box", "Hostname 1.2.3.4", "Match host x"].join("\n");
+      expect(parseSshConfig(text)).toEqual(["box", "other", "third", "quoted"]);
+    }
+    {
+      expect(parseSshConfig("Host * *.corp ?x !bad \"a b\" good\r\nHost\tok")).toEqual(["good", "ok"]);
+    }
+    {
+      expect(listSshHosts(undefined, { read: () => undefined })).toEqual([]);
+      expect(listSshHosts(undefined, { read: () => "Host a\nHost b" })).toEqual(["a", "b"]);
+    }
   });
-  it("skips wildcards, negations, option-like and spaced tokens", () => {
-    expect(parseSshConfig("Host * *.corp ?x !bad -oProxyCommand=x \"a b\" good\r\nHost\tok")).toEqual(["good", "ok"]);
-  });
-  it("listSshHosts: no file reads as none", () => {
-    expect(listSshHosts(undefined, { read: () => undefined })).toEqual([]);
-    expect(listSshHosts(undefined, { read: () => "Host a\nHost b" })).toEqual(["a", "b"]);
+  it("parseSshConfig skips an option-like alias (-oProxyCommand=x)", () => {
+    expect(parseSshConfig("Host -oProxyCommand=x good")).toEqual(["good"]);
   });
   it("CLAUDE_UI_SSH_CONFIG names the file the hosts are read from", () => {
     expect(sshConfigPath({ CLAUDE_UI_SSH_CONFIG: "/x/cfg" })).toBe("/x/cfg");
@@ -48,20 +53,25 @@ describe("parseSshConfig", () => {
 });
 
 describe("sshArgs", () => {
-  it("a config file goes in as -F before --; none: no -F", () => {
-    const a = sshArgs("box", "x", [], "/s/ssh_config");
-    expect(a.slice(6, 11)).toEqual(["ServerAliveCountMax=3", "-F", "/s/ssh_config", "--", "box"]);
-    expect(sshArgs("box", "x")).not.toContain("-F");
+  it("sshArgs puts -- right before the alias, also after -F", () => {
+    for (const a of [sshArgs("box", "x"), sshArgs("box", "x", [], "/s/ssh_config")]) expect(a.slice(a.indexOf("--"), a.indexOf("--") + 2)).toEqual(["--", "box"]);
   });
-  it("has the fixed options, -- before the alias, and a script that round-trips through base64", () => {
-    const script = "echo 'a b'\nexit 3";
-    const a = sshArgs("box", script, ["x y", "it's"]);
-    expect(a.slice(0, 8)).toEqual(["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--"]);
-    expect(a[8]).toBe("box");
-    expect(a).toHaveLength(10);
-    expect(decode(a[9]!)).toBe(`${loginEnvScript()}\n${script}`);
-    expect(a[9]).not.toContain("\n");
-    expect(a[9]!.endsWith(`sh 'x y' 'it'\\''s'`)).toBe(true);
+  it("sshArgs: a config file goes in as -F before --, none: no -F; the fixed options, -- before the alias, and a script that round-trips through base64", () => {
+    {
+      const a = sshArgs("box", "x", [], "/s/ssh_config");
+      expect(a.slice(6, 9)).toEqual(["ServerAliveCountMax=3", "-F", "/s/ssh_config"]);
+      expect(sshArgs("box", "x")).not.toContain("-F");
+    }
+    {
+      const script = "echo 'a b'\nexit 3";
+      const a = sshArgs("box", script, ["x y", "it's"]);
+      expect(a.slice(0, 8)).toEqual(["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--"]);
+      expect(a[8]).toBe("box");
+      expect(a).toHaveLength(10);
+      expect(decode(a[9]!)).toBe(`${loginEnvScript()}\n${script}`);
+      expect(a[9]).not.toContain("\n");
+      expect(a[9]!.endsWith(`sh 'x y' 'it'\\''s'`)).toBe(true);
+    }
   });
 });
 
@@ -112,19 +122,21 @@ describe.skipIf(process.platform === "win32")("loginEnvScript", () => {
 
 describe("sshError", () => {
   const e = (stderr: string, code: number | null = 255) => sshError("box", { code, stderr });
-  it("auth and host key failures tell to run ssh once in a terminal", () => {
-    expect(e("box: Permission denied (publickey).")).toBe("SSH: box: the host refused the login (key or password needed). Run `ssh box` once in a terminal, then retry.");
-    expect(e("Too many authentication failures")).toContain("refused the login");
-    expect(e("Host key verification failed.")).toBe("SSH: box: the host key is not trusted yet. Run `ssh box` once in a terminal to check and accept it, then retry.");
-    expect(e("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!")).toContain("host key is not trusted");
-    expect(e("No ED25519 host key is known for box and you have requested strict checking.")).toContain("host key is not trusted");
-  });
-  it("unreachable keeps the last stderr line; no answer; the remote's own exit is not ssh's", () => {
-    expect(e("ssh: Could not resolve hostname box: nodename nor servname provided\n")).toBe("SSH: box is not reachable: ssh: Could not resolve hostname box: nodename nor servname provided.");
-    expect(e("ssh: connect to host box port 22: Connection refused")).toContain("Connection refused");
-    expect(e("")).toBe("SSH: box is not reachable: ssh failed.");
-    expect(e("", null)).toBe("SSH: box did not answer in time.");
-    expect(e("Permission denied", 1)).toBeUndefined();
+  it("sshError: auth and host key failures tell to run ssh once in a terminal; unreachable keeps the last stderr line, no answer, the remote's own exit is not ssh's", () => {
+    {
+      expect(e("box: Permission denied (publickey).")).toBe("SSH: box: the host refused the login (key or password needed). Run `ssh box` once in a terminal, then retry.");
+      expect(e("Too many authentication failures")).toContain("refused the login");
+      expect(e("Host key verification failed.")).toBe("SSH: box: the host key is not trusted yet. Run `ssh box` once in a terminal to check and accept it, then retry.");
+      expect(e("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!")).toContain("host key is not trusted");
+      expect(e("No ED25519 host key is known for box and you have requested strict checking.")).toContain("host key is not trusted");
+    }
+    {
+      expect(e("ssh: Could not resolve hostname box: nodename nor servname provided\n")).toBe("SSH: box is not reachable: ssh: Could not resolve hostname box: nodename nor servname provided.");
+      expect(e("ssh: connect to host box port 22: Connection refused")).toContain("Connection refused");
+      expect(e("")).toBe("SSH: box is not reachable: ssh failed.");
+      expect(e("", null)).toBe("SSH: box did not answer in time.");
+      expect(e("Permission denied", 1)).toBeUndefined();
+    }
   });
 });
 
@@ -165,108 +177,120 @@ describe("prepareSshSide", () => {
     return { calls, phases, installs, result };
   }
 
-  it("probes over ssh, then streams the assembled tar as stdin of ssh, with the phases", async () => {
-    const r = run();
-    const out = await r.result;
-    expect(out.path).toBe("/tmp/f");
-    expect(out.bundle?.target).toBe("linux-x64");
-    expect(r.phases).toEqual(["downloading", "packing", "copying"]);
-    expect(r.calls.every((c) => c.cmd === "ssh" && c.args.includes("BatchMode=yes"))).toBe(true);
-    expect(r.calls[0]!.script).toContain("uname -m");
-    expect(r.calls[0]!.stdin).toBeUndefined();
-    expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
-    expect(r.calls[1]!.script).toContain("cat >");
+  it("probes over ssh, then streams the assembled tar as stdin of ssh, with the phases; with a config file every ssh run passes -F before --; a /tmp that fails moves on to /dev/shm", async () => {
+    {
+      const r = run();
+      const out = await r.result;
+      expect(out.path).toBe("/tmp/f");
+      expect(out.bundle?.target).toBe("linux-x64");
+      expect(r.phases).toEqual(["downloading", "packing", "copying"]);
+      expect(r.calls.every((c) => c.cmd === "ssh" && c.args.includes("BatchMode=yes"))).toBe(true);
+      expect(r.calls[0]!.script).toContain("uname -m");
+      expect(r.calls[0]!.stdin).toBeUndefined();
+      expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
+      expect(r.calls[1]!.script).toContain("cat >");
+    }
+    {
+      const r = run({ config: "/s/cfg" });
+      await r.result;
+      expect(r.calls.length).toBeGreaterThan(1);
+      for (const c of r.calls) expect(c.args.slice(c.args.indexOf("-F"), c.args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
+    }
+    {
+      const r = run({ copy: (n, d) => (n === 0 ? { code: 1, stderr: "Read-only file system" } : { code: 0, stdout: `${d}/x.tar\n` }) });
+      expect((await r.result).path).toBe("/dev/shm/x.tar");
+    }
   });
-  it("with a config file every ssh run passes -F before --", async () => {
-    const r = run({ config: "/s/cfg" });
-    await r.result;
-    expect(r.calls.length).toBeGreaterThan(1);
-    for (const c of r.calls) expect(c.args.slice(c.args.indexOf("-F"), c.args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
+  it("auth failure at the probe rejects with the next step; a Windows host is refused", async () => {
+    {
+      const r = run({ probe: { code: 255, stdout: "", stderr: "box: Permission denied (publickey)." } });
+      await expect(r.result).rejects.toThrow("Run `ssh box` once in a terminal");
+      expect(r.calls).toHaveLength(1);
+    }
+    {
+      await expect(run({ probe: { code: 0, stdout: "CLAUDE_UI_CHECK os=MINGW64_NT-10.0" } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
+      await expect(run({ probe: { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command," } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
+      await expect(run({ probe: { code: 1, stdout: "", stderr: "sh : The term 'sh' is not recognized as the name of a cmdlet" } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
+      expect(isWindowsHost({ stdout: "CLAUDE_UI_CHECK os=Linux", stderr: "" })).toBe(false);
+    }
   });
-  it("a /tmp that fails moves on to /dev/shm", async () => {
-    const r = run({ copy: (n, d) => (n === 0 ? { code: 1, stderr: "Read-only file system" } : { code: 0, stdout: `${d}/x.tar\n` }) });
-    expect((await r.result).path).toBe("/dev/shm/x.tar");
+  it("a host the bundle does not cover (musl) gets the npm tarball over ssh stdin, with the reason; another arch, a host without a known libc and a BSD install with npm too", async () => {
+    {
+      const r = run({ libc: "musl" });
+      const out = await r.result;
+      expect(out.path).toBe("/tmp/f");
+      expect(out.bundle).toBeUndefined();
+      expect(r.installs).toEqual([{ fallback: expect.stringContaining("the host uses musl") }]);
+      expect(r.phases).toEqual(["packing", "copying"]);
+      expect(r.calls[1]!.stdin).toMatch(/\.tgz$/);
+      expect(r.calls[1]!.script).toContain("cat >");
+    }
+    {
+      expect((await run({ arch: "riscv64" }).result).bundle).toBeUndefined();
+      expect((await run({ arch: "arm64", libc: "unknown" }).result).bundle).toBeUndefined();
+      const bsd = run({ arch: "amd64", libc: "unknown", os: "FreeBSD" });
+      expect((await bsd.result).bundle).toBeUndefined();
+      expect(bsd.installs).toEqual([{ fallback: "the host runs FreeBSD; the bundle covers Linux and macOS only" }]);
+    }
   });
-  it("auth failure at the probe rejects with the next step", async () => {
-    const r = run({ probe: { code: 255, stdout: "", stderr: "box: Permission denied (publickey)." } });
-    await expect(r.result).rejects.toThrow("Run `ssh box` once in a terminal");
-    expect(r.calls).toHaveLength(1);
+  it("a macOS host gets the darwin bundle over ssh stdin, no npm; a macOS host with a usable Node.js gets the darwin bundle without Node.js, the pinned retry carries it", async () => {
+    {
+      const r = run({ arch: "arm64", libc: "unknown", os: "Darwin" });
+      const out = await r.result;
+      expect(out.bundle).toMatchObject({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
+      expect(r.installs).toEqual([{ bundle: true }]);
+      expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
+    }
+    {
+      const os = "Darwin\nCLAUDE_UI_CHECK foundnode=1";
+      expect((await run({ arch: "arm64", libc: "unknown", os }).result).bundle).toEqual({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
+      expect((await run({ arch: "arm64", libc: "unknown", os, pinned: true }).result).bundle).toEqual({ target: "darwin-arm64", nodeDir: expect.stringMatching(/^node-v[\d.]+-darwin-arm64$/), claudePackage: "claude-agent-sdk-darwin-arm64" });
+    }
   });
-  it("a host the bundle does not cover (musl) gets the npm tarball over ssh stdin, with the reason", async () => {
-    const r = run({ libc: "musl" });
-    const out = await r.result;
-    expect(out.path).toBe("/tmp/f");
-    expect(out.bundle).toBeUndefined();
-    expect(r.installs).toEqual([{ fallback: expect.stringContaining("the host uses musl") }]);
-    expect(r.phases).toEqual(["packing", "copying"]);
-    expect(r.calls[1]!.stdin).toMatch(/\.tgz$/);
-    expect(r.calls[1]!.script).toContain("cat >");
-  });
-  it("another arch, a host without a known libc and a BSD install with npm too", async () => {
-    expect((await run({ arch: "riscv64" }).result).bundle).toBeUndefined();
-    expect((await run({ arch: "arm64", libc: "unknown" }).result).bundle).toBeUndefined();
-    const bsd = run({ arch: "amd64", libc: "unknown", os: "FreeBSD" });
-    expect((await bsd.result).bundle).toBeUndefined();
-    expect(bsd.installs).toEqual([{ fallback: "the host runs FreeBSD; the bundle covers Linux and macOS only" }]);
-  });
-  it("a macOS host gets the darwin bundle over ssh stdin, no npm", async () => {
-    const r = run({ arch: "arm64", libc: "unknown", os: "Darwin" });
-    const out = await r.result;
-    expect(out.bundle).toMatchObject({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
-    expect(r.installs).toEqual([{ bundle: true }]);
-    expect(r.calls[1]!.stdin).toMatch(/bundle-.*\.tar$/);
-  });
-  it("a macOS host with a usable Node.js gets the darwin bundle without Node.js; the pinned retry carries it", async () => {
-    const os = "Darwin\nCLAUDE_UI_CHECK foundnode=1";
-    expect((await run({ arch: "arm64", libc: "unknown", os }).result).bundle).toEqual({ target: "darwin-arm64", claudePackage: "claude-agent-sdk-darwin-arm64" });
-    expect((await run({ arch: "arm64", libc: "unknown", os, pinned: true }).result).bundle).toEqual({ target: "darwin-arm64", nodeDir: expect.stringMatching(/^node-v[\d.]+-darwin-arm64$/), claudePackage: "claude-agent-sdk-darwin-arm64" });
-  });
-  it("an automatic update (bundleOnly) never uses npm: the installed build runs", async () => {
-    const r = run({ libc: "musl", bundleOnly: true });
-    expect(await r.result).toEqual({ path: "", never: true });
-    expect(r.calls).toHaveLength(1);
-  });
-  it("a Windows host (its OS name, or a cmd.exe or PowerShell shell without sh) is refused", async () => {
-    await expect(run({ probe: { code: 0, stdout: "CLAUDE_UI_CHECK os=MINGW64_NT-10.0" } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
-    await expect(run({ probe: { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command," } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
-    await expect(run({ probe: { code: 1, stdout: "", stderr: "sh : The term 'sh' is not recognized as the name of a cmdlet" } }).result).rejects.toThrow("Windows SSH hosts are not supported yet");
-    expect(isWindowsHost({ stdout: "CLAUDE_UI_CHECK os=Linux", stderr: "" })).toBe(false);
-  });
-  it("this build already installed: nothing is packed or sent, one ssh run; force and a pinned Node.js install again", async () => {
-    const same = run({ installed: "current" });
-    expect(await same.result).toEqual({ path: "", never: true });
-    expect(same.calls).toHaveLength(1);
-    expect(same.phases).toEqual([]);
-    expect((await run({ installed: "current", setup: "force" }).result).path).toBe("/tmp/f");
-    expect((await run({ installed: "current", pinned: true }).result).path).toBe("/tmp/f");
-    expect((await run({ installed: "other" }).result).path).toBe("/tmp/f");
-  });
-  it("setup never runs nothing over ssh", async () => {
-    const r = run({ setup: "never" });
-    expect(await r.result).toEqual({ path: "" });
-    expect(r.calls).toEqual([]);
+  it("an automatic update (bundleOnly) never uses npm; this build already installed: nothing is packed or sent; setup never runs nothing over ssh", async () => {
+    {
+      const r = run({ libc: "musl", bundleOnly: true });
+      expect(await r.result).toEqual({ path: "", never: true });
+      expect(r.calls).toHaveLength(1);
+    }
+    {
+      const same = run({ installed: "current" });
+      expect(await same.result).toEqual({ path: "", never: true });
+      expect(same.calls).toHaveLength(1);
+      expect(same.phases).toEqual([]);
+      expect((await run({ installed: "current", setup: "force" }).result).path).toBe("/tmp/f");
+      expect((await run({ installed: "current", pinned: true }).result).path).toBe("/tmp/f");
+      expect((await run({ installed: "other" }).result).path).toBe("/tmp/f");
+    }
+    {
+      const r = run({ setup: "never" });
+      expect(await r.result).toEqual({ path: "" });
+      expect(r.calls).toEqual([]);
+    }
   });
 });
 
 describe("checkSshSide", () => {
   const check = (r: { code: number | null; stdout?: string; stderr?: string }) => checkSshSide({ alias: "box", pkgDir: dir("pkg-"), key: "k", exec: async () => ({ stdout: "", stderr: "", ...r }) as { code: number | null; stdout: string; stderr: string } });
-  it("ssh failures are blocked as unreachable with the ssh message", async () => {
-    const c = await check({ code: 255, stderr: "Host key verification failed." });
-    expect(c).toMatchObject({ verdict: "blocked", reason: "unreachable" });
-    expect(c.message).toContain("Run `ssh box` once in a terminal");
-  });
-  it("the check passes -F too", async () => {
-    let args: string[] = [];
-    await checkSshSide({ alias: "box", config: "/s/cfg", pkgDir: dir("pkg-"), key: "k", exec: async (_c, a) => ((args = a), { code: 255, stdout: "", stderr: "x" }) });
-    expect(args.slice(args.indexOf("-F"), args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
-  });
-  it("a running compatible Hub is installed: nothing to install", async () => {
-    const hub = Buffer.from(JSON.stringify({ port: 1, pid: 2, version: "1.2.1", startedAt: "x", attach: "/s", schema: [1, 1], exec: ["/n", "/c.js"] })).toString("base64");
-    const c = await check({ code: 0, stdout: `CLAUDE_UI_CHECK installed=none\nCLAUDE_UI_CHECK os=Linux\nCLAUDE_UI_CHECK hub=${hub}\n` });
-    expect(c).toMatchObject({ verdict: "installed", facts: { hub: { version: "1.2.1" } } });
-  });
-  it("an answer that is no check output is check_failed", async () => {
-    expect(await check({ code: 0, stdout: "hello" })).toMatchObject({ verdict: "blocked", reason: "check_failed" });
+  it("checkSshSide: ssh failures are blocked as unreachable; the check passes -F too; a running compatible Hub is installed; an answer that is no check output is check_failed", async () => {
+    {
+      const c = await check({ code: 255, stderr: "Host key verification failed." });
+      expect(c).toMatchObject({ verdict: "blocked", reason: "unreachable" });
+      expect(c.message).toContain("Run `ssh box` once in a terminal");
+    }
+    {
+      let args: string[] = [];
+      await checkSshSide({ alias: "box", config: "/s/cfg", pkgDir: dir("pkg-"), key: "k", exec: async (_c, a) => ((args = a), { code: 255, stdout: "", stderr: "x" }) });
+      expect(args.slice(args.indexOf("-F"), args.indexOf("--"))).toEqual(["-F", "/s/cfg"]);
+    }
+    {
+      const hub = Buffer.from(JSON.stringify({ port: 1, pid: 2, version: "1.2.1", startedAt: "x", attach: "/s", schema: [1, 1], exec: ["/n", "/c.js"] })).toString("base64");
+      const c = await check({ code: 0, stdout: `CLAUDE_UI_CHECK installed=none\nCLAUDE_UI_CHECK os=Linux\nCLAUDE_UI_CHECK hub=${hub}\n` });
+      expect(c).toMatchObject({ verdict: "installed", facts: { hub: { version: "1.2.1" } } });
+    }
+    {
+      expect(await check({ code: 0, stdout: "hello" })).toMatchObject({ verdict: "blocked", reason: "check_failed" });
+    }
   });
 });
 
@@ -431,23 +455,25 @@ describe("checkSshSide: hosts the bundle does not cover", () => {
     return d;
   };
   const check = (o: Record<string, string>, raw?: { code: number; stdout: string; stderr: string }) => checkSshSide({ alias: "box", pkgDir: pkg(), key: "k", exec: async () => raw ?? { code: 0, stdout: out(o), stderr: "" } });
-  it("macOS: install with the bundle (no npm, no build tools needed); the target says macOS", async () => {
-    const c = await check({ npm: "0", make: "0", cxx: "0" });
-    expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" }, target: { arch: "arm64", os: "Darwin" } } });
-  });
-  it("BSD with Node.js and npm: install with npm, the reason names the OS", async () => {
-    const c = await check({ os: "FreeBSD", arch: "amd64" });
-    expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "npm", reason: "the host runs FreeBSD; the bundle covers Linux and macOS only" }, nodeOk: true } });
-  });
-  it("Windows is blocked with its message; no Node.js, no npm and no writable folder each name what is missing", async () => {
-    expect(await check({ os: "MINGW64_NT" })).toMatchObject({ verdict: "blocked", reason: "windows_host", message: "SSH: box: Windows SSH hosts are not supported yet." });
-    expect(await check({}, { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command" })).toMatchObject({ reason: "windows_host" });
-    // The npm path (a BSD host): its own Node.js and npm are needed. A macOS host gets the bundle, which needs neither.
-    expect(await check({ os: "FreeBSD", node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
-    expect(await check({ os: "FreeBSD", npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
-    expect(await check({ node: "none", foundnode: "0", npm: "0" })).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" } } });
-    expect(await check({ writable: "/tmp" })).toMatchObject({ reason: "no_writable_path" });
-    expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("no writable home folder") });
+  it("macOS: install with the bundle; BSD with Node.js and npm: install with npm; Windows is blocked, no Node.js, no npm and no writable folder each name what is missing", async () => {
+    {
+      const c = await check({ npm: "0", make: "0", cxx: "0" });
+      expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" }, target: { arch: "arm64", os: "Darwin" } } });
+    }
+    {
+      const c = await check({ os: "FreeBSD", arch: "amd64" });
+      expect(c).toMatchObject({ verdict: "install", facts: { install: { method: "npm", reason: "the host runs FreeBSD; the bundle covers Linux and macOS only" }, nodeOk: true } });
+    }
+    {
+      expect(await check({ os: "MINGW64_NT" })).toMatchObject({ verdict: "blocked", reason: "windows_host", message: "SSH: box: Windows SSH hosts are not supported yet." });
+      expect(await check({}, { code: 1, stdout: "", stderr: "'sh' is not recognized as an internal or external command" })).toMatchObject({ reason: "windows_host" });
+      // The npm path (a BSD host): its own Node.js and npm are needed. A macOS host gets the bundle, which needs neither.
+      expect(await check({ os: "FreeBSD", node: "none", foundnode: "0" })).toMatchObject({ reason: "node_missing", message: expect.stringContaining("Node.js is not installed") });
+      expect(await check({ os: "FreeBSD", npm: "0" })).toMatchObject({ reason: "npm_missing", message: expect.stringContaining("npm is not installed on SSH: box") });
+      expect(await check({ node: "none", foundnode: "0", npm: "0" })).toMatchObject({ verdict: "install", facts: { install: { method: "bundle" } } });
+      expect(await check({ writable: "/tmp" })).toMatchObject({ reason: "no_writable_path" });
+      expect(await check({ writable: "" })).toMatchObject({ reason: "no_writable_path", message: expect.stringContaining("no writable home folder") });
+    }
   });
   it("a macOS Node.js is usable (the posix rule): the check script asks for it", () => {
     expect(checkScript("k", "ssh")).toContain('usable_node "$na" posix &&');

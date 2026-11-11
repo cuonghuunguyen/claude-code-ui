@@ -35,7 +35,7 @@ const hook = (dir: string, name: string, body: string) => {
 const names = (dir: string, ...a: string[]) => run(dir, ...a).split("\n").filter(Boolean);
 
 describe("gitCommitFiles", () => {
-  it("commits only the checked paths; unchecked unstaged and staged entries stay", async () => {
+  it("commits only the checked paths; unchecked unstaged and staged entries stay; no temp index is left", async () => {
     const { dir, inside } = repo();
     put(dir, "a.txt", "a1\n");
     put(dir, "b.txt", "b1\n");
@@ -48,6 +48,8 @@ describe("gitCommitFiles", () => {
     expect(run(dir, "status", "--porcelain")).toBe(" M b.txt\nM  c.txt");
     expect(names(dir, "diff", "--cached", "--name-only")).toEqual(["c.txt"]);
     expect(r?.refs).toBeTruthy();
+    expect(existsSync(join(dir, ".git", "index.lock"))).toBe(false);
+    expect(readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"))).toEqual([]);
   });
 
   it("commits added, untracked, deleted and renamed paths", async () => {
@@ -81,26 +83,27 @@ describe("gitCommitFiles", () => {
     expect(run(dir, "status", "--porcelain")).toBe("?? x2.txt");
   });
 
-  it("amend rewrites HEAD with the checked files and the new message", async () => {
-    const { dir, inside } = repo();
-    const parent = run(dir, "rev-parse", "HEAD~0");
-    put(dir, "a.txt", "a1\n");
-    await gitCommitFiles(dir, { paths: ["a.txt"], message: "amended", amend: true, allowed: inside });
-    expect(run(dir, "rev-list", "--count", "HEAD")).toBe("1");
-    expect(run(dir, "log", "-1", "--format=%s")).toBe("amended");
-    expect(run(dir, "show", "HEAD:a.txt")).toBe("a1");
-    expect(run(dir, "rev-parse", "HEAD")).not.toBe(parent);
-  });
 
-  it("amend with no checked file rewrites only the message of HEAD", async () => {
+  it("amend rewrites HEAD with the checked files and the new message; amend with no checked file rewrites only the message of HEAD", async () => {
     const { dir, inside } = repo();
-    put(dir, "a.txt", "a1\n");
-    const tree = run(dir, "rev-parse", "HEAD^{tree}");
-    const r = await gitCommitFiles(dir, { paths: [], message: "reworded", amend: true, allowed: inside });
-    expect(r?.hash).toBe(run(dir, "rev-parse", "HEAD"));
-    expect(run(dir, "log", "-1", "--format=%s")).toBe("reworded");
-    expect(run(dir, "rev-parse", "HEAD^{tree}")).toBe(tree);
-    expect(run(dir, "status", "--porcelain")).toBe(" M a.txt");
+    {
+      put(dir, "a.txt", "a1\n");
+      const tree = run(dir, "rev-parse", "HEAD^{tree}");
+      const r = await gitCommitFiles(dir, { paths: [], message: "reworded", amend: true, allowed: inside });
+      expect(r?.hash).toBe(run(dir, "rev-parse", "HEAD"));
+      expect(run(dir, "log", "-1", "--format=%s")).toBe("reworded");
+      expect(run(dir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(run(dir, "status", "--porcelain")).toBe(" M a.txt");
+    }
+    {
+      const parent = run(dir, "rev-parse", "HEAD~0");
+      put(dir, "a.txt", "a1\n");
+      await gitCommitFiles(dir, { paths: ["a.txt"], message: "amended", amend: true, allowed: inside });
+      expect(run(dir, "rev-list", "--count", "HEAD")).toBe("1");
+      expect(run(dir, "log", "-1", "--format=%s")).toBe("amended");
+      expect(run(dir, "show", "HEAD:a.txt")).toBe("a1");
+      expect(run(dir, "rev-parse", "HEAD")).not.toBe(parent);
+    }
   });
 
   it("refuses while a merge is in progress; nothing is committed and MERGE_HEAD stays", async () => {
@@ -196,9 +199,33 @@ describe("gitCommitFiles", () => {
     await refused(wt, "Finish or abort the rebase first");
   });
 
-  it("an empty path list without amend is bad_request", async () => {
+  it("gitCommitFiles refuses paths ../x, -x and /abs with bad_request", async () => {
     const { dir, inside } = repo();
-    await expect(gitCommitFiles(dir, { paths: [], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+    for (const p of ["../x", "-x", "/abs"]) await expect(gitCommitFiles(dir, { paths: [p], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+  });
+  it("an empty path list without amend is bad_request; rejects bad input; push: true on a detached HEAD is bad_request and nothing is committed", async () => {
+    const { dir, inside } = repo();
+    {
+      await expect(gitCommitFiles(dir, { paths: [], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+    }
+    {
+      const ok = { paths: ["a.txt"], message: "m", allowed: inside };
+      const bad = (o: Record<string, unknown>) => expect(gitCommitFiles(dir, { ...ok, ...o } as never)).rejects.toMatchObject({ code: "bad_request" });
+      await bad({ message: "  " });
+      await bad({ message: "a\0b" });
+      await bad({ message: 5 });
+      await bad({ paths: "a.txt" });
+      await bad({ paths: [""] });
+      await bad({ amend: "yes" });
+      await bad({ push: 1 });
+    }
+    {
+      run(dir, "checkout", "-q", "--detach");
+      put(dir, "a.txt", "a1\n");
+      const head = run(dir, "rev-parse", "HEAD");
+      await expect(gitCommitFiles(dir, { paths: ["a.txt"], message: "m", push: true, allowed: inside })).rejects.toMatchObject({ code: "bad_request", message: expect.stringContaining("detached") });
+      expect(run(dir, "rev-parse", "HEAD")).toBe(head);
+    }
   });
 
   it("amend on an unborn branch is bad_request; the first commit works", async () => {
@@ -259,58 +286,36 @@ describe("gitCommitFiles", () => {
     await expect(gitCommitFiles(root, { paths: ["a"], message: "m", allowed: () => true })).resolves.toBeNull();
   });
 
-  it("a nested repository commits in itself only", async () => {
-    const { dir, inside } = repo();
-    const sub = join(dir, "sub");
-    mkdirSync(sub);
-    run(sub, "init", "-q", "-b", "main");
-    put(sub, "s.txt", "s\n");
-    run(sub, "add", "-A");
-    run(sub, "commit", "-q", "-m", "sub init");
-    put(sub, "s.txt", "s1\n");
-    const head = run(dir, "rev-parse", "HEAD");
-    await gitCommitFiles(sub, { paths: ["s.txt"], message: "in sub", allowed: inside });
-    expect(run(sub, "log", "-1", "--format=%s")).toBe("in sub");
-    expect(run(dir, "rev-parse", "HEAD")).toBe(head);
-  });
-
-  it("push: true returns the dialog data of HEAD's branch, equal to gitBranch", async () => {
+  it("a nested repository commits in itself only; push: true returns the dialog data of HEAD's branch, equal to gitBranch", async () => {
     const { dir, root, inside } = repo();
-    run(root, "init", "-q", "--bare", "-b", "main", "o.git");
-    run(dir, "remote", "add", "origin", join(root, "o.git"));
-    run(dir, "push", "-q", "-u", "origin", "main");
-    put(dir, "a.txt", "a1\n");
-    const r = await gitCommitFiles(dir, { paths: ["a.txt"], message: "m", push: true, allowed: inside });
-    const info = await gitBranch(dir, "refs/heads/main", { allowed: inside });
-    expect(r?.push).toEqual(info);
-    expect(r?.push?.push).toBeTruthy();
-    expect(r?.push?.local).toBe(r?.hash);
+    {
+      const sub = join(dir, "sub");
+      mkdirSync(sub);
+      run(sub, "init", "-q", "-b", "main");
+      put(sub, "s.txt", "s\n");
+      run(sub, "add", "-A");
+      run(sub, "commit", "-q", "-m", "sub init");
+      put(sub, "s.txt", "s1\n");
+      const head = run(dir, "rev-parse", "HEAD");
+      await gitCommitFiles(sub, { paths: ["s.txt"], message: "in sub", allowed: inside });
+      expect(run(sub, "log", "-1", "--format=%s")).toBe("in sub");
+      expect(run(dir, "rev-parse", "HEAD")).toBe(head);
+    }
+    {
+      run(root, "init", "-q", "--bare", "-b", "main", "o.git");
+      run(dir, "remote", "add", "origin", join(root, "o.git"));
+      run(dir, "push", "-q", "-u", "origin", "main");
+      put(dir, "a.txt", "a1\n");
+      const r = await gitCommitFiles(dir, { paths: ["a.txt"], message: "m", push: true, allowed: inside });
+      const info = await gitBranch(dir, "refs/heads/main", { allowed: inside });
+      expect(r?.push).toEqual(info);
+      expect(r?.push?.push).toBeTruthy();
+      expect(r?.push?.local).toBe(r?.hash);
+    }
   });
 
-  it("push: true on a detached HEAD is bad_request and nothing is committed", async () => {
-    const { dir, inside } = repo();
-    run(dir, "checkout", "-q", "--detach");
-    put(dir, "a.txt", "a1\n");
-    const head = run(dir, "rev-parse", "HEAD");
-    await expect(gitCommitFiles(dir, { paths: ["a.txt"], message: "m", push: true, allowed: inside })).rejects.toMatchObject({ code: "bad_request", message: expect.stringContaining("detached") });
-    expect(run(dir, "rev-parse", "HEAD")).toBe(head);
-  });
 
-  it("rejects bad input", async () => {
-    const { dir, inside } = repo();
-    const ok = { paths: ["a.txt"], message: "m", allowed: inside };
-    const bad = (o: Record<string, unknown>) => expect(gitCommitFiles(dir, { ...ok, ...o } as never)).rejects.toMatchObject({ code: "bad_request" });
-    await bad({ message: "  " });
-    await bad({ message: "a\0b" });
-    await bad({ message: 5 });
-    await bad({ paths: "a.txt" });
-    await bad({ paths: ["../x"] });
-    await bad({ paths: ["-x"] });
-    await bad({ paths: ["/abs"] });
-    await bad({ paths: [""] });
-    await bad({ amend: "yes" });
-    await bad({ push: 1 });
-  });
+
 
   it("a second write while one runs is busy", async () => {
     const { dir, inside } = repo();
@@ -324,14 +329,6 @@ describe("gitCommitFiles", () => {
     } finally {
       setGitRunner(undefined);
     }
-  });
-
-  it("the temp index file is gone after success", async () => {
-    const { dir, inside } = repo();
-    put(dir, "a.txt", "a1\n");
-    await gitCommitFiles(dir, { paths: ["a.txt"], message: "m", allowed: inside });
-    expect(existsSync(join(dir, ".git", "index.lock"))).toBe(false);
-    expect(readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"))).toEqual([]);
   });
 });
 
@@ -354,14 +351,25 @@ describe("gitCommitDiff", () => {
     expect(run(dir, "diff", "--cached", "--name-only")).toBe(before);
     expect(tmpIndexes(dir)).toEqual([]);
   });
-  it("shows a rename with both sides checked and a deletion", async () => {
+  it("shows a rename with both sides checked and a deletion; refuses an empty or bad path list; null outside a work tree", async () => {
+    const { dir, root, inside } = repo();
+    {
+      renameSync(join(dir, "a.txt"), join(dir, "z.txt"));
+      rmSync(join(dir, "b.txt"));
+      const r = await gitCommitDiff(dir, { paths: ["a.txt", "z.txt", "b.txt"], allowed: inside });
+      expect(r?.diff).toContain("rename from a.txt");
+      expect(r?.diff).toContain("rename to z.txt");
+      expect(r?.diff).toContain("deleted file mode");
+    }
+    {
+      await expect(gitCommitDiff(dir, { paths: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+      const plain = mkdtempSync(join(root, "plain-"));
+      expect(await gitCommitDiff(plain, { paths: ["a"], allowed: inside })).toBeNull();
+    }
+  });
+  it("gitCommitDiff refuses a path that escapes the repository (../x)", async () => {
     const { dir, inside } = repo();
-    renameSync(join(dir, "a.txt"), join(dir, "z.txt"));
-    rmSync(join(dir, "b.txt"));
-    const r = await gitCommitDiff(dir, { paths: ["a.txt", "z.txt", "b.txt"], allowed: inside });
-    expect(r?.diff).toContain("rename from a.txt");
-    expect(r?.diff).toContain("rename to z.txt");
-    expect(r?.diff).toContain("deleted file mode");
+    await expect(gitCommitDiff(dir, { paths: ["../x"], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
   });
   it("works before the first commit", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "gwr-")));
@@ -394,12 +402,5 @@ describe("gitCommitDiff", () => {
     } finally {
       Object.assign(diffConfig, keep);
     }
-  });
-  it("refuses an empty or bad path list; null outside a work tree", async () => {
-    const { dir, root, inside } = repo();
-    await expect(gitCommitDiff(dir, { paths: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
-    await expect(gitCommitDiff(dir, { paths: ["../x"], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
-    const plain = mkdtempSync(join(root, "plain-"));
-    expect(await gitCommitDiff(plain, { paths: ["a"], allowed: inside })).toBeNull();
   });
 });

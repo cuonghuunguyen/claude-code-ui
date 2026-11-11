@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { nextUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const el = document.createElement("div");
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
@@ -22,11 +21,13 @@ const button = (label: string) => [...el.querySelectorAll("button")].find((b) =>
 
 const available = nextUpdate(undefined, { type: "update_available", version: "0.2.1", current: "0.2.0" })!;
 
-it("available -> installing -> waiting -> restarting, and the install then restart requests", async () => {
+it("available -> installing -> waiting -> restarting, and the install then restart requests; toast card with 44px coarse targets", async () => {
   const request = vi.fn(async (m: { type: string }) => (m.type === "update.install" ? { installed: "0.2.1" } : { waitingFor: 1 }));
   await render(available, request);
   expect(toast()!.textContent).toContain("Update available");
   expect(toast()!.textContent).toContain("claude-ui 0.2.1 is available (you have 0.2.0).");
+  expect(toast()!.className).toContain("shadow-floating");
+  expect(button("Not yet")!.className).toContain("pointer-coarse:min-h-11");
   await act(async () => button("Update and restart")!.click());
   expect(request.mock.calls.map((c) => c[0])).toEqual([{ type: "update.install" }, { type: "update.restart" }]);
 
@@ -88,8 +89,3 @@ it("an update_state without a known version is ignored; update_available starts 
   expect(nextUpdate(waiting, { type: "update_available", version: "0.2.1", current: "0.2.0" })).toEqual(available);
 });
 
-it("uses the toast card and 44px touch targets on coarse pointers", async () => {
-  await render(available);
-  expect(toast()!.className).toContain("shadow-floating");
-  expect(button("Not yet")!.className).toContain("pointer-coarse:min-h-11");
-});

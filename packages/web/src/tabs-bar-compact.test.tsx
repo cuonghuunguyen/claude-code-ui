@@ -6,8 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CHIP_HOVER_DELAY_MS, TabsBar, type TabInfo } from "./tabs-bar.tsx";
 import { NEW_TAB } from "./tabs.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const A = "/p/alpha";
 const B = "/p/beta";
 const T = (title: string, cwd: string, extra: Partial<TabInfo> = {}): TabInfo => ({ title, cwd, group: cwd, state: "idle", unread: false, ...extra });

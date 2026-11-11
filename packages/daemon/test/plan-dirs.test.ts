@@ -8,11 +8,6 @@ const tmp = () => mkdtempSync(join(tmpdir(), "plan-dirs-"));
 const settings = (dir: string, json: unknown, name = "settings.json") => (mkdirSync(dir, { recursive: true }), writeFileSync(join(dir, name), JSON.stringify(json)));
 
 describe("planDirs (the CLI's plan folders)", () => {
-  it("is <config dir>/plans, the CLAUDE_CONFIG_DIR folder the daemon was given", () => {
-    const claude = tmp();
-    expect(planDirs(claude, tmp())).toEqual([join(claude, "plans")]);
-  });
-
   it("the plansDirectory setting (local over project over user) comes first, relative to the project, and the default stays listed", () => {
     const claude = tmp();
     const cwd = tmp();

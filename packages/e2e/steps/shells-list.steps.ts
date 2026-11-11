@@ -175,7 +175,3 @@ Then("the shells dialog fits the viewport", async ({ page }) => {
   expect(box!.x + box!.width).toBeLessThanOrEqual(vp.width + 0.5);
   expect(await dialog(page).evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 });
-
-When("I wait for the shell to leave the status bar", async ({ page }) => {
-  await expect(page.locator('[data-field="shells"]')).toHaveCount(0, { timeout: 60_000 });
-});

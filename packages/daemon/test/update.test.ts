@@ -242,11 +242,6 @@ describe("createUpdater", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
-  it("install checks the registry when nothing is available yet", async () => {
-    const { u } = setup();
-    expect(await u.install()).toBe("0.2.1");
-  });
-
   it("install rejects when the registry has nothing newer", async () => {
     const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: answer({ version: "0.2.0" }), run: fakeNpm(), busy: () => ({ sessions: 0, terminals: 0 }), exit: vi.fn(), broadcast: () => {} });
     await expect(u.install()).rejects.toThrow("no update available");

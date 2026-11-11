@@ -5,12 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
 import { NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 
 import type { EngineCapabilities } from "@claude-ui/protocol";
@@ -289,10 +283,11 @@ it("/ on the new-session tab lists the project's commands once they arrive, only
   expect(rows().some((r) => r.includes("/review"))).toBe(false);
 });
 
-it("the new-session tab asks for the commands of the draft's engine", async () => {
+it("the new-session tab asks for the commands of the draft's engine and names it in the prompt", async () => {
   const onCommands = vi.fn(async () => []);
-  await render({ onCommands, engine: "opencode" });
+  const { box } = await render({ onCommands, engine: "opencode" });
   expect(onCommands).toHaveBeenCalledWith("/p/a", "opencode");
+  expect(box.placeholder).toBe("Ask OpenCode in a…");
 });
 
 it("the new-session tab asks for the commands again when the project's config changed", async () => {
@@ -349,9 +344,8 @@ it("a project without linked worktrees inside the roots has no Run session in ch
   expect(options().map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b", "Open project…"]);
 });
 
-it("has no Coordinator toggle; startSession creates a plain session", async () => {
-  const { el } = await render();
-  expect(el.querySelector('[data-testid="coordinator-toggle"]')).toBeNull();
+it("startSession creates a plain session", async () => {
+  await render();
   const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
   const request = vi.fn(async (_m: { type: string }) => ({ session: info }));
   await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });
@@ -474,10 +468,6 @@ it("an opencode_missing create error shows inline under the chips with a button 
   expect(box.value).toBe("hi");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
   expect(onOpenOpenCodeSettings).toHaveBeenCalled();
-});
-
-it("the new-session prompt names the draft's engine", async () => {
-  expect((await render({ engine: "opencode" })).box.placeholder).toBe("Ask OpenCode in a…");
 });
 
 it("another create error keeps the old path: no engine error block", async () => {

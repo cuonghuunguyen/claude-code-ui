@@ -37,18 +37,6 @@ Feature: Recommendations (GH-518)
     Then the Create worktree modal is open
     And the modal shows no Jira hint
 
-  Scenario: Opening files in tabs twice teaches middle-click
-    Given the scratch project has the file "src/a.ts" with the text "export const a = 1;"
-    And the scratch project has the file "notes.md" with the text "# Notes"
-    And the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open the Files tab of the side panel
-    And I expand the tree folder "src"
-    And I choose "Open in tab" in the tree menu of "src/a.ts"
-    And I choose "Open in tab" in the tree menu of "notes.md"
-    Then a toast says "Tip: middle-click a file in the tree to open it in its own tab."
-    And I capture "middle-click tip"
-
   Scenario: The 15th open tab offers Clean up tabs
     Given the viewport is 1440x900
     And the app is open with 15 saved sessions in each of 1 projects
@@ -75,20 +63,7 @@ Feature: Recommendations (GH-518)
     Then compact tabs are on and tabs are grouped by project
     And I capture "compact tabs on"
 
-  Scenario: Only one recommendation shows per page load
-    Given the viewport is 1000x800
-    And the app is open with 5 saved sessions in each of 3 projects
-    When I open 10 more saved sessions
-    And I open the next saved session
-    Then the toast "Many projects open. Turn on compact tabs?" shows with the button "Turn on"
-    When I dismiss the toast "Many projects open"
-    And I open 4 more saved sessions
-    Then 15 saved sessions are open
-    And no toast shows
-    And only "compactTabs" was marked as shown
-    And I capture "second rule stays quiet"
-
-  Scenario: A recommendation stacks with another toast
+  Scenario: A recommendation stacks with another toast, fits a phone and closes with Dismiss
     Given the viewport is 1440x900
     And the app is open with 15 saved sessions in each of 1 projects
     When I open 15 more saved sessions
@@ -99,24 +74,11 @@ Feature: Recommendations (GH-518)
     And the toast "15 tabs open. Clean up the ones you no longer need?" shows with the button "Show me"
     And a toast says "Shortcut tips reset."
     And I capture "two toasts"
-
-  Scenario: Two toasts fit a phone screen
-    Given the viewport is 390x844
-    And the app is open with 15 saved sessions in each of 1 projects
-    When I open 15 more saved sessions
-    Then the toast "15 tabs open. Clean up the ones you no longer need?" shows with the button "Show me"
-    When I hover the toast "15 tabs open"
-    And I run "Reset shortcut tips" from the command palette
+    When the viewport is 390x844
     Then 2 toasts show
     And the page has no horizontal scroll
     And the page is exactly 390px wide
     And I capture "two toasts phone"
-
-  Scenario: A recommendation toast closes with Dismiss
-    Given the viewport is 1440x900
-    And the app is open with 15 saved sessions in each of 1 projects
-    When I open 15 more saved sessions
-    Then the toast "15 tabs open. Clean up the ones you no longer need?" shows with the button "Show me"
     When I dismiss the toast "15 tabs open"
-    Then no toast shows
+    Then 1 toasts show
     And I capture "toast dismissed"

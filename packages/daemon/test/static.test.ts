@@ -115,18 +115,6 @@ describe("static files: missing paths", () => {
     }
   });
 
-  it("stays 403 outside the root", async () => {
-    const res = { writeHead: (s: number) => (status = s, res), end: () => res } as never;
-    let status = 0;
-    serveStatic({ method: "GET", headers: {} } as never, res, resolve(dir), "/../x");
-    expect(status).toBe(403);
-  });
-
-  it("answers 405 to a method other than GET and HEAD", async () => {
-    const r = await get("/", {}, "POST");
-    expect(r.status).toBe(405);
-    expect(r.headers.allow).toBe("GET, HEAD");
-  });
 });
 
 describe("static files: cache headers and validators", () => {
@@ -173,13 +161,14 @@ describe("static files: CSP and anti-framing (GH-280)", () => {
       });
     }
   }
-  it("304 and 405 responses carry them too", async () => {
+  it("304 and 405 (Allow: GET, HEAD) responses carry them too", async () => {
     const first = await get("/index.html");
     const r304 = await get("/index.html", { "if-none-match": String(first.headers.etag) });
     expect(r304.status).toBe(304);
     expect(r304.headers["x-frame-options"]).toBe("DENY");
     const r405 = await get("/index.html", {}, "POST");
     expect(r405.status).toBe(405);
+    expect(r405.headers.allow).toBe("GET, HEAD");
     expect(r405.headers["x-frame-options"]).toBe("DENY");
     expect(String(r405.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
   });

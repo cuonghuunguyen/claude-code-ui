@@ -85,7 +85,6 @@ const merging = (path: string, resolve: boolean) => {
   if (resolve) { writeFileSync(join(path, "c.txt"), "both\n"); git(path, "add", "c.txt"); }
   head = git(path, "rev-parse", "HEAD");
 };
-Given("the scratch project has an unresolved merge conflict", async ({ project }) => merging(project.path, false));
 Given("the scratch project has a merge with its conflicts resolved but not committed", async ({ project }) => merging(project.path, true));
 Then("the project head is unchanged", async ({ project }) => {
   expect(git(project.path, "rev-parse", "HEAD")).toBe(head);
