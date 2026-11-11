@@ -33,7 +33,7 @@ describe("ArtifactPreview", () => {
     expect(el.querySelector("iframe")).toBeNull();
   });
 
-  it("Show preview loads the URL into a sandboxed iframe without same-origin", async () => {
+  it("Show preview loads the URL into a sandboxed iframe without same-origin; the offline note names what is blocked; no missing-file note", async () => {
     const loader = ok();
     await mount(loader, 0, "toolu_a");
     await click("Show preview");
@@ -44,6 +44,8 @@ describe("ArtifactPreview", () => {
     expect(f.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(f.hasAttribute("allow")).toBe(false);
     expect(f.getAttribute("title")).toBe("Preview: T");
+    expect(el.textContent).toContain("Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.");
+    expect(el.textContent).not.toContain("not loaded");
   });
 
   it('a gone file shows "Preview not available: file is gone"', async () => {
@@ -51,12 +53,6 @@ describe("ArtifactPreview", () => {
     await click("Show preview");
     expect(el.textContent).toContain("Preview not available: file is gone");
     expect(el.querySelector("iframe")).toBeNull();
-  });
-
-  it("another failure shows its message", async () => {
-    await mount(vi.fn(async () => Promise.reject(Object.assign(new Error("larger than 16 MiB: /t/a.html"), { code: "too_large" }))));
-    await click("Show preview");
-    expect(el.textContent).toContain("Preview not available: larger than 16 MiB: /t/a.html");
   });
 
   it("Hide preview removes the frame; Reload asks again", async () => {
@@ -85,12 +81,6 @@ describe("ArtifactPreview", () => {
     await mount(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, unavailable: ["a", "b", "c", "d", "e"] })));
     await click("Show preview");
     expect(el.textContent).toContain("5 supporting files not loaded: a, b, c, …");
-  });
-
-  it("no note when every supporting file loads", async () => {
-    await mount(ok());
-    await click("Show preview");
-    expect(el.textContent).not.toContain("not loaded");
   });
 
   it("without the context nothing renders", async () => {
@@ -152,19 +142,14 @@ describe("ArtifactPreview", () => {
     expect(el.querySelector("iframe")!.getAttribute("src")).toContain("v=9");
   });
 
-  it("another failure is not asked again on reconnect", async () => {
-    const loader = vi.fn(async () => Promise.reject(Object.assign(new Error("larger"), { code: "too_large" })));
+  it("another failure shows its message and is not asked again on reconnect", async () => {
+    const loader = vi.fn(async () => Promise.reject(Object.assign(new Error("larger than 16 MiB: /t/a.html"), { code: "too_large" })));
     await mount(loader, 0, "toolu_pe");
     await click("Show preview");
+    expect(el.textContent).toContain("Preview not available: larger than 16 MiB: /t/a.html");
     await mount(loader, 0, "toolu_pe", false);
     await mount(loader, 0, "toolu_pe", true);
     expect(loader).toHaveBeenCalledTimes(1);
-  });
-
-  it("the offline note names what is blocked", async () => {
-    await mount(ok());
-    await click("Show preview");
-    expect(el.textContent).toContain("Local file, shown offline: network requests, remote scripts, images, fonts and links are blocked.");
   });
 });
 

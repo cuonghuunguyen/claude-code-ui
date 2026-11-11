@@ -89,13 +89,6 @@ it("while the answer is on its way the buttons are aria-disabled; a failure show
   expect(button("Allow once")!.getAttribute("aria-disabled")).not.toBe("true");
 });
 
-it("high tier (or tier not read yet): a High tier badge and only Open in Focus and Open session", async () => {
-  await show([item("c", "permission", { tool: "Bash", summary: "Bash · npm test", body: "npm test", tier: undefined })]);
-  const card = q("article");
-  expect(card.textContent).toContain("High tier");
-  expect([...card.querySelectorAll("button")].map((b) => b.textContent).filter(Boolean)).toEqual(["Open in Focus", "Open session"]);
-});
-
 it("a low-tier edit offers no Allow and points at the diff in Focus", async () => {
   await show([item("f", "permission", { tool: "Edit", summary: "Edit · README.md +1 −0", body: "README.md +1 −0", tier: "low" })]);
   expect(button("Allow once")).toBeUndefined();
@@ -123,8 +116,10 @@ it("a question has Open in Focus and Open session; escalated and extra requests 
   expect(button("Allow once")).toBeUndefined();
 });
 
-it("the buttons call their handlers with the card", async () => {
+it("high tier (or tier not read yet): a High tier badge and only Open in Focus and Open session; the buttons call their handlers with the card", async () => {
   const h = await show([item("b", "permission", { tier: undefined })]);
+  expect(q("article").textContent).toContain("High tier");
+  expect([...q("article").querySelectorAll("button")].map((b) => b.textContent).filter(Boolean)).toEqual(["Open in Focus", "Open session"]);
   await act(async () => button("Open in Focus")!.click());
   expect(h.onOpenFocus).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "b" }));
   await act(async () => button("Open session")!.click());
@@ -227,6 +222,7 @@ it("more than three waiting: three cards and a pill that opens Focus; finished c
   const h = await show([item("1"), item("2"), item("3"), item("4"), item("5", "finished", { body: "ok" })]);
   expect(qa("article")).toHaveLength(3);
   expect(qa('article[data-kind="finished"]')).toHaveLength(0);
+  expect(h.onDismiss).toHaveBeenCalledWith("5");
   const pill = q('[data-testid="notifications-more"]');
   expect(pill.textContent).toBe("+1 more need you · Open Focus");
   await act(async () => pill.click());
@@ -348,11 +344,6 @@ it("Esc on the +N more pill is taken, not passed to the page", async () => {
   expect(outer).not.toHaveBeenCalled();
   expect(h.restoreFocus).toHaveBeenCalled();
   window.removeEventListener("keydown", outer);
-});
-
-it("finished and error cards that do not fit are dropped", async () => {
-  const h = await show([item("1"), item("2"), item("3"), item("4", "finished", { body: "ok" })]);
-  expect(h.onDismiss).toHaveBeenCalledWith("4");
 });
 
 it("a finished card that does not fit is not announced either: only what shows is said", async () => {

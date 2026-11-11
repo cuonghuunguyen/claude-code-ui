@@ -24,7 +24,7 @@ function Host({ initialMin = false }: { initialMin?: boolean }) {
 }
 const ptr = (target: Element, type: string, x: number, y: number) => act(() => void target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y })));
 
-it("renders a non-modal dialog with the title, Read-only badge and body", async () => {
+it("renders a non-modal dialog with the title, Read-only badge and a body that scrolls instead of clipping", async () => {
   phoneQuery(false);
   await act(async () => root.render(<Host />));
   const d = el.querySelector("[role=dialog]")!;
@@ -33,6 +33,7 @@ it("renders a non-modal dialog with the title, Read-only badge and body", async 
   expect(d.textContent).toContain("Read-only");
   expect(d.textContent).toContain("body");
   expect((d as HTMLElement).style.left).toBe("100px");
+  expect(el.querySelector("[role=dialog] > div")!.className).toContain("overflow-y-auto");
 });
 
 it("dragging the header moves the popup", async () => {
@@ -73,12 +74,6 @@ it("on a phone the title has a row of its own, so the question is truncated only
   const title = [...el.querySelectorAll("header span")].find((s) => s.textContent === "Aside: why?")!;
   expect(title.className).toContain("max-md:basis-full");
   expect(el.querySelector("header")!.className).toContain("max-md:flex-wrap");
-});
-
-it("the body scrolls instead of clipping what does not fit (a permission panel)", async () => {
-  phoneQuery(false);
-  await act(async () => root.render(<Host />));
-  expect(el.querySelector("[role=dialog] > div")!.className).toContain("overflow-y-auto");
 });
 
 it("on a phone it fills the viewport and cannot be dragged", async () => {

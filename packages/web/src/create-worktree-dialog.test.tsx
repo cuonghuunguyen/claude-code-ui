@@ -194,6 +194,7 @@ it("Ticket: typed text searches after a pause; the existing branch of PRJ-2 chec
   const { calls } = mount({ jira: true });
   await flush();
   await flush();
+  expect(q("rec-jira")).toBeNull(); // no hint when Jira is set up
   await type("create-worktree-ticket-search", "PRJ-2");
   await act(async () => void vi.advanceTimersByTime(400));
   await flush();
@@ -304,12 +305,6 @@ it("shows the Connect Jira hint once when Jira is not set up", async () => {
   el!.remove();
   resetPageForTests();
   mount();
-  await flush();
-  expect(q("rec-jira")).toBeNull();
-});
-
-it("no hint when Jira is set up", async () => {
-  mount({ jira: true });
   await flush();
   expect(q("rec-jira")).toBeNull();
 });

@@ -19,7 +19,7 @@ const render = (todos: TodoItem[]) => act(async () => root.render(<TodoDock item
 const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="todo-dock"] button')!;
 
 describe("TodoDock", () => {
-  it("shows progress and each item by its content, the in-progress one too (OpenCode)", async () => {
+  it("shows progress and each item by its content, the in-progress one too (OpenCode); the list scrolls inside a bounded height", async () => {
     await render(items);
     expect(toggle().textContent).toContain("1 of 3 todos completed");
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
@@ -33,10 +33,7 @@ describe("TodoDock", () => {
     // Item text 14px / 130% on the row itself (TaskItem's text-sm must not win); dock radius 10px (OpenCode rounded-xl).
     expect(rows.every((r) => r.className.includes("text-[14px]/[1.3]") && !r.className.includes("text-sm"))).toBe(true);
     expect(el.querySelector('[data-testid="todo-dock"]')!.className).toContain("rounded-xl");
-  });
-
-  it("scrolls inside a bounded height (a share of the viewport on a phone), so a long list never pushes the prompt box out", async () => {
-    await render(items);
+    // A share of the viewport on a phone, so a long list never pushes the prompt box out.
     const list = el.querySelector<HTMLElement>("[role=list]")!;
     expect(list.className).toMatch(/\boverflow-y-auto\b/);
     expect(list.className).toMatch(/max-h-\[min\([^\]]*dvh\)\]/);

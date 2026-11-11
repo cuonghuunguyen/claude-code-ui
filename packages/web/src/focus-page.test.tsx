@@ -49,7 +49,7 @@ const render = (initial = base(), onState?: (set: (s: State) => void) => void) =
 const rows = () => [...el.querySelectorAll<HTMLElement>('[data-testid="focus-row"]')];
 const button = (name: string) => [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === name)!;
 
-it("lists the waiting requests oldest first with their wait time, then the working sessions", async () => {
+it("lists the waiting requests oldest first with their wait time, then the working sessions; request rows have no action button", async () => {
   await render();
   expect(rows().map((r) => r.dataset.kind)).toEqual(["permission", "question"]);
   expect(rows()[0]!.textContent).toContain("Session a");
@@ -61,6 +61,7 @@ it("lists the waiting requests oldest first with their wait time, then the worki
   expect(el.textContent).toContain("Working · 1");
   expect(el.querySelector('[data-testid="focus-running-row"]')!.textContent).toContain("Session c");
   expect(el.querySelector('[data-testid="focus-now"]')!.textContent).toBe("Edit");
+  expect(el.querySelector('[data-testid="focus-row-action"]')).toBeNull();
 });
 
 it("every button is a 44px target on narrow screens and coarse pointers (case 12)", async () => {
@@ -330,11 +331,6 @@ it("error, quiet, finished and limit rows have one action button beside the row,
   expect(open).toHaveBeenCalledWith("e");
   await act(async () => actions[1]!.click());
   expect(cancelContinue).toHaveBeenCalledWith("l");
-});
-
-it("request rows have no action button", async () => {
-  await render();
-  expect(el.querySelector('[data-testid="focus-row-action"]')).toBeNull();
 });
 
 it("a working row of an idle session with a background task shows k of n", async () => {

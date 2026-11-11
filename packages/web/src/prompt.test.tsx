@@ -225,19 +225,11 @@ const fileEvent = (box: HTMLElement, type: "paste" | "drop", files: File[], dirs
   return e;
 };
 
-it("GH-613: a non-image OS file pasted in the box is uploaded and mentioned, its name is not inserted as text", async () => {
-  const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
-  const { box } = await render({ onUpload });
-  const e = fileEvent(box, "paste", [new File(["hi"], "a.txt", { type: "text/plain" })]);
-  expect(e.defaultPrevented).toBe(true);
-  await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
-  expect(onUpload).toHaveBeenCalledTimes(1);
-});
-
-it.each(["paste", "drop"] as const)("GH-613: a folder %s with a file is skipped with an error; the file is attached", async (type) => {
+it.each(["paste", "drop"] as const)("GH-613: a folder %s with a file is skipped with an error; the file is attached, its name not inserted as text", async (type) => {
   const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
   const { box, $ } = await render({ onUpload });
-  fileEvent(type === "paste" ? box : box.parentElement!, type, [new File(["hi"], "a.txt", { type: "text/plain" })], ["dir"]);
+  const e = fileEvent(type === "paste" ? box : box.parentElement!, type, [new File(["hi"], "a.txt", { type: "text/plain" })], ["dir"]);
+  expect(e.defaultPrevented).toBe(true);
   await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
   expect(onUpload).toHaveBeenCalledTimes(1);
   expect($("prompt-error")!.textContent).toBe("Folders cannot be attached; mention them with @.");

@@ -66,7 +66,7 @@ const click = (e: HTMLElement) => act(async () => e.click());
 const fetchLines = () => qa('[data-testid="cleanup-fetch"]').map((e) => e.textContent);
 const confirm = () => q<HTMLButtonElement>('[data-testid="cleanup-confirm"]');
 
-it("lists worktrees with External tag and safety badges once statuses arrive; every status is requested at once (the daemon queues them)", async () => {
+it("lists worktrees with External tag and safety badges once statuses arrive; every status is requested at once (the daemon queues them); a Blocked checkbox is disabled and described by its reason; a Safe row counts its ignored files", async () => {
   let inFlight = 0;
   let max = 0;
   const release: (() => void)[] = [];
@@ -92,14 +92,11 @@ it("lists worktrees with External tag and safety badges once statuses arrive; ev
   expect(text(`wt:${P("busy")}`)).toContain("Blocked: A session there is running or needs input");
   expect(text("wt:/x/ext")).toContain("External");
   expect(text(`wt:${P("safe")}`)).not.toContain("External");
-});
-
-it("a Blocked row's checkbox is disabled and described by its reason", async () => {
-  await open();
   const c = check(`wt:${P("busy")}`);
   expect(c.disabled).toBe(true);
-  const reason = document.getElementById(c.getAttribute("aria-describedby")!)!;
-  expect(reason.textContent).toContain("Blocked: A session there is running or needs input");
+  expect(document.getElementById(c.getAttribute("aria-describedby")!)!.textContent).toContain("Blocked: A session there is running or needs input");
+  expect(text("wt:/x/ext")).toContain("3 ignored files will be deleted");
+  expect(text(`wt:${P("safe")}`)).not.toContain("ignored");
 });
 
 it("pre-selects Safe managed worktrees and closed workers; button reads 'Remove 2'", async () => {
@@ -251,12 +248,6 @@ it("a run marks every queued worktree Removing… at the start, not only the one
   expect(onRemoving.mock.calls.every(([, on]) => on)).toBe(true);
   await act(async () => release.shift()!());
   expect(onRemoving.mock.calls.filter(([, on]) => !on)).toHaveLength(1);
-});
-
-it("a Safe row with ignored files says how many ignored files will be deleted", async () => {
-  await open();
-  expect(row("wt:/x/ext").textContent).toContain("3 ignored files will be deleted");
-  expect(row(`wt:${P("safe")}`).textContent).not.toContain("ignored");
 });
 
 it("'Also remove its worktree' ticked while a filter hides that worktree: not removed, the summary says so", async () => {

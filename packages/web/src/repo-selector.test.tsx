@@ -64,12 +64,6 @@ it("opens a tree in git.repos order with aria-level, aria-expanded on parents, a
   expect(document.activeElement).toBe(rows()[1]);
 });
 
-it("submodule rows use the archive icon, others the repo icon", async () => {
-  await show();
-  await open();
-  expect(rows().map((r) => r.querySelector("[data-icon]")!.getAttribute("data-icon"))).toEqual(["repo", "archive", "repo", "archive"]);
-});
-
 it("an outsideRoots row is aria-disabled with the reason and Enter does nothing", async () => {
   const out = R("web", "nested", "/p", { outsideRoots: true });
   const onSelect = await show({ list: [main, out], selected: main });
@@ -84,9 +78,10 @@ it("an outsideRoots row is aria-disabled with the reason and Enter does nothing"
   expect(rows()).toHaveLength(2);
 });
 
-it("keyboard: arrows, Home/End, ←/→, type-ahead, Enter selects and closes, Space selects", async () => {
+it("keyboard: arrows, Home/End, ←/→, type-ahead, Enter selects and closes, Space selects; submodule rows use the archive icon", async () => {
   const onSelect = await show();
   await open();
+  expect(rows().map((r) => r.querySelector("[data-icon]")!.getAttribute("data-icon"))).toEqual(["repo", "archive", "repo", "archive"]);
   await key("ArrowDown");
   expect(document.activeElement).toBe(rows()[2]);
   await key("ArrowUp");

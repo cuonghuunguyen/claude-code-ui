@@ -294,17 +294,12 @@ it("GH-378 not compact: the chip context menu has Clean up group before Close ot
 
 const chevron = (c: HTMLElement) => c.querySelector("svg.lucide-chevron-down");
 
-it("a chip shows the project icon instead of the chevron when the project has one", async () => {
+it("a chip shows the project icon instead of the chevron when the project has one; without one it keeps the chevron", async () => {
   setLabels({ projects: { "/home/u/docs": { icon: "📚" } }, sides: {} });
   const el = await mount(<TabsBar {...noop} tabs={["a", "b"]} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} />);
   const withIcon = chip(el, "/home/u/docs");
   expect(withIcon.querySelector('[data-icon="project"]')?.textContent).toBe("📚");
   expect(chevron(withIcon)).toBeNull();
-});
-
-it("a chip keeps the chevron when the project has no icon", async () => {
-  setLabels({ projects: { "/home/u/docs": { icon: "📚" } }, sides: {} });
-  const el = await mount(<TabsBar {...noop} tabs={["a", "b"]} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} />);
   const plain = chip(el, "/home/u/web");
   expect(plain.querySelector('[data-icon="project"]')).toBeNull();
   expect(chevron(plain)).not.toBeNull();

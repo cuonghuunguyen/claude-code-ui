@@ -117,21 +117,6 @@ it("dragging a tab carries the pane; dropping on another tab inserts before it; 
   expect(fns.onDrag).toHaveBeenLastCalledWith(undefined);
 });
 
-it("a drag of something else (a session tab) is ignored", async () => {
-  const { fns, render } = h("side");
-  await render();
-  const e = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", ["application/x-claude-ui-tab"]);
-  expect(e.defaultPrevented).toBe(false);
-  expect(fns.onDropAt).not.toHaveBeenCalled();
-});
-
-it("the drop tab shows the insertion bar while it is the target", async () => {
-  const { render } = h("side", { drag: "files", dropAt: { area: "side", before: "graph" } });
-  await render();
-  expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
-  expect(el.querySelector('[data-pane-tab="files"]')!.hasAttribute("data-drop-before")).toBe(false);
-});
-
 it("DropStrip names its area and takes the dropped pane", async () => {
   const onDrop = vi.fn();
   await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={() => {}} onLeave={() => {}} onDrop={onDrop} />));
@@ -314,6 +299,7 @@ it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop
   const { fns, render } = h("side", { accepts: (e) => (e.dataTransfer?.types.includes(TAB) ? "before" : false), onDropTab, dropAt: { area: "side", before: "graph" } });
   await render();
   expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
+  expect(el.querySelector('[data-pane-tab="files"]')!.hasAttribute("data-drop-before")).toBe(false);
   const over = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);
   expect(over.defaultPrevented).toBe(true);
   expect(fns.onDropAt).toHaveBeenCalledWith({ area: "side", before: "changes" });
@@ -323,9 +309,10 @@ it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop
 });
 
 it("GH-402 without `accepts` a strip tab drag stays ignored on pane tabs and on DropStrip", async () => {
-  const { render } = h("side");
+  const { fns, render } = h("side");
   await render();
   expect(fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]).defaultPrevented).toBe(false);
+  expect(fns.onDropAt).not.toHaveBeenCalled();
   await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={() => {}} onLeave={() => {}} onDrop={() => {}} />));
   expect(fire(el.firstElementChild!, "dragover", [TAB]).defaultPrevented).toBe(false);
 });

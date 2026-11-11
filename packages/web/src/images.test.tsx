@@ -8,10 +8,14 @@ import { ImageStrip } from "./images.tsx";
 const png = "data:image/png;base64,iVBORw0KGgo=";
 
 describe("ImageStrip", () => {
-  it("shows each image as a preview", () => {
+  it("shows each image as a preview, uncropped in its own ratio, inside a max box", () => {
     const html = renderToStaticMarkup(<ImageStrip images={[png, png]} />);
     expect(html.match(new RegExp(`<img[^>]*src="${png}"`, "g"))).toHaveLength(2);
     expect(html).not.toContain("Remove image");
+    expect(html).toContain("object-contain");
+    expect(html).toContain("max-h-40");
+    expect(html).not.toContain("object-cover");
+    expect(html).not.toContain("size-16");
   });
 
   it("has a remove button per image when removable", () => {
@@ -21,14 +25,6 @@ describe("ImageStrip", () => {
 
   it("renders nothing without images", () => {
     expect(renderToStaticMarkup(<ImageStrip images={[]} />)).toBe("");
-  });
-
-  it("shows images uncropped in their own ratio, inside a max box", () => {
-    const html = renderToStaticMarkup(<ImageStrip images={[png]} />);
-    expect(html).toContain("object-contain");
-    expect(html).toContain("max-h-40");
-    expect(html).not.toContain("object-cover");
-    expect(html).not.toContain("size-16");
   });
 });
 

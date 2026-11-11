@@ -370,7 +370,7 @@ it("worker state changes update the map without reload", async () => {
   expect($("agent-closed")!.textContent).toContain("Closed (2)");
 });
 
-it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse it; closed workers are muted", async () => {
+it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse it; closed workers are muted; rows are 44px targets on touch", async () => {
   await mountWorkers();
   await click($("agents-button")!);
   expect($$("agent-worker")).toHaveLength(2);
@@ -393,6 +393,7 @@ it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse
   expect($("agent-closed")!.getAttribute("aria-expanded")).toBe("false");
   await key(document.activeElement!, "Enter");
   expect($("agent-closed")!.getAttribute("aria-expanded")).toBe("true");
+  for (const row of [...$$("agent-worker"), $("agent-closed")!, $("agent-workers")!]) expect(row.className).toContain("pointer-coarse:min-h-11");
 });
 
 it("clicking a worker row opens its session tab and closes the map; Enter on a focused worker row does the same; an open tab is reused", async () => {
@@ -452,13 +453,6 @@ it("a removed worker leaves the map", async () => {
   replies["session.list"] = listOf(coordinatorItem, worker(W1, "alpha", { state: "running" }), worker(W3, "gamma", { live: false }));
   await act(async () => changed({ type: "sessions.changed", deleted: W2 }));
   expect(workerRows()).toEqual(["alpha, worker, Running"]);
-});
-
-it("worker rows are 44px targets on touch", async () => {
-  await mountWorkers();
-  await click($("agents-button")!);
-  await click($("agent-closed")!);
-  for (const row of [...$$("agent-worker"), $("agent-closed")!, $("agent-workers")!]) expect(row.className).toContain("pointer-coarse:min-h-11");
 });
 
 it("keyboard focus: a focused worker that moves into the collapsed Closed group leaves focus on the Closed header, arrow keys keep working", async () => {

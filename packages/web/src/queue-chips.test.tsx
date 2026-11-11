@@ -34,11 +34,6 @@ it("lists the messages with a count, an image badge and three labelled buttons p
   expect(rows[0]!.querySelector('[aria-label="Delete: first message"]')).not.toBeNull();
 });
 
-it("renders nothing for an empty queue", async () => {
-  const el = await render(<QueueChips items={[]} onSendNow={() => {}} onEdit={() => {}} onDelete={() => {}} />);
-  expect(el.querySelector("section")).toBeNull();
-});
-
 it("buttons call back with the item id", async () => {
   const onSendNow = vi.fn();
   const onEdit = vi.fn();
@@ -66,7 +61,7 @@ it("shows why the queue is paused", async () => {
   expect(await held({ reason: "not_live" })).toBe("Paused: the session stopped with an error");
 });
 
-it("after Delete focus moves to the same button of the next row, else the previous row, else onEmpty", async () => {
+it("after Delete focus moves to the same button of the next row, else the previous row, else onEmpty; an empty queue renders nothing", async () => {
   const onEmpty = vi.fn();
   function Host() {
     const [items, setItems] = useState([item("a", "one"), item("b", "two"), item("c", "three")]);
@@ -79,6 +74,7 @@ it("after Delete focus moves to the same button of the next row, else the previo
   expect(document.activeElement).toBe(el.querySelector('[aria-label="Delete: one"]'));
   await click(el.querySelector('[aria-label="Delete: one"]'));
   expect(onEmpty).toHaveBeenCalled();
+  expect(el.querySelector("section")).toBeNull();
 });
 
 it("touch targets are 44px (size-11) below md and on coarse pointers; rows truncate", async () => {

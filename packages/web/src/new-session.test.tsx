@@ -283,10 +283,11 @@ it("/ on the new-session tab lists the project's commands once they arrive, only
   expect(rows().some((r) => r.includes("/review"))).toBe(false);
 });
 
-it("the new-session tab asks for the commands of the draft's engine", async () => {
+it("the new-session tab asks for the commands of the draft's engine and names it in the prompt", async () => {
   const onCommands = vi.fn(async () => []);
-  await render({ onCommands, engine: "opencode" });
+  const { box } = await render({ onCommands, engine: "opencode" });
   expect(onCommands).toHaveBeenCalledWith("/p/a", "opencode");
+  expect(box.placeholder).toBe("Ask OpenCode in a…");
 });
 
 it("the new-session tab asks for the commands again when the project's config changed", async () => {
@@ -467,10 +468,6 @@ it("an opencode_missing create error shows inline under the chips with a button 
   expect(box.value).toBe("hi");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
   expect(onOpenOpenCodeSettings).toHaveBeenCalled();
-});
-
-it("the new-session prompt names the draft's engine", async () => {
-  expect((await render({ engine: "opencode" })).box.placeholder).toBe("Ask OpenCode in a…");
 });
 
 it("another create error keeps the old path: no engine error block", async () => {

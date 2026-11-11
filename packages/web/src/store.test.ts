@@ -44,13 +44,6 @@ describe("applyEvent", () => {
     expect([...s.parts.keys()]).toEqual(["u1", "b"]);
   });
 
-  it("an external_turn part sets whether a terminal CLI turn runs", () => {
-    const s = applyEvent(emptySession(), ev(1, { type: "external_turn", id: "external_turn", running: true }));
-    expect(s.externalTurn).toBe(true);
-    expect(s.order).toEqual([]);
-    expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
-  });
-
   it("limit_stop sets and clears limitStop and adds no timeline item (GH-305)", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "limit_stop", id: "limit_stop", stopped: true, resetsAt: 5000 }));
     expect(s.limitStop).toEqual({ resetsAt: 5000 });
@@ -81,8 +74,11 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "prompt_queue", id: "prompt_queue", items: [] })).queue).toBeUndefined();
   });
 
-  it("tabs, sidebar and header show an idle session running while a terminal CLI turn runs", () => {
+  it("an external_turn part sets whether a terminal CLI turn runs; tabs, sidebar and header show an idle session running while it runs", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "external_turn", id: "external_turn", running: true }));
+    expect(s.externalTurn).toBe(true);
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })).externalTurn).toBe(false);
     expect(shownState(s)).toBe("running");
     expect(shownState({ ...s, state: "error" })).toBe("error");
     expect(shownState(applyEvent(s, ev(2, { type: "external_turn", id: "external_turn", running: false })))).toBe("idle");

@@ -336,15 +336,6 @@ it("GH-360 long press: touchstart on a row, 500 ms later the menu of that row op
   }
 });
 
-it("GH-360 menu items are 44 px high below md", async () => {
-  const t = setup();
-  await t.render();
-  await ctxMenu(t.row("/p/README.md"));
-  expect(menuItem("open").className).toContain("max-md:h-11");
-  await closeMenu();
-  t.unmount();
-});
-
 // --- GH-360: write operations ---
 const typeInto = (input: HTMLInputElement, text: string) =>
   act(async () => {
@@ -947,7 +938,7 @@ it("GH-555 Cut then Paste on a folder sends fs.rename with dir and calls onMoved
   t.unmount();
 });
 
-it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until something is copied", async () => {
+it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until something is copied; GH-360 items are 44 px high below md", async () => {
   const t = setup({}, copyReplies);
   await t.render();
   await ctxMenu(t.row("/p/src"));
@@ -956,6 +947,7 @@ it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until somethin
   expect(menuItem("copy").getAttribute("aria-keyshortcuts")).toBe("Control+C");
   await closeMenu();
   await ctxMenu(t.row("/p/README.md"));
+  expect(menuItem("open").className).toContain("max-md:h-11");
   await act(async () => menuItem("copy").click());
   await flush();
   await ctxMenu(t.row("/p/src"));

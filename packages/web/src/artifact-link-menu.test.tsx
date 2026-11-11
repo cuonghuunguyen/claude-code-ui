@@ -119,19 +119,15 @@ const md = (urls?: Map<string, string>, tab?: () => void) =>
     </ArtifactTabContext>,
   ).then(() => act(async () => void (await new Promise((r) => setTimeout(r, 50)))));
 
-it("a claude.ai link of a session publish in assistant text offers Open in tab and Open on claude.ai, no Preview", async () => {
+it("a claude.ai link of a session publish in assistant text offers Open in tab and Open on claude.ai, no Preview; an unknown claude.ai link stays plain", async () => {
   const tab = vi.fn();
   await md(new Map([[URL, "p1"]]), tab);
+  // Only the known publish link carries the menu.
+  expect(el.querySelectorAll("[aria-haspopup=menu]").length).toBe(1);
+  expect(el.textContent).toContain("other");
   expect(click().defaultPrevented).toBe(true);
   await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
   expect(items().map((i) => i.dataset.testid)).toEqual(["artifact-link-tab", "artifact-link-claude"]);
   await act(async () => items()[0]!.click());
   expect(tab).toHaveBeenCalledWith("p1");
-});
-
-it("an unknown claude.ai link stays a plain link", async () => {
-  await md(new Map([[URL, "p1"]]), () => {});
-  // Only the known publish link carries the menu.
-  expect(el.querySelectorAll("[aria-haspopup=menu]").length).toBe(1);
-  expect(el.textContent).toContain("other");
 });

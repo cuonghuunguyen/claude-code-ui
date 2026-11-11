@@ -30,11 +30,14 @@ async function render(u: ContextUsage) {
   return { el, rerender: (n: ContextUsage) => act(async () => root.render(<ContextMeter usage={n} />)) };
 }
 
-it("shows used / max tokens and percent, full numbers in its label", async () => {
+it("shows used / max tokens and percent, full numbers in its label; the ring uses the OpenCode ring tokens", async () => {
   const { el } = await render(usage);
   const meter = el.querySelector<HTMLElement>('[data-testid="context-meter"]')!;
   expect(meter.textContent).toBe("25.8K / 1M · 3%");
   expect(meter.getAttribute("aria-label")).toBe("Context window: 25,815 of 1,000,000 tokens (3%), show breakdown");
+  const [track, progress] = el.querySelectorAll("circle");
+  expect(track!.getAttribute("class")).toContain("stroke-ring-track");
+  expect(progress!.getAttribute("class")).toContain("stroke-ring-progress");
 });
 
 it("click shows the per-category breakdown: tokens and share of the window, used categories in the bar", async () => {
@@ -69,13 +72,6 @@ it("a category keeps its colour when another category is absent (colour by name,
   expect(b["Messages"]).toBe(a["Messages"]);
   expect(b["System tools"]).toBe(a["System tools"]);
   expect(new Set(Object.values(b)).size).toBe(3);
-});
-
-it("ring draws track and progress with the OpenCode ring tokens", async () => {
-  const { el } = await render(usage);
-  const [track, progress] = el.querySelectorAll("circle");
-  expect(track!.getAttribute("class")).toContain("stroke-ring-track");
-  expect(progress!.getAttribute("class")).toContain("stroke-ring-progress");
 });
 
 it("follows a new usage (next turn, compaction)", async () => {

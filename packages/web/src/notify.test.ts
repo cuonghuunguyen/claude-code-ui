@@ -20,21 +20,16 @@ it("seed: a request in a replay or snapshot makes no signal, and the same reques
   expect(t.observe(ev("b", perm("r1", { tier: "low" })), true)).toEqual([]);
 });
 
-it("a live request is one signal; its second event with the tier is not another", () => {
-  const t = createTracker();
-  expect(t.observe(ev("b", perm("r1")), true)).toEqual([{ type: "request", sessionId: "b", requestId: "r1", kind: "permission", escalated: false }]);
-  expect(t.observe(ev("b", perm("r1", { tier: "low" })), true)).toEqual([]);
-});
-
 it("a question is a question signal; a settled request is none", () => {
   const t = createTracker();
   expect(t.observe(ev("b", ask("q1")), true)).toEqual([{ type: "request", sessionId: "b", requestId: "q1", kind: "question", escalated: false }]);
   expect(t.observe(ev("b", perm("r2", { settled: true })), true)).toEqual([]);
 });
 
-it("a request a coordinator escalates later is a second signal, flagged escalated", () => {
+it("a live request is one signal, its tier event is not another; a later coordinator escalation is a second signal, flagged escalated", () => {
   const t = createTracker();
-  t.observe(ev("w", perm("r1")), true);
+  expect(t.observe(ev("w", perm("r1")), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: false }]);
+  expect(t.observe(ev("w", perm("r1", { tier: "low" })), true)).toEqual([]);
   expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder" })), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: true }]);
   expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder", tier: "low" })), true)).toEqual([]);
 });

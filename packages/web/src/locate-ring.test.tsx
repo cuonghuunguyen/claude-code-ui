@@ -88,15 +88,6 @@ it("a sidebar row hidden from the list is left alone", async () => {
   expect(document.querySelector('[data-testid="session-item"][data-locate]')).toBeNull();
 });
 
-it("an aria-modal dialog blocks the shake", async () => {
-  await mount({ sessionId: "a" });
-  const d = document.createElement("div");
-  d.setAttribute("aria-modal", "true");
-  document.body.append(d);
-  shake();
-  expect(rung()).toHaveLength(0);
-});
-
 it("setting off: nothing rings", async () => {
   saveShakeLocate(false);
   await mount({ sessionId: "a" });

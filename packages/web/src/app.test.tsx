@@ -2722,13 +2722,6 @@ describe("GH-356 split view", () => {
     expect(labels()).toEqual(["Demo, split 1 of 2", "Plan · Demo, split 2 of 2, active"]);
   });
 
-  it("GH-398 a restored split with a Terminal tab mounts its terminal in the non-active split", async () => {
-    MAIN("plan", "files", "terminal", "graph");
-    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
-    await remount(ID, [ID, TERM]);
-    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${TERM}"] [data-pane-host]`)).not.toBeNull();
-  });
-
   it("GH-398 the Git graph tab menu has Split right / down disabled with the reason; activating it shows it alone", async () => {
     MAIN("plan", "files", "terminal", "graph");
     await remount(ID, [ID, S2, GRAPH]);
@@ -3174,11 +3167,12 @@ describe("GH-356 split view", () => {
     expect(document.activeElement).not.toBe(el.querySelector(`[data-pane-tab-body="${TERM}"]`));
   });
 
-  it("GH-501 focus next split onto a Terminal split focuses its shell", async () => {
+  it("GH-398/GH-501 a restored Terminal split mounts its terminal while not active; focus next split onto it focuses its shell", async () => {
     MAIN("plan", "files", "terminal", "graph");
     const g = globalThis as { __termFocused?: number };
     localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
     await remount(ID, [ID, TERM]);
+    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${TERM}"] [data-pane-host]`)).not.toBeNull();
     const before = g.__termFocused ?? 0;
     await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
     expect(activeSplit()!.dataset.paneTabBody).toBe(TERM);

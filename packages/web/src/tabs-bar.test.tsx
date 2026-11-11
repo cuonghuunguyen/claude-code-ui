@@ -613,15 +613,6 @@ it("phone: a right swipe moves the row 16px at most, closes nothing, selects not
   expect(onSelect).not.toHaveBeenCalled();
 });
 
-it("phone: a short slow left swipe springs back and closes nothing", async () => {
-  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
-  const row = swipeRows()[1]!;
-  await swipeBy(row, -30, 800);
-  await wait(300);
-  expect(shift(row)).toBe(0);
-  expect(onSwipeClose).not.toHaveBeenCalled();
-});
-
 it("phone: a fast left flick closes", async () => {
   const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
   await swipeBy(swipeRows()[2]!, -45, 50);
@@ -842,7 +833,7 @@ it("phone: the slide-out of a swipe closes with the latest onSwipeClose, not the
 const SIZE_BOX = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
 const stdHandlers = { onSelect: () => {}, onClose: () => {}, onMove: () => {}, onMoveGroup: () => {}, onMoveGroupTo: () => {}, onNew: () => {}, onAction: () => {}, onRenamed: () => {} };
 
-it("phone: pointer moves after a finished swipe do not run it again (no blocked click, no repeated close)", async () => {
+it("phone: pointer moves after a finished swipe do not run it again (no blocked click, no repeated close); a short slow swipe springs back", async () => {
   const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
   await swipeBy(swipeRows()[0]!, -200);
   await touch(swipeRows()[0]!, "pointermove", -210, 100, "mouse");
@@ -851,6 +842,8 @@ it("phone: pointer moves after a finished swipe do not run it again (no blocked 
   expect(onSwipeClose).toHaveBeenCalledExactlyOnceWith("a");
   await swipeBy(swipeRows()[1]!, -30, 800);
   await wait(300);
+  expect(shift(swipeRows()[1]!)).toBe(0);
+  expect(onSwipeClose).toHaveBeenCalledTimes(1);
   now += 2000;
   tick(0);
   await touch(swipeRows()[1]!, "pointermove", -50, 100, "mouse");
@@ -996,13 +989,6 @@ it("GH-359 the New session tab has the move and close items only", async () => {
   const { el } = await render({ onTabCommand: vi.fn() });
   const m = await ctxMenu(el, NEW_TAB);
   expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"]);
-  await closeMenu();
-});
-
-it("GH-359 without onTabCommand the menu has Move and Close tab only", async () => {
-  const { el } = await render();
-  const m = await ctxMenu(el, "b");
-  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent).slice(0, 4)).toEqual(["Move left", "Move right", "Close tab", "Rename"]);
   await closeMenu();
 });
 

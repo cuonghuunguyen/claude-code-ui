@@ -68,7 +68,7 @@ async function render(handlers: Record<string, Handler> = {}, commands = COMMAND
 }
 
 // The first dialog render loads Base UI cold.
-it("lists commands with their skills: meta text, state buttons, locks, inert rows last; ordered by source then name", { timeout: 20_000 }, async () => {
+it("lists commands with their skills: meta text, state buttons, locks (no button, reason as tooltip), inert rows last; ordered by source then name", { timeout: 20_000 }, async () => {
   const d = await render();
   expect(d.calls[0]).toEqual({ type: "skills.list", cwd: "/p", sessionId: "s1" });
   expect(d.text()).toContain("Slash commands");
@@ -81,6 +81,11 @@ it("lists commands with their skills: meta text, state buttons, locks, inert row
     "/hiddenuser · ~40 tokensOff",
   ]);
   expect(d.all("skills-inert").map((r) => r.textContent)).toEqual(["/fixeduser · ~100 tokens", "/hiddenuser · ~40 tokens"]);
+  expect(d.all("skills-lock").map((l) => [l.textContent, l.title])).toEqual([
+    ["On · locked", "Controlled by its plugin"],
+    ["Name only · locked", "This name can't be saved in settings; rename the skill's folder or file to change it"],
+  ]);
+  expect(d.state("/ponytail:ponytail: On")).toBeNull();
 });
 
 it("state button: tooltip, cycle to the next state, 'Saving…' while saving, then the daemon's rows", async () => {
@@ -112,16 +117,6 @@ it("a hidden skill can be turned back on from its inert row", async () => {
   const d = await render();
   await d.click(d.state("/hidden: Off"));
   expect(d.calls.at(-1)).toMatchObject({ type: "skills.setState", name: "hidden", state: "on" });
-});
-
-it("locked rows have no button and the reason as tooltip", async () => {
-  const d = await render();
-  const locks = d.all("skills-lock");
-  expect(locks.map((l) => [l.textContent, l.title])).toEqual([
-    ["On · locked", "Controlled by its plugin"],
-    ["Name only · locked", "This name can't be saved in settings; rename the skill's folder or file to change it"],
-  ]);
-  expect(d.state("/ponytail:ponytail: On")).toBeNull();
 });
 
 it("an unconfirmed save shows the 'Saved, but…' notice with the daemon's rows; a CLI timeout the 'took too long' one", async () => {
