@@ -97,7 +97,7 @@ A ticket walks the stages in order and earns each one from the stage before it.
 | 2 | Acceptance | **fresh** worker `orchestration:ui-tester`, same worktree, real browser | implementer | `sonnet` | every case green, screenshots + HTML report (scripted: scenarios committed) |
 | 3 | Push + build watch | coordinator pushes (tree flow: the implementer, when the playbook allows); worker watches CI | implementer | `haiku` | build terminal-green |
 | 4 | PR open | root coordinator | root | — | PR exists, description written |
-| 5 | Review | **fresh** worker `orchestration:reviewer`, read-only, `pr-review` | implementer | `opus` | report delivered to the user |
+| 5 | Review | **fresh** worker `orchestration:reviewer`, read-only, `pr-review` lite | implementer | `opus` | report delivered to the user |
 
 Tree flow (default with the plugin): the root starts planner and implementer only; the
 implementer starts ui-tester and reviewer itself, runs the fix loop and the join, and reports
@@ -172,7 +172,7 @@ to `"$(git rev-parse --git-common-dir)/info/exclude"` (idempotently). Not a lite
   evidence/                # stage 2 captures of a scripted run (playwright-bdd)
   ui-acceptance.html       # stage 2 report
   build-<n>.log            # stage 3 excerpt on a red build
-  review.html              # stage 5 report copy
+  pr-review-<KEY>.md       # stage 5 lite report
 ```
 
 The coordinator's own file is the **ledger**, `development-docs/batches/<date>-<slug>.md` in
@@ -330,7 +330,7 @@ Named **inside worker prompts**, never run in the coordinator's own context.
 
 | Skill | Stage | Role |
 |---|---|---|
-| `pr-review` | 5 | Full review, HTML artifact, findings never posted. **Required.** |
+| `pr-review` | 5 | Full review in lite mode (args `lite <commit>`): plain-text report, no page, findings never posted. **Required.** |
 | `playwright-cli` (or playwright MCP) | 2 | Human-path acceptance, screenshots, HTML report; with `playwright-bdd`, attaching to a paused scripted run. **Required** unless `acceptance: none`. |
 | CI skill from the adapter (e.g. `jenkins`) | 3 | Watch the build to a terminal state. **Required** when the adapter names one. |
 | `tdd` | 1 | Named in the method block. Soft: note its absence, do not block. |

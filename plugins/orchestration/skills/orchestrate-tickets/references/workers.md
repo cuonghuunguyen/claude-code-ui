@@ -95,7 +95,7 @@ Stage extras, on the lines after `REPORT:`:
   `COMMIT: <sha>`, `TESTS: <passed>/<failed>/<skipped>`
 - acceptance: `CASES: <passed>/<total>`
 - build watch: `BUILD: <job> #<n> <duration>`
-- review: `VERDICT: <one line>`, `BLOCKERS: <n>`, `ARTIFACT: <url>`
+- review: `VERDICT: <one line>`, `BLOCKERS: <n>`, `COMMIT: <sha>`
 
 `failed` = the stage is red (a red suite, a failed case, a red build, review blockers).
 `blocked` = cannot do the stage as asked; the sentences say why ("needs plan", a missing tool,

@@ -82,5 +82,5 @@ Stage 5, `worker-specs.md` §4. The rules that get forgotten:
 
 1. **Fresh agent, mandatory.** An agent reviewing its own diff is worthless. Fresh agent, not
    a fresh checkout: the implementer's worktree, read-only.
-2. **`pr-review` for every PR regardless of size**, all phases.
+2. **`pr-review` for every PR regardless of size**, all phases, lite mode.
 3. **Findings go in the report, never on the PR.** The user decides what reaches the host.

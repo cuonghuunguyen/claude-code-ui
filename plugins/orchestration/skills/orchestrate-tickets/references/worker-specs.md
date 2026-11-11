@@ -250,18 +250,18 @@ STAGE:  Review. Read-only in this worktree: no edits, no commits, no rebases, ex
   The user reads your report and decides what of it reaches the PR.
 
 METHOD
-- Invoke the pr-review skill first and follow all its phases in order, including publishing
-  the artifact before you read the diff. Every PR, regardless of size.
+- Invoke the pr-review skill first with args `lite <PR or commit>` and follow all its phases in
+  order, the blind plan before you read the diff. Every PR, regardless of size.
 - Scope test runs to the diff (the playbook's scoped test command): other workers run in
   parallel.
 - Name where the author's judgement beat yours. A review that only finds fault earns no right
   to block on the one thing that should block.
 
 REPORT
-- The pr-review artifact URL, and a copy at <scratch>/<KEY>/review.html.
+- The lite report at <scratch>/<KEY>/pr-review-<KEY>.md (pass <scratch>/<KEY> as the report directory).
 - Lead with the blockers. Keep the long tail short.
 
-<RESULT> stage lines: VERDICT, BLOCKERS: <n>, ARTIFACT: <url>.
+<RESULT> stage lines: VERDICT, BLOCKERS: <n>, COMMIT: <sha>. REPORT: the lite report path.
   Blockers > 0 is RESULT: failed.
 ```
 

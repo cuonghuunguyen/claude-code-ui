@@ -22,7 +22,7 @@ An installed plugin is a copy: a change reaches users after it is merged and `cl
 | `orchestration:planner` | opus | Plans one ticket, no code |
 | `orchestration:implementer` | sonnet | Builds test-first, commits, starts its own verifiers, runs the fix loop |
 | `orchestration:ui-tester` | sonnet | Verifies a commit through the real UI with screenshots |
-| `orchestration:reviewer` | opus | Read-only review of a commit with `pr-review` (`disallowedTools`: Edit, Write, NotebookEdit) |
+| `orchestration:reviewer` | opus | Read-only review of a commit with `pr-review` lite mode (`disallowedTools`: Edit, Write, NotebookEdit) |
 
 No agent file declares `tools:` (a tool list drops the orchestration MCP tools) or `permissionMode`: an SDK probe (SDK 0.3.285, CLI 2.1.294) showed that `permissionMode` in an agent file is ignored for a main-thread agent (the session mode is the `worker_start` mode, or `default` when none is given), so the mode ceiling cannot be raised by an agent file. The planner, ui-tester and reviewer have `mcp__orchestration__worker_start` in `disallowedTools`: only the implementer starts workers. The input of every role is the HANDOFF block (`skills/orchestrate-tickets/references/handoff.md`).
 
