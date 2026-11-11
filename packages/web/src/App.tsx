@@ -201,6 +201,7 @@ import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, 
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
+import { askCommitBox } from "./commit-ask.ts";
 import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
@@ -3333,6 +3334,7 @@ export function App() {
       if (shows("terminal")) setTermFocusReq((n) => n + 1);
       reveal("terminal");
     },
+    commitBox: (what) => (reveal("changes"), askCommitBox(what)),
     resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,

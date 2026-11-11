@@ -733,6 +733,23 @@ it("Uncommitted: each file has a checkbox, a commit sends only the checked ones 
   expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Committed abcdef1");
 });
 
+it("Uncommitted: a folder checkbox checks every file under it, shows mixed as indeterminate, and clears them", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "src/a.ts", added: 1, removed: 0 }, { status: "M", path: "src/b.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:src/a.ts`]: "a\n", [`${BASE}:src/b.ts`]: "b\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/src/a.ts": "a2\n", "/p/src/b.ts": "b2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const folder = () => el.querySelector<HTMLInputElement>("[data-testid=commit-check-folder][data-path=src]")!;
+  const box = (p: string) => el.querySelector<HTMLInputElement>(`[data-testid=commit-check][data-path='${p}']`)!;
+  await act(async () => box("/p/src/a.ts").click());
+  expect(folder().indeterminate).toBe(true);
+  await act(async () => folder().click());
+  expect([box("/p/src/a.ts").checked, box("/p/src/b.ts").checked, box("/p/c.ts").checked]).toEqual([true, true, false]);
+  expect(folder().checked).toBe(true);
+  await act(async () => folder().click());
+  expect([box("/p/src/a.ts").checked, box("/p/src/b.ts").checked]).toEqual([false, false]);
+});
+
 it("Against branch asks git.diff with base branch, shows the ref, and a picked branch re-requests with it", async () => {
   saveDiffMode("branch");
   const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }], { ref: "refs/heads/main", branches: ["refs/heads/main", "refs/heads/dev", "refs/remotes/origin/main"] }), at: { [`${BASE}:a.ts`]: "a\n" } };

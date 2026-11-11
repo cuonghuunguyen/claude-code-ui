@@ -66,6 +66,9 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "pane.files", title: "Show files", group: "Panels", key: "mod+shift+e" },
   { id: "pane.changes", title: "Show changes", group: "Panels", key: "mod+shift+g" },
   { id: "pane.graph", title: "Show git graph", group: "Panels", key: "mod+shift+h" },
+  // IntelliJ's Ctrl+K and Ctrl+Shift+K; elsewhere Ctrl+K is the command palette (mod+k), so Alt there.
+  { id: "git.commit", title: "Commit", group: "Panels", key: "alt+k", mac: "ctrl+k" },
+  { id: "git.push", title: "Push", group: "Panels", key: "alt+shift+k", mac: "ctrl+shift+k" },
   { id: "signal.toggle", title: "Toggle signal only", group: "Panels", key: "mod+alt+s" },
   { id: "terminal.toggle", title: "Toggle terminal", group: "Panels", key: "ctrl+`" },
   { id: "terminal.new", title: "New terminal", group: "Panels", key: "ctrl+shift+`" },
