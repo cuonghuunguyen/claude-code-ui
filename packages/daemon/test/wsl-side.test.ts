@@ -285,6 +285,8 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     writeFileSync(join(sideDir, "cli.js"), 'if (process.argv.includes("--version")) { console.log("1.0.0"); process.exit(0); } console.log("side started");');
     writeFileSync(join(sideDir, "chunk.js"), "");
     writeFileSync(join(sideDir, "side.json"), '{"sdk":"1"}');
+    mkdirSync(join(sideDir, "plugins/visualize/skills/visualize"), { recursive: true });
+    writeFileSync(join(sideDir, "plugins/visualize/skills/visualize/SKILL.md"), "skill");
     writeFileSync(join(sideDir, "THIRD_PARTY_LICENSES.txt"), "licenses");
     writeFileSync(join(bin, "wslpath"), '#!/bin/sh\nprintf "%s\\n" "$2"\n', { mode: 0o755 });
     const root = join(home, ".local/share/claude-ui/side");
@@ -312,7 +314,7 @@ describe.skipIf(!hasTools)("the WSL bundle script, run", () => {
     const d = installed(w.root, "1.0.0-1");
     expect(statSync(join(d, "node/bin/node")).mode & 0o111).toBeTruthy();
     expect(readdirSync(join(d, "node_modules/node-pty/prebuilds"))).toEqual([TARGET]);
-    for (const f of ["@anthropic-ai/claude-agent-sdk/package.json", `@anthropic-ai/claude-agent-sdk-${TARGET}/claude`, "claude-code-ui/dist/cli.js", "claude-code-ui/dist/chunk.js", "claude-code-ui/dist/THIRD_PARTY_LICENSES.txt"]) expect(existsSync(join(d, "node_modules", f)), f).toBe(true);
+    for (const f of ["@anthropic-ai/claude-agent-sdk/package.json", `@anthropic-ai/claude-agent-sdk-${TARGET}/claude`, "claude-code-ui/dist/cli.js", "claude-code-ui/dist/chunk.js", "claude-code-ui/dist/THIRD_PARTY_LICENSES.txt", "claude-code-ui/dist/plugins/visualize/skills/visualize/SKILL.md"]) expect(existsSync(join(d, "node_modules", f)), f).toBe(true);
     expect(existsSync(join(d, "node_modules/claude-code-ui/dist/side.json"))).toBe(false);
     expect(JSON.parse(readFileSync(join(d, "node_modules/claude-code-ui/package.json"), "utf8"))).toEqual({ name: "claude-code-ui", version: "1.0.0", type: "module" });
     expect(readFileSync(join(d, "parts.id"), "utf8").trim()).toBe("id-1");

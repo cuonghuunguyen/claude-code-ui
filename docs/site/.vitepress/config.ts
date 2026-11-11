@@ -105,6 +105,7 @@ const VI: Labels = {
   "WSL, Docker & SSH": "WSL, Docker và SSH",
   "MCP, skills & plugins": "MCP, skill và plugin",
   Addons: "Addon",
+  "Inline visualizations": "Hình minh họa trong trò chuyện",
   Updates: "Cập nhật",
   Reference: "Tham khảo",
   "Keyboard shortcuts": "Phím tắt",

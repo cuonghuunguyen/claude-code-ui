@@ -130,6 +130,20 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(sent.model).toBeUndefined();
   });
 
+  it("the visualize skill goes as `system` of a prompt while the setting is on, not when it is off", async () => {
+    const d = await boot({ script: ["text", "text"] });
+    const s = await d.open();
+    await s.prompt("one");
+    await until(() => !!s.find("turn_result"));
+    await d.ok({ type: "settings.set", patch: { chat: { visualize: false } } });
+    await s.prompt("two");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    const [on, off] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(on.system).toContain("Draw a chart, diagram");
+    expect(on.system).toContain("```visualize");
+    expect(off.system).toBeUndefined();
+  });
+
   it("a Bash permission shows the Claude card input, the rule and noEdit; Allow replies once and the tool finishes", async () => {
     const d = await boot({ script: ["bash"] });
     const s = await d.open();

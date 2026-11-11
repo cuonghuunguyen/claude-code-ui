@@ -15,5 +15,4 @@ Switch it off in [Settings › Sessions › Chat](../reference/settings#chat). I
 - The drawing runs in a sandboxed frame. It cannot read the app, your files, cookies or storage, and cannot make network requests. Scripts load only inline or from `cdn.jsdelivr.net`, `cdnjs.cloudflare.com` and `unpkg.com`.
 - A script in the drawing could still put data into the address of a CDN script. Claude can already write files, so this adds little, but know it.
 - It follows the light/dark theme and the colour theme.
-- Sessions on Docker, WSL or SSH sides do not have the skill yet: Claude draws there only if you ask for a ```` ```visualize ```` block, and the app still renders it.
-- The OpenCode engine has no skill; a `visualize` block it writes still renders.
+- It works on Docker, WSL and SSH sides (after the side updates to this build) and with the OpenCode engine. OpenCode gets the guidance with each prompt, so a change of the setting applies from the next prompt.
