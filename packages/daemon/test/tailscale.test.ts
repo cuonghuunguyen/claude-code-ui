@@ -8,16 +8,18 @@ const running = { BackendState: "Running", Self: { DNSName: "m.tn.ts.net." }, Ce
 const winServe = { TCP: { "443": { HTTPS: true } }, Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4280" } } } } };
 
 describe("cliCandidates / installHint", () => {
-  it("per platform", () => {
-    expect(cliCandidates("linux", {})).toEqual(["tailscale"]);
-    expect(cliCandidates("darwin", {})).toEqual(["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]);
-    expect(cliCandidates("win32", { ProgramFiles: "D:\\PF" })).toEqual(["D:\\PF\\Tailscale\\tailscale.exe", "tailscale"]);
-  });
-  it("install text", () => {
-    expect(installHint("linux", {})).toContain("install.sh");
-    expect(installHint("linux", { WSL_DISTRO_NAME: "Ubuntu" })).toMatch(/WSL distro[\s\S]*Windows/);
-    expect(installHint("darwin", {})).toContain("download/mac");
-    expect(installHint("win32", {})).toContain("download/windows");
+  it("cliCandidates per platform; install text", () => {
+    {
+      expect(cliCandidates("linux", {})).toEqual(["tailscale"]);
+      expect(cliCandidates("darwin", {})).toEqual(["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]);
+      expect(cliCandidates("win32", { ProgramFiles: "D:\\PF" })).toEqual(["D:\\PF\\Tailscale\\tailscale.exe", "tailscale"]);
+    }
+    {
+      expect(installHint("linux", {})).toContain("install.sh");
+      expect(installHint("linux", { WSL_DISTRO_NAME: "Ubuntu" })).toMatch(/WSL distro[\s\S]*Windows/);
+      expect(installHint("darwin", {})).toContain("download/mac");
+      expect(installHint("win32", {})).toContain("download/windows");
+    }
   });
 });
 
@@ -32,27 +34,31 @@ describe("readStatus", () => {
 });
 
 describe("readServe", () => {
-  it("free / ours / other", () => {
-    expect(readServe({}, "m.tn.ts.net", 4280)).toBe("free");
-    expect(readServe(winServe, "m.tn.ts.net", 4280)).toBe("ours");
-    expect(readServe(winServe, "m.tn.ts.net", 5000)).toEqual({ error: expect.stringContaining("already serves something else") });
-    const lh = { Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://localhost:4280" } } } } };
-    expect(readServe(lh, "m.tn.ts.net", 4280)).toBe("ours");
-  });
-  it("funnel is refused, also when ours", () => {
-    expect(readServe({ ...winServe, AllowFunnel: { "m.tn.ts.net:443": true } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
+  it("readServe: free / ours / other; funnel is refused, also when ours", () => {
+    {
+      expect(readServe({}, "m.tn.ts.net", 4280)).toBe("free");
+      expect(readServe(winServe, "m.tn.ts.net", 4280)).toBe("ours");
+      expect(readServe(winServe, "m.tn.ts.net", 5000)).toEqual({ error: expect.stringContaining("already serves something else") });
+      const lh = { Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://localhost:4280" } } } } };
+      expect(readServe(lh, "m.tn.ts.net", 4280)).toBe("ours");
+    }
+    {
+      expect(readServe({ ...winServe, AllowFunnel: { "m.tn.ts.net:443": true } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
+    }
   });
 });
 
 const ok = (stdout: string) => Promise.resolve({ stdout });
 describe("readServe Foreground", () => {
   const fgWeb = { Foreground: { abc: { TCP: { "443": { HTTPS: true } }, Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4280" } } } } } } };
-  it("foreground funnel is refused", () => {
-    expect(readServe({ Foreground: { abc: { AllowFunnel: { "m.tn.ts.net:443": true } } } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
-  });
-  it("foreground serve on 443 is refused, also for our port", () => {
-    expect(readServe(fgWeb, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("foreground") });
-    expect(readServe(fgWeb, "m.tn.ts.net", 5000)).toEqual({ error: expect.stringContaining("foreground") });
+  it("foreground funnel is refused; foreground serve on 443 is refused, also for our port", () => {
+    {
+      expect(readServe({ Foreground: { abc: { AllowFunnel: { "m.tn.ts.net:443": true } } } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
+    }
+    {
+      expect(readServe(fgWeb, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("foreground") });
+      expect(readServe(fgWeb, "m.tn.ts.net", 5000)).toEqual({ error: expect.stringContaining("foreground") });
+    }
   });
   it("empty Foreground is free", () => expect(readServe({ Foreground: {} }, "m.tn.ts.net", 4280)).toBe("free"));
 });

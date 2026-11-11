@@ -9,26 +9,30 @@ const use = (id: string) => ({ type: "tool_use", id, name: "Bash", input: {} });
 const res = (id: string) => ({ type: "tool_result", tool_use_id: id, content: "ok" });
 
 describe("asideForkPoint", () => {
-  it("idle transcript: last assistant text entry", () => {
-    expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", text()), m("u2", "user", text()), m("a2", "assistant", text())])).toBe("a2");
+  it("idle transcript: last assistant text entry; mid-turn with a pending tool_use: the tool_result before it; parallel calls: only after both results", () => {
+    {
+      expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", text()), m("u2", "user", text()), m("a2", "assistant", text())])).toBe("a2");
+    }
+    {
+      expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", text()), m("a2", "assistant", [use("t1")]), m("r1", "user", [res("t1")]), m("a3", "assistant", [use("t2")])])).toBe("r1");
+    }
+    {
+      expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [use("t1")]), m("a2", "assistant", [use("t2")]), m("r1", "user", [res("t1")]), m("r2", "user", [res("t2")])])).toBe("r2");
+      expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [use("t1")]), m("a2", "assistant", [use("t2")]), m("r1", "user", [res("t1")])])).toBeUndefined();
+    }
   });
-  it("mid-turn with a pending tool_use: the tool_result before it", () => {
-    expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", text()), m("a2", "assistant", [use("t1")]), m("r1", "user", [res("t1")]), m("a3", "assistant", [use("t2")])])).toBe("r1");
-  });
-  it("parallel calls: only after both results", () => {
-    expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [use("t1")]), m("a2", "assistant", [use("t2")]), m("r1", "user", [res("t1")]), m("r2", "user", [res("t2")])])).toBe("r2");
-    expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [use("t1")]), m("a2", "assistant", [use("t2")]), m("r1", "user", [res("t1")])])).toBeUndefined();
-  });
-  it("thinking-only and tool_use-only assistant entries are no fork point", () => {
-    expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [{ type: "thinking", thinking: "" }]), m("a2", "assistant", [use("t1")])])).toBeUndefined();
-  });
-  it("no reply yet: undefined", () => {
-    expect(asideForkPoint([m("u1", "user", text())])).toBeUndefined();
-    expect(asideForkPoint([])).toBeUndefined();
-  });
-  it("string content and sidechain entries are skipped safely", () => {
-    const side = { ...m("s1", "assistant", text()), parent_tool_use_id: "t9" } as SessionMessage;
-    expect(asideForkPoint([m("u1", "user", "hi"), m("a1", "assistant", text()), side])).toBe("a1");
+  it("thinking-only and tool_use-only assistant entries are no fork point; no reply yet: undefined; string content and sidechain entries are skipped safely", () => {
+    {
+      expect(asideForkPoint([m("u1", "user", text()), m("a1", "assistant", [{ type: "thinking", thinking: "" }]), m("a2", "assistant", [use("t1")])])).toBeUndefined();
+    }
+    {
+      expect(asideForkPoint([m("u1", "user", text())])).toBeUndefined();
+      expect(asideForkPoint([])).toBeUndefined();
+    }
+    {
+      const side = { ...m("s1", "assistant", text()), parent_tool_use_id: "t9" } as SessionMessage;
+      expect(asideForkPoint([m("u1", "user", "hi"), m("a1", "assistant", text()), side])).toBe("a1");
+    }
   });
 });
 
