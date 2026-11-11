@@ -247,7 +247,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Content search (docs/spec.md "Wire protocol"): streams `sessions.search.result`, then the reply SessionsSearchResult. A new search on the connection cancels the running one; a query under MIN_SEARCH_CHARS only cancels. */
   | { type: "sessions.search"; query: string; cwd?: string }
   /** Liveness probe: answered with `{}` by the daemon itself (never routed to a side). The page sends it after waking to find a zombie socket. */
-  | { type: "ping" }
+  /** `note`: why the page's previous socket went down (close code, probe timeout), sent once after a reconnect; the daemon logs it. */
+  | { type: "ping"; note?: string }
   /** The daemon's VAPID public key, for `PushManager.subscribe()`. */
   | { type: "push.key" }
   | { type: "push.subscribe"; subscription: WebPushSubscription }
@@ -1011,6 +1012,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   performance: { monitor: boolean };
   /** Claude in Chrome (GH-514): new non-worker sessions run the CLI with --chrome; applies when a session's query (re)starts. */
   chrome: { enabled: boolean };
+  /** Inline visualizations (GH-690): the visualize skill is loaded into the CLI and ```visualize fences render in a sandboxed frame; applies when a session's query (re)starts. */
+  chat: { visualize: boolean };
   /** Claude account (GH-615): `""` = Default (the Daemon's environment), `"cli"` = the CLI login (no CLAUDE_CODE_OAUTH_TOKEN), else the id of a token account. Hub-local. */
   claude: { account: string };
   /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */
@@ -1067,7 +1070,7 @@ export type ClaudeAccountInfo = { id: string; name: string };
 export type EditorId = "code" | "cursor" | "idea";
 export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId | "custom"; label: string }[] }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
-export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list";
+export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list" | "session.scan" | "session.scanAll";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
 export type PerfStall = { kind: "stall"; at: number; ms: number; spans: { name: PerfSpanName; id: number }[] };
 /** A child process: `cmd` and `sub` come from closed lists; `request` = the request type it served ("background" = none in flight). */
@@ -1089,8 +1092,8 @@ export type PerfDaemon = {
   spans: Partial<Record<PerfSpanName, HistSummary>>;
   /** Key "git log", "git status", "claude", ... */
   children: Record<string, HistSummary>;
-  /** Last 60 samples, one per 10 s. */
-  memory: { at: number; rss: number; heapUsed: number }[];
+  /** Last 60 samples, one per 10 s. `cpu`: process CPU over the window, worker threads included (% of one core; absent from an older daemon). */
+  memory: { at: number; rss: number; heapUsed: number; cpu?: number }[];
   /** The 50 slowest events, slowest first. */
   worst: PerfWorst[];
   /** The monitor's own JS time since `since` (ms) and the time it was on. */

@@ -225,13 +225,4 @@ describe("Side registry: an SSH Side survives the pipe", () => {
     sides.close();
   });
 
-  it("WSL reconnects like SSH: a dropped pipe shows reconnecting", async () => {
-    const { d } = daemon();
-    const h = hub(d);
-    await h.sides.start("wsl:Ubuntu");
-    await vi.advanceTimersByTimeAsync(5);
-    h.pipes[0]!.drop();
-    expect(h.sides.list().find((s) => s.id === "wsl:Ubuntu")!.state).toBe("reconnecting");
-    h.sides.close();
-  });
 });

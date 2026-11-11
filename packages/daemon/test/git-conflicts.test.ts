@@ -55,11 +55,6 @@ describe("gitOperation", () => {
   it("is undefined in a clean repository", async () => {
     expect(await gitOperation(repo().dir)).toBeUndefined();
   });
-  it("names merge, with the conflicted files", async () => {
-    const r = repo();
-    tryRun(r.dir, "merge", "other");
-    expect(await gitOperation(r.dir)).toEqual({ kind: "merge", conflicted: ["a.txt"] });
-  });
   it("names rebase (merge backend and apply backend)", async () => {
     const r = repo();
     run(r.dir, "checkout", "-q", "other");
@@ -93,12 +88,12 @@ describe("gitOperation", () => {
     tryRun(r.dir, "stash", "pop");
     expect(await gitOperation(r.dir)).toEqual({ kind: "conflict", conflicted: ["a.txt"] });
   });
-  it("a linked worktree sees only its own operation", async () => {
+  it("names merge, with the conflicted files; a linked worktree sees only its own operation", async () => {
     const r = repo();
     const wt = join(r.root, "wt");
     run(r.dir, "worktree", "add", "-q", "-b", "wt", wt, "main");
     tryRun(r.dir, "merge", "other");
-    expect((await gitOperation(r.dir))?.kind).toBe("merge");
+    expect(await gitOperation(r.dir)).toEqual({ kind: "merge", conflicted: ["a.txt"] });
     expect(await gitOperation(wt)).toBeUndefined();
   });
 });

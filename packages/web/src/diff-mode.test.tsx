@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, useDefaultDiffMode } from "./diff-mode.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();

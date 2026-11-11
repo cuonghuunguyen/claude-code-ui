@@ -130,6 +130,9 @@ describe("back marks in the daemon", { timeout: 20_000 }, () => {
   it("a due reminder fires once: remindedAt set, one push with the mark part; two due give one grouped push", async () => {
     const pushed: PushPayload[] = [];
     let now = 1_000_000;
+    // The same push channel carries the notifier: the brief turn that back.set starts ends idle and pushes "Finished" FINISH_DELAY_MS (1.5 s) later, which on a slow machine lands between the two reminders.
+    // Only the reminders (tag "back...") are looked at.
+    const reminders = () => pushed.filter((p) => p.tag?.startsWith("back"));
     const push = { publicKey: "k", subscribe: () => true, send: async (p: PushPayload) => void pushed.push(p) };
     const h = await harness(fakeQuery, { push: push as never, backReminders: { everyMs: 20, now: () => now } });
     const id = await h.session();
@@ -137,16 +140,16 @@ describe("back marks in the daemon", { timeout: 20_000 }, () => {
     await h.request({ ...set(id, { remindMs: 60_000 }), partId: "msg_2:0" });
     const base = h.marks(id)[0]!.remindAt!;
     now = base + 5 * 60_000;
-    await vi.waitFor(() => expect(pushed.length).toBe(1), { timeout: 3000 });
-    expect(pushed[0]).toMatchObject({ title: "2 replies to come back to", tag: "back" });
+    await vi.waitFor(() => expect(reminders().length).toBe(1), { timeout: 3000 });
+    expect(reminders()[0]).toMatchObject({ title: "2 replies to come back to", tag: "back" });
     expect(h.marks(id).every((m) => m.remindedAt !== undefined)).toBe(true);
     await new Promise((r) => setTimeout(r, 100));
-    expect(pushed.length).toBe(1);
+    expect(reminders().length).toBe(1);
     // Snooze re-arms; a single due mark gives the single payload with backPart and the missed note.
     await h.request(set(id, { remindMs: 60_000 }));
     now = h.marks(id)[0]!.remindAt! + 5 * 60_000;
-    await vi.waitFor(() => expect(pushed.length).toBe(2), { timeout: 3000 });
-    expect(pushed[1]).toMatchObject({ backPart: "msg_1:0", tag: "back-msg_1:0" });
-    expect(pushed[1]!.body).toMatch(/^do it \(was due /);
+    await vi.waitFor(() => expect(reminders().length).toBe(2), { timeout: 3000 });
+    expect(reminders()[1]).toMatchObject({ backPart: "msg_1:0", tag: "back-msg_1:0" });
+    expect(reminders()[1]!.body).toMatch(/^do it \(was due /);
   });
 });

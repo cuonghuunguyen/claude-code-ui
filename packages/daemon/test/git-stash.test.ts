@@ -77,21 +77,15 @@ describe("gitStashPush", () => {
 });
 
 describe("gitStashList", () => {
-  it("lists newest first with index, hash, message and time", async () => {
-    const r = repo();
-    const list = await two(r);
-    expect(list.map((s) => s.index)).toEqual([0, 1]);
-    expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
-    expect(list[1].hash).toBe(run(r.dir, "rev-parse", "stash@{1}"));
-    expect(list.map((s) => s.message)).toEqual(["On main: second", "On main: first"]);
-    expect(list[0].time).toBeGreaterThan(1_600_000_000);
-  });
   it("lists more than 100 entries whole (output over 8000 chars)", async () => {
     const r = repo();
-    for (let i = 0; i < 150; i++) {
-      put(r.dir, "a.txt", `edit ${i}\n`);
-      run(r.dir, "stash", "store", "-m", `entry number ${i} with a long enough message to fill the output`, run(r.dir, "stash", "create"));
-    }
+    // One stash commit and 150 reflog lines written straight into the stash reflog: 150 x (stash create + stash store) is 300 git processes, minutes on Windows.
+    put(r.dir, "a.txt", "edit\n");
+    const sha = run(r.dir, "stash", "create");
+    const lines = Array.from({ length: 150 }, (_, i) => `${sha} ${sha} t <t@t> 1700000000 +0000\tentry number ${i} with a long enough message to fill the output\n`);
+    mkdirSync(join(r.dir, ".git", "logs", "refs"), { recursive: true });
+    writeFileSync(join(r.dir, ".git", "logs", "refs", "stash"), lines.join(""));
+    writeFileSync(join(r.dir, ".git", "refs", "stash"), `${sha}\n`);
     const list = (await gitStashList(r.dir, r.o))!;
     expect(list).toHaveLength(150);
     expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
@@ -106,9 +100,15 @@ describe("gitStashList", () => {
 });
 
 describe("gitStash", () => {
-  it("applies keeps the entries, pops removes one, drops removes one without touching the work tree", async () => {
+  it("list is newest first with index, hash, message and time; apply keeps the entries, pop removes one, drop removes one without touching the work tree", async () => {
     const r = repo();
-    const [s0, s1] = await two(r);
+    const list = await two(r);
+    expect(list.map((s) => s.index)).toEqual([0, 1]);
+    expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
+    expect(list[1].hash).toBe(run(r.dir, "rev-parse", "stash@{1}"));
+    expect(list.map((s) => s.message)).toEqual(["On main: second", "On main: first"]);
+    expect(list[0].time).toBeGreaterThan(1_600_000_000);
+    const [s0, s1] = list;
     await gitStash(r.dir, "apply", { ...r.o, ...entry(s1) });
     expect(read(r.dir, "a.txt")).toBe("one\n");
     expect(count(r)).toBe(2);

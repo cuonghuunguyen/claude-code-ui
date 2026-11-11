@@ -6,13 +6,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const noop = () => {};
 const call = (id: string, tool: string, input: unknown, status: "running" | "done" = "done"): Part => ({
   type: "tool_call",

@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { setGitRunner } from "../src/git-runner.ts";
+import { gitRunnerConfig, setGitRunner, threadRunner } from "../src/git-runner.ts";
+import type { GitRunOptions } from "../src/git-runner.ts";
 import { cutLine, findInFiles, grepArgs, GrepError, matcher, parseGlobs, parseGrep, rangesOf } from "../src/grep.ts";
+import { slowKill } from "./slow-kill.ts";
 
 const dirs: string[] = [];
 const tmp = () => {
@@ -105,32 +107,54 @@ describe("findInFiles", () => {
     return d;
   };
 
-  it("repository: tracked and untracked, no ignored or binary, with context and ranges", async () => {
+  it("findInFiles repository: tracked and untracked, no ignored or binary, with context and ranges; globs filter at any depth; allowed() drops files; an aborted signal returns canceled; nested repository: own run with the rel prefix, outsideRoots is skipped", async () => {
     const d = fixture();
-    const r = await run(d, "needle");
-    expect(paths(r)).toEqual(["a.txt", "src/d/x.ts", "u.ts"]);
-    expect(r).toMatchObject({ git: true, includeIgnored: false, matches: 4 });
-    const a = r.files.find((f) => f.path === "a.txt")!;
-    expect(a.lines.map((l) => l.n)).toEqual([1, 2, 3, 4, 5, 7, 8, 9, 10]);
-    expect(a.lines.filter((l) => l.ranges).map((l) => [l.n, l.ranges])).toEqual([[3, [[7, 13]]], [9, [[7, 13]]]]);
-    const on = await run(d, "needle", { includeIgnored: true });
-    expect(paths(on)).toContain("dist/o.js");
-    expect(paths(on)).not.toContain("bin.dat");
+    {
+      const r = await run(d, "needle");
+      expect(paths(r)).toEqual(["a.txt", "src/d/x.ts", "u.ts"]);
+      expect(r).toMatchObject({ git: true, includeIgnored: false, matches: 4 });
+      const a = r.files.find((f) => f.path === "a.txt")!;
+      expect(a.lines.map((l) => l.n)).toEqual([1, 2, 3, 4, 5, 7, 8, 9, 10]);
+      expect(a.lines.filter((l) => l.ranges).map((l) => [l.n, l.ranges])).toEqual([[3, [[7, 13]]], [9, [[7, 13]]]]);
+      const on = await run(d, "needle", { includeIgnored: true });
+      expect(paths(on)).toContain("dist/o.js");
+      expect(paths(on)).not.toContain("bin.dat");
+    }
+    {
+      expect(paths(await run(d, "needle", { globs: ["*.ts"] }))).toEqual(["src/d/x.ts", "u.ts"]);
+    }
+    {
+      const ctl = new AbortController();
+      const p = run(d, "needle", {}, { signal: ctl.signal });
+      ctl.abort();
+      const t0 = Date.now();
+      expect((await p).stopped).toBe("canceled");
+      expect(Date.now() - t0).toBeLessThan(2000);
+    }
+    {
+      put(d, "sub/n.txt", "needle\n");
+      init(join(d, "sub"));
+      const repo = { path: join(d, "sub"), rel: "sub", kind: "nested" as const };
+      expect(paths(await run(d, "needle", {}, { repos: [repo] }))).toContain("sub/n.txt");
+      expect(paths(await run(d, "needle"))).not.toContain("sub/n.txt");
+    }
   });
 
-  it("globs filter at any depth", async () => {
+
+
+  it("findInFiles: allowed() drops the files it refuses", async () => {
     const d = fixture();
-    expect(paths(await run(d, "needle", { globs: ["*.ts"] }))).toEqual(["src/d/x.ts", "u.ts"]);
+    expect(paths(await run(d, "needle"))).toContain("u.ts");
+    expect(paths(await run(d, "needle", {}, { allowed: (p) => !p.endsWith("u.ts") }))).not.toContain("u.ts");
   });
 
-  it("nested repository: own run with the rel prefix; outsideRoots is skipped", async () => {
+  it("findInFiles: a nested repository marked outsideRoots is skipped", async () => {
     const d = fixture();
     put(d, "sub/n.txt", "needle\n");
     init(join(d, "sub"));
     const repo = { path: join(d, "sub"), rel: "sub", kind: "nested" as const };
     expect(paths(await run(d, "needle", {}, { repos: [repo] }))).toContain("sub/n.txt");
     expect(paths(await run(d, "needle", {}, { repos: [{ ...repo, outsideRoots: true }] }))).not.toContain("sub/n.txt");
-    expect(paths(await run(d, "needle"))).not.toContain("sub/n.txt");
   });
 
   it("outside a repository: ignored files included by default, .git folders never", async () => {
@@ -190,23 +214,29 @@ describe("findInFiles", () => {
     expect((await run(d, "foo\\d", { regex: true })).files[0]!.lines[0]!.ranges).toEqual([[0, 4], [5, 9]]);
   });
 
-  it("PCRE's match limit (git exits with an error) fails the search as grep_failed", async () => {
+
+  it("a pattern git refuses is grep_failed with git's message; PCRE's match limit fails the search as grep_failed; a git without PCRE is regex_unsupported, only in regex mode; git missing", async () => {
     const d = fixture();
-    setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: pcre2_match failed with error code -47: match limit exceeded\n", stdout: Buffer.alloc(0) })));
-    await expect(run(d, "(a+)+b", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringContaining("match limit") });
+    {
+      await expect(run(d, "a(", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringMatching(/\S/) });
+    }
+    {
+      setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: pcre2_match failed with error code -47: match limit exceeded\n", stdout: Buffer.alloc(0) })));
+      await expect(run(d, "(a+)+b", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringContaining("match limit") });
+    }
+    {
+      setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n", stdout: Buffer.alloc(0) })));
+      await expect(run(d, "need.e", { regex: true })).rejects.toMatchObject({ code: "regex_unsupported" });
+      await expect(run(d, "needle")).rejects.toMatchObject({ code: "grep_failed" });
+    }
+    {
+      setGitRunner(() => Promise.reject(Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT", stderr: "", stdout: Buffer.alloc(0) })));
+      const e = await run(d, "needle").catch((x) => x);
+      expect(e).toBeInstanceOf(GrepError);
+      expect(e.code).toBe("git_missing");
+    }
   });
 
-  it("a pattern git refuses is grep_failed with git's message", async () => {
-    const d = fixture();
-    await expect(run(d, "a(", { regex: true })).rejects.toMatchObject({ code: "grep_failed", message: expect.stringMatching(/\S/) });
-  });
-
-  it("a git without PCRE is regex_unsupported, only in regex mode", async () => {
-    const d = fixture();
-    setGitRunner(() => Promise.reject(Object.assign(new Error("x"), { code: 128, stderr: "fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n", stdout: Buffer.alloc(0) })));
-    await expect(run(d, "need.e", { regex: true })).rejects.toMatchObject({ code: "regex_unsupported" });
-    await expect(run(d, "needle")).rejects.toMatchObject({ code: "grep_failed" });
-  });
 
   it("caps: matches, files, cut lines, run bytes", async () => {
     const d = tmp();
@@ -235,37 +265,33 @@ describe("findInFiles", () => {
     expect(next.files[0]!.lines.map((l) => l.n)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
-  it("an aborted signal returns canceled", async () => {
-    const d = fixture();
-    const ctl = new AbortController();
-    const p = run(d, "needle", {}, { signal: ctl.signal });
-    ctl.abort();
-    const t0 = Date.now();
-    expect((await p).stopped).toBe("canceled");
-    expect(Date.now() - t0).toBeLessThan(2000);
-  });
 
   it("the deadline stops a slow search", async () => {
     const d = tmp();
     init(d);
     const big = "x".repeat(20_000) + "\n";
     for (let i = 0; i < 1500; i++) put(d, `g${i % 30}/f${i}.txt`, big);
-    const t0 = Date.now();
-    const r = await run(d, "zzzz", {}, { limits: { ms: 20 } });
-    expect(Date.now() - t0).toBeLessThan(2000);
-    expect(["time", undefined]).toContain(r.stopped);
+    // The kill of git's tree is held back until the reply came: the search answers at its deadline and does not wait for the kill
+    // (on Windows a taskkill process of 0.5-5 s, which made the reply about 5 s late in a loaded full run).
+    // The kill path is forced: the limit is long enough that git always starts (a short one can run out in the checks before it),
+    // and the runner's timeout, the deadline left, is cut to 1 ms, which git (a 30 MB tree) always outlives.
+    const k = slowKill();
+    gitRunnerConfig.killCommand = k.command;
+    const calls: GitRunOptions[] = [];
+    setGitRunner((o) => (calls.push(o), threadRunner({ ...o, timeout: 1 })));
+    try {
+      const r = await run(d, "zzzz", {}, { limits: { ms: 60_000 } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ killTree: true, idempotent: true });
+      expect(calls[0]!.timeout).toBeLessThanOrEqual(60_000);
+      expect(r.stopped).toBe("time");
+      expect(k.killed()).toBe(false);
+      expect(await k.invoked()).toBe(true);
+    } finally {
+      await k.finish();
+      gitRunnerConfig.killCommand = undefined;
+    }
   });
 
-  it("git missing", async () => {
-    const d = fixture();
-    setGitRunner(() => Promise.reject(Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT", stderr: "", stdout: Buffer.alloc(0) })));
-    const e = await run(d, "needle").catch((x) => x);
-    expect(e).toBeInstanceOf(GrepError);
-    expect(e.code).toBe("git_missing");
-  });
 
-  it("allowed() drops files", async () => {
-    const d = fixture();
-    expect(paths(await run(d, "needle", {}, { allowed: (p) => !p.endsWith("u.ts") }))).not.toContain("u.ts");
-  });
 });

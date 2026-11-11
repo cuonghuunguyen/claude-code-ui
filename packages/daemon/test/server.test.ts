@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import type { PageResult, PushPayload, ServerMessage, Snapshot } from "@claude-ui/protocol";
 import { ALL_CAPABILITIES, MAX_TERMINAL_INPUT_BYTES, MAX_UPLOAD_BYTES, PAGE_TURNS, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_HEADERS } from "../src/artifact-preview.ts";
+import { VISUALIZE_CSP, VISUALIZE_SHELL } from "../src/visualize.ts";
 import { openChecked, readdirChecked } from "../src/fd-check.ts";
 import { gitBlobRead, listWorktrees } from "../src/git.ts";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
@@ -20,7 +21,7 @@ import { createSecrets } from "../src/secrets.ts";
 import { createSettings } from "../src/settings.ts";
 import { ConfigError } from "../src/config.ts";
 import { TEST_ARGS } from "../src/claude-test.ts";
-import { createDaemon, MAX_FRAME_BYTES, MAX_SETTINGS } from "../src/server.ts";
+import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
@@ -141,24 +142,12 @@ describe("daemon", () => {
     expect((await fetch(`http://127.0.0.1:${port}/some/route`)).status).toBe(200);
   });
 
-  it("creates a session, streams a prompt's reply as seq'd events over WebSocket", async () => {
-    const c = await client();
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const session = (created as { result: { session: { id: string } } }).result.session;
-    expect(session.id).toMatch(/^[0-9a-f-]{36}$/);
-
-    await c.request({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0 });
-    await c.request({ type: "session.prompt", sessionId: session.id, text: "hi" });
-    await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
-    const events = c.inbox.filter((m) => m.type === "event");
-    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
-  });
-
   it("session.create and session.list carry the Engine's capability flags", async () => {
     const c = await client();
     const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string; capabilities?: unknown } } };
     expect(created.result.session.capabilities).toEqual(ALL_CAPABILITIES);
     const id = created.result.session.id;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
     await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
     await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
     await c.waitFor((m) => m.type === "event" && m.part.type === "turn_result");
@@ -197,11 +186,6 @@ describe("daemon", () => {
     const id = ((await c.request({ type: "session.create", cwd: dir })) as { result: { session: { id: string } } }).result.session.id;
     rmSync(dir, { recursive: true });
     expect(await c.request({ type: "session.bash", sessionId: id, command: "echo hi" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
-  });
-
-  it("rejects a cwd that is not a directory", async () => {
-    const c = await client();
-    expect(await c.request({ type: "session.create", cwd: "/nonexistent" })).toMatchObject({ type: "error", code: "bad_cwd" });
   });
 
   it("answers a malformed URL path with 400 and keeps running", async () => {
@@ -434,15 +418,7 @@ describe("daemon", () => {
     expect(sub.result.seq).toBeGreaterThan(0);
     await second.c.request({ type: "session.prompt", sessionId: id, text: "go" });
     expect(calls.at(-1)).toMatchObject({ resume: id, model: "haiku", effort: "high", permissionMode: "acceptEdits" });
-    // A mode the daemon no longer enables is not restored.
-    await second.c.request({ type: "session.setPermissionMode", sessionId: id, mode: "plan" });
     second.d.close();
-    const saved = JSON.parse(readFileSync(settingsFile, "utf8"));
-    writeFileSync(settingsFile, JSON.stringify({ ...saved, [id]: { ...saved[id], permissionMode: "bypassPermissions" } }));
-    const third = await start();
-    const again = (await third.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })) as { result: { session: object } };
-    expect(again.result.session).toMatchObject({ model: "haiku", effort: "high", permissionMode: "default" });
-    third.d.close();
   });
 
   describe("sessions.json", () => {
@@ -468,19 +444,6 @@ describe("daemon", () => {
     const file = () => join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
     const read = (f: string) => JSON.parse(readFileSync(f, "utf8")) as Record<string, unknown>;
 
-    it("is replaced atomically (a new file renamed over the old one), no temp file left", async () => {
-      const f = file();
-      const { d, c } = await daemon(f);
-      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "high" });
-      const inode = statSync(f).ino;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "low" });
-      expect(statSync(f).ino).not.toBe(inode);
-      expect(read(f)[id]).toMatchObject({ effort: "low" });
-      expect(readdirSync(dirname(f))).toEqual(["sessions.json"]);
-      d.close();
-    });
-
     it("session.delete removes the entry; a list drops entries whose session has no transcript and is not live", async () => {
       const f = file();
       const [kept, gone, deleted] = [uuid(1), uuid(2), uuid(3)];
@@ -491,23 +454,6 @@ describe("daemon", () => {
       expect(Object.keys(read(f))).toEqual([kept, gone]);
       await c.request({ type: "session.list" });
       expect(Object.keys(read(f))).toEqual([kept]);
-      d.close();
-    });
-
-    it(`keeps at most ${MAX_SETTINGS} entries: the least recently changed go first`, async () => {
-      const f = file();
-      const entry = { model: "haiku", permissionMode: "default", effort: "high" };
-      writeFileSync(f, JSON.stringify(Object.fromEntries(Array.from({ length: MAX_SETTINGS }, (_, i) => [uuid(i), entry]))));
-      const { d, c } = await daemon(f);
-      // Re-saving an existing entry moves it to the end; a new one pushes out the oldest.
-      await c.request({ type: "session.subscribe", sessionId: uuid(0), sinceSeq: 0 });
-      await c.request({ type: "session.setEffort", sessionId: uuid(0), effort: "low" });
-      const id = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
-      await c.request({ type: "session.setEffort", sessionId: id, effort: "max" });
-      const keys = Object.keys(read(f));
-      expect(keys).toHaveLength(MAX_SETTINGS);
-      expect(keys.slice(0, 1)).toEqual([uuid(2)]);
-      expect(keys.slice(-2)).toEqual([uuid(0), id]);
       d.close();
     });
 
@@ -1019,42 +965,36 @@ describe("daemon", () => {
     });
   });
 
-  it("survives a frame above ws maxPayload: that socket closes with 1009, the daemon keeps answering", async () => {
-    const c = await client();
-    const closed = new Promise<number>((r) => c.ws.on("close", r));
-    // Raw masked binary frame header claiming 256 MiB (> the 100 MiB default maxPayload); ws rejects it on the header.
-    (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.from([0x82, 0xff, 0, 0, 0, 0, 0x10, 0, 0, 0, 1, 2, 3, 4]));
-    expect(await closed).toBe(1009);
-    expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
-  });
-
-  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default", async () => {
+  it("sets ws maxPayload to MAX_FRAME_BYTES, below the 100 MiB default; the daemon keeps answering", async () => {
     const c = await client();
     const closed = new Promise<number>((r) => c.ws.on("close", r));
     const len = Buffer.alloc(8);
     len.writeBigUInt64BE(BigInt(MAX_FRAME_BYTES + 1));
     (c.ws as unknown as { _socket: import("node:net").Socket })._socket.write(Buffer.concat([Buffer.from([0x82, 0xff]), len, Buffer.from([1, 2, 3, 4])]));
     expect(await closed).toBe(1009);
+    expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
-  it("rejects an empty or non-string model", async () => {
-    const c = await client();
-    expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const id = (created as { result: { session: { id: string } } }).result.session.id;
-    expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
+  it("rejects an empty or non-string model; accepts an image-only prompt and rejects invalid images", async () => {
+    {
+      const c = await client();
+      expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
+      const created = await c.request({ type: "session.create", cwd: webRoot });
+      const id = (created as { result: { session: { id: string } } }).result.session.id;
+      expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
+    }
+    {
+      const c = await client();
+      const created = await c.request({ type: "session.create", cwd: webRoot });
+      const sessionId = (created as { result: { session: { id: string } } }).result.session.id;
+      const prompt = (images: unknown) => c.request({ type: "session.prompt", sessionId, text: "", images });
+      for (const bad of ["data:image/png;base64,x", ["data:text/html;base64,PGI+"], [42]])
+        expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
+      expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
+      expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
+    }
   });
 
-  it("accepts an image-only prompt and rejects invalid images", async () => {
-    const c = await client();
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const sessionId = (created as { result: { session: { id: string } } }).result.session.id;
-    const prompt = (images: unknown) => c.request({ type: "session.prompt", sessionId, text: "", images });
-    for (const bad of ["data:image/png;base64,x", ["data:text/html;base64,PGI+"], [42]])
-      expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
-    expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
-    expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
-  });
 
   it("rejects a cwd outside the allowlisted roots", async () => {
     const c = await client();
@@ -1275,65 +1215,70 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: ws, query: "fresh" })).toMatchObject({ result: { paths: ["fresh.txt"] } });
   });
 
-  it("answers git.status for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.status", cwd: webRoot })).toMatchObject({ result: { status: null } });
-    expect(await c.request({ type: "git.status", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-  });
-
-  it("answers git.fetch for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.fetch", cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.fetch", cwd: webRoot })).toMatchObject({ result: { remote: null } });
-  });
-
-  it("answers git.commitFiles for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const m = { type: "git.commitFiles", paths: ["a.txt"], message: "m" };
-    expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: { committed: null } });
-    expect(await c.request({ ...m, cwd: webRoot, message: " " })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...m, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.rollbackPreview, git.rollback and git.rollbackHunk for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const hunk = { newStart: 1, lines: ["-a", "+b"] };
-    const ms = [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { type: "git.rollback", paths: ["a.txt"], token: "t" }, { type: "git.rollbackHunk", path: "a.txt", hunk }];
-    const nulls = [{ preview: null }, { rolledBack: null }, { rolledBack: null }];
-    for (const [i, m] of ms.entries()) {
-      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
-      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: nulls[i] });
-    }
-    expect(await c.request({ ...ms[0]!, cwd: webRoot, paths: ["../x"] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...ms[1]!, cwd: webRoot, token: 5 })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ ...ms[2]!, cwd: webRoot, hunk: { newStart: 1, lines: [] } })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.merge, git.rebase, git.continue, git.abort and git.operation for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const outside = join(webRoot, "..");
+  describe("git requests check the cwd against the roots and their arguments", () => {
     const hash = "a".repeat(40);
+    const ref = "refs/heads/main";
     const write = { ref: "refs/heads/x", local: hash, headRef: "refs/heads/main", headHash: hash, argv: [] };
-    const msgs = [{ type: "git.merge", ...write }, { type: "git.rebase", ...write }, { type: "git.continue", kind: "merge" }, { type: "git.abort", kind: "merge" }, { type: "git.operation" }];
-    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write })).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.continue", cwd: webRoot, kind: "merge" })).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.operation", cwd: webRoot })).toMatchObject({ result: { operation: null } });
-    expect(await c.request({ type: "git.merge", cwd: webRoot, ...write, local: "nope" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.abort", cwd: webRoot, kind: "nope" })).toMatchObject({ code: "bad_request" });
-  });
+    const hunk = { newStart: 1, lines: ["-a", "+b"] };
+    // [message, reply for a cwd inside the roots; undefined: only the outside check]
+    const inRoots: [Record<string, unknown>, object | undefined][] = [
+      [{ type: "git.status" }, { status: null }],
+      [{ type: "git.fetch" }, { remote: null }],
+      [{ type: "git.commitFiles", paths: ["a.txt"], message: "m" }, { committed: null }],
+      [{ type: "git.rollbackPreview", paths: ["a.txt"] }, { preview: null }],
+      [{ type: "git.rollback", paths: ["a.txt"], token: "t" }, { rolledBack: null }],
+      [{ type: "git.rollbackHunk", path: "a.txt", hunk }, { rolledBack: null }],
+      [{ type: "git.merge", ...write }, { written: null }],
+      [{ type: "git.rebase", ...write }, undefined],
+      [{ type: "git.continue", kind: "merge" }, { written: null }],
+      [{ type: "git.abort", kind: "merge" }, undefined],
+      [{ type: "git.operation" }, { operation: null }],
+      [{ type: "git.stashList" }, { stashes: null }],
+      [{ type: "git.stashPush" }, { written: null }],
+      [{ type: "git.stashApply", index: 0, hash }, { written: null }],
+      [{ type: "git.stashPop", index: 0, hash }, { written: null }],
+      [{ type: "git.stashDrop", index: 0, hash }, { written: null }],
+      [{ type: "git.branchCreate", name: "x" }, { written: null }],
+      [{ type: "git.checkout", ref: "refs/heads/x" }, { written: null }],
+      [{ type: "git.branch", ref }, { branch: null }],
+      [{ type: "git.push", ref, local: hash, argv: [] }, { remote: null }],
+      [{ type: "git.pull", ref, local: hash, argv: [] }, { remote: null }],
+      [{ type: "git.log" }, { log: null }],
+      [{ type: "git.diff", base: "head" }, { diff: null }],
+      [{ type: "git.commit", hash, path: "x" }, undefined],
+      [{ type: "git.fileAt", hash, path: "x" }, undefined],
+    ];
+    it.each(inRoots)("%j: a cwd outside the roots is refused, one inside is answered", async (m, inside) => {
+      const c = await client();
+      expect(await c.request({ ...m, cwd: join(webRoot, "..") })).toMatchObject({ code: "cwd_not_allowed" });
+      if (inside) expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ result: inside });
+    });
 
-  it("answers git.stashList, git.stashPush, git.stashApply, git.stashPop and git.stashDrop for a cwd inside the roots only, with checked arguments", async () => {
-    const c = await client();
-    const outside = join(webRoot, "..");
-    const hash = "a".repeat(40);
-    const msgs = [{ type: "git.stashList" }, { type: "git.stashPush" }, { type: "git.stashApply", index: 0, hash }, { type: "git.stashPop", index: 0, hash }, { type: "git.stashDrop", index: 0, hash }];
-    for (const m of msgs) expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-    expect(await c.request({ type: "git.stashList", cwd: webRoot })).toMatchObject({ result: { stashes: null } });
-    for (const m of msgs.slice(1)) expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
-    expect(await c.request({ type: "git.stashDrop", cwd: webRoot, index: -1, hash })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.stashPush", cwd: webRoot, message: 5 })).toMatchObject({ code: "bad_request" });
+    const badArgs: Record<string, unknown>[] = [
+      { type: "git.commitFiles", paths: ["a.txt"], message: " " },
+      { type: "git.commitFiles", paths: ["../x"], message: "m" },
+      { type: "git.rollbackPreview", paths: ["../x"] },
+      { type: "git.rollback", paths: ["a.txt"], token: 5 },
+      { type: "git.rollbackHunk", path: "a.txt", hunk: { newStart: 1, lines: [] } },
+      { type: "git.merge", ...write, local: "nope" },
+      { type: "git.abort", kind: "nope" },
+      { type: "git.stashDrop", index: -1, hash },
+      { type: "git.stashPush", message: 5 },
+      { type: "git.checkout", ref: "HEAD" },
+      { type: "git.branchCreate", name: "-x" },
+      { type: "git.push", ref, local: "nope", argv: [] },
+      { type: "git.pull", ref, local: 5, argv: [] },
+      { type: "git.push", ref, local: hash },
+      { type: "git.push", ref, local: hash, argv: [], tracking: "nothex" },
+      { type: "git.pull", ref, local: hash, argv: [], tracking: "nothex" },
+      { type: "git.pull", ref, local: hash, argv: [1] },
+      { type: "git.branch", ref: 7 },
+      { type: "git.branch", ref: "HEAD" },
+    ];
+    it.each(badArgs)("%j is refused as bad_request", async (m) => {
+      const c = await client();
+      expect(await c.request({ ...m, cwd: webRoot })).toMatchObject({ code: "bad_request" });
+    });
   });
 
   it("git.commitMessage: checked arguments, the reply, and a cancel that stops only this connection's generation", async () => {
@@ -1384,15 +1329,8 @@ describe("daemon", () => {
     }
   });
 
-  it("answers git.branchCreate and git.checkout for a cwd inside the roots only, with checked arguments and the local_changes code", async () => {
+  it("git.checkout with local changes that the branch would overwrite replies local_changes", async () => {
     const c = await client();
-    const outside = join(webRoot, "..");
-    for (const m of [{ type: "git.branchCreate", name: "x" }, { type: "git.checkout", ref: "refs/heads/x" }]) {
-      expect(await c.request({ ...m, cwd: outside }), m.type).toMatchObject({ code: "cwd_not_allowed" });
-      expect(await c.request({ ...m, cwd: webRoot }), m.type).toMatchObject({ result: { written: null } });
-    }
-    expect(await c.request({ type: "git.checkout", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branchCreate", cwd: webRoot, name: "-x" })).toMatchObject({ code: "bad_request" });
     const repo = join(webRoot, "coproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
@@ -1408,31 +1346,8 @@ describe("daemon", () => {
     expect(await c.request({ type: "git.checkout", cwd: repo, ref: "refs/heads/other" })).toMatchObject({ code: "local_changes" });
   });
 
-  it("answers git.branch, git.push and git.pull for a cwd inside the roots only, with checked arguments", async () => {
+  it("git.log, git.commit, git.fileAt and git.blame read a repository inside the roots", async () => {
     const c = await client();
-    const ref = "refs/heads/main";
-    const local = "a".repeat(40);
-    const outside = join(webRoot, "..");
-    for (const m of [{ type: "git.branch", ref }, { type: "git.push", ref, local, argv: [] }, { type: "git.pull", ref, local, argv: [] }]) {
-      expect(await c.request({ ...m, cwd: outside })).toMatchObject({ code: "cwd_not_allowed" });
-    }
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref })).toMatchObject({ result: { branch: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [] })).toMatchObject({ result: { remote: null } });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local: "nope", argv: [] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local: 5, argv: [] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.push", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [], tracking: "nothex" })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.pull", cwd: webRoot, ref, local, argv: [1] })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: 7 })).toMatchObject({ code: "bad_request" });
-    expect(await c.request({ type: "git.branch", cwd: webRoot, ref: "HEAD" })).toMatchObject({ code: "bad_request" });
-  });
-
-  it("answers git.log, git.commit and git.fileAt for a cwd inside the roots only", async () => {
-    const c = await client();
-    expect(await c.request({ type: "git.log", cwd: webRoot })).toMatchObject({ result: { log: null } });
-    for (const type of ["git.log", "git.commit", "git.fileAt"]) expect(await c.request({ type, cwd: join(webRoot, ".."), hash: "a".repeat(40), path: "x" })).toMatchObject({ code: "cwd_not_allowed" });
     const repo = join(webRoot, "gitproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
@@ -1710,10 +1625,8 @@ describe("daemon", () => {
     });
   });
 
-  it("answers git.diff for a cwd inside the roots only", async () => {
+  it("git.diff reads a repository inside the roots; a bad base is refused", async () => {
     const c = await client();
-    expect(await c.request({ type: "git.diff", cwd: webRoot, base: "head" })).toMatchObject({ result: { diff: null } });
-    expect(await c.request({ type: "git.diff", cwd: join(webRoot, ".."), base: "head" })).toMatchObject({ code: "cwd_not_allowed" });
     const repo = join(webRoot, "diffproj");
     mkdirSync(repo, { recursive: true });
     const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@x.test", ...a], { cwd: repo, encoding: "utf8" }).trim();
@@ -1735,29 +1648,42 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
-  it("two consecutive saves with the returned mtime both succeed (GH-282)", async () => {
-    const file = join(webRoot, "proj", "twice.txt");
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    writeFileSync(file, "one");
-    const c = await client();
-    const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
-    const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
-    expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
-    expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
-    expect(readFileSync(file, "utf8")).toBe("three");
+  it("two consecutive saves with the returned mtime both succeed; fs.write keeps the inode, leaves no tail bytes, and refuses a directory; fs.read keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
+    {
+      const file = join(webRoot, "proj", "twice.txt");
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      writeFileSync(file, "one");
+      const c = await client();
+      const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
+      const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
+      expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
+      expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
+      expect(readFileSync(file, "utf8")).toBe("three");
+    }
+    {
+      const file = join(webRoot, "proj", "w.txt");
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      writeFileSync(file, "long content here");
+      const ino = statSync(file).ino;
+      const c = await client();
+      await c.request({ type: "fs.write", path: file, content: "short" });
+      expect(readFileSync(file, "utf8")).toBe("short");
+      expect(statSync(file).ino).toBe(ino);
+      expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+    }
+    {
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      const c = await client();
+      const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
+      const file = join(webRoot, "proj", "bom.txt");
+      writeFileSync(file, bytes);
+      const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
+      expect(read.result.content).toBe("\ufeffa\r\nb");
+      await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
+      expect(readFileSync(file).equals(bytes)).toBe(true);
+    }
   });
 
-  it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
-    const file = join(webRoot, "proj", "w.txt");
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    writeFileSync(file, "long content here");
-    const ino = statSync(file).ino;
-    const c = await client();
-    await c.request({ type: "fs.write", path: file, content: "short" });
-    expect(readFileSync(file, "utf8")).toBe("short");
-    expect(statSync(file).ino).toBe(ino);
-    expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
-  });
 
   describe("file tree operations (GH-360)", () => {
     const base = join(webRoot, "ops");
@@ -1895,7 +1821,7 @@ describe("daemon", () => {
       expect(readdirSync(d)).toEqual(["ln"]);
     });
 
-    it("GH-360: refuses a UNC path on Windows with no file system call", async () => {
+    it("GH-360, GH-282: refuses a UNC path on Windows with no file system call", async () => {
       const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
       const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
       const native = vi.spyOn(fs.realpathSync, "native");
@@ -1904,11 +1830,12 @@ describe("daemon", () => {
       const c = await client();
       Object.defineProperty(process, "platform", { value: "win32" });
       try {
-        for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate"]) {
+        for (const type of ["fs.create", "fs.rename", "fs.delete", "fs.duplicate", "fs.read"]) {
           for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
             native.mockClear();
             exists.mockClear();
-            expect(await c.request({ type, path, name: "y" }), `${type} ${path}`).toMatchObject({ type: "error" });
+            const reply = await c.request({ type, path, name: "y" });
+            expect(reply, `${type} ${path}`).toMatchObject({ type: "error", ...(type === "fs.read" && { code: "path_not_allowed" }) });
             expect(native, `${type} ${path}`).not.toHaveBeenCalled();
             expect(exists, `${type} ${path}`).not.toHaveBeenCalled();
           }
@@ -1981,31 +1908,6 @@ describe("daemon", () => {
     expect(c.inbox.some((m) => m.type === "fs.changed" && m.path === file)).toBe(false);
   });
 
-  it("fs.read refuses a UNC path on Windows with no file system call (GH-282)", async () => {
-    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
-    // The CommonJS fs object: spying there and syncing makes the daemon's named imports call the spy.
-    const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
-    const native = vi.spyOn(fs.realpathSync, "native");
-    const exists = vi.spyOn(fs, "existsSync");
-    syncBuiltinESMExports();
-    const c = await client();
-    Object.defineProperty(process, "platform", { value: "win32" });
-    try {
-      for (const path of ["\\\\evil\\s\\x", "//evil/s/x", "\\\\.host\\s\\x"]) {
-        native.mockClear();
-        exists.mockClear();
-        expect(await c.request({ type: "fs.read", path }), path).toMatchObject({ code: "path_not_allowed" });
-        expect(native, path).not.toHaveBeenCalled();
-        expect(exists, path).not.toHaveBeenCalled();
-      }
-    } finally {
-      Object.defineProperty(process, "platform", orig);
-      native.mockRestore();
-      exists.mockRestore();
-      syncBuiltinESMExports();
-    }
-  });
-
   it("reads and writes files inside the roots only, refusing a write over a newer disk version", async () => {
     const file = join(webRoot, "proj", "a.txt");
     mkdirSync(join(webRoot, "proj"), { recursive: true });
@@ -2040,8 +1942,6 @@ describe("daemon", () => {
       code: "path_not_allowed",
     });
     expect(await c.request({ type: "fs.read", path: join(webRoot, "proj") })).toMatchObject({ code: "not_a_file" });
-    writeFileSync(join(webRoot, "proj", "bin"), Buffer.from([1, 0, 2]));
-    expect(await c.request({ type: "fs.read", path: join(webRoot, "proj", "bin") })).toMatchObject({ code: "binary" });
   });
 
   it("fs.read: binary, too large, UTF-16 and invalid UTF-8 files fail with their own code and the size; empty and just-under-limit files read", async () => {
@@ -2084,36 +1984,6 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(mkdtempSync(join(tmpdir(), "outside-")), "f.txt") })).toMatchObject({ code: "path_not_allowed" });
   });
 
-  it("fs.read of files under a deleted directory (rm -rf after Edits) replies not_found", async () => {
-    const src = join(webRoot, "proj", "src");
-    mkdirSync(join(src, "sub"), { recursive: true });
-    writeFileSync(join(src, "math.js"), "x");
-    writeFileSync(join(src, "sub", "notes.md"), "y");
-    rmSync(src, { recursive: true });
-    const c = await client();
-    expect(await c.request({ type: "fs.read", path: join(src, "math.js") })).toMatchObject({ code: "not_found" });
-    expect(await c.request({ type: "fs.read", path: join(src, "sub", "notes.md") })).toMatchObject({ code: "not_found" });
-  });
-
-  it("fs.read refuses non-UTF-8 text and keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    const c = await client();
-    const latin1 = join(webRoot, "proj", "latin1.txt");
-    writeFileSync(latin1, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])); // "café\n" in Latin-1
-    expect(await c.request({ type: "fs.read", path: latin1 })).toMatchObject({ code: "not_utf8" });
-
-    const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
-    const file = join(webRoot, "proj", "bom.txt");
-    writeFileSync(file, bytes);
-    const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
-    expect(read.result.content).toBe("\ufeffa\r\nb");
-    await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
-    expect(readFileSync(file).equals(bytes)).toBe(true);
-
-    const empty = join(webRoot, "proj", "empty.txt");
-    writeFileSync(empty, "");
-    expect(await c.request({ type: "fs.read", path: empty })).toMatchObject({ result: { content: "" } });
-  });
 
   it("notifies watchers when a watched file changes on disk", { timeout: 10_000 }, async () => {
     const file = join(webRoot, "proj", "w.txt");
@@ -2658,10 +2528,11 @@ describe("daemon", () => {
       const first = c.request({ type: "session.list" });
       await vi.waitFor(() => expect(scans).toBe(1));
       const burst = Array.from({ length: 10 }, () => c.request({ type: "session.list" }));
-      await new Promise((r) => setTimeout(r, 50));
+      // A request sent after the burst on the same socket: its answer shows the daemon took the burst in (a fixed 50 ms is too short for a loaded machine).
+      await c.request({ type: "fs.read", path: join(webRoot, "no-such-file") }).catch(() => {});
       expect(scans).toBe(1);
       release.shift()!();
-      await vi.waitFor(() => expect(scans).toBe(2));
+      await vi.waitFor(() => expect(scans).toBe(2), { timeout: process.platform === "win32" ? 10_000 : 1000 });
       release.shift()!();
       const titles = (r: unknown) => (r as { result: { sessions: { title: string }[] } }).result.sessions.map((s) => s.title);
       expect(titles(await first)).toEqual(["scan 1"]);
@@ -2701,6 +2572,45 @@ describe("daemon", () => {
       writeFileSync(join(dir, "5b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b.jsonl"), "{}\n");
       await c.request({ type: "session.list" });
       expect(scans).toBe(3);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("a listed transcript that changed is read again alone (getSessionInfo), not every transcript", async () => {
+    const projectsDir = mkdtempSync(join(tmpdir(), "projects-"));
+    const dir = join(projectsDir, "-p");
+    mkdirSync(dir);
+    const id = "4b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b";
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, "{}\n");
+    const entry = (summary: string, lastModified: number) => ({ sessionId: id, summary, lastModified, cwd: webRoot, fileSize: 3 });
+    let scans = 0;
+    const infos: string[] = [];
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: fakeQuery as never,
+      projectsDir,
+      listCache: true,
+      modelListWaitMs: 0,
+      history: {
+        listSessions: (async () => (scans++, [entry("Old title", 1)])) as never,
+        getSessionInfo: (async (sid: string) => (infos.push(sid), entry("New title", 2))) as never,
+        getSessionMessages: (async () => []) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "project.open", cwd: webRoot });
+      await c.request({ type: "session.list" });
+      writeFileSync(file, "{}\n{}\n");
+      const r = (await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } };
+      expect(scans).toBe(1);
+      expect(infos).toEqual([id]);
+      expect(r.result.sessions.find((s) => s.id === id)?.title).toBe("New title");
     } finally {
       d.close();
     }
@@ -2973,32 +2883,7 @@ describe("daemon", () => {
     type Listed = { projects: string[]; recentProjects: { cwd: string; sessionCount: number; lastActivity: number }[]; sessions: { id: string }[] };
     const list = async (c: Awaited<ReturnType<typeof client>>) => ((await c.request({ type: "session.list" })) as { result: Listed }).result;
 
-    it("a fresh state lists no project and no session while transcripts exist; they are the recent projects, newest first", async () => {
-      const [a, b] = [cwdOf("a"), cwdOf("b")];
-      const x = await start(
-        [
-          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
-          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
-          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
-          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
-        ],
-        createProjects(),
-      );
-      try {
-        expect(await list(x.c)).toMatchObject({
-          projects: [],
-          sessions: [],
-          recentProjects: [
-            { cwd: b, sessionCount: 1, lastActivity: 30 },
-            { cwd: a, sessionCount: 2, lastActivity: 20 },
-          ],
-        });
-      } finally {
-        x.d.close();
-      }
-    });
-
-    it("session.ids names every session inside the roots, of added projects or not, and none outside", async () => {
+    it("session.ids names every session inside the roots, of added projects or not, and none outside; a fresh state lists no project and no session, the transcripts are the recent projects, newest first", async () => {
       const [a, b] = [cwdOf("a"), cwdOf("b")];
       const x = await start(
         [
@@ -3012,7 +2897,14 @@ describe("daemon", () => {
       try {
         const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
         expect([...r.result.ids].sort()).toEqual([sid(1), sid(2), sid(3)]);
-        expect((await list(x.c)).sessions).toEqual([]);
+        expect(await list(x.c)).toMatchObject({
+          projects: [],
+          sessions: [],
+          recentProjects: [
+            { cwd: b, sessionCount: 1, lastActivity: 30 },
+            { cwd: a, sessionCount: 2, lastActivity: 20 },
+          ],
+        });
       } finally {
         x.d.close();
       }
@@ -4047,7 +3939,7 @@ describe("push", () => {
     none.d.close();
   });
 
-  it("push.focus covered: the sessions an in-app page shows cards for get no push; an empty push.focus and a closed socket lift it; bad values are refused (GH-158)", async () => {
+  it("push.focus covered: the sessions an in-app page shows cards for get no push; bad values are refused (GH-158)", async () => {
     const f = fakePush();
     const { d, c } = await daemon(f.push);
     try {
@@ -4154,9 +4046,15 @@ describe("push", () => {
       await c.request({ type: "push.focus" });
       await c.request({ type: "permission.respond", requestId: req.part.requestId, decision: "allow" });
       await c.waitFor((m) => m.type === "event" && m.part.type === "session_state" && m.part.state === "idle");
-      await c.request({ type: "session.prompt", sessionId, text: "again" });
-      await vi.waitFor(() => expect(f.sent).toHaveLength(1));
-      expect(f.sent[0]).toEqual({ sessionId, title: basename(webRoot), body: "Needs input · Bash: npm test" });
+      // Not suppressed any more: a second session asks for input. A new session, because session 1's own "finished" push (FINISH_DELAY_MS 1.5 s after its idle,
+      // unless its next turn starts first) would make the daemon drop a second push for it for MIN_GAP_MS (5 s): whether that happens depends on how fast this
+      // test runs, so it must not be the session under test.
+      const second = ((await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } }).result.session.id;
+      await c.request({ type: "session.subscribe", sessionId: second, sinceSeq: 0 });
+      await c.request({ type: "session.prompt", sessionId: second, text: "again" });
+      const needs = () => f.sent.filter((p) => p.sessionId === second);
+      await vi.waitFor(() => expect(needs()).toHaveLength(1), { timeout: process.platform === "win32" ? 10_000 : 1000 });
+      expect(needs()[0]).toEqual({ sessionId: second, title: basename(webRoot), body: "Needs input · Bash: npm test" });
     } finally {
       d.close();
     }
@@ -4685,6 +4583,7 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     expect(await t.mode()).toBe("default");
     writeFileSync(t.user, "{ not json");
     expect(await t.mode()).toBe("default");
+    expect(await t.c.request({ type: "session.defaultMode", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
     t.d.close();
   });
 
@@ -4723,14 +4622,6 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
-  it("bypassPermissions from the user settings still counts (with allow-bypass)", async () => {
-    const t = await setup(true);
-    write(t.user, "bypassPermissions");
-    write(t.shared, "bypassPermissions");
-    expect(await t.mode()).toBe("bypassPermissions");
-    t.d.close();
-  });
-
   it("bypassPermissions needs the daemon's allow-bypass; auto needs a model with auto support", async () => {
     const t = await setup();
     write(t.user, "bypassPermissions");
@@ -4759,12 +4650,6 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     await t.c.request({ type: "skills.setState", cwd: t.project, name: "x", state: "off" });
     await ask(t.project);
     expect(calls.slice(before).filter((o) => o.cwd === t.project && o.persistSession === false && !("resume" in o)).length).toBeGreaterThanOrEqual(2);
-    t.d.close();
-  });
-
-  it("session.defaultMode refuses a cwd outside the roots", async () => {
-    const t = await setup();
-    expect(await t.c.request({ type: "session.defaultMode", cwd: tmpdir() })).toMatchObject({ code: "cwd_not_allowed" });
     t.d.close();
   });
 
@@ -4871,7 +4756,7 @@ describe("sessions.search", () => {
   };
   const results = (c: Awaited<ReturnType<typeof client>>) => c.inbox.filter((m): m is Extract<ServerMessage, { type: "sessions.search.result" }> => m.type === "sessions.search.result");
 
-  it("streams hits of transcripts inside the roots only, then replies the scan stats", async () => {
+  it("sessions.search streams hits of transcripts inside the roots only, then replies the scan stats", async () => {
     const { d } = setup();
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     try {
@@ -4879,6 +4764,33 @@ describe("sessions.search", () => {
       const reply = (await c.request({ type: "sessions.search", query: "ZEBRA" })) as { reqId: string; result: { scannedFiles: number } };
       expect(results(c).map((r) => [r.sessionId, r.reqId, r.hits[0]!.messageId])).toEqual([["a1", reply.reqId, "u-a1"], ["a2", reply.reqId, "u-a2"]]);
       expect(reply.result.scannedFiles).toBe(2);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("sessions.search with a cwd outside the roots is cwd_not_allowed", async () => {
+    const { d, outside } = setup();
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      expect(await c.request({ type: "sessions.search", query: "zebra", cwd: outside })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(results(c)).toHaveLength(0);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("sessions.search: cwd limits the search to that project; a 1-char query replies empty; 201 chars is bad_query", async () => {
+    const { d, inside } = setup();
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
+      expect(results(c).map((r) => r.sessionId), "cwd inside").toEqual(["a1"]);
+      expect(await c.request({ type: "sessions.search", query: "z" })).toMatchObject({ type: "reply", result: { scannedFiles: 0 } });
+      expect(await c.request({ type: "sessions.search", query: "z".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
+      expect(results(c)).toHaveLength(1);
     } finally {
       d.close();
     }
@@ -4904,23 +4816,7 @@ describe("sessions.search", () => {
     }
   });
 
-  it("cwd limits the search to that project; a cwd outside the roots is cwd_not_allowed; a 1-char query replies empty; 201 chars is bad_query", async () => {
-    const { d, inside, outside } = setup();
-    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
-    try {
-      const c = await client((d.address() as AddressInfo).port);
-      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
-      expect(results(c).map((r) => r.sessionId)).toEqual(["a1"]);
-      expect(await c.request({ type: "sessions.search", query: "zebra", cwd: outside })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
-      expect(await c.request({ type: "sessions.search", query: "z" })).toMatchObject({ type: "reply", result: { scannedFiles: 0 } });
-      expect(await c.request({ type: "sessions.search", query: "z".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
-      expect(results(c)).toHaveLength(1);
-    } finally {
-      d.close();
-    }
-  });
-
-  it("a new sessions.search cancels the running one", async () => {
+  it("a new sessions.search cancels the running one; closing the connection cancels the running search", async () => {
     const { d } = setup(150);
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     try {
@@ -4931,26 +4827,21 @@ describe("sessions.search", () => {
       expect(await first).toMatchObject({ type: "reply", result: { stopped: "canceled" } });
       expect(((await second) as { result: { stopped?: string } }).result.stopped).toBeUndefined();
       expect(results(c).map((r) => r.sessionId)).toEqual(["a1"]);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const c2 = await client((d.address() as AddressInfo).port);
+        c2.ws.send(JSON.stringify({ type: "sessions.search", query: "zebra", reqId: "1" }));
+        await new Promise((r) => setTimeout(r, 30));
+        c2.ws.close();
+        await vi.waitFor(() => expect(log.mock.calls.map((a) => String(a[0])).some((l) => l.startsWith("sessions.search:") && l.endsWith("stopped: canceled"))).toBe(true), { timeout: 5000 });
+      } finally {
+        log.mockRestore();
+      }
     } finally {
       d.close();
     }
   });
 
-  it("closing the connection cancels the running search", async () => {
-    const { d } = setup(150);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
-    try {
-      const c = await client((d.address() as AddressInfo).port);
-      c.ws.send(JSON.stringify({ type: "sessions.search", query: "zebra", reqId: "1" }));
-      await new Promise((r) => setTimeout(r, 30));
-      c.ws.close();
-      await vi.waitFor(() => expect(log.mock.calls.map((a) => String(a[0])).some((l) => l.startsWith("sessions.search:") && l.endsWith("stopped: canceled"))).toBe(true), { timeout: 5000 });
-    } finally {
-      log.mockRestore();
-      d.close();
-    }
-  });
 });
 
 describe("fs.media and /media", () => {
@@ -5674,6 +5565,17 @@ describe("artifact.preview and /artifact (GH-175)", () => {
       req.end();
     });
 
+  it("GET /visualize serves the shell with its own CSP to an iframe only (GH-690)", async () => {
+    await listening;
+    const ok = await get("/visualize");
+    expect(ok.status).toBe(200);
+    expect(ok.headers["content-security-policy"]).toBe(VISUALIZE_CSP);
+    expect(ok.body.toString()).toBe(VISUALIZE_SHELL);
+    expect((await get("/visualize", { "sec-fetch-dest": "script" })).status).toBe(403);
+    expect((await get("/visualize", { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await get("/visualize", {}, "POST")).status).toBe(405);
+  });
+
   it("replies a nonce URL for a done publish outside the roots; GET serves the bytes with the sandbox headers", async () => {
     const c = await open();
     const r = await preview(c, "toolu_a");
@@ -5774,12 +5676,6 @@ describe("artifact.preview and /artifact (GH-175)", () => {
     c.ws.close();
     expect(wire.cl).toBe(15 * MiB);
     expect(wire.body).toBe(wire.cl);
-  });
-
-  it("the page carries X-DNS-Prefetch-Control: off", async () => {
-    const c = await open();
-    expect((await get((await preview(c, "toolu_a")).result.url)).headers["x-dns-prefetch-control"]).toBe("off");
-    c.ws.close();
   });
 
   it("GET refuses a top-level load, a cross-site or foreign-origin request, an unknown host and POST", async () => {

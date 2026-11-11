@@ -4,10 +4,8 @@ import { adapt, chaptersOf, STEPS, stepById, stepsFor } from "./guide-steps.ts";
 const ctx = { session: false, git: false, narrow: false };
 
 describe("chapter Basics", () => {
-  it("has six steps in order, welcome first and the end card last", () => {
+  it("has six steps in order, welcome first and the end card last, at every width (a narrow screen swaps the sidebar anchor, it does not drop the step)", () => {
     expect(stepsFor("basics", ctx).map((s) => s.id)).toEqual(["welcome", "project", "new-session", "sidebar", "palette", "basics-end"]);
-  });
-  it("has six steps at every width (a narrow screen swaps the sidebar anchor, it does not drop the step)", () => {
     expect(stepsFor("basics", { ...ctx, narrow: true })).toHaveLength(6);
   });
   it("shows the end card's Add project action", () => {

@@ -134,18 +134,22 @@ describe("session-scan", () => {
   it("transcriptStamp changes when a transcript is added, grows or is touched; undefined without the folder", async () => {
     const root = config();
     const dir = join(root, "projects");
-    const a = (await transcriptStamp(dir))!;
+    const stamp = async (d: string) => {
+      const m = await transcriptStamp(d);
+      return m && JSON.stringify([...m]);
+    };
+    const a = (await stamp(dir))!;
     expect(a).toContain("-tmp-p/");
     const f = join(dir, "-tmp-p", "4b2c3d4e-5f60-4718-8a9b-000000000000.jsonl");
     writeFileSync(f, "{}\n{}\n");
-    const b = await transcriptStamp(dir);
+    const b = await stamp(dir);
     expect(b).not.toBe(a);
     const t = statSync(f).mtimeMs / 1000 + 10;
     utimesSync(f, t, t);
-    const c = await transcriptStamp(dir);
+    const c = await stamp(dir);
     expect(c).not.toBe(b);
     writeFileSync(join(dir, "-tmp-p", "5b2c3d4e-5f60-4718-8a9b-000000000000.jsonl"), "{}\n");
-    expect(await transcriptStamp(dir)).not.toBe(c);
+    expect(await stamp(dir)).not.toBe(c);
     expect(await transcriptStamp(join(root, "none"))).toBeUndefined();
   });
 

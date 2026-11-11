@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PairingForm } from "./pairing-form.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const TOKEN = "aB3_-xYz0123456789abcdefghijklmnopqrstuv";
 
 let el: HTMLDivElement;

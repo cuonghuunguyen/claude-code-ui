@@ -1,6 +1,6 @@
 Feature: A changed submodule shows as a submodule row (GH-388)
 
-  Scenario: Uncommitted changes list a moved submodule as a submodule row
+  Scenario: A moved submodule is a submodule row in the uncommitted changes and against the branch
     Given the viewport is 1440x900
     And the scratch project is a superproject with a moved submodule
     And the app is open
@@ -13,15 +13,7 @@ Feature: A changed submodule shows as a submodule row (GH-388)
     And the detail of the submodule "libs/lib" says it is "in HEAD" at the recorded commit
     And no changes error shows
     And I capture "uncommitted-moved-submodule"
-
-  Scenario: Against branch lists a moved submodule as a submodule row
-    Given the viewport is 1440x900
-    And the scratch project is a superproject with a moved submodule
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
-    When I open the Changes tab of the side panel
-    And I choose the "Against branch" diff mode
+    When I choose the "Against branch" diff mode
     Then the submodule row "libs/lib" shows a submodule badge and no line counts
     And the detail of the submodule "libs/lib" says it is "at the merge base" at the recorded commit
     And no changes error shows
@@ -49,17 +41,13 @@ Feature: A changed submodule shows as a submodule row (GH-388)
     Then the changes list has no row for "libs/lib"
     And I capture "dirty-only-submodule"
 
-  Scenario: The status bar does not count a moved submodule as added and removed lines
+  Scenario: The status bar does not count a moved submodule as added and removed lines and the submodule row fits a phone
     Given the viewport is 1440x900
     And the scratch project is a superproject with a moved submodule
     And a Haiku session with one finished reply
     Then the status bar shows no added or removed lines for the submodule
     And I capture "status-bar-counts"
-
-  Scenario: The submodule row fits a phone
     Given the viewport is 390x844
-    And the scratch project is a superproject with a moved submodule
-    And a Haiku session with one finished reply
     When I open the Changes tab of the side panel
     And I choose the "Uncommitted" diff mode
     Then the submodule row "libs/lib" shows a submodule badge and no line counts

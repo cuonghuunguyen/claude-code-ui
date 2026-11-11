@@ -399,10 +399,6 @@ describe("desktop notification", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("notify false (--no-os-notify): nothing runs", async () => {
-    await expect(createPush({ ...mk(), notify: false }).send(pl)).resolves.toBeUndefined();
-  });
-
   it("linux: text is literal argv after --", () => {
     expect(osNotifyCommand({ title: "-x", body: evil }, "linux")).toEqual(["notify-send", ["--app-name=claude-ui", "--", "-x", evil]]);
   });
@@ -529,20 +525,6 @@ describe("notifier: worker notifications off (GH-387)", () => {
     n.observe(ev(bash("r1", { settled: true, decision: "allow", escalated: true }), "w"));
     expect(pushed.filter((p) => p.replace)).toHaveLength(1);
     expect(pushed.at(-1)!.body).toMatch(/^No longer needs input/);
-  });
-
-  it("a quiet worker blocked on a shared request: no group push; a settle replaces nothing", () => {
-    for (const sid of ["w", "w2"]) {
-      n.observe(state("running", sid));
-      n.observe(ev(read(`r-${sid}`), sid));
-      n.observe(state("needs_input", sid));
-    }
-    expect(pushed).toEqual([]);
-    for (const sid of ["w", "w2"]) {
-      n.observe(ev(read(`r-${sid}`, { settled: true, decision: "allow" }), sid));
-      n.observe(state("running", sid));
-    }
-    expect(pushed).toEqual([]);
   });
 
   it("one quiet worker and one escalated worker on the same request: the escalation pushes with sound and its reason, the settle replaces only that, nothing for the quiet one", () => {

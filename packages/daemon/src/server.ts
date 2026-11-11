@@ -24,6 +24,7 @@ import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
 import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
@@ -63,6 +64,7 @@ import { createOrchestration } from "./orchestration.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
+import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 /** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
@@ -87,7 +89,8 @@ export interface Conn {
   terminate(): void;
   on(event: "message", listener: (data: RawData) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
-  on(event: "pong" | "close", listener: () => void): unknown;
+  on(event: "pong", listener: () => void): unknown;
+  on(event: "close", listener: (code?: number) => void): unknown;
 }
 // Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
 void ((w: WebSocket): Conn => w);
@@ -128,6 +131,10 @@ const IDLE_CHECK_MS = 60_000;
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
+const LAG_TICK_MS = 500;
+const LAG_LOG_MS = 1_000;
+const MEM_LOG_MS = 10 * 60_000;
+const mb = (n: number) => Math.round(n / 2 ** 20);
 
 /** An OpenCode session id: it reaches a request path, so only this shape does. */
 const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
@@ -405,6 +412,7 @@ export function createDaemon(opts: {
     plan,
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
+    visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
       const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
@@ -1239,17 +1247,42 @@ export function createDaemon(opts: {
   // Requests during a scan share one queued scan, so a reply is never older than its request.
   // Each listSessions() call also grows the daemon RSS by ~4 MB that it never returns (SDK 0.3.285, heap flat; probe in
   // development-docs/FIX-C/ls-probe.log): while no transcript changed (names, sizes, mtimes), the last result is reused.
+  // A running session writes its transcript every turn: with the same file set, only the changed files are read again
+  // (getSessionInfo, two 64 KB reads each), not all of them; a file added or removed scans all again.
+  type Scanned = Awaited<ReturnType<typeof listSessions>>;
   let scan: ReturnType<typeof listSessions> | undefined;
   let nextScan: ReturnType<typeof listSessions> | undefined;
-  let lastScan: { stamp: string; result: Awaited<ReturnType<typeof listSessions>> } | undefined;
+  let lastScan: { stamp: Map<string, string>; result: Scanned } | undefined;
   const listCache = opts.listCache ?? !opts.history?.listSessions;
+  /** `last.result` with the entries of the `changed` files read again; undefined when only a full scan gives the same list. */
+  async function patchScan(last: Scanned, changed: string[], stamp: Map<string, string>): Promise<Scanned | undefined> {
+    const idOf = (file: string) => file.slice(file.lastIndexOf("/") + 1, -".jsonl".length);
+    const count = new Map<string, number>();
+    for (const f of stamp.keys()) count.set(idOf(f), (count.get(idOf(f)) ?? 0) + 1);
+    const ids = changed.map(idOf);
+    // A session in two project folders, or one the SDK left out of the list (filtered): its entry needs the full scan's rules.
+    if (ids.some((id) => count.get(id) !== 1 || last.filter((t) => t.sessionId === id).length !== 1)) return undefined;
+    const infos = await mapLimit(ids, 8, (id) => history.getSessionInfo(id).catch(() => undefined));
+    if (infos.some((i, n) => i?.sessionId !== ids[n])) return undefined;
+    const fresh = new Map(infos.map((i) => [i!.sessionId, i!]));
+    return last.map((t) => fresh.get(t.sessionId) ?? t).sort((a, b) => b.lastModified - a.lastModified);
+  }
   function transcripts(): ReturnType<typeof listSessions> {
     if (!scan) {
       // Taken before the scan: a file written during it changes the next stamp.
       return (scan = (async () => {
         const stamp = listCache ? await transcriptStamp(projectsDir) : undefined;
-        if (stamp !== undefined && lastScan?.stamp === stamp) return lastScan.result;
+        const last = lastScan;
+        if (stamp && last && stamp.size === last.stamp.size && [...stamp.keys()].every((f) => last.stamp.has(f))) {
+          const changed = [...stamp].filter(([f, v]) => last.stamp.get(f) !== v).map(([f]) => f);
+          const sp = perfMon.span("session.scan");
+          const result = changed.length ? await patchScan(last.result, changed, stamp) : last.result;
+          sp.end();
+          if (result) return (lastScan = { stamp, result }).result;
+        }
+        const sp = perfMon.span("session.scanAll");
         const result = await history.listSessions();
+        sp.end();
         lastScan = stamp === undefined ? undefined : { stamp, result };
         return result;
       })().finally(() => (scan = undefined)));
@@ -1865,6 +1898,12 @@ export function createDaemon(opts: {
       const m = /^\/artifact\/([0-9a-f]{32})\/(.*)$/.exec(rawPath);
       return m ? serveArtifact(req, res, m[1]!, m[2]!) : void res.writeHead(404).end();
     }
+    if (rawPath === "/visualize") {
+      if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
+      const dest = req.headers["sec-fetch-dest"];
+      if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
+      return void res.writeHead(200, VISUALIZE_HEADERS).end(req.method === "HEAD" ? undefined : VISUALIZE_SHELL);
+    }
     if (rawPath.startsWith("/addon/")) {
       const m = /^\/addon\/([0-9a-f]{32})\/([a-z0-9-]{1,64})\/(.+)$/.exec(rawPath);
       return m ? serveAddon(req, res, m[1]!, m[2]!, m[3]!) : void res.writeHead(404).end();
@@ -1917,6 +1956,7 @@ export function createDaemon(opts: {
   const pinger = setInterval(() => {
     for (const ws of [...connections]) {
       if (!answered.has(ws)) {
+        console.warn(`${new Date().toISOString()} ws: no pong in ${(opts.pingMs ?? PING_MS) / 1000}s, dropped (${connections.size - 1} left)`);
         drop(ws);
         continue;
       }
@@ -1928,7 +1968,22 @@ export function createDaemon(opts: {
       }
     }
   }, opts.pingMs ?? PING_MS).unref();
-  http.on("close", () => clearInterval(pinger));
+  // Perf log: an event loop blocked ≥1 s delays every reply and pong (a page probe times out, a socket is dropped).
+  let lagAt = performance.now();
+  const lagWatch = setInterval(() => {
+    const t = performance.now();
+    const late = t - lagAt - LAG_TICK_MS;
+    lagAt = t;
+    if (late < LAG_LOG_MS) return;
+    const m = process.memoryUsage();
+    console.warn(`${new Date().toISOString()} perf: event loop blocked ${Math.round(late)}ms, rss ${mb(m.rss)}MB, heap ${mb(m.heapUsed)}MB, ${connections.size} sockets`);
+  }, LAG_TICK_MS).unref();
+  // Perf log: memory every 10 min, to see a leak over a day.
+  const memLog = setInterval(() => {
+    const m = process.memoryUsage();
+    console.log(`${new Date().toISOString()} perf: rss ${mb(m.rss)}MB, heap ${mb(m.heapUsed)}/${mb(m.heapTotal)}MB, ${connections.size} sockets, ${sessions.size} sessions`);
+  }, MEM_LOG_MS).unref();
+  http.on("close", () => (clearInterval(pinger), clearInterval(lagWatch), clearInterval(memLog)));
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
     const sameBrowser = sameMachine(req);
@@ -1938,6 +1993,7 @@ export function createDaemon(opts: {
     sleepWatch?.check();
     connections.add(ws);
     answered.add(ws);
+    const openedAt = Date.now();
     ws.on("pong", () => answered.add(ws));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
@@ -1985,7 +2041,8 @@ export function createDaemon(opts: {
     };
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
-    ws.on("close", () => {
+    ws.on("close", (code) => {
+      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left)`);
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
@@ -2010,6 +2067,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
+      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 300)}`);
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
       const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);

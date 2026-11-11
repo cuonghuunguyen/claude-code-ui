@@ -88,9 +88,11 @@ describe("createShortcut", () => {
     expect(await shortcut.set(false)).toBe(false);
     expect(existsSync(app)).toBe(false);
   });
-  it("creates and removes the Linux entry and icon", async () => {
+  it("creates, replaces (our own entry) and removes the Linux entry and icon", async () => {
     const { dir, configDir, shortcut } = setup("linux");
     expect(await shortcut.set(true)).toBe(true);
+    expect(await shortcut.set(true)).toBe(true);
+    expect(readFileSync(join(dir, "claude-ui.desktop"), "utf8")).toContain("X-ClaudeUI-Shortcut=");
     expect(readFileSync(join(dir, "claude-ui.desktop"), "utf8")).toContain(`Icon=${join(configDir, "claude-ui.png")}`);
     expect(existsSync(join(configDir, "claude-ui.png"))).toBe(true);
     expect(await shortcut.set(false)).toBe(false);
@@ -123,13 +125,6 @@ describe("createShortcut", () => {
       await expect(shortcut.set(true)).rejects.toThrow(/not made by claude-ui/);
       expect(readFileSync(file, "utf8")).toBe("the user's own");
     }
-  });
-  it("our own entry is replaced and removed", async () => {
-    const { dir, shortcut } = setup("linux");
-    await shortcut.set(true);
-    await shortcut.set(true);
-    expect(readFileSync(join(dir, "claude-ui.desktop"), "utf8")).toContain("X-ClaudeUI-Shortcut=");
-    expect(await shortcut.set(false)).toBe(false);
   });
   it("an unsupported platform gives no shortcut", () => {
     expect(createShortcut({ platform: "aix", env: {}, home: "/h", configDir: "/c", webRoot: "/w" })).toBeUndefined();

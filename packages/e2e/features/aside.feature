@@ -1,7 +1,7 @@
 Feature: Aside (/btw)
 
-  Scenario Outline: /btw opens an Aside that knows the owner's context at <width>x<height>
-    Given the viewport is <width>x<height>
+  Scenario: /btw opens an Aside that knows the owner's context; follow-up, hide with the tab, move, resize, minimize, a second popup and Close
+    Given the viewport is 1440x900
     And a Haiku session that has read "notes-465.txt"
     And I note the owner transcript
     When I ask the aside "Which file did we read? Answer with the file name only."
@@ -11,20 +11,53 @@ Feature: Aside (/btw)
     And the session list shows no aside
     And the page has no horizontal scroll
     And I capture "aside"
-
-    Examples:
-      | width | height |
-      | 1440  | 900    |
-      | 390   | 844    |
-
-  Scenario: A follow-up continues the Aside
-    Given a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    Then the aside shows a reply
     When I send "And what did it contain? One word." in the aside
     Then the aside shows at least 2 replies
     And the owner timeline shows 1 prompt
     And I capture "follow-up"
+    When I open the New session tab
+    Then no aside popup shows
+    And I capture "other-tab"
+    When I open the first session tab
+    Then an aside popup shows
+    And the aside shows a reply
+    And I capture "back"
+    When I drag the aside popup by -200,100
+    Then the aside popup has moved
+    When I resize the aside popup by 120,80
+    Then the aside popup has grown
+    When I minimize the aside
+    Then the aside shows as a chip
+    When I send "Reply with exactly: hi" in the owner
+    Then the owner turn has finished
+    When I restore the aside
+    Then an aside popup shows
+    And I capture "moved"
+    When I ask the aside "Reply with the word two."
+    Then 2 aside popups show
+    And the owner timeline shows 2 prompts
+    And I capture "two-popups"
+    When I close the aside
+    Then an aside popup shows
+    And the aside transcript file does not exist
+    When I close the aside
+    Then no aside popup shows
+    And the aside transcript file does not exist
+    And the session list shows no aside
+    And I capture "closed"
+
+  Scenario: The Aside fills the screen on a phone and knows the owner's context
+    Given the viewport is 390x844
+    And a Haiku session that has read "notes-465.txt"
+    And I note the owner transcript
+    When I ask the aside "Which file did we read? Answer with the file name only."
+    Then an aside popup shows
+    And the aside shows a reply
+    And the owner transcript is unchanged
+    And the session list shows no aside
+    And the aside popup fills the viewport
+    And the page has no horizontal scroll
+    And I capture "aside"
 
   Scenario: An Aside permission request shows in the popup and in Focus
     Given a Haiku session that has read "notes-465.txt"
@@ -46,40 +79,6 @@ Feature: Aside (/btw)
     And the aside ran no Write or Edit tool
     And the file "aside-probe.txt" does not exist in the project
     And I capture "read-only"
-
-  Scenario: The popup moves, resizes and minimizes while the owner stays usable
-    Given the viewport is 1440x900
-    And a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    Then an aside popup shows
-    When I drag the aside popup by -200,100
-    Then the aside popup has moved
-    When I resize the aside popup by 120,80
-    Then the aside popup has grown
-    When I minimize the aside
-    Then the aside shows as a chip
-    When I send "Reply with exactly: hi" in the owner
-    Then the owner turn has finished
-    When I restore the aside
-    Then an aside popup shows
-    And I capture "moved"
-
-  Scenario: The popup fills the screen on a phone
-    Given the viewport is 390x844
-    And a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    Then the aside popup fills the viewport
-    And I capture "phone"
-
-  Scenario: Close throws the Aside away
-    Given a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    Then the aside shows a reply
-    When I close the aside
-    Then no aside popup shows
-    And the aside transcript file does not exist
-    And the session list shows no aside
-    And I capture "closed"
 
   Scenario: /btw works while the owner's turn runs, and the owner's request is answerable with the popup open
     Given a Haiku session that has read "notes-465.txt"
@@ -141,26 +140,6 @@ Feature: Aside (/btw)
     When I allow the owner permission request
     Then the owner turn has finished
     And the file "card-note.txt" exists in the project
-
-  Scenario: A second /btw opens a second popup
-    Given a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    And I ask the aside "Reply with the word two."
-    Then 2 aside popups show
-    And the owner timeline shows 1 prompt
-    And I capture "two-popups"
-
-  Scenario: Popups hide with their owner tab and come back with it
-    Given a Haiku session that has read "notes-465.txt"
-    When I ask the aside "Which file did we read? Answer with the file name only."
-    Then the aside shows a reply
-    When I open the New session tab
-    Then no aside popup shows
-    And I capture "other-tab"
-    When I open the first session tab
-    Then an aside popup shows
-    And the aside shows a reply
-    And I capture "back"
 
   Scenario: /btw before the first Claude reply is refused
     Given the viewport is 1440x900

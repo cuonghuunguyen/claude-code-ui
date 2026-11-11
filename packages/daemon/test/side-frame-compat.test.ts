@@ -1,8 +1,8 @@
 // GH-549 / ADR 0009: the Side wire protocol. The frame lines below are pinned: a Hub reads every frame an attach server writes, and an attach server understands every line a Hub writes.
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { parseSideFrame } from "../src/side-frame.ts";
-import { createSides, runSide, type SideProcess } from "../src/sides.ts";
+import { parseSideFrame, schemaOverlap } from "../src/side-frame.ts";
+import { createSides, mismatchMessage, runSide, type SideProcess } from "../src/sides.ts";
 import { sideTarget } from "../src/side-kinds.ts";
 import { daemon, pipe } from "./ssh-side-harness.ts";
 
@@ -25,17 +25,14 @@ describe("frames stay readable", () => {
       expect(r, line).toMatchObject({ frame: { kind } });
     }
     expect(parseSideFrame('{"ready":true,"killTree":true,"hb":true}')).toMatchObject({ frame: { build: undefined } });
+    expect(parseSideFrame('{"running":true}')).toEqual({ frame: { kind: "running", running: true } });
   });
-  it("a Daemon line of the next build that this build does not know is dropped, not fatal", () => {
-    expect(parseSideFrame('{"future":1}')).toEqual({ error: "unknown frame" });
+  it("a Daemon line of the next build that this build does not know is dropped, not fatal; so are the frames of the old protocol (terminals, taken)", () => {
+    for (const line of ['{"future":1}', '{"terminals":2}', '{"taken":1}']) expect(parseSideFrame(line), line).toEqual({ error: "unknown frame" });
   });
   it("ready with schema, version and startedBy parses; ready without schema parses too (the Hub then shows a mismatch)", () => {
     expect(parseSideFrame('{"ready":true,"killTree":true,"hb":true,"build":"1.2-3","schema":[1,2],"version":"1.1.0","startedBy":"attach"}')).toMatchObject({ frame: { kind: "ready", build: "1.2-3", schema: [1, 2], version: "1.1.0", startedBy: "attach" } });
     expect(parseSideFrame('{"ready":true}')).toMatchObject({ frame: { kind: "ready", schema: undefined, version: undefined, startedBy: undefined } });
-  });
-  it("frames of the old protocol are gone: terminals and taken are unknown", () => {
-    expect(parseSideFrame('{"terminals":2}')).toEqual({ error: "unknown frame" });
-    expect(parseSideFrame('{"taken":1}')).toEqual({ error: "unknown frame" });
   });
 });
 
@@ -99,4 +96,18 @@ describe("an attach server serves the lines a Hub writes", () => {
       vi.useRealTimers();
     }
   });
+});
+
+// ADR 0009: the range of side frame schemas decides whether two Hubs can attach; a mismatch row names which side updates.
+it("schemaOverlap: ranges that share a number overlap", () => {
+  expect(schemaOverlap([1, 1], [1, 1])).toBe(true);
+  expect(schemaOverlap([1, 2], [2, 3])).toBe(true);
+  expect(schemaOverlap([1, 1], [2, 2])).toBe(false);
+  expect(schemaOverlap([3, 4], [1, 2])).toBe(false);
+});
+
+const mismatch = (remoteOlder: boolean) => ({ local: "1.2.0", remote: "1.0.0", localSchema: [1, 1] as [number, number], remoteOlder });
+it("mismatchMessage: an older remote is updated there, a newer remote means updating this Hub", () => {
+  expect(mismatchMessage("SSH: box", mismatch(true))).toBe("SSH: box runs Claude UI 1.0.0, this is 1.2.0: they cannot work together. Update it there; it attaches by itself afterwards.");
+  expect(mismatchMessage("SSH: box", mismatch(false))).toBe("SSH: box runs Claude UI 1.0.0, newer than this 1.2.0: they cannot work together. Update this Claude UI.");
 });

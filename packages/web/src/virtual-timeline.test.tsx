@@ -7,8 +7,6 @@ import { SessionPane } from "./App.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // jsdom has no layout: the scroll element (role="log") is 600px high, each timeline item 100px unless `heights` says
 // otherwise; scrollHeight follows the rendered list height. A fake ResizeObserver reports sizes when the test resizes.
 const VIEWPORT = 600;

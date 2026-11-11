@@ -7,11 +7,13 @@ import { describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const plugin = join(root, "plugins/orchestration");
 const json = (p: string) => JSON.parse(readFileSync(p, "utf8"));
+/** A text file as LF: a Windows checkout with core.autocrlf has CRLF on disk. */
+const lf = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const ROLES = { planner: "opus", implementer: "sonnet", "ui-tester": "sonnet", reviewer: "opus" } as const;
 
 /** Frontmatter keys of an agent file (`key: value` lines between the --- fences) and its body. */
 function agent(role: string) {
-  const text = readFileSync(join(plugin, "agents", `${role}.md`), "utf8");
+  const text = lf(join(plugin, "agents", `${role}.md`));
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
   expect(m, `${role}.md has frontmatter`).toBeTruthy();
   const front = Object.fromEntries(m![1]!.split("\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 1).trim()]));
@@ -24,12 +26,13 @@ describe("orchestration plugin", () => {
     const m = json(join(root, ".claude-plugin/marketplace.json"));
     const p = json(join(plugin, ".claude-plugin/plugin.json"));
     expect(m.name).toBe("claude-ui");
-    expect(m.plugins.map((e: { name: string }) => e.name)).toEqual(["orchestration", "addons"]);
+    expect(m.plugins.map((e: { name: string }) => e.name)).toEqual(["orchestration", "addons", "visualize"]);
     expect(m.plugins[0]).toMatchObject({ name: "orchestration", source: "./plugins/orchestration" });
     expect(p).toMatchObject({ name: "orchestration", license: "MIT", homepage: "https://github.com/cuonghuunguyen/claude-code-ui" });
     // GH-541: every listed plugin's manifest has its name and version.
     for (const e of m.plugins) expect(json(join(root, e.source, ".claude-plugin/plugin.json")), e.name).toMatchObject({ name: e.name, version: e.version, license: "MIT" });
-    expect(readFileSync(join(root, "plugins/addons/skills/write-addon/SKILL.md"), "utf8")).toMatch(/^---\nname: write-addon\ndescription: /);
+    expect(lf(join(root, "plugins/addons/skills/write-addon/SKILL.md"))).toMatch(/^---\nname: write-addon\ndescription: /);
+    expect(lf(join(root, "plugins/visualize/skills/visualize/SKILL.md"))).toMatch(/^---\nname: visualize\ndescription: /);
     expect(json(join(root, ".claude/settings.json")).enabledPlugins["orchestration@claude-ui"]).toBe(true);
   });
 
@@ -86,7 +89,7 @@ describe("orchestration plugin", () => {
   });
 
   it("the handoff block in the skill is the one the roles read", () => {
-    const h = readFileSync(join(plugin, "skills/orchestrate-tickets/references/handoff.md"), "utf8");
+    const h = lf(join(plugin, "skills/orchestrate-tickets/references/handoff.md"));
     for (const field of ["role:", "ticket:", "worktree:", "branch:", "commit:", "coordinator:", "attempts:", "report-dir:"]) expect(h).toContain(field);
   });
 });

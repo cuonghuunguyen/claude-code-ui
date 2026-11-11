@@ -8,8 +8,6 @@ import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
 import { OpenExternalContext } from "./open-external-menu.ts";
 import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const listings: Record<string, ReturnType<typeof ent>[]> = {
   "/p": [ent("/p/src", true), ent("/p/README.md"), ent("/p/package.json"), ent("/p/new.ts")],
@@ -251,6 +249,8 @@ it("GH-360 right click opens the menu of the row under it: file, folder, empty s
   await t.render();
   await ctxMenu(t.row("/p/README.md"));
   expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
+  expect(menuItem("rename").getAttribute("aria-keyshortcuts")).toBe("F2");
+  expect(menuItem("delete").className).toContain("text-destructive");
   await closeMenu();
   await ctxMenu(t.row("/p/src"));
   expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
@@ -314,6 +314,8 @@ it("GH-360 Shift+F10 and the ContextMenu key open the focused row's menu; F10 al
   for (const init of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
     await t.key(t.row("/p/README.md"), init.key, init);
     expect(menuIds()).toContain("open");
+    await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("open")));
+    expect(document.activeElement!.getAttribute("role")).toBe("menuitem");
     await closeMenu();
     expect(document.activeElement).toBe(t.row("/p/README.md"));
   }
@@ -332,15 +334,6 @@ it("GH-360 long press: touchstart on a row, 500 ms later the menu of that row op
   } finally {
     vi.useRealTimers();
   }
-});
-
-it("GH-360 menu items are 44 px high below md", async () => {
-  const t = setup();
-  await t.render();
-  await ctxMenu(t.row("/p/README.md"));
-  expect(menuItem("open").className).toContain("max-md:h-11");
-  await closeMenu();
-  t.unmount();
 });
 
 // --- GH-360: write operations ---
@@ -585,31 +578,6 @@ it("GH-360 Rename while a filter is active clears the filter, reveals the row an
   t.unmount();
 });
 
-it("GH-360 file menu has Rename F2, Duplicate and Delete with the shortcut hints; a folder has New file and New folder", async () => {
-  const t = setup();
-  await t.render();
-  await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).toEqual(["open", "viewer", "cut", "copy", "mention", "copyPath", "copyRel", "rename", "duplicate", "delete"]);
-  expect(menuItem("rename").getAttribute("aria-keyshortcuts")).toBe("F2");
-  expect(menuItem("delete").className).toContain("text-destructive");
-  await closeMenu();
-  await ctxMenu(t.row("/p/src"));
-  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
-  await closeMenu();
-  t.unmount();
-});
-
-it("GH-360 Shift+F10 on a focused row moves focus to the menu's first enabled item", async () => {
-  const t = setup();
-  await t.render();
-  t.row("/p/src").focus();
-  await t.key(t.row("/p/src"), "F10", { shiftKey: true });
-  await vi.waitFor(() => expect(document.activeElement).toBe(menuItem("newFile")));
-  expect(document.activeElement!.getAttribute("role")).toBe("menuitem");
-  await closeMenu();
-  t.unmount();
-});
-
 it("GH-360 deleting a row from the filter results removes it from the list", async () => {
   const t = setup();
   await t.render();
@@ -660,12 +628,31 @@ const openAll = async (t: ReturnType<typeof setup>) => {
   for (const p of ["/q/tools", "/q/tools/inner", "/q/libs"]) await act(async () => t.row(p).click());
 };
 
-it("GH-392 with a repository list: one git.diff per readable repository with cwd = its top, base head and exact; none for outsideRoots", async () => {
+it("GH-392 with a repository list: one git.diff per readable repository with cwd = its top, base head and exact; none for outsideRoots; a file in a nested repository shows its own mark and the parent's untracked folder entry gives no mark and no dot; a moved submodule folder shows the letter M and no dot; repository folders show the repository and submodule icons with their accessible labels and tooltips", async () => {
   const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
   await t.render();
   await wait();
   expect(diffCalls(t).map((m) => m.cwd).sort()).toEqual(["/q", "/q/libs/lib", "/q/tools/inner"]);
   expect(t.request).toHaveBeenCalledWith({ type: "git.diff", cwd: "/q/tools/inner", base: "head", exact: true });
+  expect(mark(t, "/q/libs")!.className, "submodule parent dot").toContain("rounded-full");
+  await openAll(t);
+  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
+  expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
+  expect(mark(t, "/q/far")).toBeNull();
+  const lib = mark(t, "/q/libs/lib")!;
+  expect(lib.textContent).toBe("M");
+  expect(lib.className).not.toContain("rounded-full");
+  expect(t.row("/q/libs/lib").textContent).toContain(", modified");
+  const icon = (p: string) => t.row(p).querySelector<HTMLElement>("[data-testid=tree-repo-icon]");
+  expect(icon("/q/tools/inner")!.getAttribute("aria-label")).toBe("Repository inner, branch main");
+  expect(icon("/q/tools/inner")!.title).toBe("main · repository");
+  expect(icon("/q/tools/inner")!.querySelector("[data-icon=repo]")).not.toBeNull();
+  expect(icon("/q/libs/lib")!.getAttribute("aria-label")).toBe("Submodule lib, branch a4a3b80");
+  expect(icon("/q/libs/lib")!.querySelector("[data-icon=archive]")).not.toBeNull();
+  expect(icon("/q/far")!.getAttribute("aria-label")).toBe("Repository far, outside the allowed folders");
+  expect(icon("/q/tools")).toBeNull();
   t.unmount();
 });
 
@@ -765,54 +752,11 @@ describe("GH-392 a reply that arrives after the read was replaced shows no marks
   });
 });
 
-it("GH-392 a file in a nested repository shows its own mark; the parent's untracked folder entry gives no mark and no dot", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await wait();
-  await openAll(t);
-  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
-  expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
-  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
-  expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
-  expect(mark(t, "/q/far")).toBeNull();
-  t.unmount();
-});
-
 it("GH-392 a clean nested repository gets no mark from the parent's untracked entry", async () => {
   const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": (m: { cwd: string }) => (m.cwd === "/q/tools/inner" ? { diff: { prefix: "", files: [] } } : byCwd(m)) });
   await t.render();
   await wait();
   expect(mark(t, "/q/tools")).toBeNull();
-  t.unmount();
-});
-
-it("GH-392 a moved submodule folder shows the letter M and no dot", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await wait();
-  const m = mark(t, "/q/libs");
-  expect(m!.className).toContain("rounded-full");
-  await act(async () => t.row("/q/libs").click());
-  const lib = mark(t, "/q/libs/lib")!;
-  expect(lib.textContent).toBe("M");
-  expect(lib.className).not.toContain("rounded-full");
-  expect(t.row("/q/libs/lib").textContent).toContain(", modified");
-  t.unmount();
-});
-
-it("GH-392 repository folders show the repository and submodule icons with their accessible labels and tooltips", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await act(async () => t.row("/q/tools").click());
-  await act(async () => t.row("/q/libs").click());
-  const icon = (p: string) => t.row(p).querySelector<HTMLElement>("[data-testid=tree-repo-icon]");
-  expect(icon("/q/tools/inner")!.getAttribute("aria-label")).toBe("Repository inner, branch main");
-  expect(icon("/q/tools/inner")!.title).toBe("main · repository");
-  expect(icon("/q/tools/inner")!.querySelector("[data-icon=repo]")).not.toBeNull();
-  expect(icon("/q/libs/lib")!.getAttribute("aria-label")).toBe("Submodule lib, branch a4a3b80");
-  expect(icon("/q/libs/lib")!.querySelector("[data-icon=archive]")).not.toBeNull();
-  expect(icon("/q/far")!.getAttribute("aria-label")).toBe("Repository far, outside the allowed folders");
-  expect(icon("/q/tools")).toBeNull();
   t.unmount();
 });
 
@@ -970,7 +914,7 @@ it("GH-555 Cut then Paste on a folder sends fs.rename with dir and calls onMoved
   t.unmount();
 });
 
-it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until something is copied", async () => {
+it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until something is copied; GH-360 items are 44 px high below md", async () => {
   const t = setup({}, copyReplies);
   await t.render();
   await ctxMenu(t.row("/p/src"));
@@ -979,6 +923,7 @@ it("GH-555 the menu offers Cut, Copy and Paste; Paste is disabled until somethin
   expect(menuItem("copy").getAttribute("aria-keyshortcuts")).toBe("Control+C");
   await closeMenu();
   await ctxMenu(t.row("/p/README.md"));
+  expect(menuItem("open").className).toContain("max-md:h-11");
   await act(async () => menuItem("copy").click());
   await flush();
   await ctxMenu(t.row("/p/src"));

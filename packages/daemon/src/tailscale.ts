@@ -89,12 +89,13 @@ export async function tailscalePreflight(o: { port: number; platform: NodeJS.Pla
  * Windows has no groups: `taskkill /T /F` ends the child and its children (a `.cmd` shim runs the real binary as a child). Also used for `opencode serve` (opencode-server.ts). */
 export const SERVE_WATCHER = `const [cli, ...a] = process.argv.slice(1);
 const posix = process.platform !== "win32";
-const c = require("node:child_process").spawn(cli, a, { stdio: ["ignore", "inherit", "inherit"], windowsHide: true, detached: posix });
+// cmd.exe gets its "/c" line verbatim (opencode-server.ts invocation): Node's own quoting would break the outer quotes.
+const c = require("node:child_process").spawn(cli, a, { stdio: ["ignore", "inherit", "inherit"], windowsHide: true, detached: posix, windowsVerbatimArguments: !posix && ["cmd", "cmd.exe"].includes(require("node:path").win32.basename(cli).toLowerCase()) });
 const stop = () => { try { if (posix) return void process.kill(-c.pid); } catch {} if (posix) return c.kill(); require("node:child_process").spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { windowsHide: true }); };
 process.stdin.on("close", stop).resume();
 // Ctrl+C or a closed terminal signals the watcher too (same foreground group), but not the detached serve: stop it before exiting.
 for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(s, () => (stop(), process.exit(1)));
-c.on("exit", (code) => process.exit(code ?? 1));
+c.on("exit", (code, sig) => (code === null && console.error("the process was ended by " + sig), process.exit(code ?? 1)));
 c.on("error", (e) => (console.error(e.message), process.exit(1)));`;
 
 /** Spawns the foreground serve (its config lives only while the process runs, which ends with this daemon); returns stop(). */

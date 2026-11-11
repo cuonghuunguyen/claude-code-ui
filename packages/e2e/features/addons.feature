@@ -14,15 +14,67 @@ Feature: Addons (GH-516)
     Then the addon "example" is enabled
     And I capture "addon approved"
 
-  Scenario: The Addons dialog fits a phone screen
+  Scenario: The addon band, command, status entry, toast, refused call, log and pane of the example addon
+    Given the example addon is installed and enabled
+    And a Haiku session with one finished reply
+    Then the addon band of "example" is above the prompt box
+    And the band shows the turn count
+    And the band text is fully visible
+    And I capture "addon band"
+    When I count the user messages
+    And I type "/example:" in the prompt box
+    Then the command picker lists "/example:cmd" with its description
+    When I run "/example:cmd release notes"
+    Then the prompt box contains "Summarise this session: release notes"
+    And no new user message is shown
+    And I capture "addon command"
+    When I open the "Stats" addon pane in the side panel
+    Then the addon pane shows the part counts of the session
+    And I capture "addon pane side"
+    When I click "Set status" in the addon pane
+    Then the status bar shows "example" status "ready"
+    When I click "Toast" in the addon pane
+    Then a toast says "example: hello"
+    And I capture "status and toast"
+    When I click "Try to submit" in the addon pane
+    Then a toast says "Addon example was refused: prompt.submit"
+    And the pane shows a refused error
+    When I open the Addons dialog
+    Then the log of "example" lists "prompt.submit"
+    And no new user message is shown
+    And I capture "refused call"
+    When I press "Escape"
+    And I click "Log" in the addon pane
+    And I open the Addons dialog
+    Then the log of "example" lists "pane clicked"
+    When I reload the page
+    And I open the Addons dialog
+    Then the log of "example" lists "pane clicked"
+    And I capture "addon log"
+    When I clear the log of "example"
+    Then the addon "example" has no log
+    When I press "Escape"
+    And I move the "Stats" pane to the main area from its tab menu
+    Then the "Stats" tab opens right of its session tab and has the focus
+    And the addon pane shows the part counts of the session
+    And I capture "addon pane main"
+
+  Scenario: The Addons dialog, the hidden phone:false view and the addon band fit a phone screen
     Given the example addon is installed and enabled
     And the viewport is 390x844
+    And a Haiku session with one finished reply
     When I open the Addons dialog
     Then the addon "example" is enabled
     And the page has no horizontal scroll
     And I capture "addons dialog phone"
+    When I press "Escape"
+    Then the pane switcher does not list "Stats"
+    And the addon band of "example" is above the prompt box
+    And the band shows the turn count
+    And the page has no horizontal scroll
+    And I capture "addon band phone"
 
-  Scenario: An addon theme is picked like a built-in one and its CSS goes with the addon
+  Scenario: An addon theme is picked like a built-in one in dark and light mode, its CSS goes with the addon and uninstalling removes it
     Given the example addon is installed and enabled
     And the mode is "dark"
     When I choose the theme "Example Dusk"
@@ -34,89 +86,15 @@ Feature: Addons (GH-516)
     And I capture "addon theme disabled"
     When I enable the addon "example"
     Then the addon stylesheet of "example" is applied
-
-  Scenario: An addon pane sits in the side panel and moves to the main area
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I open the "Stats" addon pane in the side panel
-    Then the addon pane shows the part counts of the session
-    And I capture "addon pane side"
-    When I move the "Stats" pane to the main area from its tab menu
-    Then the "Stats" tab opens right of its session tab and has the focus
-    And the addon pane shows the part counts of the session
-    And I capture "addon pane main"
-
-  Scenario: An addon sets a status entry and shows a toast
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I open the "Stats" addon pane in the side panel
-    And I click "Set status" in the addon pane
-    Then the status bar shows "example" status "ready"
-    When I click "Toast" in the addon pane
-    Then a toast says "example: hello"
-    And I capture "status and toast"
-
-  Scenario: A call outside the approved capabilities is refused
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I count the user messages
-    And I open the "Stats" addon pane in the side panel
-    And I click "Try to submit" in the addon pane
-    Then a toast says "Addon example was refused: prompt.submit"
-    And the pane shows a refused error
-    When I open the Addons dialog
-    Then the log of "example" lists "prompt.submit"
-    And no new user message is shown
-    And I capture "refused call"
-
-  Scenario: An addon writes to its log, which outlives a reload and can be cleared
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I open the "Stats" addon pane in the side panel
-    And I click "Log" in the addon pane
-    And I open the Addons dialog
-    Then the log of "example" lists "pane clicked"
-    When I reload the page
-    And I open the Addons dialog
-    Then the log of "example" lists "pane clicked"
-    And I capture "addon log"
-    When I clear the log of "example"
-    Then the addon "example" has no log
-
-  Scenario: A phone:false view is hidden on a phone
-    Given the example addon is installed and enabled
-    And the viewport is 390x844
-    And a Haiku session with one finished reply
-    Then the pane switcher does not list "Stats"
-    And the page has no horizontal scroll
-    And I capture "phone no stats"
-
-  Scenario: The addon band shows above the prompt
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    Then the addon band of "example" is above the prompt box
-    And the band shows the turn count
-    And I capture "addon band"
-
-  Scenario: The addon band fits a phone screen
-    Given the example addon is installed and enabled
-    And the viewport is 390x844
-    And a Haiku session with one finished reply
-    Then the addon band of "example" is above the prompt box
-    And the band shows the turn count
-    And the page has no horizontal scroll
-    And I capture "addon band phone"
-
-  Scenario: An addon command puts text in the prompt box without sending it
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I count the user messages
-    And I type "/example:" in the prompt box
-    Then the command picker lists "/example:cmd" with its description
-    When I run "/example:cmd release notes"
-    Then the prompt box contains "Summarise this session: release notes"
-    And no new user message is shown
-    And I capture "addon command"
+    Given the mode is "light"
+    When I choose the theme "Example Dusk"
+    Then the app card colour is "#f5f2fb"
+    And the addon stylesheet of "example" is applied
+    And I capture "addon theme light"
+    When I uninstall the addon "example"
+    Then the addon stylesheet of "example" is not applied
+    And the addon "example" is not listed
+    And I capture "uninstalled css"
 
   Scenario: An addon draws a code fence, with show raw
     Given the example addon is installed and enabled
@@ -128,7 +106,7 @@ Feature: Addons (GH-516)
     And I capture "fence renderer"
 
   # Acceptance 2
-  Scenario: An addon pane in a crowded side panel opens from the more panes menu
+  Scenario: An addon pane in a crowded side panel opens from the more panes menu; a session switch shows only the new session
     Given the example addon is installed and enabled
     And the scratch project is a git repository with an origin
     And a Haiku session with one finished reply
@@ -137,27 +115,7 @@ Feature: Addons (GH-516)
     When I open the "Stats" addon pane from the more panes menu
     Then the addon pane shows the part counts of the session
     And I capture "addon pane overflow"
-
-  Scenario: An addon theme in light mode in the theme picker
-    Given the example addon is installed and enabled
-    And the mode is "light"
-    When I choose the theme "Example Dusk"
-    Then the app card colour is "#f5f2fb"
-    And the addon stylesheet of "example" is applied
-    And I capture "addon theme light"
-
-  Scenario: The addon band text is fully visible
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    Then the addon band of "example" is above the prompt box
-    And the band text is fully visible
-    And I capture "addon band text"
-
-  Scenario: A session switch shows only the new session in the addon pane
-    Given the example addon is installed and enabled
-    And a Haiku session with one finished reply
-    When I open the "Stats" addon pane in the side panel
-    And I note the part counts of the addon pane
+    When I note the part counts of the addon pane
     And I open a second session with a finished reply
     And I send the prompt "Reply with exactly: TWO" and wait for the reply
     Then the side panel shows exactly one addon pane frame
@@ -177,17 +135,3 @@ Feature: Addons (GH-516)
     Then the addon "example" is enabled
     And the Addons dialog shows the git source without "s3cretpw"
     And I capture "git url redacted row"
-
-  Scenario: Uninstalling the addon removes its stylesheet
-    Given the example addon is installed and enabled
-    And the mode is "dark"
-    And I choose the theme "Example Dusk"
-    And the addon stylesheet of "example" is applied
-    When I uninstall the addon "example"
-    Then the addon stylesheet of "example" is not applied
-    And I capture "uninstalled css"
-
-  Scenario: The example addon is removed again
-    Given the example addon is not installed
-    Then the addon "example" is not listed
-    And I capture "addon removed"

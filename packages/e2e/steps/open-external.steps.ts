@@ -76,10 +76,18 @@ const openSettings = async (page: Page) => {
 };
 When("I set the editor command {string} with the name {string} in Settings", async ({ page }, command: string, name: string) => {
   await openSettings(page);
-  await page.getByTestId("settings-openapp-command").fill(command.replace("<node>", `"${process.execPath}"`));
-  await page.getByTestId("settings-openapp-name").fill(name);
-  await page.getByTestId("settings-openapp-name").blur();
-  await expect(page.getByTestId("settings-openapp-name")).toBeEnabled();
+  const cmd = page.getByTestId("settings-openapp-command");
+  const nameInput = page.getByTestId("settings-openapp-name");
+  // Save the command before the name: a field disabled while saving drops the blur of the other one.
+  await cmd.fill(command.replace("<node>", `"${process.execPath}"`));
+  await cmd.blur();
+  await expect(cmd).toHaveValue(/\S/);
+  await page.waitForTimeout(300);
+  await expect(nameInput).toBeEnabled();
+  await nameInput.fill(name);
+  await nameInput.blur();
+  await page.waitForTimeout(300);
+  await expect(nameInput).toBeEnabled();
   await page.keyboard.press("Escape");
 });
 Then("the tree menu entry {string} reads {string}", async ({ page }, how: string, text: string) => {

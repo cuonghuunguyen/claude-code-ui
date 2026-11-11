@@ -9,11 +9,11 @@ The groups sit under four headings:
 | Heading | Groups |
 | --- | --- |
 | App | Appearance, General, Layout, Notifications, Keyboard |
-| Sessions | Orchestration, Focus, Usage limits |
+| Sessions | Orchestration, Focus, Chat, Usage limits |
 | Integrations | Git, Jira |
 | System | Sides, Performance, Help & about |
 
-Most settings are **kept in this browser** only. Orchestration, Focus, Usage limits (except the ring), Git, Jira, Sides, Performance and desktop notifications are saved in the daemon and apply to every browser.
+Most settings are **kept in this browser** only. Orchestration, Focus, Chat, Usage limits (except the ring), Git, Jira, Sides, Performance and desktop notifications are saved in the daemon and apply to every browser.
 
 ## Appearance
 
@@ -98,6 +98,12 @@ Lets a session start and steer worker sessions. Off by default. **Notifications 
 | Setting | Does |
 | --- | --- |
 | Next for you | After a turn, Claude predicts your next prompt; finished rows on Focus show it as a chip. Off by default. Uses a small extra request per turn that reuses the prompt cache. Applies to sessions started or resumed after the change. |
+
+## Chat
+
+| Setting | Does |
+| --- | --- |
+| Inline visualizations | Claude can draw charts, diagrams and small interactive widgets in its replies ([details](../features/visualize)). On by default. Applies to sessions started or resumed after the change; off: they show as code. |
 
 ## Usage limits
 

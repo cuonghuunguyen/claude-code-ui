@@ -73,6 +73,11 @@ Then("the branch chip menu does not offer {string}", async ({ page }, name: stri
   await expect(items(menu(page)).filter({ hasText: new RegExp(`^${name}`) })).toHaveCount(0);
 });
 
+// A closing menu stays in the DOM during its exit animation: wait for it before the next menu opens.
+Then("the branch menu is closed", async ({ page }) => {
+  await expect(menu(page)).toHaveCount(0);
+});
+
 // Phone: the row's author column is hidden, so the right click goes on the subject text.
 When("I open the commit menu on the subject {string}", async ({ page }, subject: string) => {
   await page.getByTestId("graph-panel").getByTestId("commit-row").filter({ hasText: subject }).first().getByText(subject, { exact: true }).click({ button: "right" });

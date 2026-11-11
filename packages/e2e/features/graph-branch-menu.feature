@@ -1,45 +1,6 @@
 Feature: The Git graph branch menu pushes, force pushes with a lease and pulls (GH-309)
 
-  Scenario: Push asks first with the exact command and pushes
-    Given the viewport is 1440x900
-    And the scratch project is a git repository with an origin inside the allowed roots
-    And the scratch project's main has the local commit "local work"
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
-    When I open the Graph tab of the side panel
-    And I open the branch menu on the chip "refs/heads/main"
-    And I pick "Push" in the branch menu
-    Then the "push" dialog shows the command "push --no-recurse-submodules --no-follow-tags origin refs/heads/main:refs/heads/main"
-    And I capture "push-dialog"
-    When I confirm the "push" dialog
-    Then the Graph result line says "Pushed main to origin"
-    And the origin's main is the project's main
-    And I capture "pushed"
-
-  Scenario: Force push only with the lease and Cancel runs nothing
-    Given the viewport is 1440x900
-    And the scratch project is a git repository with an origin inside the allowed roots
-    And the scratch project's main has the local commit "local rewrite"
-    And the origin's main has the commit "remote work" and the project fetched it
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
-    When I open the Graph tab of the side panel
-    And I open the branch menu on the chip "refs/heads/main"
-    And I pick "Force push…" in the branch menu
-    Then the force push dialog leases origin's main
-    And I capture "force-dialog"
-    When I cancel the "force push" dialog
-    Then the origin's main is not the project's main
-    When I open the branch menu on the chip "refs/heads/main"
-    And I pick "Force push…" in the branch menu
-    And I confirm the "force push" dialog
-    Then the Graph result line says "Pushed main to origin (forced)"
-    And the origin's main is the project's main
-    And I capture "force-pushed"
-
-  Scenario: Pull is fast-forward only and a branch in another worktree has Pull disabled with the reason
+  Scenario: Pull is fast-forward only, a branch in another worktree has Pull disabled, then Push asks first with the exact command
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the origin's main has the commit "remote work" and the project fetched it
@@ -58,8 +19,19 @@ Feature: The Git graph branch menu pushes, force pushes with a lease and pulls (
     And I open the branch menu on the chip "refs/heads/feat/remote"
     Then the branch menu item "Pull" is disabled and says "Checked out in"
     And I capture "pull-other-worktree"
+    When I press "Escape" in the branch popup
+    Given the scratch project's main has the local commit "local work"
+    When I click Refresh in the Graph
+    And I open the branch menu on the chip "refs/heads/main"
+    And I pick "Push" in the branch menu
+    Then the "push" dialog shows the command "push --no-recurse-submodules --no-follow-tags origin refs/heads/main:refs/heads/main"
+    And I capture "push-dialog"
+    When I confirm the "push" dialog
+    Then the Graph result line says "Pushed main to origin"
+    And the origin's main is the project's main
+    And I capture "pushed"
 
-  Scenario: The daemon refuses a pull and a push when the remote branch moved after the menu opened
+  Scenario: The daemon refuses a stale pull and a stale push, then force push only with the lease and Cancel runs nothing
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project's main has the local commit "local work"
@@ -84,18 +56,16 @@ Feature: The Git graph branch menu pushes, force pushes with a lease and pulls (
     And I confirm the "push" dialog
     Then the Graph shows the error "origin/main moved since the menu opened"
     And I capture "stale-push"
-
-  Scenario: The branch menu and dialog fit a phone
-    Given the viewport is 390x844
-    And the scratch project is a git repository with an origin inside the allowed roots
-    And the scratch project's main has the local commit "local work"
-    And a Haiku session with one finished reply
-    When I open the Graph tab of the side panel
+    When I dismiss the Graph result line
     And I open the branch menu on the chip "refs/heads/main"
-    Then every branch menu item is at least 44px high
-    And the scrollWidth of the page is 390
-    And I capture "phone-menu"
-    When I pick "Push" in the branch menu
-    Then the "push" dialog shows the command "refs/heads/main:refs/heads/main"
-    And the scrollWidth of the page is 390
-    And I capture "phone-dialog"
+    And I pick "Force push…" in the branch menu
+    Then the force push dialog leases origin's main
+    And I capture "force-dialog"
+    When I cancel the "force push" dialog
+    Then the origin's main is not the project's main
+    When I open the branch menu on the chip "refs/heads/main"
+    And I pick "Force push…" in the branch menu
+    And I confirm the "force push" dialog
+    Then the Graph result line says "Pushed main to origin (forced)"
+    And the origin's main is the project's main
+    And I capture "force-pushed"

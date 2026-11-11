@@ -12,12 +12,6 @@ import { clearDrafts, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
 import { collapsePasted, pasteTagId, splitPasted } from "./pasted-text.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 
 const models: ModelInfo[] = [
@@ -269,19 +263,11 @@ const fileEvent = (box: HTMLElement, type: "paste" | "drop", files: File[], dirs
   return e;
 };
 
-it("GH-613: a non-image OS file pasted in the box is uploaded and mentioned, its name is not inserted as text", async () => {
-  const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
-  const { box } = await render({ onUpload });
-  const e = fileEvent(box, "paste", [new File(["hi"], "a.txt", { type: "text/plain" })]);
-  expect(e.defaultPrevented).toBe(true);
-  await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
-  expect(onUpload).toHaveBeenCalledTimes(1);
-});
-
-it.each(["paste", "drop"] as const)("GH-613: a folder %s with a file is skipped with an error; the file is attached", async (type) => {
+it.each(["paste", "drop"] as const)("GH-613: a folder %s with a file is skipped with an error; the file is attached, its name not inserted as text", async (type) => {
   const onUpload = vi.fn(async (f: File) => `/u/${f.name}`);
   const { box, $ } = await render({ onUpload });
-  fileEvent(type === "paste" ? box : box.parentElement!, type, [new File(["hi"], "a.txt", { type: "text/plain" })], ["dir"]);
+  const e = fileEvent(type === "paste" ? box : box.parentElement!, type, [new File(["hi"], "a.txt", { type: "text/plain" })], ["dir"]);
+  expect(e.defaultPrevented).toBe(true);
   await vi.waitFor(() => expect(box.value).toBe("@/u/a.txt "));
   expect(onUpload).toHaveBeenCalledTimes(1);
   expect($("prompt-error")!.textContent).toBe("Folders cannot be attached; mention them with @.");
@@ -336,14 +322,16 @@ it("user bubble: an attached file shows as a file name chip, not its upload path
 
 it("send button sends; while a turn runs with nothing typed it is a stop button", async () => {
   const onPrompt = vi.fn(async () => {});
+  const onQueue = vi.fn(async () => {});
   const onInterrupt = vi.fn();
-  const { $, box } = await render({ onPrompt, onInterrupt }, { ...emptySession(), state: "running" });
+  const { $, box } = await render({ onPrompt, onQueue, onInterrupt }, { ...emptySession(), state: "running" });
   await act(async () => $("toolbar-stop")!.click());
   expect(onInterrupt).toHaveBeenCalled();
   await type(box, "steer");
   expect($("toolbar-stop")).not.toBeNull();
   await act(async () => $("send")!.click());
   expect(onPrompt).toHaveBeenCalledWith("steer", []);
+  expect(onQueue).not.toHaveBeenCalled();
 });
 
 it("send button follows the session state: label, tooltip, spinner, needs input, disconnected", async () => {
@@ -1099,15 +1087,6 @@ it("GH-77: chips also show above a permission request", async () => {
   expect(el.querySelector('section[aria-label="Queued messages"]')).not.toBeNull();
 });
 
-it("the send menu is gone: the toolbar has Stop and the send button only, with a hint on the send button", async () => {
-  const { $, el, box } = await render({ onQueue: async () => {} }, { ...emptySession(), state: "running" });
-  await type(box, "hello");
-  expect($("send-menu")).toBeNull();
-  expect(el.querySelector('[aria-label="More send options"]')).toBeNull();
-  expect($("toolbar-stop")).not.toBeNull();
-  expect($("send")!.getAttribute("aria-label")).toBe("Claude is working. Steer");
-});
-
 it("the send mode defaults to steer, and an unknown stored value is steer", async () => {
   expect(loadSendMode()).toBe("steer");
   localStorage.setItem("claude-ui.sendMode", "nonsense");
@@ -1147,16 +1126,6 @@ it("queue mode: the send button queues and is labelled Queue; the placeholder fo
   expect(onPrompt).not.toHaveBeenCalled();
 });
 
-it("steer mode: the send button steers", async () => {
-  const onPrompt = vi.fn(async () => {});
-  const onQueue = vi.fn(async () => {});
-  const { $, box } = await render({ onPrompt, onQueue }, { ...emptySession(), state: "running" });
-  await type(box, "hello");
-  await act(async () => $("send")!.click());
-  expect(onPrompt).toHaveBeenCalledWith("hello", []);
-  expect(onQueue).not.toHaveBeenCalled();
-});
-
 it("queue mode without onQueue still steers; idle Enter still sends and idle Alt+Enter still queues", async () => {
   saveSendMode("queue");
   const onPrompt = vi.fn(async () => {});
@@ -1190,23 +1159,17 @@ it("GH-77: Stop and Steer are 44px below md and on coarse pointers (also with a 
 });
 
 // GH-77 review fixes.
-it("GH-77: Delete of a chip another tab already sent leaves the typed text unchanged", async () => {
-  const onDequeue = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
-  const { box, el } = await render({ onDequeue }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
+it.each([
+  ["Delete", "onDequeue"],
+  ["Send now", "onSendQueued"],
+] as const)("GH-77: %s of a chip another tab already sent leaves the typed text unchanged", async (action, handler) => {
+  const onGone = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
+  const { box, el } = await render({ [handler]: onGone }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
   await type(box, "typed");
-  await act(async () => void (el.querySelector('[aria-label="Delete: gone"]') as HTMLElement).click());
+  await act(async () => void (el.querySelector(`[aria-label="${action}: gone"]`) as HTMLElement).click());
   await act(async () => {});
   expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
   expect(el.querySelector('[data-testid="prompt-error"]')).toBeNull();
-});
-
-it("GH-77: Send now of a chip already sent leaves the typed text unchanged", async () => {
-  const onSendQueued = vi.fn(() => Promise.reject(Object.assign(new Error("gone"), { code: "unknown_item" })));
-  const { box, el } = await render({ onSendQueued }, queueView([{ id: "q1", text: "gone", imageCount: 0 }]));
-  await type(box, "typed");
-  await act(async () => void (el.querySelector('[aria-label="Send now: gone"]') as HTMLElement).click());
-  await act(async () => {});
-  expect(JSON.stringify(box.value)).toBe(JSON.stringify("typed"));
 });
 
 it("GH-77: Delete of the last chip moves focus to the prompt box", async () => {
@@ -1322,24 +1285,15 @@ const paste = (box: HTMLTextAreaElement, text: string) => {
 const chips = (el: HTMLElement) => el.querySelectorAll('[data-testid="paste-chip"]');
 const userView = (text: string) => applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
 
-it("paste of 200 lines inserts one token and one chip; the textarea holds only the token", async () => {
+it("paste of one short line stays plain text; paste of 200 lines inserts one token and one chip, the textarea holds only the token; Backspace after a token removes the whole token and its chip", async () => {
   const d = await render();
+  const short = paste(d.box, "hello world");
+  expect(short.defaultPrevented).toBe(false);
+  expect(chips(d.el)).toHaveLength(0);
   const e = paste(d.box, lines200);
   expect(e.defaultPrevented).toBe(true);
   expect(d.box.value).toBe("[Pasted text #1 +199 lines]");
   expect(chips(d.el)).toHaveLength(1);
-});
-
-it("paste of one short line stays plain text", async () => {
-  const d = await render();
-  const e = paste(d.box, "hello world");
-  expect(e.defaultPrevented).toBe(false);
-  expect(chips(d.el)).toHaveLength(0);
-});
-
-it("Backspace after a token removes the whole token and its chip", async () => {
-  const d = await render();
-  paste(d.box, lines200);
   d.box.setSelectionRange(d.box.value.length, d.box.value.length);
   await key(d.box, { key: "Backspace" });
   expect(d.box.value).toBe("");

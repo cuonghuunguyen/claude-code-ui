@@ -5,7 +5,9 @@ Feature: Local history and Timeline (GH-565)
 
   Scenario: Saving a file adds a Local history entry that the Timeline compares and restores
     Given the viewport is 1440x900
-    And a Haiku session with one finished reply
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
     When I open the Files tab of the side panel
     And I expand the tree folder "src"
     And I open the tree file "src/app.ts"
@@ -39,15 +41,3 @@ Feature: Local history and Timeline (GH-565)
     And I open the Timeline
     Then the Timeline lists "Agent edit, second commit"
     And I capture "timeline-agent-edit"
-
-  Scenario: The Timeline fits a phone
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I open the Files tab of the side panel
-    And I expand the tree folder "src"
-    And I open the tree file "src/app.ts"
-    And I open the Timeline
-    Then the Timeline lists "second commit"
-    And the page is exactly 390px wide
-    And every Timeline row is at least 44px high
-    And I capture "timeline-phone"

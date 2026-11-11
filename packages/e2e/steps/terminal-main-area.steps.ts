@@ -87,11 +87,6 @@ When("I open Settings and choose the terminal position {string}", async ({ page 
   await expect(page.getByTestId("settings-terminal")).toHaveCount(0);
 });
 
-When("I move the Terminal tab to the bottom panel from its tab menu", async ({ page }) => {
-  await tab(page).first().click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move Terminal to bottom panel", exact: true }).click();
-});
-
 When("I click the session tab of the terminal", async ({ page }) => {
   await page.locator('[data-testid="tab-strip"] [data-testid="tab"]:not([data-tab-id^="terminal:"]) [role="tab"]').first().click();
 });

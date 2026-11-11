@@ -99,6 +99,12 @@ Cho phép một phiên bắt đầu và điều khiển các phiên worker. Tắ
 | --- | --- |
 | Tiếp theo cho bạn | Sau mỗi lượt, Claude dự đoán prompt tiếp theo của bạn; các dòng đã xong trên Focus hiện nó dưới dạng chip. Tắt mặc định. Dùng thêm một yêu cầu nhỏ mỗi lượt, tái sử dụng bộ nhớ đệm prompt. Áp dụng cho phiên bắt đầu hoặc tiếp tục sau khi đổi. |
 
+## Trò chuyện {#chat}
+
+| Cài đặt | Chức năng |
+| --- | --- |
+| Hình minh họa trong trò chuyện | Claude có thể vẽ biểu đồ, sơ đồ và widget tương tác nhỏ trong câu trả lời ([chi tiết](../features/visualize)). Bật mặc định. Áp dụng cho phiên bắt đầu hoặc tiếp tục sau khi đổi; tắt: hình hiện dưới dạng mã. |
+
 ## Giới hạn mức dùng {#usage-limits}
 
 | Cài đặt | Chức năng |

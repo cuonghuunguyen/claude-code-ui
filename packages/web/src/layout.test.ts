@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { canMain, withPanes, DEFAULT_LAYOUT, activePane, areaOf, loadLayout, loadPaneTabs, loadTerminalDock, movePane, parsePaneTabs, parseLayout, rememberPane, resetLayout, saveLayout, saveTerminalDock, withPane, useLayout, useMinWidth, useTerminalDock } from "./layout.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => (vi.restoreAllMocks(), resetLayout(), localStorage.clear()));
 
 it("parseLayout: bad input reads as the default", () => {
