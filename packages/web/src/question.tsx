@@ -25,6 +25,9 @@ export function answerList(q: Question, { chosen, other }: Choice): string[] {
   return [...q.options.map((o) => o.label).filter((l) => chosen.includes(l)), ...(text ? [text] : [])];
 }
 
+/** Preview controls: only a diagram's fullscreen, so a small preview (two columns on a phone) can be read. */
+const PREVIEW_CONTROLS = { code: false, table: false, image: false, mermaid: { fullscreen: true, copy: false, download: false, panZoom: false } } as const;
+
 /** OpenCode question dock: one question per page, option cards, tray Dismiss · Back · Next / Submit. `onDismiss`: Claude Code's Esc (stops the turn). */
 export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>, choices: Record<string, string[]>) => void; onDismiss?: () => void; mode?: ReactNode }) {
   const t = useT();
@@ -86,7 +89,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
                     <span className="min-w-0 truncate font-medium">{o.label}</span>
                   </button>
                   <div className="max-h-56 min-w-0 overflow-auto p-2 text-sm">
-                    <MessageResponse mode="static" controls={false}>{o.preview}</MessageResponse>
+                    <MessageResponse mode="static" controls={PREVIEW_CONTROLS}>{o.preview}</MessageResponse>
                   </div>
                 </div>
               );
@@ -139,7 +142,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
               {t("session.question.back")}
             </Button>
           )}
-          <Button type="submit" variant={last ? "default" : "outline"} disabled={last ? answers.some((a) => !a) : !answers[page]}>
+          <Button type="submit" variant={last ? "default" : "outline"} className={last ? "bg-send shadow-button-contrast hover:bg-send/80" : undefined} disabled={last ? answers.some((a) => !a) : !answers[page]}>
             {last ? t("session.question.submit") : t("session.question.next")}
           </Button>
         </div>

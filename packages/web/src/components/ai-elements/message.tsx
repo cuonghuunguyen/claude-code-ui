@@ -33,6 +33,7 @@ import {
 import { Streamdown } from "streamdown";
 import { useAddonFenceRenderers } from "../../addon-render.tsx";
 import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
+import { useDark } from "../../theme.ts";
 import { useT } from "../../i18n.ts";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -338,12 +339,16 @@ export const MessageResponse = memo(
     // The built-in `visualize` renderer (GH-690) goes first: it wins over an addon claiming the same fence.
     const on = use(VisualizeContext);
     const renderers = useMemo(() => (on ? [{ language: ["visualize"], component: VisualizeFence as never }, ...addonRenderers] : addonRenderers), [on, addonRenderers]);
+    // Mermaid draws with its own palette: without the dark theme its lines vanish on a dark background.
+    const dark = useDark();
+    const mermaid = useMemo(() => ({ config: { theme: dark ? ("dark" as const) : ("default" as const) } }), [dark]);
     return (
       <Streamdown
         className={cn(
           "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
+        mermaid={mermaid}
         plugins={renderers.length ? { ...streamdownPlugins, renderers } : streamdownPlugins}
         {...props}
       />
