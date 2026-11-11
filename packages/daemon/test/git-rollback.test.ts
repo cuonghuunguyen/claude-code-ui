@@ -33,39 +33,58 @@ const roll = async (dir: string, o: ReturnType<typeof repo>["o"], paths: string[
 };
 
 describe("gitRollback", () => {
-  it("restores HEAD in the work tree and the index of a file with staged and unstaged edits", async () => {
+  it("restores HEAD in the work tree and the index of a file with staged and unstaged edits; lists a path once when deleted in the index and present as an untracked copy; deleteAdded on an added file already deleted from the work tree unstages it", async () => {
     const { dir, o, seen } = repo();
-    put(dir, "a.txt", "a1\n");
-    run(dir, "add", "a.txt");
-    put(dir, "a.txt", "a2\n");
-    await roll(dir, o, ["a.txt"]);
-    expect(get(dir, "a.txt")).toBe("a0\n");
-    expect(run(dir, "status", "--porcelain")).toBe("");
-    expect(seen.map((s) => s.text)).toEqual(["a2\n"]);
+    {
+      put(dir, "a.txt", "a1\n");
+      run(dir, "add", "a.txt");
+      put(dir, "a.txt", "a2\n");
+      await roll(dir, o, ["a.txt"]);
+      expect(get(dir, "a.txt")).toBe("a0\n");
+      expect(run(dir, "status", "--porcelain")).toBe("");
+      expect(seen.map((s) => s.text)).toEqual(["a2\n"]);
+    }
+    {
+      run(dir, "rm", "-q", "--cached", "a.txt");
+      put(dir, "a.txt", "changed\n");
+      const p = await gitRollbackPreview(dir, { paths: ["a.txt"], ...o });
+      expect(p?.files).toEqual([{ path: "a.txt", kind: "D" }]);
+      await roll(dir, o, ["a.txt"]);
+      expect(get(dir, "a.txt")).toBe("a0\n");
+      expect(run(dir, "status", "--porcelain")).toBe("");
+    }
+    {
+      put(dir, "n.txt", "n\n");
+      run(dir, "add", "n.txt");
+      rmSync(join(dir, "n.txt"));
+      await roll(dir, o, ["n.txt"], { deleteAdded: true });
+      expect(run(dir, "status", "--porcelain")).toBe("");
+    }
   });
 
-  it("restores a deleted file (work tree and `git rm`) and leaves other changes alone", async () => {
-    const { dir, o } = repo();
-    rmSync(join(dir, "b.txt"));
-    run(dir, "rm", "-q", "c.txt");
-    put(dir, "d.txt", "d1\n");
-    put(dir, "a.txt", "a1\n");
-    run(dir, "add", "a.txt");
-    await roll(dir, o, ["b.txt", "c.txt"]);
-    expect(run(dir, "status", "--porcelain")).toBe("M  a.txt\n M d.txt");
-  });
 
-  it("moves a rename back: the old path is restored, the new path is gone", async () => {
+  it("moves a rename back: the old path is restored, the new path is gone; restores a deleted file (work tree and `git rm`) and leaves other changes alone", async () => {
     const { dir, o, seen } = repo();
-    run(dir, "mv", "a.txt", "a2.txt");
-    put(dir, "a2.txt", "edited\n");
-    const p = await gitRollbackPreview(dir, { paths: ["a.txt", "a2.txt"], ...o });
-    expect(p?.files).toEqual([{ path: "a2.txt", kind: "R", oldPath: "a.txt" }]);
-    await roll(dir, o, ["a.txt", "a2.txt"]);
-    expect(existsSync(join(dir, "a2.txt"))).toBe(false);
-    expect(get(dir, "a.txt")).toBe("a0\n");
-    expect(run(dir, "status", "--porcelain")).toBe("");
-    expect(seen.map((s) => s.text)).toEqual(["edited\n"]);
+    {
+      run(dir, "mv", "a.txt", "a2.txt");
+      put(dir, "a2.txt", "edited\n");
+      const p = await gitRollbackPreview(dir, { paths: ["a.txt", "a2.txt"], ...o });
+      expect(p?.files).toEqual([{ path: "a2.txt", kind: "R", oldPath: "a.txt" }]);
+      await roll(dir, o, ["a.txt", "a2.txt"]);
+      expect(existsSync(join(dir, "a2.txt"))).toBe(false);
+      expect(get(dir, "a.txt")).toBe("a0\n");
+      expect(run(dir, "status", "--porcelain")).toBe("");
+      expect(seen.map((s) => s.text)).toEqual(["edited\n"]);
+    }
+    {
+      rmSync(join(dir, "b.txt"));
+      run(dir, "rm", "-q", "c.txt");
+      put(dir, "d.txt", "d1\n");
+      put(dir, "a.txt", "a1\n");
+      run(dir, "add", "a.txt");
+      await roll(dir, o, ["b.txt", "c.txt"]);
+      expect(run(dir, "status", "--porcelain")).toBe("M  a.txt\n M d.txt");
+    }
   });
 
   it("keeps added files as untracked files, deletes them with deleteAdded", async () => {
@@ -84,25 +103,7 @@ describe("gitRollback", () => {
     expect(seen.map((s) => s.text).sort()).toEqual(["n1\n", "n2\n"]);
   });
 
-  it("lists a path once when it is deleted in the index and present as an untracked copy", async () => {
-    const { dir, o } = repo();
-    run(dir, "rm", "-q", "--cached", "a.txt");
-    put(dir, "a.txt", "changed\n");
-    const p = await gitRollbackPreview(dir, { paths: ["a.txt"], ...o });
-    expect(p?.files).toEqual([{ path: "a.txt", kind: "D" }]);
-    await roll(dir, o, ["a.txt"]);
-    expect(get(dir, "a.txt")).toBe("a0\n");
-    expect(run(dir, "status", "--porcelain")).toBe("");
-  });
 
-  it("deleteAdded on an added file already deleted from the work tree unstages it", async () => {
-    const { dir, o } = repo();
-    put(dir, "n.txt", "n\n");
-    run(dir, "add", "n.txt");
-    rmSync(join(dir, "n.txt"));
-    await roll(dir, o, ["n.txt"], { deleteAdded: true });
-    expect(run(dir, "status", "--porcelain")).toBe("");
-  });
 
   it("refuses with stale when a listed file or HEAD changed after the preview; nothing changes", async () => {
     const { dir, o } = repo();
@@ -197,44 +198,44 @@ describe("revertHunk", () => {
 
 describe("gitRollbackHunk", () => {
   const big = () => Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
-  it("rolls back the first of two hunks; the second edit and the index stay; history gets the old text", async () => {
+  it("rolls back the first of two hunks (second edit and index stay, history gets the old text); keeps CRLF and refuses with stale when the lines changed; validates the hunk, the size and the path", async () => {
     const { dir, o, seen } = repo();
-    put(dir, "big.txt", big().join("\n") + "\n");
-    run(dir, "add", "-A");
-    run(dir, "commit", "-q", "-m", "big");
-    const l = big();
-    l[1] = "EDIT 2";
-    l[25] = "EDIT 26";
-    put(dir, "big.txt", l.join("\n") + "\n");
-    const before = get(dir, "big.txt");
-    const r = await gitRollbackHunk(dir, { path: "big.txt", hunk: { newStart: 1, lines: [" line 1", "-line 2", "+EDIT 2", " line 3"] }, maxBytes: 1e6, ...o });
-    expect(r).toEqual({ output: "" });
-    expect(get(dir, "big.txt").split("\n")[1]).toBe("line 2");
-    expect(get(dir, "big.txt").split("\n")[25]).toBe("EDIT 26");
-    expect(run(dir, "diff", "--cached", "--name-only")).toBe("");
-    expect(seen).toEqual([{ path: join(dir, "big.txt"), text: before }]);
-  });
-
-  it("keeps CRLF, and refuses with stale when the lines changed (file unchanged)", async () => {
-    const { dir, o } = repo();
-    put(dir, "w.txt", "a\r\nX\r\nc\r\n");
-    const lines = [" a", "-b", "+X", " c"];
-    await gitRollbackHunk(dir, { path: "w.txt", hunk: { newStart: 1, lines }, maxBytes: 1e6, ...o });
-    expect(get(dir, "w.txt")).toBe("a\r\nb\r\nc\r\n");
-    await expect(gitRollbackHunk(dir, { path: "w.txt", hunk: { newStart: 1, lines }, maxBytes: 1e6, ...o })).rejects.toMatchObject({ code: "stale" });
-    expect(get(dir, "w.txt")).toBe("a\r\nb\r\nc\r\n");
-  });
-
-  it("validates the hunk, the size and the path", async () => {
-    const { dir, o } = repo();
-    const call = (hunk: unknown, path: unknown = "a.txt", maxBytes = 1e6) => gitRollbackHunk(dir, { path, hunk, maxBytes, ...o });
-    for (const h of [null, { newStart: -1, lines: ["+x"] }, { newStart: 1.5, lines: ["+x"] }, { newStart: 1, lines: [] }, { newStart: 1, lines: [" x"] }, { newStart: 1, lines: ["xy"] }, { newStart: 1, lines: ["+a\nb"] }, { newStart: 1, lines: [1] }]) {
-      await expect(call(h)).rejects.toMatchObject({ code: "bad_request" });
+    {
+      put(dir, "big.txt", big().join("\n") + "\n");
+      run(dir, "add", "-A");
+      run(dir, "commit", "-q", "-m", "big");
+      const l = big();
+      l[1] = "EDIT 2";
+      l[25] = "EDIT 26";
+      put(dir, "big.txt", l.join("\n") + "\n");
+      const before = get(dir, "big.txt");
+      const r = await gitRollbackHunk(dir, { path: "big.txt", hunk: { newStart: 1, lines: [" line 1", "-line 2", "+EDIT 2", " line 3"] }, maxBytes: 1e6, ...o });
+      expect(r).toEqual({ output: "" });
+      expect(get(dir, "big.txt").split("\n")[1]).toBe("line 2");
+      expect(get(dir, "big.txt").split("\n")[25]).toBe("EDIT 26");
+      expect(run(dir, "diff", "--cached", "--name-only")).toBe("");
+      expect(seen).toEqual([{ path: join(dir, "big.txt"), text: before }]);
     }
-    await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "../a.txt")).rejects.toMatchObject({ code: "bad_request" });
-    await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "a.txt", 1)).rejects.toMatchObject({ code: "bad_request" });
-    expect(get(dir, "a.txt")).toBe("a0\n");
+    {
+      put(dir, "w.txt", "a\r\nX\r\nc\r\n");
+      const lines = [" a", "-b", "+X", " c"];
+      await gitRollbackHunk(dir, { path: "w.txt", hunk: { newStart: 1, lines }, maxBytes: 1e6, ...o });
+      expect(get(dir, "w.txt")).toBe("a\r\nb\r\nc\r\n");
+      await expect(gitRollbackHunk(dir, { path: "w.txt", hunk: { newStart: 1, lines }, maxBytes: 1e6, ...o })).rejects.toMatchObject({ code: "stale" });
+      expect(get(dir, "w.txt")).toBe("a\r\nb\r\nc\r\n");
+    }
+    {
+      const call = (hunk: unknown, path: unknown = "a.txt", maxBytes = 1e6) => gitRollbackHunk(dir, { path, hunk, maxBytes, ...o });
+      for (const h of [null, { newStart: -1, lines: ["+x"] }, { newStart: 1.5, lines: ["+x"] }, { newStart: 1, lines: [] }, { newStart: 1, lines: [" x"] }, { newStart: 1, lines: ["xy"] }, { newStart: 1, lines: ["+a\nb"] }, { newStart: 1, lines: [1] }]) {
+        await expect(call(h)).rejects.toMatchObject({ code: "bad_request" });
+      }
+      await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "../a.txt")).rejects.toMatchObject({ code: "bad_request" });
+      await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "a.txt", 1)).rejects.toMatchObject({ code: "bad_request" });
+      expect(get(dir, "a.txt")).toBe("a0\n");
+    }
   });
+
+
 
   it.skipIf(!posix || process.getuid?.() === 0)("is atomic: a failed write leaves the original and no temp file; a success keeps the mode", async () => {
     const { dir, o } = repo();
