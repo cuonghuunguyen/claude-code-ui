@@ -224,7 +224,7 @@ function mediaPanel(opts: { media?: (path: string) => unknown; read?: string } =
   return { request, el, root, show, q, button, change: (path: string) => act(async () => changed({ path })) };
 }
 
-it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, size line with pixel size", async () => {
+it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, size line with pixel size; Fit / 100% toggle switches the image classes and aria-pressed", async () => {
   const p = mediaPanel();
   await p.show("/p/a.png");
   const img = p.q<HTMLImageElement>("media-image")!;
@@ -236,13 +236,6 @@ it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, siz
   Object.defineProperty(img, "naturalHeight", { value: 480 });
   await act(async () => void img.dispatchEvent(new Event("load")));
   expect(p.q("media-info")!.textContent).toBe("640×480 · 2 KB");
-  act(() => p.root.render(null));
-});
-
-it("Fit / 100% toggle switches the image classes and aria-pressed", async () => {
-  const p = mediaPanel();
-  await p.show("/p/a.png");
-  const img = p.q("media-image")!;
   const fit = p.q("media-fit")!;
   expect(img.className).toContain("max-w-full");
   expect(fit.getAttribute("aria-pressed")).toBe("false");
@@ -252,7 +245,7 @@ it("Fit / 100% toggle switches the image classes and aria-pressed", async () => 
   act(() => p.root.render(null));
 });
 
-it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>", async () => {
+it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>; a decode error shows \"Unable to load image.\" (video: \"Unable to load video.\")", async () => {
   const p = mediaPanel();
   await p.show("/p/v.mp4");
   const v = p.q<HTMLVideoElement>("media-video")!;
@@ -262,11 +255,6 @@ it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>", 
   const a = p.q<HTMLAudioElement>("media-audio")!;
   expect(a.hasAttribute("controls")).toBe(true);
   expect(a.getAttribute("src")).toBe("/media/abc/a.mp3?v=1");
-  act(() => p.root.render(null));
-});
-
-it("a decode error shows \"Unable to load image.\" (video: \"Unable to load video.\")", async () => {
-  const p = mediaPanel();
   await p.show("/p/a.png");
   await act(async () => void p.q("media-image")!.dispatchEvent(new Event("error")));
   expect(p.q("file-notice")!.textContent).toBe("Unable to load image.");

@@ -628,12 +628,31 @@ const openAll = async (t: ReturnType<typeof setup>) => {
   for (const p of ["/q/tools", "/q/tools/inner", "/q/libs"]) await act(async () => t.row(p).click());
 };
 
-it("GH-392 with a repository list: one git.diff per readable repository with cwd = its top, base head and exact; none for outsideRoots", async () => {
+it("GH-392 with a repository list: one git.diff per readable repository with cwd = its top, base head and exact; none for outsideRoots; a file in a nested repository shows its own mark and the parent's untracked folder entry gives no mark and no dot; a moved submodule folder shows the letter M and no dot; repository folders show the repository and submodule icons with their accessible labels and tooltips", async () => {
   const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
   await t.render();
   await wait();
   expect(diffCalls(t).map((m) => m.cwd).sort()).toEqual(["/q", "/q/libs/lib", "/q/tools/inner"]);
   expect(t.request).toHaveBeenCalledWith({ type: "git.diff", cwd: "/q/tools/inner", base: "head", exact: true });
+  await openAll(t);
+  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
+  expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
+  expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
+  expect(mark(t, "/q/far")).toBeNull();
+  expect(mark(t, "/q/libs")!.className, "submodule parent dot").toContain("rounded-full");
+  const lib = mark(t, "/q/libs/lib")!;
+  expect(lib.textContent).toBe("M");
+  expect(lib.className).not.toContain("rounded-full");
+  expect(t.row("/q/libs/lib").textContent).toContain(", modified");
+  const icon = (p: string) => t.row(p).querySelector<HTMLElement>("[data-testid=tree-repo-icon]");
+  expect(icon("/q/tools/inner")!.getAttribute("aria-label")).toBe("Repository inner, branch main");
+  expect(icon("/q/tools/inner")!.title).toBe("main · repository");
+  expect(icon("/q/tools/inner")!.querySelector("[data-icon=repo]")).not.toBeNull();
+  expect(icon("/q/libs/lib")!.getAttribute("aria-label")).toBe("Submodule lib, branch a4a3b80");
+  expect(icon("/q/libs/lib")!.querySelector("[data-icon=archive]")).not.toBeNull();
+  expect(icon("/q/far")!.getAttribute("aria-label")).toBe("Repository far, outside the allowed folders");
+  expect(icon("/q/tools")).toBeNull();
   t.unmount();
 });
 
@@ -733,54 +752,11 @@ describe("GH-392 a reply that arrives after the read was replaced shows no marks
   });
 });
 
-it("GH-392 a file in a nested repository shows its own mark; the parent's untracked folder entry gives no mark and no dot", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await wait();
-  await openAll(t);
-  expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
-  expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
-  expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
-  expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
-  expect(mark(t, "/q/far")).toBeNull();
-  t.unmount();
-});
-
 it("GH-392 a clean nested repository gets no mark from the parent's untracked entry", async () => {
   const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": (m: { cwd: string }) => (m.cwd === "/q/tools/inner" ? { diff: { prefix: "", files: [] } } : byCwd(m)) });
   await t.render();
   await wait();
   expect(mark(t, "/q/tools")).toBeNull();
-  t.unmount();
-});
-
-it("GH-392 a moved submodule folder shows the letter M and no dot", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await wait();
-  const m = mark(t, "/q/libs");
-  expect(m!.className).toContain("rounded-full");
-  await act(async () => t.row("/q/libs").click());
-  const lib = mark(t, "/q/libs/lib")!;
-  expect(lib.textContent).toBe("M");
-  expect(lib.className).not.toContain("rounded-full");
-  expect(t.row("/q/libs/lib").textContent).toContain(", modified");
-  t.unmount();
-});
-
-it("GH-392 repository folders show the repository and submodule icons with their accessible labels and tooltips", async () => {
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos() }, { "git.diff": byCwd });
-  await t.render();
-  await act(async () => t.row("/q/tools").click());
-  await act(async () => t.row("/q/libs").click());
-  const icon = (p: string) => t.row(p).querySelector<HTMLElement>("[data-testid=tree-repo-icon]");
-  expect(icon("/q/tools/inner")!.getAttribute("aria-label")).toBe("Repository inner, branch main");
-  expect(icon("/q/tools/inner")!.title).toBe("main · repository");
-  expect(icon("/q/tools/inner")!.querySelector("[data-icon=repo]")).not.toBeNull();
-  expect(icon("/q/libs/lib")!.getAttribute("aria-label")).toBe("Submodule lib, branch a4a3b80");
-  expect(icon("/q/libs/lib")!.querySelector("[data-icon=archive]")).not.toBeNull();
-  expect(icon("/q/far")!.getAttribute("aria-label")).toBe("Repository far, outside the allowed folders");
-  expect(icon("/q/tools")).toBeNull();
   t.unmount();
 });
 
