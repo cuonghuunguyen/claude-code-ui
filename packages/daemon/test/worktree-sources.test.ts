@@ -57,11 +57,13 @@ describe("createWorktree: a new branch named by the user", () => {
     expect(out(r.path, "rev-parse", "HEAD")).toBe(out(main, "rev-parse", "origin/feat/remote"));
   });
 
-  it("refuses a leading -, an invalid ref, a too long folder; a taken folder or branch is exists", async () => {
+  it("refuses a leading -, an invalid ref, a @{, a too long folder; a taken folder or branch is exists", async () => {
     const { main, opts } = origin();
     expect(await code(createWorktree(main, { ...opts, branch: "-x" }))).toBe("bad_name");
     expect(await code(createWorktree(main, { ...opts, branch: "a..b" }))).toBe("bad_name");
     expect(await code(createWorktree(main, { ...opts, branch: `a/${"b".repeat(70)}` }))).toBe("bad_name");
+    expect(await code(createWorktree(main, { ...opts, branch: "a@{1}" }))).toBe("bad_name");
+    expect(out(main, "branch", "--list", "a*")).toBe("");
     await createWorktree(main, { ...opts, branch: "feat/x" });
     // feat-x is taken as a folder by feat/x.
     expect(await code(createWorktree(main, { ...opts, branch: "feat-x" }))).toBe("exists");
@@ -180,12 +182,6 @@ describe("pullRequestBranches: a pasted pull request link", () => {
 });
 
 describe("createWorktree: branch name edge cases", () => {
-  it("createWorktree refuses a branch with @{", async () => {
-    const { main, opts } = origin();
-    expect(await code(createWorktree(main, { ...opts, branch: "a@{1}" }))).toBe("bad_name");
-    expect(out(main, "branch", "--list", "a*")).toBe("");
-  });
-
   it("createWorktree returns exists for a D/F conflict both ways", async () => {
     const { main, opts } = origin();
     run(main, "branch", "feat");

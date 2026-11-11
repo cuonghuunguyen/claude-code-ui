@@ -74,11 +74,6 @@ When("I remove the worktree {string} from the sidebar", async ({ page, project }
   await page.getByTestId("remove-worktree-confirm").click();
 });
 
-Then("the worktree folder {string} is gone and its branch {string} is deleted", async ({ project }, folder: string, branch: string) => {
-  await expect(async () => expect(existsSync(wtDir(project, folder))).toBe(false)).toPass({ timeout: 30_000 });
-  expect(git(project.path, "branch", "--list", branch)).toBe("");
-});
-
 Then("the worktree folder {string} is gone and its branch {string} still exists", async ({ project }, folder: string, branch: string) => {
   await expect(async () => expect(existsSync(wtDir(project, folder))).toBe(false)).toPass({ timeout: 30_000 });
   expect(git(project.path, "branch", "--list", branch)).toContain(branch);
@@ -226,8 +221,6 @@ type RmSnap = { t: number; dialog: { text: string; confirm: boolean | null } | n
 const timeline = (page: Page) => page.evaluate(() => (window as unknown as { __cl: unknown[] }).__cl) as Promise<Snap[]>;
 const rmTimeline = (page: Page) => page.evaluate(() => (window as unknown as { __rm: unknown[] }).__rm) as Promise<RmSnap[]>;
 
-When("I watch the dialogs of the page", async ({ page }) => page.evaluate(WATCH));
-
 When("I open Clean up from the menu of the scratch project", async ({ page, project }) => {
   await page.evaluate(WATCH);
   await page.evaluate(() => ((window as unknown as { __cl: unknown[] }).__cl.length = 0)); // the timeline of this open only
@@ -265,10 +258,6 @@ Then("the Clean up row {string} is {string}", async ({ page }, branch: string, t
 
 Then("the Clean up row {string} mentions {string}", async ({ page }, branch: string, text: string) => {
   await expect(cleanupRow(page, branch)).toContainText(text);
-});
-
-Then("the Clean up row {string} can be ticked", async ({ page }, branch: string) => {
-  await expect(cleanupRow(page, branch).getByTestId("cleanup-check")).toBeEnabled();
 });
 
 When("I tick the Clean up row {string}", async ({ page }, branch: string) => {
@@ -311,12 +300,6 @@ Then("the row {string} showed Checking… with its checkbox disabled and then a 
   // The cached verdict is kept visible next to Checking…, not hidden.
   expect(tl[i]!.row!.badge).toMatch(/Safe|Has work|Checking…/);
   expect(tl.slice(i).some((s) => !s.row!.badge.includes("Checking…")), "a fresh result followed").toBe(true);
-});
-
-Then("the row {string} never showed Checking…", async ({ page }, branch: string) => {
-  const tl = (await timeline(page)).map((s) => s.rows.find((r) => r.text.includes(branch))).filter(Boolean);
-  expect(tl.length).toBeGreaterThan(0);
-  expect(tl.some((r) => r!.badge.includes("Checking…"))).toBe(false);
 });
 
 Then("the status bar of the app answers while Clean up scans", async ({ page }) => {

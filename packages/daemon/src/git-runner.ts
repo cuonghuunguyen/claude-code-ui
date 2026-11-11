@@ -5,7 +5,9 @@ import { Worker } from "node:worker_threads";
 import { perf } from "./perf.ts";
 
 export type GitRunOptions = { cwd: string; args: string[]; env: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string; file?: string; /** May run twice: the call only reads. A WSL side lost after the call was sent re-runs it through wsl.exe only then. */ idempotent?: boolean;
-  /** The process and everything it starts (ssh, per-remote fetches) run in their own group, which a timeout kills as a whole; the call settles after the group's pipes closed. */
+  /** The process and everything it starts (ssh, per-remote fetches) run in their own group, which a timeout kills as a whole; the call settles after the group's pipes closed.
+   * An `idempotent` call settles when the kill starts (timeout, abort, maxBuffer), with the output so far, and its group ends in the background: on Windows the
+   * kill is a `taskkill /T` process of 0.5-5 s, which a read (a search past its deadline) does not wait for. */
   killTree?: boolean;
   /** Kills the process group and rejects (the rejection has the partial stdout). Honoured only together with `killTree`: only then the main thread knows the pid; without it the run ends at its timeout. An already aborted signal rejects without starting. */
   signal?: AbortSignal };
@@ -20,33 +22,37 @@ const DEFAULT_MAX_BUFFER = 64 << 20;
 
 const GIT_RUN_THREAD = `
 const { parentPort } = require("node:worker_threads");
-const { execFile, spawn, spawnSync } = require("node:child_process");
-const killTree = (pid) => {
+const { execFile, spawn } = require("node:child_process");
+// A kill command (Windows: taskkill /T) is not awaited: it takes 0.5-5 s, and this thread serves every other git call meanwhile.
+const killTree = (pid, cmd) => {
   try {
-    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+    if (cmd) spawn(cmd.file, cmd.args.map((a) => (a === "{pid}" ? String(pid) : a)), { windowsHide: true, stdio: "ignore" }).on("error", () => {});
     else process.kill(-pid, "SIGKILL");
   } catch {}
 };
 // execFile cannot start a process group (it drops detached): killTree runs are spawned here, with execFile's error shape.
+// early (an idempotent call): it settles when the kill starts, with the output so far, not when the group's pipes close.
 const spawnTree = (file, args, o, cb) => {
   const child = spawn(file, args, { cwd: o.cwd, env: o.env, windowsHide: true, detached: process.platform !== "win32" });
   const out = []; const err = []; let size = 0; let timedOut = false; let over = false; let done = false;
-  const take = (arr) => (b) => { arr.push(b); size += b.length; if (size > o.maxBuffer && !over) { over = true; killTree(child.pid); } };
+  const failure = (code, signal) => Object.assign(new Error("Command failed: " + file + " " + args.join(" ")), { code: over ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : code, killed: timedOut, signal });
+  const kill = () => { killTree(child.pid, o.killCommand); if (o.early) finish(failure(null, null)); };
+  const take = (arr) => (b) => { if (done) return; arr.push(b); size += b.length; if (size > o.maxBuffer && !over) { over = true; kill(); } };
   child.stdout.on("data", take(out)); child.stderr.on("data", take(err));
-  const timer = setTimeout(() => { timedOut = true; killTree(child.pid); }, o.timeout);
+  const timer = setTimeout(() => { timedOut = true; kill(); }, o.timeout);
   const finish = (e) => { if (done) return; done = true; clearTimeout(timer); cb(e, Buffer.concat(out), Buffer.concat(err)); };
   child.on("error", (e) => finish(e));
-  child.on("close", (code, signal) => finish(code === 0 && !signal && !over ? undefined : Object.assign(new Error("Command failed: " + file + " " + args.join(" ")), { code: over ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : code, killed: timedOut, signal })));
+  child.on("close", (code, signal) => finish(code === 0 && !signal && !over ? undefined : failure(code, signal)));
   return child;
 };
-parentPort.on("message", ({ id, file, cwd, args, env, timeout, maxBuffer, input, tree }) => {
+parentPort.on("message", ({ id, file, cwd, args, env, timeout, maxBuffer, input, tree, early, killCommand }) => {
   try {
   const cb = (err, stdout, stderr) => {
     const out = Buffer.from(stdout ?? []);
     const ab = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
     parentPort.postMessage({ id, stdout: ab, stderr: String(stderr ?? ""), error: err ? { message: err.message, code: err.code, killed: !!err.killed, signal: err.signal } : undefined }, [ab]);
   };
-  const child = tree ? spawnTree(file || "git", args, { cwd, env, timeout, maxBuffer }, cb) : execFile(file || "git", args, { cwd, env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, cb);
+  const child = tree ? spawnTree(file || "git", args, { cwd, env, timeout, maxBuffer, early, killCommand }, cb) : execFile(file || "git", args, { cwd, env, timeout, maxBuffer, encoding: "buffer", windowsHide: true }, cb);
   child.stdin.on("error", () => {});
   child.stdin.end(input ?? "");
   if (tree && child.pid) parentPort.postMessage({ id, pid: child.pid });
@@ -59,12 +65,16 @@ let thread: Worker | undefined;
 let threadBroken = false;
 let started = false;
 let nextCall = 0;
-type Call = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout; w: Worker; pid?: number; aborted?: boolean };
+/** settled: an idempotent call that already failed with its abort; the thread's later result is dropped. */
+type Call = { ok: (o: GitRunOutput) => void; fail: (e: Error) => void; timer: NodeJS.Timeout; w: Worker; pid?: number; aborted?: boolean; settled?: boolean };
 const calls = new Map<number, Call>();
 
-/** Test seam: the thread's script. `reset()` drops the thread and the broken mark. */
+type KillCommand = { file: string; args: string[] };
+const TASKKILL: KillCommand = { file: "taskkill", args: ["/pid", "{pid}", "/T", "/F"] };
+/** Test seams: the thread's script; `killCommand` replaces the tree kill (taskkill on Windows, a group SIGKILL elsewhere), `{pid}` stands for the root's pid. `reset()` drops the thread and the broken mark. */
 export const gitRunnerConfig = {
   script: GIT_RUN_THREAD,
+  killCommand: undefined as KillCommand | undefined,
   reset() {
     const w = thread;
     thread = undefined;
@@ -86,8 +96,8 @@ function failCalls(w: Worker, why: string) {
       calls.delete(id);
       clearTimeout(c.timer);
       // The lock of a remote operation is released with this failure: nothing may still run.
-      if (c.pid !== undefined) (trees.delete(c.pid), killProcessTree(c.pid));
-      c.fail(new Error(why));
+      if (c.pid !== undefined) (trees.delete(c.pid), killProcessTree(c.pid, true));
+      if (!c.settled) c.fail(new Error(why));
     }
 }
 
@@ -107,6 +117,7 @@ function runThread(): Worker | undefined {
       if (c.pid !== undefined) trees.delete(c.pid);
       calls.delete(id);
       clearTimeout(c.timer);
+      if (c.settled) return;
       const out = Buffer.from(stdout);
       if (!error) c.ok({ stdout: out, stderr });
       else c.fail(Object.assign(new Error(error.message), { stderr, stdout: out, killed: error.killed, code: error.code, signal: error.signal }));
@@ -134,11 +145,20 @@ function runThread(): Worker | undefined {
   return thread;
 }
 
-/** Kills a process and its whole group (`killTree` runs); the platform equivalent of `kill(-pid)` is `taskkill /T`. */
-export function killProcessTree(pid: number): void {
+const killCommand = () => gitRunnerConfig.killCommand ?? (process.platform === "win32" ? TASKKILL : undefined);
+/**
+ * Kills a process and its whole group (`killTree` runs); the platform equivalent of `kill(-pid)` is `taskkill /T`, a process of 0.5-5 s:
+ * not awaited (it would block the event loop) unless `sync` (daemon exit; a failure that releases a remote operation's lock).
+ */
+export function killProcessTree(pid: number, sync = false): void {
+  const cmd = killCommand();
   try {
-    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
-    else process.kill(-pid, "SIGKILL");
+    if (!cmd) process.kill(-pid, "SIGKILL");
+    else {
+      const args = cmd.args.map((a) => (a === "{pid}" ? String(pid) : a));
+      if (sync) spawnSync(cmd.file, args, { windowsHide: true });
+      else spawn(cmd.file, args, { windowsHide: true, stdio: "ignore" }).on("error", () => {}).unref();
+    }
   } catch {
     // Already gone.
   }
@@ -148,7 +168,7 @@ const trees = new Set<number>();
 let exitHook = false;
 /** Kills every running `killTree` group (daemon exit and signals; tests). */
 export function endProcessTrees(): void {
-  for (const p of trees) killProcessTree(p);
+  for (const p of trees) killProcessTree(p, true);
   trees.clear();
 }
 function noteTree(pid: number | undefined): void {
@@ -192,18 +212,26 @@ const direct: GitRunner = (o) =>
     let settled = false;
     const pid = child.pid;
     if (pid) noteTree(pid);
-    const onAbort = () => pid && killProcessTree(pid);
+    const failure = (code: number | null, signal: NodeJS.Signals | null) =>
+      Object.assign(new Error(`Command failed: ${o.file ?? "git"} ${o.args.join(" ")}`), { code: over ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : (code ?? undefined), killed: timedOut, signal: signal ?? undefined });
+    // An idempotent call settles when the kill starts (see `killTree`).
+    const kill = (early: () => Error) => {
+      if (pid) killProcessTree(pid);
+      if (o.idempotent) finish(early());
+    };
+    const onAbort = () => kill(abortedError);
     o.signal?.addEventListener("abort", onAbort, { once: true });
     const take = (arr: Buffer[]) => (b: Buffer) => {
+      if (settled) return;
       arr.push(b);
       size += b.length;
-      if (size > maxBuffer && !over && pid) ((over = true), killProcessTree(pid));
+      if (size > maxBuffer && !over && pid) ((over = true), kill(() => failure(null, null)));
     };
     child.stdout.on("data", take(out));
     child.stderr.on("data", take(err));
     const timer = setTimeout(() => {
       timedOut = true;
-      if (pid) killProcessTree(pid);
+      kill(() => failure(null, null));
     }, timeout);
     const finish = (e: (Error & { code?: string | number; killed?: boolean; signal?: string }) | null) => {
       if (settled) return;
@@ -214,7 +242,7 @@ const direct: GitRunner = (o) =>
       done(e, Buffer.concat(out), Buffer.concat(err).toString("utf8"));
     };
     child.on("error", finish);
-    child.on("close", (code, signal) => finish(code === 0 && !signal && !over ? null : Object.assign(new Error(`Command failed: ${o.file ?? "git"} ${o.args.join(" ")}`), { code: over ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : (code ?? undefined), killed: timedOut, signal: signal ?? undefined })));
+    child.on("close", (code, signal) => finish(code === 0 && !signal && !over ? null : failure(code, signal)));
     child.stdin.on("error", () => {});
     child.stdin.end(o.input ?? "");
   });
@@ -235,16 +263,18 @@ export const threadRunner: GitRunner = (o) =>
     timer.unref();
     // The thread runs git: the diagnostics channel does not see it, so the call is timed here (thread time, not main-loop time).
     const done = perf.child({ cmd: "git", args: o.args, cwd: o.cwd, thread: "worker" });
+    // Before the thread sent the pid, the kill waits for it. An idempotent call settles now (see `killTree`).
     const onAbort = () => {
       const c = calls.get(id);
-      if (!c) return;
+      if (!c || c.aborted) return;
+      c.aborted = true;
       if (c.pid !== undefined) killProcessTree(c.pid);
-      else c.aborted = true;
+      if (o.idempotent) ((c.settled = true), c.fail(abortedError()));
     };
     if (o.killTree) o.signal?.addEventListener("abort", onAbort, { once: true });
     const settle = () => o.signal?.removeEventListener("abort", onAbort);
     calls.set(id, { ok: (r) => (settle(), done(0), ok(r)), fail: (e) => (settle(), done("error"), fail(e)), timer, w });
-    w.postMessage({ id, file: o.file, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input, tree: o.killTree });
+    w.postMessage({ id, file: o.file, cwd: o.cwd, args: o.args, env: o.env, timeout: o.timeout ?? DEFAULT_TIMEOUT, maxBuffer: o.maxBuffer ?? DEFAULT_MAX_BUFFER, input: o.input, tree: o.killTree, early: !!(o.killTree && o.idempotent), killCommand: killCommand() });
   });
 
 let runner: GitRunner = threadRunner;

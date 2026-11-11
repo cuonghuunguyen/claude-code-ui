@@ -1,6 +1,6 @@
 Feature: Launcher settings (GH-553)
 
-  Scenario: The launcher shortcut is created and removed from Settings
+  Scenario: The launcher shortcut is created and removed from Settings; a foreign entry at its path is refused and kept; Launcher fits a phone
     Given the viewport is 1440x900
     And the app is open
     When I open Settings › Launcher
@@ -11,26 +11,19 @@ Feature: Launcher settings (GH-553)
     When I turn the launcher shortcut switch off
     Then the launcher shortcut entry is gone
     And I capture "launcher shortcut off"
-
-  Scenario: Launcher fits a phone
-    Given the viewport is 390x844
-    And the app is open
-    When I open Settings › Launcher
-    Then the page has no horizontal scroll
-    And the launcher shortcut row is below the back button
-    And I capture "launcher phone"
-
-  Scenario: A foreign entry at the shortcut path is refused and kept
-    Given the viewport is 1440x900
-    And the app is open
-    And a foreign file sits at the launcher shortcut path
-    When I open Settings › Launcher
-    And I click the launcher shortcut switch
+    Given a foreign file sits at the launcher shortcut path
+    When I click the launcher shortcut switch
     Then the Settings error mentions "not made by claude-ui"
     And the launcher shortcut switch is off
     And the foreign launcher shortcut file is untouched
     And I capture "launcher shortcut refused"
     When I remove the foreign launcher shortcut file
+    Given the viewport is 390x844
+    When I close Settings
+    And I open Settings › Launcher
+    Then the page has no horizontal scroll
+    And the launcher shortcut row is below the back button
+    And I capture "launcher phone"
 
   Scenario: Saved start options apply on the next start; a flag still wins
     Given the viewport is 1440x900

@@ -47,11 +47,6 @@ Then("the tree row {string} has no letter mark", async ({ page }, rel: string) =
   await expect(letter(entry(page, rel))).toHaveCount(0);
 });
 
-Then("the tree row {string} shows no mark at all", async ({ page }, rel: string) => {
-  await expect(entry(page, rel)).toBeVisible();
-  await expect(entry(page, rel).getByTestId("git-mark")).toHaveCount(0);
-});
-
 Then("the tree folder {string} shows a dot", async ({ page }, rel: string) => {
   const mark = entry(page, rel).getByTestId("git-mark");
   await expect(mark).toHaveCount(1, { timeout: 30_000 });
@@ -88,11 +83,6 @@ Then("the tree menu offers {string} and {string}", async ({ page }, a: string, b
   const menu = page.getByTestId("tree-menu");
   await expect(menu.getByRole("menuitem", { name: a, exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: b, exact: true })).toBeVisible();
-});
-
-When("I close the tree menu", async ({ page }) => {
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("tree-menu")).toHaveCount(0);
 });
 
 // The list shows its first row when the selection matches no row (existing behaviour, not a selected file): the folder path matches none.

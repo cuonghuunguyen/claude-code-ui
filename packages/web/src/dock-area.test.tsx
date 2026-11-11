@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DOCKED_DRAG_TYPE, DockHeader, DropStrip, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import type { DockArea, PaneId } from "./layout.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
@@ -22,7 +21,7 @@ const h = (area: DockArea, over: Partial<Parameters<typeof DockHeader>[0]> = {})
 };
 const doc = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 
-it("renders a labelled tablist with the active pane selected; click selects", async () => {
+it("renders a labelled tablist with the active pane selected; click selects; the side menu moves the active pane, flips the side and resets", async () => {
   const { fns, render } = h("side");
   await render();
   expect(el.querySelector('[role="tablist"]')!.getAttribute("aria-label")).toBe("Side panel");
@@ -31,11 +30,6 @@ it("renders a labelled tablist with the active pane selected; click selects", as
   expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "true", "false"]);
   await act(async () => tabs[0]!.click());
   expect(fns.onSelect).toHaveBeenCalledWith("changes");
-});
-
-it("the side menu moves the active pane, flips the side and resets", async () => {
-  const { fns, render } = h("side");
-  await render();
   await act(async () => doc("dock-menu-side").click());
   expect(doc("dock-move").textContent).toBe("Move Files to bottom panel");
   expect(doc("dock-side-flip").textContent).toBe("Move side panel to left");
@@ -116,21 +110,6 @@ it("dragging a tab carries the pane; dropping on another tab inserts before it; 
   expect(fns.onMove).toHaveBeenCalledWith("files", "side", "changes");
   await act(async () => void fire(el.querySelector('[data-pane-tab="files"]')!, "dragend"));
   expect(fns.onDrag).toHaveBeenLastCalledWith(undefined);
-});
-
-it("a drag of something else (a session tab) is ignored", async () => {
-  const { fns, render } = h("side");
-  await render();
-  const e = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", ["application/x-claude-ui-tab"]);
-  expect(e.defaultPrevented).toBe(false);
-  expect(fns.onDropAt).not.toHaveBeenCalled();
-});
-
-it("the drop tab shows the insertion bar while it is the target", async () => {
-  const { render } = h("side", { drag: "files", dropAt: { area: "side", before: "graph" } });
-  await render();
-  expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
-  expect(el.querySelector('[data-pane-tab="files"]')!.hasAttribute("data-drop-before")).toBe(false);
 });
 
 it("DropStrip names its area and takes the dropped pane", async () => {
@@ -315,6 +294,7 @@ it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop
   const { fns, render } = h("side", { accepts: (e) => (e.dataTransfer?.types.includes(TAB) ? "before" : false), onDropTab, dropAt: { area: "side", before: "graph" } });
   await render();
   expect(el.querySelector('[data-pane-tab="graph"]')!.hasAttribute("data-drop-before")).toBe(true);
+  expect(el.querySelector('[data-pane-tab="files"]')!.hasAttribute("data-drop-before")).toBe(false);
   const over = fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]);
   expect(over.defaultPrevented).toBe(true);
   expect(fns.onDropAt).toHaveBeenCalledWith({ area: "side", before: "changes" });
@@ -324,9 +304,10 @@ it("GH-402 a pane tab with `accepts` takes a strip tab drag: insertion bar, drop
 });
 
 it("GH-402 without `accepts` a strip tab drag stays ignored on pane tabs and on DropStrip", async () => {
-  const { render } = h("side");
+  const { fns, render } = h("side");
   await render();
   expect(fire(el.querySelector('[data-pane-tab="changes"]')!, "dragover", [TAB]).defaultPrevented).toBe(false);
+  expect(fns.onDropAt).not.toHaveBeenCalled();
   await act(async () => root.render(<DropStrip area="bottom" over={false} onOver={() => {}} onLeave={() => {}} onDrop={() => {}} />));
   expect(fire(el.firstElementChild!, "dragover", [TAB]).defaultPrevented).toBe(false);
 });

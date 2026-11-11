@@ -1,12 +1,18 @@
 Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-561)
 
-  Scenario: New branch from a commit row is checked out, on a desktop and on a phone
+  Scenario: New branch from the commit details chip and from a commit row is checked out, on a desktop and on a phone
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project's main has the local commit "local work"
     And a Haiku session with one finished reply
     When I open the Graph tab of the side panel
-    And I open the branch menu on the commit row "initial"
+    And I select the commit row "local work"
+    And I open the branch menu on the chip "refs/heads/main" in the commit details
+    Then the branch menu offers a new branch from "main"
+    And I capture "details-chip-new-branch"
+    When I press "Escape" in the branch popup
+    Then the branch menu is closed
+    When I open the branch menu on the commit row "initial"
     And I create the branch "topic" from the branch menu
     Then the Graph result line says "Created and checked out topic"
     And the project is on the branch "topic"
@@ -24,7 +30,9 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
   Scenario: Checkout of a remote branch creates a tracking local branch
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
-    And a Haiku session with one finished reply
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
     And I open the branch menu on the chip "refs/remotes/origin/feat/remote"
@@ -39,7 +47,9 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project has the branch "topic" that edits the first line of "a.txt"
     And the scratch project has the uncommitted text "one\ntwo\nthree\nfour\nfive edited\n" in "a.txt"
-    And a Haiku session with one finished reply
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
     And I open the branch menu on the chip "refs/heads/topic"
@@ -59,7 +69,9 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project has the branch "feature" that conflicts with main on "a.txt"
     And the scratch project has the uncommitted text "local" in "a.txt"
-    And a Haiku session with one finished reply
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
     And I open the branch menu on the chip "refs/heads/feature"
@@ -76,7 +88,9 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the branch "feat/remote" tracks origin and is checked out in another worktree
-    And a Haiku session with one finished reply
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
     And I open the branch menu on the chip "refs/heads/feat/remote"
@@ -84,14 +98,3 @@ Feature: New branch, Checkout and Smart checkout from the Graph branch menu (GH-
     Then the Graph shows the error "worktree"
     And the project is on the branch "main"
     And I capture "other-worktree"
-
-  Scenario: New branch from a chip in the commit details offers the shown commit
-    Given the viewport is 1440x900
-    And the scratch project is a git repository with an origin inside the allowed roots
-    And the scratch project's main has the local commit "local work"
-    And a Haiku session with one finished reply
-    When I open the Graph tab of the side panel
-    And I select the commit row "local work"
-    And I open the branch menu on the chip "refs/heads/main" in the commit details
-    Then the branch menu offers a new branch from "main"
-    And I capture "details-chip-new-branch"

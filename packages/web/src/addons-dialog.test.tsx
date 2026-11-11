@@ -7,8 +7,6 @@ import type { Request } from "./client.ts";
 import { AddonsDialog } from "./addons-dialog.tsx";
 import { capabilityDiff, rendererConflicts, type AddonLogEntry } from "./addons.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const CAPS = ["session.read", "ui.pane", "render.fence:example", "net:https://api.github.com"];
 const addon = (name: string, o: Partial<AddonInfo> = {}): AddonInfo => ({
   name,

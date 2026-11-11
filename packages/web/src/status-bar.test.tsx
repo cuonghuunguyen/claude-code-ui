@@ -6,8 +6,6 @@ import type { GitStatus, Part } from "@claude-ui/protocol";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { backgroundShells, foregroundShells, StatusBar, tokens, totals } from "./status-bar.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function view(...parts: Part[]): SessionView {
   return parts.reduce((v, part, i) => applyEvent(v, { type: "event", sessionId: "s", seq: i + 1, part }), emptySession());
 }
@@ -87,11 +85,6 @@ it("takes no row when no field has data (no git repo, no turn, no shells)", asyn
   expect(el.querySelector('[data-testid="status-bar"]')).toBeNull();
 });
 
-it("keeps all its fields on every width (no sm-only hiding)", async () => {
-  const { el } = await render({ view: view(result("r1", 1, 1, 1)), git: async () => ({ branch: "main", added: 0, removed: 0 }) });
-  expect(el.innerHTML).not.toContain("max-sm:hidden");
-});
-
 it("refreshes git after each turn", async () => {
   const git = vi.fn(async (): Promise<GitStatus> => ({ branch: "main", added: git.mock.calls.length, removed: 0 }));
   const { text, rerender } = await render({ git, view: { ...view(), state: "running" } });
@@ -137,10 +130,11 @@ async function mountBar(v: SessionView, git?: () => Promise<GitStatus | null>) {
 const fields = (el: HTMLElement) => [...el.querySelectorAll("[data-field]")].map((f) => (f as HTMLElement).dataset.field);
 const GIT: GitStatus = { branch: "main", added: 3, removed: 1 };
 
-it("GH-166: wide: branch, diff, In, Out, Cached and shells all show", async () => {
+it("GH-166: wide: branch, diff, In, Out, Cached and shells all show (no sm-only hiding)", async () => {
   const v = view(result("r1", 100, 20, 1000), bash("a", { command: "npm run dev", run_in_background: true }, "running"));
   const { el, done } = await mountBar(v, async () => GIT);
   expect(fields(el)).toEqual(["branch", "diff", "in", "out", "cached", "shells"]);
+  expect(el.innerHTML).not.toContain("max-sm:hidden");
   done();
 });
 

@@ -6,8 +6,6 @@ import type { McpServerInfo } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SERVERS: McpServerInfo[] = [
   { name: "ctx", status: "connected", scope: "user", config: { type: "http", url: "https://x/mcp" }, tools: [{ name: "search", readOnly: true }, { name: "drop", destructive: true }] },
   { name: "broken", status: "failed", scope: "project", error: "Connection closed\nat x", config: { type: "stdio", command: "false" } },

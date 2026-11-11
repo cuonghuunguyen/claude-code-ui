@@ -5,8 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { resetAll, specOf } from "./keymap.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot>;
 let el: HTMLDivElement;
 const onClose = vi.fn();

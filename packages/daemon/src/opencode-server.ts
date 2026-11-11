@@ -5,6 +5,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
+import { winQuote } from "./update.ts";
 
 export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed";
 /** A non-2xx answer: `status` and the parsed `body` let callers map OpenCode's error `name`. */
@@ -33,6 +34,10 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const FAST_EXITS = 3;
 const FAST_MS = 30_000;
 const GUARD_MS = 5 * 60_000;
+/** Every fetch to the server goes through here: a new connection each time (`connection: close`), so a dead server only fails the connect, which proves the
+ * request never reached it (see request()). A pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and
+ * takes the request. One fetch to the server without the header puts a socket in the pool that the next request may reuse. */
+const ocFetch = (url: string | URL, init: RequestInit & { headers: Record<string, string> }) => fetch(url, { ...init, headers: { ...init.headers, connection: "close" } });
 const missing = () => new OpenCodeError("opencode_missing", "OpenCode is not installed or not found on PATH. Install it (https://opencode.ai/docs) or set its path in Settings › OpenCode.");
 
 /** `x.y.z` as numbers; undefined when the text has none. */
@@ -40,14 +45,20 @@ export const parseVersion = (text: string) => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.
 /** a < b for `x.y.z` lists. */
 export const olderThan = (a: number[], b: number[]) => (a.find((n, i) => n !== b[i]) ?? 0) < (b.find((n, i) => n !== a[i]) ?? 0);
 
-/** The binary on PATH: `opencode`; on Windows `opencode.exe`, else `opencode.cmd` (run through cmd.exe). */
+/** The binary on PATH: `opencode`; on Windows `opencode.exe`, else `opencode.cmd` (run through cmd.exe, see invocation). */
 function lookup(env: NodeJS.ProcessEnv): string[] | undefined {
   const win = process.platform === "win32";
   for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean))
     for (const name of win ? ["opencode.exe", "opencode.cmd"] : ["opencode"]) {
       const file = join(dir, name);
-      if (existsSync(file)) return name.endsWith(".cmd") ? ["cmd.exe", "/d", "/s", "/c", file] : [file];
+      if (existsSync(file)) return [file];
     }
+}
+
+/** How to run `binary ...args`: a Windows .cmd/.bat goes through cmd.exe as one quoted line (`/s` strips the outer quotes), passed verbatim, so a path with spaces survives. */
+export function invocation(binary: string, args: string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[]; verbatim: boolean } {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(binary)) return { file: binary, args, verbatim: false };
+  return { file: "cmd.exe", args: ["/d", "/s", "/c", `"${[binary, ...args].map(winQuote).join(" ")}"`], verbatim: true };
 }
 
 /** A consumer of the server's event stream: `event` per payload of `GET /global/event`; `resync` after a reconnect (events may be lost). */
@@ -103,12 +114,13 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     return o.command ?? lookup(env());
   };
 
-  /** Binary and version, never a server: throws OpenCodeError. */
+  /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
   async function check() {
     const cmd = argv();
     if (!cmd) throw missing();
+    const run = invocation(cmd[0]!, [...cmd.slice(1), "--version"]);
     const out = await new Promise<string>((resolve, reject) =>
-      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: 10_000, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
+      execFile(run.file, run.args, { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: run.verbatim }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
@@ -134,7 +146,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     // A start that fails counts as a quick exit, once (the exit event may count it too).
     let counted = false;
     const count = () => !counted && ((counted = true), fastExits.push(startedAt));
-    const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, cmd[0]!, ...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"], {
+    const run = invocation(cmd[0]!, [...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"]);
+    const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, run.file, ...run.args], {
       env: { ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -168,7 +181,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         new Promise<never>((_, reject) => (timer = setTimeout(() => reject(failed(`no answer in ${(o.startTimeoutMs ?? START_TIMEOUT_MS) / 1000} s. Last output: ${tail()}`)), o.startTimeoutMs ?? START_TIMEOUT_MS))),
       ]);
       const health = await Promise.race([
-        fetch(`${url}/global/health`, { headers: { authorization: auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
+        ocFetch(`${url}/global/health`, { headers: { authorization: auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
         exited,
       ]);
       if (!health.healthy) throw new Error("health says not healthy");
@@ -245,7 +258,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         const u = await ensure();
         if (!handlers.size) break;
         streamAbort = new AbortController();
-        const res = await fetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
+        const res = await ocFetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
         if (again) for (const h of [...handlers]) h.resync();
         again = true;
@@ -317,17 +330,48 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
     async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
-      const up = await ensure();
-      const url = new URL(path, `${up.url}/`);
-      if (r.directory) url.searchParams.set("directory", r.directory);
+      // The caller's timeout counts from each send (a start or restart of the server is not part of it, as before the merge of GH-685).
+      const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let rejectLate!: (err: Error) => void;
+      const late = new Promise<never>((_, reject) => (rejectLate = reject));
+      const sending = () => {
+        if (r.timeoutMs === 0) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => rejectLate(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms);
+      };
       const work = (async () => {
-        const res = await fetch(url, {
-          method: r.method ?? "GET",
-          headers: { authorization: up.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
-          body: r.body === undefined ? undefined : JSON.stringify(r.body),
-          // Only the caller's own signal aborts. A timeout never does (below).
-          signal: r.signal,
-        });
+        // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the connect fails (no pooled connections, ocFetch).
+        // If the server does not answer a health probe either, drop it, start the next one and send the request once more. Any other failure, also a connection that
+        // broke after the connect, is the caller's (OpenCode may have got the request), and a live server is never restarted.
+        // `srv` is the server this request used: only when it is still the current one (`up`) is it dropped; a server another request restarted meanwhile is kept.
+        let res: Response;
+        for (let retry = true; ; retry = false) {
+          const srv = await ensure();
+          const url = new URL(path, `${srv.url}/`);
+          if (r.directory) url.searchParams.set("directory", r.directory);
+          sending();
+          try {
+            res = await ocFetch(url, {
+              method: r.method ?? "GET",
+              headers: { authorization: srv.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
+              body: r.body === undefined ? undefined : JSON.stringify(r.body),
+              // Only the caller's own signal aborts. A timeout never does (below).
+              signal: r.signal,
+            });
+            break;
+          } catch (err) {
+            // Nothing reached the server: the probe and a restart are not the caller's wait either.
+            if (retry && neverArrived(err)) clearTimeout(timer);
+            if (!retry || !neverArrived(err) || (await alive(srv))) throw err;
+            if (up === srv) {
+              stopRequested = true;
+              killSync();
+              child = undefined;
+              up = undefined;
+            }
+          }
+        }
         const text = await res.text();
         if (!res.ok) {
           let body: unknown;
@@ -345,12 +389,22 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       // commands) on the first request that needs it and caches the result of that load, an interruption included (1.19.5): a request the client
       // cut off during the load would leave the folder broken until its instance is disposed. See `brokenState` (opencode-engine.ts).
       work.catch(() => {});
-      const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms)));
+      late.catch(() => {});
       return Promise.race([work, late]).finally(() => clearTimeout(timer));
     },
   };
 }
+
+/** A fetch whose connect failed (any code: ECONNREFUSED, a reset, undici's connect timeout): with a new connection per request (ocFetch) the server read nothing. */
+const neverArrived = (err: unknown): boolean => {
+  const c = (err as { cause?: { syscall?: string; code?: string } } | undefined)?.cause;
+  return c?.syscall === "connect" || c?.code === "UND_ERR_CONNECT_TIMEOUT";
+};
+/** Whether the server answers its health check at all. */
+const alive = (srv: { url: string; auth: string }) =>
+  ocFetch(`${srv.url}/global/health`, { headers: { authorization: srv.auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
+    () => true,
+    () => false,
+  );
 
 export type OpenCodeServer = ReturnType<typeof createOpenCodeServer>;

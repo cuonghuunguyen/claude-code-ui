@@ -1,6 +1,6 @@
 Feature: Stop a running turn
 
-  Scenario: Stop ends the turn while a command runs
+  Scenario: Stop ends the turn while a command runs; Esc stops it, and stops the next turn after the interrupt
     Given the app is open
     And I open the scratch project
     And I start a new Haiku session
@@ -12,11 +12,6 @@ Feature: Stop a running turn
     Then the turn has finished
     And the "slept.txt" tool call is stopped
     And I capture "stopped"
-
-  Scenario: Esc stops a turn, and Esc stops the next turn after the interrupt
-    Given the app is open
-    And I open the scratch project
-    And I start a new Haiku session
     When I send "Use the Bash tool to run exactly this command in the foreground (no run_in_background) and nothing else: for i in $(seq 1 120); do sleep 1; done; echo e2e > first.txt"
     And I allow the permission request
     Then the "first.txt" tool call is running

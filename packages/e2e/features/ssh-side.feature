@@ -11,7 +11,7 @@ Feature: Open a project on an SSH host
     Then the phases include preparing and unpacking in the host
     And I capture "ssh-installed"
 
-  Scenario: A project on the SSH host has its file tree, git changes, Terminal and cwd routing
+  Scenario: A project on the SSH host has its file tree, git changes, Terminal with the login profile PATH and cwd routing
     Given a throwaway SSH host
     When I choose the SSH host "e2e-ok" in Open project
     And I open the remote project folder
@@ -22,13 +22,7 @@ Feature: Open a project on an SSH host
     And I type "echo GH546-$((6*7))" in the terminal
     Then the terminal shows "GH546-42"
     And I capture "ssh-project"
-
-  Scenario: A terminal on the SSH host has the PATH of the login profile
-    Given a throwaway SSH host
-    When I choose the SSH host "e2e-ok" in Open project
-    And I open the remote project folder
-    And I toggle the terminal from the titlebar
-    And I type "command -v gh592-tool" in the terminal
+    When I type "command -v gh592-tool" in the terminal
     Then the terminal shows "/opt/gh592/bin/gh592-tool"
     And I capture "ssh-login-path"
 
@@ -39,14 +33,6 @@ Feature: Open a project on an SSH host
     And I send the prompt "hello" in the remote project
     Then the session says Claude is not logged in
     And I capture "ssh-not-logged-in"
-
-  Scenario: Start with Claude UI is off by default and can be turned on
-    Given a throwaway SSH host
-    When I open the app and Settings › Sides
-    Then the Settings row of the SSH host "e2e-ok" says Start with Claude UI is "off"
-    When I turn on Start with Claude UI for the SSH host "e2e-ok"
-    Then the Settings row of the SSH host "e2e-ok" says Start with Claude UI is "on"
-    And I capture "ssh-start-with-claude-ui"
 
   Scenario: A host that refuses the login says to run ssh once in a terminal
     Given a throwaway SSH host
@@ -68,10 +54,14 @@ Feature: Open a project on an SSH host
     Then the side panel says "is not reachable"
     And I capture "ssh-unreachable"
 
-  Scenario: An SSH host with a custom name and icon shows them in Settings, Open project and the project badge
+  Scenario: Start with Claude UI is off by default and can be turned on, and an SSH host with a custom name and icon shows them in Settings, Open project and the project badge
     Given a throwaway SSH host
     When I open the app and Settings › Sides
-    And I rename the SSH host "e2e-ok" to "Build box" with the emoji "🖥️"
+    Then the Settings row of the SSH host "e2e-ok" says Start with Claude UI is "off"
+    When I turn on Start with Claude UI for the SSH host "e2e-ok"
+    Then the Settings row of the SSH host "e2e-ok" says Start with Claude UI is "on"
+    And I capture "ssh-start-with-claude-ui"
+    When I rename the SSH host "e2e-ok" to "Build box" with the emoji "🖥️"
     Then the Settings row of the SSH host "e2e-ok" is named "Build box"
     When I close Settings
     And I list the SSH hosts in Open project
@@ -80,15 +70,7 @@ Feature: Open a project on an SSH host
     When I open the remote project folder
     And the project badge shows "Build box"
     And I capture "ssh-custom-name"
-
-  Scenario: The Open project host rows show the custom name and icon with the raw name beside, and the filter matches both
-    Given a throwaway SSH host
-    When I choose the SSH host "e2e-ok" in Open project
-    And I open the remote project folder
-    And I open the app and Settings › Sides
-    And I rename the SSH host "e2e-ok" to "Build box" with the emoji "🖥️"
-    And I close Settings
-    And Open project forgets the last chosen side
+    When Open project forgets the last chosen side
     And I list the SSH hosts in Open project
     Then the Open project row "Build box" shows the emoji "🖥️" and the raw name "e2e-ok"
     When I filter the Open project list by "e2e-ok"

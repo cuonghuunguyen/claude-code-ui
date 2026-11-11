@@ -35,10 +35,6 @@ it("followSplit drops runs of tabs that left", () => {
   expect(followSplit(s, "c", ["a", "b", "c"])?.runs).toEqual({ a: "r1" });
 });
 
-it("isSession is false for a plan ref; followSplit suspends while a plan tab is active only with no split content", () => {
-  expect(isSession(`plan:${U}`)).toBe(false);
-});
-
 it("splitTo: the split of the active tab takes the neighbour, any other tab takes the active tab's place beside it", () => {
   expect(splitTo(undefined, ["a", "b", "c"], "b", "b", "row")).toEqual({ split: { dir: "row", ids: ["c", "b"], at: 1, ratio: 0.5, runs: undefined }, active: "b" });
   expect(splitTo(undefined, ["a", "b", "c"], "a", "c", "col")?.split).toMatchObject({ dir: "col", ids: ["a", "c"], at: 1 });
@@ -103,7 +99,7 @@ it("switchRuns takes the target's view out and keeps the previous active tab's",
   expect(switchRuns(undefined, "a", undefined, "b")).toEqual({ runs: undefined, run: undefined });
 });
 
-it("GH-396 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab", () => {
+it("GH-396 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab; isSession is false for files and plan refs", () => {
   const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
   const ref = `graph:${U}`;
   const s = sp();
@@ -111,6 +107,7 @@ it("GH-396 followSplit keeps the split unchanged while a graph tab is active and
   expect(followSplit(s, ref, tabs)).toBe(s);
   expect(followSplit(s, "b", tabs)?.ids).toEqual(s.ids);
   expect(isSession(`files:${U}`)).toBe(false);
+  expect(isSession(`plan:${U}`)).toBe(false);
 });
 
 it("GH-398 parseSplit keeps a session plus a session or a Plan/Files/Terminal ref; two panes, a Git graph ref and junk read as no split", () => {
@@ -133,14 +130,6 @@ it("GH-398 followSplit puts an activated pane in the active split, never over th
   const s = sp();
   expect(followSplit(s, `graph:${U}`, [...tabs, `graph:${U}`])).toBe(s);
   expect(followSplit(sp({ ids: ["a", plan] }), `plan:${"1".repeat(8)}-1234-4abc-8def-0123456789ab`, ["b", plan, `plan:${"1".repeat(8)}-1234-4abc-8def-0123456789ab`])).toBeUndefined();
-});
-
-it("GH-398 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab", () => {
-  const ref = `graph:${U}`;
-  const s = sp();
-  const tabs = ["a", "b", ref];
-  expect(followSplit(s, ref, tabs)).toBe(s);
-  expect(followSplit(s, "b", tabs)?.ids).toEqual(s.ids);
 });
 
 it("GH-398 splitTo pairs a pane with a session: the active session, else the split's, else its owner, else the nearest session", () => {

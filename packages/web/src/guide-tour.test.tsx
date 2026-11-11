@@ -5,13 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GuideTour, type GuideTourProps } from "./guide-tour.tsx";
 import type { GuideHost } from "./guide.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 let reduced = false;
 let coarse = false;
 let app: HTMLElement;
@@ -159,8 +152,11 @@ it("announces each step once in a polite live region", async () => {
   expect(live.textContent).not.toContain("**");
 });
 
-it("shows key chips from the host's key specs and hides the line for an unbound command", async () => {
+it("a step with no visible anchor is centered with no cutout and a full dim; shows key chips from the host's key specs and hides the line for an unbound command", async () => {
   await show({ start: "palette" });
+  expect(q("guide-spotlight")).toBeNull();
+  expect(pop().dataset.placement).toBe("center");
+  expect(q("guide-shield")!.className).toContain("bg-overlay");
   const chips = [...q("guide-keys")!.querySelectorAll("kbd span")].map((s) => s.textContent);
   expect(chips).toEqual(["Ctrl", "K"]);
   await act(async () => root.render(<GuideTour ids={IDS} start="palette" host={{ ...guestHost, keyOf: () => undefined }} narrow={false} onEnd={() => {}} visible={() => true} />));
@@ -171,13 +167,6 @@ it("a coarse-only pointer reads 'With a keyboard'", async () => {
   coarse = true;
   await show({ start: "palette" });
   expect(q("guide-keys")!.textContent).toContain("With a keyboard");
-});
-
-it("a step with no visible anchor is centered with no cutout and a full dim", async () => {
-  await show({ start: "palette" });
-  expect(q("guide-spotlight")).toBeNull();
-  expect(pop().dataset.placement).toBe("center");
-  expect(q("guide-shield")!.className).toContain("bg-overlay");
 });
 
 it("a visible anchor gets a spotlight cutout and an arrow", async () => {

@@ -52,8 +52,10 @@ When("I queue {string}", async ({ page }, text: string) => {
   await page.keyboard.press("Alt+Enter");
 });
 
+const shellChip = (page: Page) => chips(page).locator("li").filter({ hasText: "!" }).first();
+
 When("I edit the queued shell command", async ({ page }) => {
-  await chips(page).locator("li").first().locator('[data-action="edit"]').click();
+  await shellChip(page).locator('[data-action="edit"]').click();
 });
 
 Then("the queue shows the shell command {string}", async ({ page }, command: string) => {
@@ -85,12 +87,13 @@ Then("a bash card shows {string}", async ({ page }, text: string) => {
 });
 
 Then("Send now on the queued shell command is disabled with a reason", async ({ page }) => {
-  const send = chips(page).locator("li").first().locator('[data-action="send"]');
+  const send = shellChip(page).locator('[data-action="send"]');
+  const before = await chips(page).locator("li").count();
   await expect(send).toHaveAttribute("aria-disabled", "true");
   await expect(send).toHaveAttribute("title", /\S{5,}/);
   await send.click({ force: true, timeout: 3_000 });
-  // Click is a no-op: the chip stays.
-  await expect(chips(page).locator("li")).toHaveCount(1);
+  // Click is a no-op: the chips stay.
+  await expect(chips(page).locator("li")).toHaveCount(before);
 });
 
 Then("the prompt box is in bash mode with {string}", async ({ page }, command: string) => {
@@ -126,10 +129,6 @@ When("I paste {int} lines into the prompt box", async ({ page }, n: number) => {
   await pasteInto(page, lineText(n));
 });
 
-When("I paste {string} into the prompt box", async ({ page }, text: string) => {
-  await pasteInto(page, text);
-});
-
 Then("the prompt box shows {int} pasted-text chip(s)", async ({ page }, n: number) => {
   await expect(page.getByTestId("paste-chip")).toHaveCount(n);
 });
@@ -137,14 +136,6 @@ Then("the prompt box shows {int} pasted-text chip(s)", async ({ page }, n: numbe
 Then("the prompt box is still small", async ({ page }) => {
   const h = (await promptBox(page).boundingBox())!.height;
   expect(h).toBeLessThanOrEqual(120);
-});
-
-// An untrusted paste event inserts nothing by itself: the browser default insertion is done for a trusted paste only.
-// So: the app must leave the event alone (not prevented), then the default insertion is stood in for by insertText.
-Then("the browser inserts the short paste {string} into the prompt box", async ({ page }, text: string) => {
-  expect(pasteHandled.get(page), "the app left the paste event to the browser").toBe(false);
-  await page.keyboard.insertText(text);
-  await expect(promptBox(page)).toHaveValue(text);
 });
 
 When("I view the pasted text of the chip", async ({ page }) => {
@@ -269,20 +260,6 @@ Then("the user message shows no literal pasted-text token", async ({ page }) => 
   const msg = page.locator('[data-testid="user-message"]:not([data-pending])').first();
   await expect(msg).toBeVisible({ timeout: TURN_MS });
   expect(((await msg.textContent()) ?? "")).not.toMatch(/\[Pasted text #\d+/);
-});
-
-When("I type {string} at the start of the prompt box", async ({ page }, text: string) => {
-  await promptBox(page).click();
-  await caretTo(page, "start");
-  await page.keyboard.type(text);
-});
-
-Then("the prompt box is not in bash mode", async ({ page }) => {
-  await expect(page.getByTestId("bash-mode")).toHaveCount(0);
-});
-
-Then("the prompt box starts with {string} and holds the token text", async ({ page }, text: string) => {
-  await expect(promptBox(page)).toHaveValue(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*\\[Pasted text #\\d+`));
 });
 
 // GH-620: Expand a chip into plain text; a copied token pasted back is inlined.

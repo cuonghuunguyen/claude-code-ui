@@ -112,8 +112,8 @@ const INCLUDE = /^(include\.path|includeif\..+\.path)$/;
 const WALK_LIMIT = 50_000;
 /** The walk's time limit (a slow or huge disk): past it, unsafe. */
 const WALK_DEADLINE_MS = 5000;
-/** Per git process; past it the scan fails, and a failed scan is unsafe. */
-const GIT_TIMEOUT_MS = 5000;
+/** Per git process; past it the scan fails, and a failed scan is unsafe. `CLAUDE_UI_GIT_READONLY_TIMEOUT_MS` is for tests on a machine whose git stalls for seconds (Windows, under load). */
+const GIT_TIMEOUT_MS = Number(process.env.CLAUDE_UI_GIT_READONLY_TIMEOUT_MS) || 5000;
 
 /** The real path of `p`, a missing tail resolved through its nearest existing ancestor (8.3 short names and symlinks expand); `/c/x` is `C:/x` on Windows. */
 function realish(p: string): string {

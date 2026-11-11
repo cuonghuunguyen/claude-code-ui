@@ -4,8 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { useNear } from "./use-near.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const created: { cb: (e: { target: Element; isIntersecting: boolean }[]) => void; opts: IntersectionObserverInit; observed: Set<Element>; disconnected: boolean }[] = [];
 class FakeObserver {
   rec: (typeof created)[number];

@@ -1,6 +1,6 @@
 Feature: Claude in Chrome setting (GH-514)
 
-  Scenario: Claude in Chrome is off by default, states its limits and survives a daemon restart
+  Scenario: Claude in Chrome is off by default, states its limits, survives a daemon restart, toggles from the palette and fits a phone
     Given the viewport is 1440x900
     And the app is open
     When I open Settings › Claude in Chrome
@@ -14,19 +14,14 @@ Feature: Claude in Chrome setting (GH-514)
     Then the Claude in Chrome switch is on
     And I capture "chrome setting on after restart"
     When I turn the Claude in Chrome switch off
-
-  Scenario: The palette toggles Claude in Chrome
-    Given the viewport is 1440x900
-    And the app is open
-    When I run "Toggle Claude in Chrome" from the command palette
+    And I close Settings
+    And I run "Toggle Claude in Chrome" from the command palette
     And I open Settings › Claude in Chrome
     Then the Claude in Chrome switch is on
     And I capture "chrome on from palette"
     When I turn the Claude in Chrome switch off
-
-  Scenario: The Claude in Chrome setting fits a phone screen
     Given the viewport is 390x844
-    And the app is open
-    When I open Settings › Claude in Chrome
+    When I close Settings
+    And I open Settings › Claude in Chrome
     Then the page has no horizontal scroll
     And I capture "chrome setting phone"

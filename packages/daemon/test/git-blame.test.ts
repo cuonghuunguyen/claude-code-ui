@@ -76,7 +76,7 @@ describe("gitBlame", () => {
     await expect(gitBlame(repo, "f.txt", () => false, 1e6)).rejects.toMatchObject({ code: "cwd_not_allowed" });
     const outside = realpathSync(mkdtempSync(join(tmpdir(), "blame-out-")));
     writeFileSync(join(outside, "s.txt"), "s\n");
-    symlinkSync(outside, join(repo, "link"));
+    symlinkSync(outside, join(repo, "link"), "junction");
     await expect(gitBlame(repo, "link/s.txt", ok, 1e6)).rejects.toMatchObject({ code: "cwd_not_allowed" });
     rmSync(outside, { recursive: true, force: true });
   });

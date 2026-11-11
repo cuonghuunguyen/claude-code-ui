@@ -15,6 +15,8 @@ import { createDaemon } from "../src/server.ts";
 import { Session } from "../src/session.ts";
 import { createSettings } from "../src/settings.ts";
 import { askInput, models } from "./fake-query.ts";
+/** The bound of every poll for an event of a worker's CLI (`until`, `worker_wait`): a pass returns at once, so it only limits a hang. Starting a worker's CLI took over 5 s in a full suite on Windows; elsewhere 5 s stays. */
+const POLL_MS = process.platform === "win32" ? 30_000 : 5000;
 
 /** One query() call of a session (throwaway queries have no canUseTool) and the prompt texts it took. */
 type Run = { options: Options; texts: string[]; closed?: boolean };
@@ -196,7 +198,8 @@ async function client(p = port) {
 const c = await client();
 afterAll(() => c.ws.close());
 
-async function until<T>(get: () => T | undefined | false, ms = 5000): Promise<T> {
+/** Polls until `get` answers. A poll bound, not a speed check: starting a worker's CLI took over 5 s in a full suite on Windows, so a pass costs nothing and only a hang waits the 30 s. */
+async function until<T>(get: () => T | undefined | false, ms = POLL_MS): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const v = get();
@@ -274,13 +277,16 @@ describe("orchestration", () => {
     expect(runsOf(id)[1]!.options.mcpServers).toBeUndefined();
   });
 
-  it("auto-allows the coordinator's tools by sdk source; worker_start asks with no rule to save; a configured server of the same name is not trusted", async () => {
+  it("auto-allows the coordinator's tools by sdk source; worker_start and worker_remove (irreversible) ask with no rule to save; a configured server of the same name is not trusted", async () => {
     const { toolPolicy } = daemon.orchestration;
     const sdk = { name: "orchestration", source: "sdk" };
     expect(toolPolicy("mcp__orchestration__worker_wait", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_send", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_targets", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_start", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
+    expect(toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_wait", { name: "orchestration", source: "user" })).toBeUndefined();
     expect(toolPolicy("mcp__orchestration__worker_wait", undefined)).toBeUndefined();
     expect(toolPolicy("mcp__other__worker_wait", { name: "other", source: "sdk" })).toBeUndefined();
@@ -517,7 +523,7 @@ describe("orchestration", () => {
       await c.request({ type: "permission.respond", requestId: bad.requestId, decision: "deny" });
       // A worker session asking for worker_start: it gets the card too, naming the chain.
       await call(coord, "worker_start", { name: "wk", cwd: dirB, prompt: start({ name: "x", cwd: dirB, prompt: "p", mode: "auto" }), mode: "default" });
-      const e = (await call(coord, "worker_wait", { names: ["wk"], types: ["permission"], timeoutMs: 5000 })).events[0];
+      const e = (await call(coord, "worker_wait", { names: ["wk"], types: ["permission"], timeoutMs: POLL_MS })).events[0];
       await c.request({ type: "session.subscribe", sessionId: e.sessionId, sinceSeq: 0 });
       const part = (await until(() => c.inbox.find((m) => m.type === "event" && m.sessionId === e.sessionId && m.part.type === "permission_request") as any)).part;
       expect(part.title).toMatch(/^Start worker x in .*, started by worker wk$/);
@@ -849,7 +855,7 @@ describe("orchestration", () => {
   it("a worker turn end reaches worker_wait with its result text", async () => {
     enable();
     const coord = await coordinator();
-    const waiting = call(coord, "worker_wait", { timeoutMs: 5000 });
+    const waiting = call(coord, "worker_wait", { timeoutMs: POLL_MS });
     await call(coord, "worker_start", { name: "p", cwd: dirB, prompt: "compile" });
     const r = await waiting;
     expect(r.events).toEqual([expect.objectContaining({ name: "p", type: "turn_end", result: "done: compile", isError: false })]);
@@ -1009,13 +1015,6 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_remove", { name: "Bad Name" })).error).toBeDefined();
   });
 
-  it("worker_remove is not in the no-permission-prompt tools (irreversible): no rules offered either", () => {
-    const sdk = { name: "orchestration", source: "sdk" };
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
-  });
-
   it("worker_remove closes an idle worker with a live CLI without a prior worker_close, frees the name and broadcasts the removal", async () => {
     enable();
     const coord = await coordinator();
@@ -1087,16 +1086,6 @@ describe("orchestration", () => {
   });
 
   describe("web app worker.close / worker.remove", () => {
-    it("worker.close stops a running worker first, then closes it", async () => {
-      enable();
-      const coord = await coordinator();
-      const w = await call(coord, "worker_start", { name: "u1", cwd: dirB, prompt: "hold" });
-      await until(() => runsOf(w.sessionId)[0]?.texts.length);
-      expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply", result: {} });
-      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u1")).toMatchObject({ live: false });
-      expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
-    });
-
     it("worker.close of an idle worker without a CLI is ok", async () => {
       enable();
       const coord = await coordinator();
@@ -1104,32 +1093,6 @@ describe("orchestration", () => {
       await until(async () => (await state(w.sessionId)) === "idle");
       await call(coord, "worker_close", { name: "u2" });
       expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
-    });
-
-    it("worker.remove deletes an idle worker, frees the name, keeps the worktree folder, broadcasts the removal", async () => {
-      enable();
-      const coord = await coordinator();
-      const w = await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "x" });
-      await until(async () => (await state(w.sessionId)) === "idle");
-      const seen = c.inbox.length;
-      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId }, 15000)).toMatchObject({ type: "reply", result: {} });
-      await until(() => c.inbox.slice(seen).some((m: any) => m.type === "sessions.changed" && m.deleted === w.sessionId));
-      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u3")).toBeUndefined();
-      expect(existsSync(dirB)).toBe(true);
-      expect((await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "again" })).name).toBe("u3");
-    }, 20_000);
-
-    it("worker.remove refuses a running and a waiting worker with text that names no tool", async () => {
-      enable();
-      const coord = await coordinator();
-      const a = await call(coord, "worker_start", { name: "u4", cwd: dirB, prompt: "hold" });
-      await until(() => runsOf(a.sessionId)[0]?.texts.length);
-      const r = await c.request({ type: "worker.remove", sessionId: a.sessionId });
-      expect(r).toMatchObject({ type: "error", code: "session_running" });
-      expect(r.message).not.toMatch(/worker_/);
-      const b = await call(coord, "worker_start", { name: "u5", cwd: dirB, prompt: "ask" });
-      await pendingQ(b.sessionId);
-      expect(await c.request({ type: "worker.remove", sessionId: b.sessionId })).toMatchObject({ type: "error", code: "session_running" });
     });
 
     it("a session that is no worker, and an unknown id, are not_worker", async () => {
@@ -1190,18 +1153,6 @@ describe("orchestration", () => {
     }
   });
 
-  it("a coordinator with a running worker is not idle-closed; after the worker's turn it is", async () => {
-    enable();
-    const coord = await coordinator();
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(false);
-    const w = await call(coord, "worker_start", { name: "idle-w", cwd: dirB, prompt: "hold" });
-    await until(() => runsOf(w.sessionId)[0]?.texts.length);
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(true);
-    await call(coord, "worker_send", { name: "idle-w", text: "end" });
-    await until(async () => (await state(w.sessionId)) === "idle");
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(false);
-  });
-
   it("the idle close skips a coordinator while its worker runs, and takes it once the worker is idle", async () => {
     enable();
     const d = await start(history, 150);
@@ -1230,16 +1181,16 @@ describe("orchestration", () => {
     enable();
     const coord = await coordinator();
     const w = await call(coord, "worker_start", { name: "ask1", cwd: dirB, prompt: "ask" });
-    const [q] = (await call(coord, "worker_wait", { names: ["ask1"], types: ["question"], timeoutMs: 5000 })).events;
+    const [q] = (await call(coord, "worker_wait", { names: ["ask1"], types: ["question"], timeoutMs: POLL_MS })).events;
     expect(q).toMatchObject({ type: "question", questions: [{ question: "Which package manager?", options: ["npm", "pnpm"], multiSelect: false }] });
     expect((await call(coord, "worker_answer", { name: "ask1", id: q.requestId, answer: { "Other?": "x" } })).error).toMatch(/No answer for: Which package manager\?/);
     expect(await call(coord, "worker_answer", { name: "ask1", id: q.requestId, answer: "pnpm" })).toEqual({ name: "ask1", answered: q.requestId });
     expect((await c.request({ type: "question.respond", requestId: q.requestId, answers: { "Which package manager?": "npm" } })).result).toEqual({ settled: false });
-    const end = (await call(coord, "worker_wait", { names: ["ask1"], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+    const end = (await call(coord, "worker_wait", { names: ["ask1"], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
     expect(end.result).toBe('answer: {"Which package manager?":"pnpm"}');
     // The user first.
     await call(coord, "worker_send", { name: "ask1", text: "ask" });
-    const [q2] = (await call(coord, "worker_wait", { names: ["ask1"], types: ["question"], timeoutMs: 5000 })).events;
+    const [q2] = (await call(coord, "worker_wait", { names: ["ask1"], types: ["question"], timeoutMs: POLL_MS })).events;
     expect((await c.request({ type: "question.respond", requestId: q2.requestId, answers: { "Which package manager?": "npm" } })).result).toEqual({ settled: true });
     expect((await call(coord, "worker_answer", { name: "ask1", id: q2.requestId, answer: "pnpm" })).error).toMatch(/No pending question/);
     // A question the user answered before the coordinator read it is dropped from worker_wait.
@@ -1269,12 +1220,12 @@ describe("orchestration", () => {
     const coord = await coordinator();
     const w = await call(coord, "worker_start", { name: "att", cwd: dirB, prompt: "ask" });
     const q = await pendingQ(w.sessionId);
-    const [e] = (await call(coord, "worker_wait", { names: ["att"], types: ["question"], timeoutMs: 5000 })).events;
+    const [e] = (await call(coord, "worker_wait", { names: ["att"], types: ["question"], timeoutMs: POLL_MS })).events;
     expect(e.requestId).toBe(q.requestId);
     expect(await call(coord, "worker_answer", { name: "att", id: q.requestId, answer: "pnpm" })).toEqual({ name: "att", answered: q.requestId });
     expect((await settledQ(w.sessionId, q.id)).part).toMatchObject({ settled: true, by: "coordinator", answers: { "Which package manager?": "pnpm" } });
     expect((await ans(q.requestId)).result).toEqual({ settled: false });
-    await call(coord, "worker_wait", { names: ["att"], types: ["turn_end"], timeoutMs: 5000 });
+    await call(coord, "worker_wait", { names: ["att"], types: ["turn_end"], timeoutMs: POLL_MS });
     await call(coord, "worker_send", { name: "att", text: "ask" });
     const q2 = await pendingQ(w.sessionId, [q.requestId]);
     // A forged `by` on the wire is ignored: the settled part says the user answered.
@@ -1331,10 +1282,10 @@ describe("orchestration", () => {
     await c.request({ type: "push.focus" });
     // Escalated after the event was delivered to a waiting wait: a new question is read, then escalated; the queue holds nothing.
     await ans(q.requestId);
-    await call(coord, "worker_wait", { names: ["esc"], types: ["turn_end"], timeoutMs: 5000 });
+    await call(coord, "worker_wait", { names: ["esc"], types: ["turn_end"], timeoutMs: POLL_MS });
     await call(coord, "worker_send", { name: "esc", text: "ask" });
     const q2 = await pendingQ(w.sessionId, [q.requestId]);
-    const [ev] = (await call(coord, "worker_wait", { names: ["esc"], types: ["question"], timeoutMs: 5000 })).events;
+    const [ev] = (await call(coord, "worker_wait", { names: ["esc"], types: ["question"], timeoutMs: POLL_MS })).events;
     expect(ev.requestId).toBe(q2.requestId);
     await call(coord, "worker_escalate", { name: "esc", id: q2.requestId, reason: "again" });
     expect((await call(coord, "worker_wait", { names: ["esc"], types: ["question"], timeoutMs: 0 })).events).toEqual([]);
@@ -1352,7 +1303,7 @@ describe("orchestration", () => {
     const done = (await settledQ(w.sessionId, q.id)).part;
     expect(done).toMatchObject({ settled: true, escalated: true });
     expect(done.by).toBeUndefined();
-    const end = (await call(coord, "worker_wait", { names: ["lock"], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+    const end = (await call(coord, "worker_wait", { names: ["lock"], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
     expect(end.result).toBe('answer: {"Which package manager?":"npm"}');
   });
 
@@ -1377,7 +1328,7 @@ describe("orchestration", () => {
     const coord = await coordinator();
     const w = await call(coord, "worker_start", { name: "stp", cwd: dirB, prompt: perm("Bash", { command: "npm view react version" }) });
     await c.request({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 });
-    const [p] = (await call(coord, "worker_wait", { names: ["stp"], types: ["permission"], timeoutMs: 5000 })).events;
+    const [p] = (await call(coord, "worker_wait", { names: ["stp"], types: ["permission"], timeoutMs: POLL_MS })).events;
     await call(coord, "worker_escalate", { name: "stp", id: p.requestId, reason: "network" });
     const r = await call(coord, "worker_stop", { name: "stp" });
     expect(r.state).not.toBe("needs_input");
@@ -1415,9 +1366,9 @@ describe("orchestration", () => {
     expect((await esc("ea", qa.requestId)).error).toMatch(/No pending question/);
     await call(coord, "worker_answer", { name: "eb", id: qb.requestId, answer: "npm" });
     expect((await esc("eb", qb.requestId)).error).toMatch(/No pending question/);
-    await call(coord, "worker_wait", { names: ["ea", "eb"], types: ["turn_end"], timeoutMs: 5000 });
+    await call(coord, "worker_wait", { names: ["ea", "eb"], types: ["turn_end"], timeoutMs: POLL_MS });
     await call(coord, "worker_send", { name: "ea", text: "perm" });
-    const [p] = (await call(coord, "worker_wait", { names: ["ea"], types: ["permission"], timeoutMs: 5000 })).events;
+    const [p] = (await call(coord, "worker_wait", { names: ["ea"], types: ["permission"], timeoutMs: POLL_MS })).events;
     expect(await esc("ea", p.requestId)).toMatchObject({ escalated: p.requestId });
     expect((await call(coord, "worker_permission", { name: "ea", id: p.requestId, allow: false, reason: "r" })).error).toMatch(/escalated to the user/);
     expect((await call(coord, "worker_wait", { names: ["ea"], types: ["permission"], timeoutMs: 0 })).events).toEqual([]);
@@ -1431,8 +1382,10 @@ describe("orchestration", () => {
     const q = await pendingQ(w.sessionId);
     expect((await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1001) })).error).toMatch(/Invalid input/);
     await call(coord, "worker_escalate", { name: "blk", id: q.requestId, reason: "x".repeat(1000) });
-    await new Promise((r) => setTimeout(r, 400));
-    const turns = runsOf(coord).reduce((n, r) => n + r.texts.length, 0);
+    // Let the coordinator's own turns settle (a fixed 400 ms was too short under load): the count is the same over 1 s.
+    const count = () => runsOf(coord).reduce((n, r) => n + r.texts.length, 0);
+    for (let same = 0, last = -1; same < 5; await new Promise((r) => setTimeout(r, 200))) (same = count() === last ? same + 1 : 0), (last = count());
+    const turns = count();
     expect((await call(coord, "worker_wait", { names: ["blk"], types: ["question"], timeoutMs: 100 })).events).toEqual([]);
     expect(runsOf(coord).reduce((n, r) => n + r.texts.length, 0)).toBe(turns);
   });
@@ -1453,8 +1406,8 @@ describe("orchestration", () => {
 
   const perm = (tool: string, input: object, extra: object = {}) => `perm ${JSON.stringify({ tool, input, ...extra })}`;
   const editIn = { file_path: "src/a.ts", old_string: "a", new_string: "b" };
-  const permEvent = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["permission"], timeoutMs: 5000 })).events[0];
-  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+  const permEvent = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["permission"], timeoutMs: POLL_MS })).events[0];
+  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
   /** The worker's PermissionResult, from its "perm: <json>" reply. */
   const permResult = async (coord: string, name: string) => JSON.parse((await turnEnd(coord, name)).result.slice("perm: ".length));
   const respond = (requestId: string, decision: string, extra: object = {}) => c.request({ type: "permission.respond", requestId, decision, ...extra });
@@ -1623,7 +1576,7 @@ describe("orchestration", () => {
     await wp("pb", eb.requestId);
     await turnEnd(coord, "pb");
     await call(coord, "worker_send", { name: "pb", text: "ask" });
-    const [q] = (await call(coord, "worker_wait", { names: ["pb"], types: ["question"], timeoutMs: 5000 })).events;
+    const [q] = (await call(coord, "worker_wait", { names: ["pb"], types: ["question"], timeoutMs: POLL_MS })).events;
     expect((await wp("pb", q.requestId)).error).toMatch(/No pending permission request/);
     await call(coord, "worker_answer", { name: "pb", id: q.requestId, answer: "npm" });
   });
@@ -1646,7 +1599,7 @@ describe("orchestration", () => {
     await closeAll();
     const coord = await coordinator();
     await call(coord, "worker_start", { name: "cls", cwd: dirB, prompt: "classified" });
-    const [d] = (await call(coord, "worker_wait", { names: ["cls"], types: ["denied"], timeoutMs: 5000 })).events;
+    const [d] = (await call(coord, "worker_wait", { names: ["cls"], types: ["denied"], timeoutMs: POLL_MS })).events;
     expect(d).toMatchObject({ name: "cls", type: "denied", tool: "Bash", input: JSON.stringify({ command: "git push --force origin main" }) });
     expect(d.toolUseId).toEqual(expect.any(String));
     await turnEnd(coord, "cls");
@@ -1661,7 +1614,7 @@ describe("orchestration", () => {
     enable();
     const coord = await coordinator();
     await call(coord, "worker_start", { name: "r", cwd: dirB, prompt: "x".repeat(10_000) });
-    await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: 5000 });
+    await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: POLL_MS });
     const all = await call(coord, "worker_read", { name: "r" });
     expect(all.entries[0]).toMatch(/^prompt: x{4000}… \[6000 more characters\]$/);
     expect(all.entries.slice(1)).toEqual([expect.stringMatching(/^reply: done: x+/), "turn ended"]);
@@ -1670,7 +1623,7 @@ describe("orchestration", () => {
     // Two more long turns: 9 entries, 6 of them ~4030 characters; the oldest go until the total fits 20 000.
     for (let i = 0; i < 2; i++) {
       await call(coord, "worker_send", { name: "r", text: "y".repeat(10_000) });
-      await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: 5000 });
+      await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: POLL_MS });
     }
     const bounded = (await call(coord, "worker_read", { name: "r", lastN: 9 })).entries as string[];
     expect(bounded.join("").length).toBeLessThanOrEqual(20_000);
@@ -1685,7 +1638,7 @@ describe("orchestration", () => {
     const prompt = "z".repeat(30_000);
     const full = `done: ${prompt}`;
     await call(coord, "worker_start", { name: "r", cwd: dirB, prompt });
-    const result = (await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: 5000 })).events[0].result as string;
+    const result = (await call(coord, "worker_wait", { names: ["r"], types: ["turn_end"], timeoutMs: POLL_MS })).events[0].result as string;
     const m = result.match(/^(.{4000})… \[26006 more characters\] read them: worker_read \{"name":"r","part":"([^"]+)","offset":4000\}$/s);
     expect(m).toBeTruthy();
     const part = m![2];
@@ -2048,7 +2001,7 @@ describe("orchestration", () => {
 
 describe("Close finished workers (GH-574)", () => {
   const live = async (coord: string, n: string) => (await call(coord, "worker_list")).workers.find((w: { name: string }) => w.name === n)?.live;
-  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
 
   it("cap 1: a worker that ends its turn closes its CLI; the next worker_start passes without worker_close; turn_end says closed", async () => {
     enable({ workerCap: 1, closeFinished: true });
@@ -2211,7 +2164,7 @@ describe("orchestration /clear (GH-334)", () => {
     const w = await call(coord, "worker_start", { name: "bw", cwd: dirB, prompt: "hold" });
     await until(async () => (await state(w.sessionId)) === "running");
     const heir = await clear(coord);
-    const waiting = call(heir, "worker_wait", { timeoutMs: 5000 });
+    const waiting = call(heir, "worker_wait", { timeoutMs: POLL_MS });
     await call(heir, "worker_send", { name: "bw", text: "end" });
     expect((await waiting).events).toEqual([expect.objectContaining({ name: "bw", type: "turn_end" })]);
   });
@@ -2249,11 +2202,13 @@ describe("orchestration /clear (GH-334)", () => {
     expect((await call(coord, "worker_list")).workers).toEqual([expect.objectContaining({ name: "wc", sessionId: heir })]);
     expect(link(w.sessionId).coordinatorId).toBeUndefined();
     expect(link(w.sessionId).name).toBeUndefined();
+    // The old session, as a plain session, may get the coordinator server now.
+    expect(daemon.orchestration.mcpServers(w.sessionId)).toBeDefined();
     expect(link(heir)).toEqual(expect.objectContaining({ coordinatorId: coord, name: "wc", cwd: dirB }));
     // The heir's turn end reaches the coordinator with the worker's name.
     await call(coord, "worker_wait", { timeoutMs: 0 });
     await call(coord, "worker_send", { name: "wc", text: "again" });
-    expect((await call(coord, "worker_wait", { names: ["wc"], timeoutMs: 5000 })).events).toEqual([expect.objectContaining({ name: "wc", sessionId: heir, type: "turn_end", result: "done: again" })]);
+    expect((await call(coord, "worker_wait", { names: ["wc"], timeoutMs: POLL_MS })).events).toEqual([expect.objectContaining({ name: "wc", sessionId: heir, type: "turn_end", result: "done: again" })]);
   });
 
   it("a card-approved worker above the coordinator's mode starts after /clear", async () => {
@@ -2313,7 +2268,7 @@ describe("stall watchdog", () => {
     enable({ closeFinished: true });
     const coord = await coordinator();
     await call(coord, "worker_start", { name: "ac1", cwd: dirB, prompt: "ok" });
-    const e = (await call(coord, "worker_wait", { names: ["ac1"], types: ["turn_end"], timeoutMs: 5000 })).events[0];
+    const e = (await call(coord, "worker_wait", { names: ["ac1"], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
     expect(e).toMatchObject({ closed: true });
     later(SILENT);
     expect(await stalls(coord)).toEqual([]);

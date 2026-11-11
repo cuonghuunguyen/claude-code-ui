@@ -23,35 +23,58 @@ Feature: UI language (GH-510)
     Then the app is in English
     And I capture "picker system"
 
-  Scenario Outline: Main views in <lang>, <mode>
+  Scenario: Main views in English and Vietnamese, light and dark, then Vietnamese on a phone
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin
     And the scratch project has an uncommitted change
     And a Haiku session with one finished reply
-    And the mode is "<mode>"
+    Given the mode is "light"
     When I open the Changes tab of the side panel
-    And I switch the language to <lang>
-    Then the app is in <lang>
-    And I capture "session <lang> <mode>"
+    And I switch the language to English
+    Then the app is in English
+    And I capture "session English light"
     When I open Settings
     Then no text is clipped in the open dialog or the sidebar
-    And I capture "settings <lang> <mode>"
+    And I capture "settings English light"
     When I close Settings
     And I open Focus
-    Then I capture "focus <lang> <mode>"
-
-    Examples:
-      | lang       | mode  |
-      | English    | light |
-      | English    | dark  |
-      | Vietnamese | light |
-      | Vietnamese | dark  |
-
-  Scenario: Vietnamese fits a phone
+    Then I capture "focus English light"
+    Given the mode is "dark"
+    When I open the Changes tab of the side panel
+    And I switch the language to English
+    Then the app is in English
+    And I capture "session English dark"
+    When I open Settings
+    Then no text is clipped in the open dialog or the sidebar
+    And I capture "settings English dark"
+    When I close Settings
+    And I open Focus
+    Then I capture "focus English dark"
+    Given the mode is "light"
+    When I open the Changes tab of the side panel
+    And I switch the language to Vietnamese
+    Then the app is in Vietnamese
+    And I capture "session Vietnamese light"
+    When I open Settings
+    Then no text is clipped in the open dialog or the sidebar
+    And I capture "settings Vietnamese light"
+    When I close Settings
+    And I open Focus
+    Then I capture "focus Vietnamese light"
+    Given the mode is "dark"
+    When I open the Changes tab of the side panel
+    And I switch the language to Vietnamese
+    Then the app is in Vietnamese
+    And I capture "session Vietnamese dark"
+    When I open Settings
+    Then no text is clipped in the open dialog or the sidebar
+    And I capture "settings Vietnamese dark"
+    When I close Settings
+    And I open Focus
+    Then I capture "focus Vietnamese dark"
     Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I switch the language to Vietnamese
-    Then the page has no horizontal scroll
+    Then the app is in Vietnamese
+    And the page has no horizontal scroll
     And I capture "phone vi session"
     When I open Settings
     Then the page has no horizontal scroll

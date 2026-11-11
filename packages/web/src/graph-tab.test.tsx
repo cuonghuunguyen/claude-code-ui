@@ -7,12 +7,6 @@ import { GraphTab } from "./graph-tab.tsx";
 import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 
 vi.mock("@pierre/diffs/react", () => ({ MultiFileDiff: () => <div data-testid="pierre-diff" /> }));
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as never;
 Element.prototype.scrollTo = function (this: Element, o?: ScrollToOptions | number) {
   this.scrollTop = typeof o === "object" ? (o.top ?? 0) : 0;

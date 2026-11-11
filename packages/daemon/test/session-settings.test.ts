@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -102,7 +102,7 @@ describe("session settings (sessions.json)", () => {
     expect(b.ids()).toEqual([]);
   });
 
-  it("a truncated or wrong-shaped file counts as empty; a save leaves no temp file", () => {
+  it("a truncated or wrong-shaped file counts as empty; a save replaces the file atomically, no temp file left", () => {
     const f = file();
     writeFileSync(f, '{"s1":{"model":"haiku"');
     const s = createSessionSettings({ file: f });
@@ -110,6 +110,10 @@ describe("session settings (sessions.json)", () => {
     writeFileSync(f, "[1]");
     expect(s.ids()).toEqual([]);
     s.set("s2", { model: "haiku" });
+    // A save renames a new file over the old one.
+    const inode = statSync(f).ino;
+    s.set("s2", { model: "sonnet" });
+    expect(statSync(f).ino).not.toBe(inode);
     expect(readdirSync(join(f, ".."))).toEqual(["sessions.json"]);
   });
 

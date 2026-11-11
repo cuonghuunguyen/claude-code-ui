@@ -80,7 +80,7 @@ describe("themeCss", () => {
 });
 
 describe("terminalTheme", () => {
-  it("derives ANSI colors from the palette", () => {
+  it("derives ANSI colors from the palette; black is the foreground in light themes, the side surface in dark ones", () => {
     const p = catppuccin.dark!;
     expect(terminalTheme("catppuccin", "dark")).toMatchObject({
       foreground: p.fg, background: p.card, cursor: p.fg, selectionBackground: p.fg + "40",
@@ -88,9 +88,6 @@ describe("terminalTheme", () => {
       brightBlack: p.cmt, brightRed: p.err, brightGreen: p.ok, brightYellow: p.warn, brightBlue: p.fn, brightMagenta: p.kw, brightCyan: p.info, brightWhite: p.muted,
     });
     expect(terminalTheme("catppuccin", "light").selectionBackground).toBe(catppuccin.light!.fg + "33");
-  });
-
-  it("black is the foreground in light themes (readable), the side surface in dark ones", () => {
     expect(terminalTheme("catppuccin", "light")).toMatchObject({ black: catppuccin.light!.fg, brightBlack: catppuccin.light!.cmt });
   });
 

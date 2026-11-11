@@ -2,7 +2,42 @@
 # Not covered here: the usage-limit row (a real limit cannot be forced; focus.test.ts, focus-page.test.tsx) and the error row
 # after a page reload (no step puts a real session into `error` reliably; focus.test.ts, app.test.tsx).
 # Scenario "Next for you chip" is timing-dependent: the CLI sends a suggestion a few seconds after the turn (none on the first turn, not always), so the step waits generously; it can be flaky.
-Feature: Focus rows
+Feature: Focus
+
+  Scenario: Session tab, New session tab and Focus keep the panels in place; phone shows no docks
+    Given the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I toggle the terminal from the titlebar
+    Then a terminal shows in the bottom panel
+    When I send "Reply with exactly: OK"
+    Then the turn has finished
+    When I note the panel layout
+    And I open the New session tab
+    Then the panel layout is unchanged
+    And I capture "new session keeps panels"
+    When I open Focus
+    Then the panel layout is unchanged
+    And I capture "focus keeps panels"
+    When I click the first session tab
+    Then the panel layout is unchanged
+    And I capture "back on the session"
+    When I maximize the bottom panel
+    And I open Focus
+    Then the bottom panel is not maximized
+    And I capture "focus restores maximized"
+    When I click the first session tab
+    And I hide the bottom panel
+    And I note the panel layout
+    And I open Focus
+    Then the panel layout is unchanged
+    And I capture "focus hidden bottom"
+    Given the viewport is 390x844
+    And I open Focus
+    Then no side or bottom panel shows
+    And the page has no horizontal scroll
+    And I capture "narrow focus"
 
   Scenario: Worker rows nest under their coordinator
     Given the viewport is 1440x900
@@ -30,6 +65,7 @@ Feature: Focus rows
     Then Focus shows a worker group with a permission row nested under its coordinator
     And the page has no horizontal scroll
     And I capture "nested phone"
+
 
   Scenario: The Next for you chip fills the prompt box
     Given the viewport is 1440x900
@@ -68,3 +104,16 @@ Feature: Focus rows
     And I open Focus
     Then Focus shows a Finished row
     And I capture "finished after restart"
+
+  Scenario: A question shows its text once, in the Question card
+    Given the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I send "Use the AskUserQuestion tool exactly once. Ask which color to use. Offer two options, Red and Blue."
+    Then I see a question request
+    When I open Focus
+    And I select the question request in Focus
+    Then the Focus waiting line shows only the wait time
+    And the Focus detail shows the question text once
+    And the Focus detail has a Question card
+    And I capture "question"
