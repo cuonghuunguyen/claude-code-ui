@@ -86,6 +86,10 @@ describe("resolveTarget", () => {
       expect(m).not.toContain("x,");
     }
   });
+  it("refuses a worktree outside the daemon's allowed roots, by name and by path", async () => {
+    expect(await code(resolveTarget({ worktree: "old" }, deps))).toMatch(/^outside:.*outside the daemon's allowed roots/);
+    expect(await code(resolveTarget({ worktree: "/out/old" }, deps))).toMatch(/^outside/);
+  });
   it("worktree name, scoped and ambiguous; refuses a worktree outside the roots or being removed; refuses the main checkout as worktree and another side's paths; cwd takes the deepest listed entry", async () => {
     {
       const m = await code(resolveTarget({ worktree: "feat" }, deps));
@@ -99,8 +103,6 @@ describe("resolveTarget", () => {
       expect(await code(resolveTarget({ worktree: "nope", project: "tools" }, deps))).toMatch(/^unknown: No worktree named nope in project tools/);
     }
     {
-      expect(await code(resolveTarget({ worktree: "old" }, deps))).toMatch(/^outside:.*outside the daemon's allowed roots/);
-      expect(await code(resolveTarget({ worktree: "/out/old" }, deps))).toMatch(/^outside/);
       expect(await code(resolveTarget({ worktree: "gone", project: "/r/a/app" }, deps))).toMatch(/^removing:.*being removed/);
       expect(await code(resolveTarget({ worktree: "/r/a/app/.claude/worktrees/gone" }, deps))).toMatch(/^removing/);
     }

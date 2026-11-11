@@ -18,7 +18,10 @@ describe("openCommand", () => {
       expect(() => openCommand("linux", "default", "/p/d", "/p", true)).toThrow(/folder/);
     }
   });
-  it("editor: file beside its root, folder alone, app bundle through open -a; Windows .cmd launcher: cmd.exe with quoted arguments, % refused, .exe direct", () => {
+  it("a Windows .cmd editor launcher refuses a path holding %", () => {
+    expect(() => openCommand("win32", "code", "C:\\p\\%PATH%.ts", "C:\\p", false, { cli: "C:\\bin\\code.cmd" })).toThrow(/%/);
+  });
+  it("editor: file beside its root, folder alone, app bundle through open -a; Windows .cmd launcher: cmd.exe with quoted arguments, .exe direct", () => {
     {
       expect(openCommand("linux", "code", "/p/a.ts", "/p", false, cli)).toEqual({ cmd: "/bin/code", args: ["/p", "/p/a.ts"] });
       expect(openCommand("linux", "code", "/p/d", "/p", true, cli)).toEqual({ cmd: "/bin/code", args: ["/p/d"] });
@@ -31,7 +34,6 @@ describe("openCommand", () => {
         args: ["/d", "/s", "/c", '""C:\\bin\\code.cmd" "C:\\p" "C:\\p\\a & b.ts""'],
         verbatim: true,
       });
-      expect(() => openCommand("win32", "code", "C:\\p\\%PATH%.ts", "C:\\p", false, { cli: "C:\\bin\\code.cmd" })).toThrow(/%/);
       expect(openCommand("win32", "idea", "C:\\p\\a.ts", "C:\\p", false, { cli: "C:\\bin\\idea64.exe" })).toEqual({ cmd: "C:\\bin\\idea64.exe", args: ["C:\\p", "C:\\p\\a.ts"] });
     }
   });
@@ -88,20 +90,22 @@ describe("custom editor command (GH-646)", () => {
       expect(customCommand(["subl", "--goto={path}", "{root}"], "/p/a.ts", "/p", false, "linux", found)).toEqual({ cmd: "/usr/bin/subl", args: ["--goto=/p/a.ts", "/p"] });
     }
   });
-  it("a file name holding {root} is not replaced again; shell metacharacters stay literal in argv", () => {
+  it("a file name holding {root} is not replaced again", () => {
     {
       expect(customCommand(["e", "{path}"], "/p/n-{root}.md", "/p", false, "linux", found).args).toEqual(["/p/n-{root}.md"]);
     }
-    {
-      const p = "/p/a;b|c&$(x)`y`'z.ts";
-      expect(customCommand(["e", "{path}"], p, "/p", false, "linux", found).args).toEqual([p]);
-    }
   });
-  it("not found: editor_missing, Windows .cmd with % refused; findOnPath: PATH search with PATHEXT; editorLabel: name, else program name", () => {
+  it("a custom editor command that resolves to a Windows .cmd refuses a path holding %", () => {
+    expect(() => customCommand(["ed", "{path}"], "C:\\p\\%X%.ts", "C:\\p", false, "win32", () => "C:\\bin\\ed.cmd")).toThrow(/%/);
+  });
+  it("shell metacharacters in a file name stay literal in argv", () => {
+    const p = "/p/a;b|c&$(x)`y`'z.ts";
+    expect(customCommand(["e", "{path}"], p, "/p", false, "linux", found).args).toEqual([p]);
+  });
+  it("not found: editor_missing; findOnPath: PATH search with PATHEXT; editorLabel: name, else program name", () => {
     {
       expect(() => customCommand(["nope"], "/p/a", "/p", false, "linux", () => undefined)).toThrow(/not found: nope/);
       expect(customCommand(["ed", "{path}"], "C:\\p\\a & b.ts", "C:\\p", false, "win32", () => "C:\\bin\\ed.cmd")).toEqual({ cmd: "cmd.exe", args: ["/d", "/s", "/c", '""C:\\bin\\ed.cmd" "C:\\p\\a & b.ts""'], verbatim: true });
-      expect(() => customCommand(["ed", "{path}"], "C:\\p\\%X%.ts", "C:\\p", false, "win32", () => "C:\\bin\\ed.cmd")).toThrow(/%/);
     }
     {
       const o = { platform: "win32" as const, env: { PATH: "C:\\a;C:\\b", PATHEXT: ".EXE;.CMD" }, exists: (p: string) => p === "C:\\b\\ed.cmd" || p === "C:\\x\\y.exe" };

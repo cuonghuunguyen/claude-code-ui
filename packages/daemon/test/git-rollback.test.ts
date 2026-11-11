@@ -229,13 +229,17 @@ describe("gitRollbackHunk", () => {
       for (const h of [null, { newStart: -1, lines: ["+x"] }, { newStart: 1.5, lines: ["+x"] }, { newStart: 1, lines: [] }, { newStart: 1, lines: [" x"] }, { newStart: 1, lines: ["xy"] }, { newStart: 1, lines: ["+a\nb"] }, { newStart: 1, lines: [1] }]) {
         await expect(call(h)).rejects.toMatchObject({ code: "bad_request" });
       }
-      await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "../a.txt")).rejects.toMatchObject({ code: "bad_request" });
       await expect(call({ newStart: 1, lines: ["-a0", "+x"] }, "a.txt", 1)).rejects.toMatchObject({ code: "bad_request" });
       expect(get(dir, "a.txt")).toBe("a0\n");
     }
   });
 
 
+  it("refuses a path that escapes the repository (../a.txt) with bad_request and leaves a.txt unchanged", async () => {
+    const { dir, o } = repo();
+    await expect(gitRollbackHunk(dir, { path: "../a.txt", hunk: { newStart: 1, lines: ["-a0", "+x"] }, maxBytes: 1e6, ...o })).rejects.toMatchObject({ code: "bad_request" });
+    expect(get(dir, "a.txt")).toBe("a0\n");
+  });
 
   it.skipIf(!posix || process.getuid?.() === 0)("is atomic: a failed write leaves the original and no temp file; a success keeps the mode", async () => {
     const { dir, o } = repo();

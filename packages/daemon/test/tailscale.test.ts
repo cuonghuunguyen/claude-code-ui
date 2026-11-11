@@ -34,7 +34,7 @@ describe("readStatus", () => {
 });
 
 describe("readServe", () => {
-  it("readServe: free / ours / other; funnel is refused, also when ours", () => {
+  it("readServe: free / ours / other", () => {
     {
       expect(readServe({}, "m.tn.ts.net", 4280)).toBe("free");
       expect(readServe(winServe, "m.tn.ts.net", 4280)).toBe("ours");
@@ -42,9 +42,9 @@ describe("readServe", () => {
       const lh = { Web: { "m.tn.ts.net:443": { Handlers: { "/": { Proxy: "http://localhost:4280" } } } } };
       expect(readServe(lh, "m.tn.ts.net", 4280)).toBe("ours");
     }
-    {
-      expect(readServe({ ...winServe, AllowFunnel: { "m.tn.ts.net:443": true } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
-    }
+  });
+  it("readServe refuses Funnel, also when the serve is ours", () => {
+    expect(readServe({ ...winServe, AllowFunnel: { "m.tn.ts.net:443": true } }, "m.tn.ts.net", 4280)).toEqual({ error: expect.stringContaining("Funnel is on") });
   });
 });
 

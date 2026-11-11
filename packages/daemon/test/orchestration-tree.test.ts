@@ -394,13 +394,16 @@ describe("worker tree: agent types", () => {
 
 
 
-  it("an invalid agent name is refused before any lookup; an unknown agent type is a tool error listing the agent types, nothing starts; an ambiguous bare agent name is a tool error naming the candidates; a failed agent lookup is a tool error and starts nothing", async () => {
+  it("an invalid agent name (a b;c) is refused before any lookup", async () => {
     const t = setup();
     t.sessions.set("C", fakeSession("C"));
-    {
-      expect((await call(t.o, "C", "worker_start", start("x", { agent: "a b;c" }))).error).toMatch(/agent must be an agent type name/);
-      expect(t.agentCalls).toEqual([]);
-    }
+    expect((await call(t.o, "C", "worker_start", start("x", { agent: "a b;c" }))).error).toMatch(/agent must be an agent type name/);
+    expect(t.agentCalls).toEqual([]);
+  });
+
+  it("an unknown agent type is a tool error listing the agent types, nothing starts; an ambiguous bare agent name is a tool error naming the candidates; a failed agent lookup is a tool error and starts nothing", async () => {
+    const t = setup();
+    t.sessions.set("C", fakeSession("C"));
     {
       const r = await call(t.o, "C", "worker_start", start("x", { agent: "nope" }));
       expect(r.error).toMatch(/Unknown agent type nope/);

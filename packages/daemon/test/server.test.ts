@@ -4756,20 +4756,41 @@ describe("sessions.search", () => {
   };
   const results = (c: Awaited<ReturnType<typeof client>>) => c.inbox.filter((m): m is Extract<ServerMessage, { type: "sessions.search.result" }> => m.type === "sessions.search.result");
 
-  it("streams hits of transcripts inside the roots only, then replies the scan stats; cwd limits the search to that project; a cwd outside the roots is cwd_not_allowed; a 1-char query replies empty; 201 chars is bad_query", async () => {
-    const { d, inside, outside } = setup();
+  it("sessions.search streams hits of transcripts inside the roots only, then replies the scan stats", async () => {
+    const { d } = setup();
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     try {
       const c = await client((d.address() as AddressInfo).port);
       const reply = (await c.request({ type: "sessions.search", query: "ZEBRA" })) as { reqId: string; result: { scannedFiles: number } };
       expect(results(c).map((r) => [r.sessionId, r.reqId, r.hits[0]!.messageId])).toEqual([["a1", reply.reqId, "u-a1"], ["a2", reply.reqId, "u-a2"]]);
       expect(reply.result.scannedFiles).toBe(2);
-      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
-      expect(results(c).slice(2).map((r) => r.sessionId), "cwd inside").toEqual(["a1"]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("sessions.search with a cwd outside the roots is cwd_not_allowed", async () => {
+    const { d, outside } = setup();
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
       expect(await c.request({ type: "sessions.search", query: "zebra", cwd: outside })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(results(c)).toHaveLength(0);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("sessions.search: cwd limits the search to that project; a 1-char query replies empty; 201 chars is bad_query", async () => {
+    const { d, inside } = setup();
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
+      expect(results(c).map((r) => r.sessionId), "cwd inside").toEqual(["a1"]);
       expect(await c.request({ type: "sessions.search", query: "z" })).toMatchObject({ type: "reply", result: { scannedFiles: 0 } });
       expect(await c.request({ type: "sessions.search", query: "z".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
-      expect(results(c)).toHaveLength(3);
+      expect(results(c)).toHaveLength(1);
     } finally {
       d.close();
     }

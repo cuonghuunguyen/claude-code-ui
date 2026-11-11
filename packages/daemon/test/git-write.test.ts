@@ -199,6 +199,10 @@ describe("gitCommitFiles", () => {
     await refused(wt, "Finish or abort the rebase first");
   });
 
+  it("gitCommitFiles refuses paths ../x, -x and /abs with bad_request", async () => {
+    const { dir, inside } = repo();
+    for (const p of ["../x", "-x", "/abs"]) await expect(gitCommitFiles(dir, { paths: [p], message: "m", allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
+  });
   it("an empty path list without amend is bad_request; rejects bad input; push: true on a detached HEAD is bad_request and nothing is committed", async () => {
     const { dir, inside } = repo();
     {
@@ -211,9 +215,6 @@ describe("gitCommitFiles", () => {
       await bad({ message: "a\0b" });
       await bad({ message: 5 });
       await bad({ paths: "a.txt" });
-      await bad({ paths: ["../x"] });
-      await bad({ paths: ["-x"] });
-      await bad({ paths: ["/abs"] });
       await bad({ paths: [""] });
       await bad({ amend: "yes" });
       await bad({ push: 1 });
@@ -362,10 +363,13 @@ describe("gitCommitDiff", () => {
     }
     {
       await expect(gitCommitDiff(dir, { paths: [], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
-      await expect(gitCommitDiff(dir, { paths: ["../x"], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
       const plain = mkdtempSync(join(root, "plain-"));
       expect(await gitCommitDiff(plain, { paths: ["a"], allowed: inside })).toBeNull();
     }
+  });
+  it("gitCommitDiff refuses a path that escapes the repository (../x)", async () => {
+    const { dir, inside } = repo();
+    await expect(gitCommitDiff(dir, { paths: ["../x"], allowed: inside })).rejects.toMatchObject({ code: "bad_request" });
   });
   it("works before the first commit", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "gwr-")));

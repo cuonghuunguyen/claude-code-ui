@@ -126,7 +126,6 @@ describe("client against a real daemon", () => {
       const o = await run(["open"]);
       expect(o.code).toBe(0);
       expect(o.opened).toEqual([`http://127.0.0.1:${port}/#token=${token}`]);
-      expect(o.out + o.err).not.toContain(token);
       const p = await run(["open", "--print"]);
       expect(p.out.trim()).toBe(`http://127.0.0.1:${port}/#token=${token}`);
       expect(p.opened).toEqual([]);
@@ -134,9 +133,14 @@ describe("client against a real daemon", () => {
     {
       const o = await run(["open", sessionIds[1]!, "--print"]);
       expect(o.out.trim()).toBe(`http://127.0.0.1:${port}/#${sessionIds[1]}`);
-      expect(o.out).not.toContain(token);
       expect((await run(["open", "44444444-4444-4444-8444-444444444444"])).code).toBe(1);
     }
+  });
+  it("open without --print and open <sessionId> do not print the token", async () => {
+    const o = await run(["open"]);
+    expect(o.out + o.err).not.toContain(token);
+    const d = await run(["open", sessionIds[1]!, "--print"]);
+    expect(d.out).not.toContain(token);
   });
   it("no output of any command holds the token, except open --print", async () => {
     for (const argv of [["status"], ["status", "--json"], ["sessions"], ["sessions", "--json"], ["projects"], ["projects", "--json"], ["workers"], ["workers", "--json"], ["open"], ["open", sessionIds[0]!]]) {

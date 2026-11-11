@@ -124,9 +124,6 @@ describe("findInFiles", () => {
       expect(paths(await run(d, "needle", { globs: ["*.ts"] }))).toEqual(["src/d/x.ts", "u.ts"]);
     }
     {
-      expect(paths(await run(d, "needle", {}, { allowed: (p) => !p.endsWith("u.ts") }))).not.toContain("u.ts");
-    }
-    {
       const ctl = new AbortController();
       const p = run(d, "needle", {}, { signal: ctl.signal });
       ctl.abort();
@@ -139,12 +136,26 @@ describe("findInFiles", () => {
       init(join(d, "sub"));
       const repo = { path: join(d, "sub"), rel: "sub", kind: "nested" as const };
       expect(paths(await run(d, "needle", {}, { repos: [repo] }))).toContain("sub/n.txt");
-      expect(paths(await run(d, "needle", {}, { repos: [{ ...repo, outsideRoots: true }] }))).not.toContain("sub/n.txt");
       expect(paths(await run(d, "needle"))).not.toContain("sub/n.txt");
     }
   });
 
 
+
+  it("findInFiles: allowed() drops the files it refuses", async () => {
+    const d = fixture();
+    expect(paths(await run(d, "needle"))).toContain("u.ts");
+    expect(paths(await run(d, "needle", {}, { allowed: (p) => !p.endsWith("u.ts") }))).not.toContain("u.ts");
+  });
+
+  it("findInFiles: a nested repository marked outsideRoots is skipped", async () => {
+    const d = fixture();
+    put(d, "sub/n.txt", "needle\n");
+    init(join(d, "sub"));
+    const repo = { path: join(d, "sub"), rel: "sub", kind: "nested" as const };
+    expect(paths(await run(d, "needle", {}, { repos: [repo] }))).toContain("sub/n.txt");
+    expect(paths(await run(d, "needle", {}, { repos: [{ ...repo, outsideRoots: true }] }))).not.toContain("sub/n.txt");
+  });
 
   it("outside a repository: ignored files included by default, .git folders never", async () => {
     const d = tmp();

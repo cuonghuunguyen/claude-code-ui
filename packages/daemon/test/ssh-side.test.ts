@@ -31,12 +31,15 @@ describe("parseSshConfig", () => {
       expect(parseSshConfig(text)).toEqual(["box", "other", "third", "quoted"]);
     }
     {
-      expect(parseSshConfig("Host * *.corp ?x !bad -oProxyCommand=x \"a b\" good\r\nHost\tok")).toEqual(["good", "ok"]);
+      expect(parseSshConfig("Host * *.corp ?x !bad \"a b\" good\r\nHost\tok")).toEqual(["good", "ok"]);
     }
     {
       expect(listSshHosts(undefined, { read: () => undefined })).toEqual([]);
       expect(listSshHosts(undefined, { read: () => "Host a\nHost b" })).toEqual(["a", "b"]);
     }
+  });
+  it("parseSshConfig skips an option-like alias (-oProxyCommand=x)", () => {
+    expect(parseSshConfig("Host -oProxyCommand=x good")).toEqual(["good"]);
   });
   it("CLAUDE_UI_SSH_CONFIG names the file the hosts are read from", () => {
     expect(sshConfigPath({ CLAUDE_UI_SSH_CONFIG: "/x/cfg" })).toBe("/x/cfg");
@@ -50,10 +53,13 @@ describe("parseSshConfig", () => {
 });
 
 describe("sshArgs", () => {
+  it("sshArgs puts -- right before the alias, also after -F", () => {
+    for (const a of [sshArgs("box", "x"), sshArgs("box", "x", [], "/s/ssh_config")]) expect(a.slice(a.indexOf("--"), a.indexOf("--") + 2)).toEqual(["--", "box"]);
+  });
   it("sshArgs: a config file goes in as -F before --, none: no -F; the fixed options, -- before the alias, and a script that round-trips through base64", () => {
     {
       const a = sshArgs("box", "x", [], "/s/ssh_config");
-      expect(a.slice(6, 11)).toEqual(["ServerAliveCountMax=3", "-F", "/s/ssh_config", "--", "box"]);
+      expect(a.slice(6, 9)).toEqual(["ServerAliveCountMax=3", "-F", "/s/ssh_config"]);
       expect(sshArgs("box", "x")).not.toContain("-F");
     }
     {

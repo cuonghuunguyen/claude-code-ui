@@ -1232,10 +1232,14 @@ describe("gitLog / gitShow / gitFileAt", () => {
     {
       expect(await gitRefs(r.dir, () => true)).toBe(await refsStamp(r.dir));
       expect(await gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
-      expect(await gitRefs(r.dir, () => false)).toBeNull();
     }
   });
 
+
+  it("gitRefs returns null when the repository is not allowed", async () => {
+    const r = graphRepo();
+    expect(await gitRefs(r.dir, () => false)).toBeNull();
+  });
 
   it("returns null outside a git repository", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "gg-")));
@@ -1681,12 +1685,11 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     }
     {
       expect((await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!.ref).toBe("refs/heads/main");
-      for (const ref of ["main", "--output=x", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
+      for (const ref of ["main", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
       expect(await code(gitDiff(r.dir, { base: "branch", ref: 5 as never, allowed: all }))).toBe("bad_request");
     }
     {
       expect(await code(gitDiff(r.dir, { base: "x", allowed: all }))).toBe("bad_request");
-      expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
     }
     {
       const d = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
@@ -1700,6 +1703,16 @@ describe("gitDiff", { timeout: 90_000 }, () => {
       expect(o.ref).toBe("refs/remotes/origin/dev");
       expect(o.branches).not.toContain("refs/remotes/origin/HEAD");
     }
+  });
+
+  it("gitDiff refuses a repository outside the allowed roots with cwd_not_allowed", async () => {
+    const r = diffRepo();
+    expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
+  });
+
+  it("gitDiff refuses the option-like ref --output=x with bad_request", async () => {
+    const r = diffRepo();
+    expect(await code(gitDiff(r.dir, { base: "branch", ref: "--output=x", allowed: all }))).toBe("bad_request");
   });
 
   it("head before the first commit: no base, staged and untracked files are A", async () => {

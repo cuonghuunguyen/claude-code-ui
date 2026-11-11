@@ -109,17 +109,25 @@ describe("Session", () => {
     expect(late.every((e) => all.includes(e))).toBe(true);
   });
 
-  it("strips API key env vars from the SDK env (ADR 0002); forwards subagent text and enables TodoWrite and Artifact; passes the chosen model to the SDK, default means no model option; starts in default permission mode and model default effort", () => {
-    {
-      vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
-      vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "tok");
-      started({ query: fakeQuery as never });
-      vi.unstubAllEnvs();
-      const env = calls.at(-1)!.env!;
-      expect(env.PATH).toBe(process.env.PATH);
-      expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
-      expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
-    }
+  it("strips API key env vars from the SDK env (ADR 0002)", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "tok");
+    started({ query: fakeQuery as never });
+    vi.unstubAllEnvs();
+    const env = calls.at(-1)!.env!;
+    expect(env.PATH).toBe(process.env.PATH);
+    expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("allows bypass permissions only when the daemon enables it", () => {
+    started({ query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: false });
+    started({ allowBypass: true, query: fakeQuery as never });
+    expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
+  });
+
+  it("forwards subagent text and enables TodoWrite and Artifact; passes the chosen model to the SDK, default means no model option; starts in default permission mode and model default effort", () => {
     {
       vi.stubEnv("CLAUDE_CODE_ENABLE_TASKS", "1");
       started({ query: fakeQuery as never });
@@ -141,8 +149,6 @@ describe("Session", () => {
       const s = started({ query: fakeQuery as never });
       expect(calls.at(-1)).toMatchObject({ permissionMode: "default", allowDangerouslySkipPermissions: false, effort: undefined });
       expect(s.info()).toMatchObject({ permissionMode: "default", effort: "default", permissionModes: ["default", "acceptEdits", "plan", "dontAsk"] });
-      started({ allowBypass: true, query: fakeQuery as never });
-      expect(calls.at(-1)).toMatchObject({ allowDangerouslySkipPermissions: true });
     }
   });
 

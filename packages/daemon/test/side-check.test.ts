@@ -258,14 +258,17 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     return { ...b, out: r.stdout, parsed: parseCheck(r.stdout), unchanged: snapshot(b.home).join("\n") === before.join("\n"), err: r.stderr };
   };
 
+  it("check script output holds no credentials, and reports home as the text $HOME, never its path", () => {
+    const c = check({});
+    expect(c.out).not.toContain("credentials");
+    expect(c.parsed!.writable).toContain("$HOME");
+    expect(c.out).not.toContain(c.home);
+  });
+
   it("check script, nothing installed: install; another build installed: update, named; this build installed: current; no node, old node, no tools", () => {
     {
       const c = check({});
       expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, installed: "none" });
-      expect(c.out).not.toContain("credentials");
-      // Home is reported as the text $HOME, never as its value.
-      expect(c.parsed!.writable).toContain("$HOME");
-      expect(c.out).not.toContain(c.home);
       expect(c.unchanged).toBe(true);
       expect(c.calls().filter((l) => l.startsWith("npm"))).toEqual([]);
       // Node only answered version and detection questions, never ran the claude-ui entry.
