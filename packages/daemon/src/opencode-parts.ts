@@ -1,6 +1,7 @@
 // OpenCode messages and events as Parts (docs/spec.md "OpenCode engine"): one stateful mapper for stored history and live events, so both
 // give the same part ids. User message = one `user_text` (id = message id); text/reasoning/tool part ids = the OpenCode part id; a tool call's id = its callID.
 import type { Part, ToolStatus, TodoItem } from "@claude-ui/protocol";
+import { errorText, type OpenCodeError } from "./opencode-errors.ts";
 
 type ToolState = { status: string; title?: string; input?: Record<string, unknown>; output?: string; error?: string; metadata?: Record<string, unknown>; time?: { start?: number; end?: number } };
 export type OpenCodePart = {
@@ -22,7 +23,7 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: { name: string; data?: { message?: string } }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };
@@ -200,8 +201,17 @@ export function openCodeParts(messages: readonly OpenCodeMessage[], children: Re
         const child = p.state?.metadata?.sessionId;
         return typeof child === "string" && children[child] ? [...out, ...walk(children[child]!, child)] : out;
       }),
+      // Why the turn failed (the live `session.error` shows the same notice, same id); an aborted message is a Stop or OpenCode's own abort, shown elsewhere.
+      ...(!sessionID ? failure(msg.info) : []),
     ]);
   return dedupeUser(walk(messages));
+}
+
+/** The warning notice of a root assistant message that ended with an error (not an abort); id `error:<message id>`. */
+export function failure(info: OpenCodeMessage["info"]): Part[] {
+  if (info.role !== "assistant" || !info.error || info.error.name === "MessageAbortedError") return [];
+  const model = info.providerID && info.modelID ? `${info.providerID}/${info.modelID}` : undefined;
+  return [{ type: "notice", id: `error:${info.id}`, level: "warning", text: errorText(info.error, { ...(model && { model }) }) }];
 }
 
 /** A user message's several parts re-emit its one `user_text`: the last wins, at the first position. */

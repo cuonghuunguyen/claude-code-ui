@@ -21,6 +21,22 @@ describe("openCodeParts", () => {
   });
 });
 
+describe("openCodeParts: a failed assistant message (GH-683)", () => {
+  const assistant = (id: string, error?: { name: string; data?: object }): OpenCodeMessage => ({
+    info: { id, role: "assistant", parentID: "msg_u", providerID: "stub", modelID: "m1", time: { completed: 2 }, ...(error && { error }) },
+    parts: [{ id: `prt_${id}`, type: "text", text: "partial", messageID: id }],
+  });
+  const user: OpenCodeMessage = { info: { id: "msg_u", role: "user" }, parts: [{ id: "prt_u", type: "text", text: "hi", messageID: "msg_u" }] };
+
+  it("a stored assistant message with an API error shows its error notice after its parts; an aborted one shows none", () => {
+    const failed = openCodeParts([user, assistant("msg_a", { name: "APIError", data: { message: "Rate limit reached for m1", statusCode: 429 } })]);
+    expect(failed.map((p) => p.type)).toEqual(["user_text", "assistant_text", "notice"]);
+    expect(failed[2]).toMatchObject({ type: "notice", id: "error:msg_a", level: "warning", text: "Rate limit reached for m1 (HTTP 429)" });
+    expect(openCodeParts([user, assistant("msg_b", { name: "MessageAbortedError", data: { message: "Aborted" } })]).map((p) => p.type)).toEqual(["user_text", "assistant_text"]);
+    expect(openCodeParts([user, assistant("msg_c")]).map((p) => p.type)).toEqual(["user_text", "assistant_text"]);
+  });
+});
+
 describe("mapTool", () => {
   it("renames the tools and their inputs to the Claude cards; other tools stay as sent", () => {
     expect(mapTool("edit", { filePath: "/a", oldString: "x", newString: "y", replaceAll: true })).toEqual({ tool: "Edit", input: { file_path: "/a", old_string: "x", new_string: "y", replace_all: true } });

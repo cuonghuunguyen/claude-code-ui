@@ -1,6 +1,6 @@
 // A fake `opencode` binary for the OpenCode engine tests: `--version` and `serve` (a small HTTP server with the routes of the OpenCode API the
 // daemon uses, hand-built from packages/sdk/openapi.json). Run as `node <this file> ...` (no shebang needed).
-// Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
+// `msg_ASSISTANT` in a script is an assistant message id of its own per played turn. Prompts replay scripted turns (turn-*.json, cut from a real OpenCode 1.18 recording): a node `{events, on?, abort?}`; `events` play on the
 // event stream (`ses_ROOT` = the prompted session, the recorded user message id = the posted `messageID`); a node that ends at a
 // permission.asked / question.asked waits for its reply, which plays `on[reply]` (`once`, `always`, `reject`, `reject:message`, `answer`).
 // POST /session/:id/summarize plays the next script like a prompt and answers at once.
@@ -9,8 +9,8 @@
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // MCP load and OpenCode 1.19.5's broken state (GH-682): with FAKE_OPENCODE_MCP_LOAD_MS the first GET|POST /mcp or GET /command of a directory starts its "MCP load" (one shared wait per directory); those requests wait for it, and one whose connection closes before the load ends puts the directory into `broken` (OpenCode keeps the interruption as the folder's MCP state). A broken directory answers 499 (empty body) to GET|POST /mcp, GET /command and POST /mcp/:name/disconnect, and its prompt_async plays a turn OpenCode aborts on its own: assistant message `msg_selfabort_<n>` with MessageAbortedError, idle, NO session.error. POST /instance/dispose?directory= (authed) repairs it (and drops the directory's MCP servers and load).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state, POST /__heal {directory} takes it out (OpenCode repaired itself), POST /__zombie stops listening but keeps the open connections and resets every one that sends a request (a server that died while the kernel has not closed its sockets yet), POST /__deaf stops listening and drops every connection while the process stays (a dead server whose exit is not seen).
-// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once, or nothing, and answers that late), FAKE_OPENCODE_PROVIDERS_DELAY_MS (GET /config/providers answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__status {sessionId, status?} sets what GET /session/status answers for a session (a `retry` status; no status clears it; a played session.status clears it too; an abort while it is `retry` ends the session with idle and no session.error, like OpenCode 1.19.5), POST /__fail {path} makes the next request to that path answer 500, POST /__break {directory} puts a directory into the broken MCP state, POST /__heal {directory} takes it out (OpenCode repaired itself), POST /__zombie stops listening but keeps the open connections and resets every one that sends a request (a server that died while the kernel has not closed its sockets yet), POST /__deaf stops listening and drops every connection while the process stays (a dead server whose exit is not seen).
+// Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages, busy?, asks?, statuses?: session id -> status}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once, or nothing, and answers that late), FAKE_OPENCODE_PROVIDERS_DELAY_MS (GET /config/providers answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
 import { createServer } from "node:http";
 import { Server } from "node:net";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -43,6 +43,8 @@ const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boole
 let current;
 let asks = data.asks ?? [];
 const busy = new Set(data.busy ?? []);
+/** What POST /__status set: a session's status as GET /session/status answers it (e.g. `retry`), over the busy set. */
+const statuses = new Map(Object.entries(data.statuses ?? {}));
 let generation = 0;
 let zombie = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -93,11 +95,13 @@ async function play(node, sessionId, directory, messageID, recorded) {
   current = Object.assign(node, { sessionId, directory, messageID, userId });
   let text = JSON.stringify(node.events).replaceAll("ses_ROOT", sessionId).replaceAll("ses_CHILD", `${sessionId}_child`);
   if (userId && messageID) text = text.replaceAll(userId, messageID);
+  // `msg_ASSISTANT`: an assistant message id of its own per played turn (two turns of one script must not share it).
+  text = text.replaceAll("msg_ASSISTANT", `msg_asst${mine}`);
   for (const e of JSON.parse(text)) {
     if (generation !== mine) return;
     await sleep(3);
     const p = e.properties;
-    if (e.type === "session.status") p.status.type === "idle" ? busy.delete(p.sessionID) : busy.add(p.sessionID);
+    if (e.type === "session.status") (statuses.delete(p.sessionID), p.status.type === "idle" ? busy.delete(p.sessionID) : busy.add(p.sessionID));
     if (e.type === "permission.asked" || e.type === "question.asked") asks.push({ type: e.type, ...p });
     if (e.type === "permission.replied" || e.type === "question.replied") asks = asks.filter((a) => a.id !== p.requestID);
     send(directory, e);
@@ -167,6 +171,7 @@ const server = createServer(async (req, res) => {
       const s = sessions.find((x) => x.id === body.sessionId);
       (delete s.revert, updated(s));
     }
+    if (url.pathname === "/__status") body.status ? statuses.set(body.sessionId, body.status) : statuses.delete(body.sessionId);
     if (url.pathname === "/__break") broken.add(body.directory);
     if (url.pathname === "/__heal") broken.delete(body.directory);
     if (url.pathname === "/__break_providers") provBroken.add(body.global ? "*" : (body.directory ?? ""));
@@ -247,7 +252,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/command" && !(await mcpGate(dir, res))) return;
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
   if (url.pathname === "/agent") return json(200, [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
-  if (url.pathname === "/session/status") return json(200, Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])));
+  if (url.pathname === "/session/status") return json(200, { ...Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])), ...Object.fromEntries(statuses) });
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));
   if (url.pathname === "/question") return json(200, asks.filter((a) => a.type === "question.asked").map(({ type, ...a }) => a));
   let m2 = /^\/permission\/([^/]+)\/reply$/.exec(url.pathname);
@@ -348,7 +353,10 @@ const server = createServer(async (req, res) => {
       generation++;
       asks = [];
       busy.delete(m[1]);
-      const events = current?.abort ?? [{ type: "session.error", properties: { sessionID: "ses_ROOT", error: { name: "MessageAbortedError", data: { message: "Aborted" } } } }, { type: "session.status", properties: { sessionID: "ses_ROOT", status: { type: "idle" } } }, { type: "session.idle", properties: { sessionID: "ses_ROOT" } }];
+      // OpenCode 1.19.5 aborting a session that waits to retry (status `retry`, see POST /__status): idle, no session.error.
+      const waiting = statuses.get(m[1])?.type === "retry";
+      statuses.delete(m[1]);
+      const events = waiting ? [{ type: "session.status", properties: { sessionID: "ses_ROOT", status: { type: "idle" } } }, { type: "session.idle", properties: { sessionID: "ses_ROOT" } }] : (current?.abort ?? [{ type: "session.error", properties: { sessionID: "ses_ROOT", error: { name: "MessageAbortedError", data: { message: "Aborted" } } } }, { type: "session.status", properties: { sessionID: "ses_ROOT", status: { type: "idle" } } }, { type: "session.idle", properties: { sessionID: "ses_ROOT" } }]);
       log({ type: "aborted", sessionId: m[1] });
       for (const e of JSON.parse(JSON.stringify(events).replaceAll("ses_ROOT", m[1]))) send(dir, e);
     };

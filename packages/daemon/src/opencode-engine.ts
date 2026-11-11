@@ -6,6 +6,7 @@ import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { MAX_WAIT_MS } from "./orchestration.ts";
+import { errorKey, errorText, firstLine } from "./opencode-errors.ts";
 import { ascending } from "./opencode-id.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
@@ -80,11 +81,16 @@ export const modeOf = (rules: readonly Rule[]): PermissionMode | undefined => {
 
 type PermissionAsked = { id: string; sessionID: string; permission: string; patterns?: string[]; metadata?: Record<string, unknown>; always?: string[]; tool?: { callID?: string } };
 type QuestionAsked = { id: string; sessionID: string; questions: { question: string; header: string; options: { label: string; description: string }[]; multiple?: boolean }[]; tool?: { callID?: string } };
-type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string };
+type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; /** `retry`: when the next attempt starts (epoch ms of OpenCode's clock). */ next?: number };
+/** What the `model_retry` part carries. */
+type Retry = { attempt: number; message: string; next?: number };
 type Payload = { type: string; properties: Record<string, any> };
 
 /** What `begin()` and `resync()` read of a session: stored messages (and those of its subagents), busy state, pending requests of the folder. */
-export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
+export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
+
+/** The `model_retry` state of a `retry` status: the first line of the reason (OpenCode may append more). */
+const retryOf = (s: Status): Retry => ({ attempt: s.attempt ?? 1, message: firstLine(s.message ?? ""), ...(typeof s.next === "number" && { next: s.next }) });
 
 export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string): Promise<OpenCodeHistory> {
   // No timeout: reopening a session after a restart reads a cold folder, whose first answer takes more than 3 s; giving up would lose the session.
@@ -101,7 +107,8 @@ export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cw
   const messages = cut < 0 ? all : all.slice(0, cut);
   const childIds = messages.flatMap((m) => m.parts.map((p) => p.state?.metadata?.sessionId).filter((c): c is string => typeof c === "string"));
   const children = Object.fromEntries(await mapLimit(childIds, 4, async (c) => [c, await server.request<OpenCodeMessage[]>(`/session/${c}/message`, at).catch(() => [])] as const));
-  return { messages, children, busy: status[id]?.type === "busy", revert, permission: row.permission ?? [], permissions, questions };
+  const st = status[id];
+  return { messages, children, busy: st?.type === "busy" || st?.type === "retry", ...(st?.type === "retry" && { retry: retryOf(st) }), revert, permission: row.permission ?? [], permissions, questions };
 }
 
 /** `GET /config/providers`: the connected providers with their models (`variants`: the model's reasoning variants by name) and the default model per provider. */
@@ -212,6 +219,18 @@ class OpenCodeSession implements EngineSession {
    * `busy` and `idle` report them to cleanStale().
    */
   private quiet: { busy: () => void; idle: () => void } | undefined;
+  /** The model call is being retried (a `model_retry` part is set), undefined when not. */
+  private retrying: Retry | undefined;
+  /** The last retry attempt of the turn: a failing turn says OpenCode gave up after that many retries. */
+  private lastAttempt = 0;
+  /** Counts the `session.status` events seen: a read of the status that a live one overtook is not applied. */
+  private statusEvents = 0;
+  /** An id of the running turn, kept after it ended: an error after idle belongs to it (and a notice of the turn has an id of its own). */
+  private turnKey = ascending("msg");
+  /** The last assistant message of the running turn (its id is the id of the turn's error notice, as at a restore) and its model. */
+  private turnAssistant: { id: string; model?: string } | undefined;
+  /** The errors the turn showed (`errorKey`): OpenCode 1.19.5 sends a model-not-found error twice. */
+  private errorKeys = new Set<string>();
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -249,7 +268,8 @@ class OpenCodeSession implements EngineSession {
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
-    if (this.history.busy) (this.turnAt = Date.now(), this.openTurnEnd(), this.noteLastUser(this.history.messages));
+    if (this.history.busy) (this.turnAt = Date.now(), this.turnKey = ascending("msg"), this.openTurnEnd(), this.noteLastUser(this.history.messages));
+    this.setRetry(this.history.retry);
     this.requests(this.history);
     // Events between the history read and the stream connecting are lost: read again once it is open.
     void this.server.streamReady().then(() => this.resync());
@@ -294,9 +314,12 @@ class OpenCodeSession implements EngineSession {
   }
 
   resync(): Promise<void> {
+    const seen = this.statusEvents;
     return (this.resyncing ??= loadOpenCodeHistory(this.server, this.id, this.cwd)
       .then((h) => {
         this.apply(h);
+        // A status event that came while the read ran is newer than the read.
+        if (seen === this.statusEvents) this.setRetry(h.retry);
         void this.emitCommands();
         this.requests(h);
         const state = this.session.currentState();
@@ -316,6 +339,20 @@ class OpenCodeSession implements EngineSession {
   }
   private notice(id: string, text: string) {
     this.session.emit({ type: "notice", id: `${this.id}:${id}`, level: "warning", text });
+  }
+  /** A warning of its own: a notice id is reused only to update the same warning, so each occurrence has one (a second one must not rewrite the first in an older turn). */
+  private occurrence(kind: string, text: string, key = ascending("msg")) {
+    this.notice(`${kind}:${key}`, text);
+  }
+
+  /** Sets the retry state of the model call (the `model_retry` head part); only a change is emitted. */
+  private setRetry(r: Retry | undefined) {
+    const was = this.retrying;
+    if (!r && !was) return;
+    if (r && was && r.attempt === was.attempt && r.message === was.message && r.next === was.next) return;
+    this.retrying = r;
+    if (r) this.lastAttempt = r.attempt;
+    this.session.emit({ type: "model_retry", id: "model_retry", retry: r ?? null });
   }
 
   async setModel(model: string) {
@@ -363,7 +400,7 @@ class OpenCodeSession implements EngineSession {
       const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false, timeout: MAX_WAIT_MS + 60_000 };
       await this.server.request("/mcp", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { name, config } });
     })()
-      .catch((err) => this.notice("mcp_failed", `Could not attach the orchestration tools to OpenCode: ${(err as Error).message}`))
+      .catch((err) => this.occurrence("mcp_failed", `Could not attach the orchestration tools to OpenCode: ${(err as Error).message}`))
       .finally(() => (this.attaching = undefined)));
   }
 
@@ -462,7 +499,7 @@ class OpenCodeSession implements EngineSession {
     this.turnUsers.add(messageID);
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     void this.send(messageID, text, images, !steer && cmd && this.commandNames.has(cmd[1]!) ? { name: cmd[1]!, args: cmd[2] ?? "" } : undefined).catch((err) => {
-      this.notice("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`);
+      this.occurrence("prompt_failed", `Could not send the prompt to OpenCode: ${(err as Error).message}`, messageID);
       if (!steer) this.toIdle();
     });
   }
@@ -544,6 +581,10 @@ class OpenCodeSession implements EngineSession {
     this.aborted = false;
     this.failed = false;
     this.selfAbort = undefined;
+    this.turnKey = ascending("msg");
+    this.turnAssistant = undefined;
+    this.errorKeys = new Set();
+    this.lastAttempt = 0;
     this.turnUsers = new Set();
     this.mapper.resetTurn();
   }
@@ -565,6 +606,8 @@ class OpenCodeSession implements EngineSession {
     const { usage, cost } = this.mapper.turn();
     const shell = this.shellRun;
     this.shellRun = false;
+    // A Stop hit this turn and OpenCode ended it without an abort error (it sends none while it waits to retry): the Stop's one marker, no result.
+    if (this.turnStop < this.stops.count && !this.aborted) (this.aborted = true, this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` }));
     if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
     void this.emitUsage();
@@ -584,6 +627,7 @@ class OpenCodeSession implements EngineSession {
 
   /** The turn is over: idle, and a prompt waiting for the end of an aborted turn goes on. */
   private toIdle() {
+    this.setRetry(undefined);
     this.session.setState("idle");
     this.turnEnd?.resolve();
     this.turnEnd = undefined;
@@ -601,6 +645,7 @@ class OpenCodeSession implements EngineSession {
   async interrupt() {
     if (this.session.currentState() === "idle") return;
     this.stopped = true;
+    this.setRetry(undefined); // OpenCode waits no more for the retry once the abort reaches it; the line goes at once
     const ways = this.stops.stop();
     this.session.interruptPending();
     if (!this.turnPosted) this.endStopped();
@@ -702,6 +747,7 @@ class OpenCodeSession implements EngineSession {
         }
         if (root && this.hiding()) return;
         if (root) this.noteUsage(info);
+        if (root && info.role === "assistant" && !this.quiet && this.session.currentState() !== "idle" && this.ofTurn(info)) this.turnAssistant = { id: info.id, ...(info.providerID && info.modelID && { model: `${info.providerID}/${info.modelID}` }) };
         // A prompt of this turn sent elsewhere (OpenCode's own UI, a compaction); ours are noted when sent (a late update of a stopped one is not this turn's).
         if (root && info.role === "user" && !this.mapper.own.has(info.id) && this.session.currentState() !== "idle") this.turnUsers.add(info.id);
         // OpenCode aborted the turn on its own (no session.error, not our Stop): say so instead of ending silently.
@@ -731,8 +777,11 @@ class OpenCodeSession implements EngineSession {
         if (!root) return;
         const s = p.status as Status;
         if (s.type === "busy" && this.hiding()) return this.quiet!.busy();
+        if (this.hiding()) return;
+        this.statusEvents++;
+        // The reason of the wait shows until the next attempt (busy) or the end (idle) replaces it.
+        this.setRetry(s.type === "retry" ? retryOf(s) : undefined);
         if (s.type === "busy" && this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
-        else if (s.type === "retry") this.notice("retry", `Retrying (attempt ${s.attempt ?? 1}): ${s.message ?? ""}`);
         return;
       }
       case "session.idle":
@@ -747,7 +796,12 @@ class OpenCodeSession implements EngineSession {
           return this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
         }
         this.failed = true;
-        return this.notice("error", p.error?.data?.message ?? p.error?.name ?? "OpenCode reported an error");
+        // One warning per turn, in its own place: the id is the turn's assistant message (the history shows the same one after a restore), else the turn's.
+        const key = errorKey(p.error);
+        if (this.errorKeys.has(key)) return;
+        this.errorKeys.add(key);
+        const model = this.model !== "default" ? this.model : this.turnAssistant?.model;
+        return this.session.emit({ type: "notice", id: `error:${this.turnAssistant?.id ?? this.turnKey}`, level: "warning", text: errorText(p.error, { ...(model && { model }), ...(this.lastAttempt > 0 && { attempts: this.lastAttempt }) }) });
       }
       case "session.updated": {
         if (!root) return;
@@ -812,7 +866,7 @@ class OpenCodeSession implements EngineSession {
   }
 
   private post(path: string, body: unknown) {
-    void this.server.request(path, { method: "POST", directory: this.cwd, body }).catch((err) => this.notice("answer_failed", `Could not answer OpenCode: ${(err as Error).message}`));
+    void this.server.request(path, { method: "POST", directory: this.cwd, body }).catch((err) => this.occurrence("answer_failed", `Could not answer OpenCode: ${(err as Error).message}`));
   }
 
   private answerPermission(id: string, r: Reply) {
@@ -830,7 +884,7 @@ class OpenCodeSession implements EngineSession {
         }
         // Edit: "always" would only live in the server's memory; "all edits" is the acceptEdits mode, saved with the session.
         this.post(path, { reply: "once" });
-        return void this.setPermissionMode("acceptEdits").catch((err) => this.notice("mode_failed", `Could not switch the mode: ${(err as Error).message}`));
+        return void this.setPermissionMode("acceptEdits").catch((err) => this.occurrence("mode_failed", `Could not switch the mode: ${(err as Error).message}`));
       case "deny":
       case "interrupt":
       case "coordinator": {
@@ -860,7 +914,7 @@ class OpenCodeSession implements EngineSession {
   private persist(permission: string, patterns: string[]) {
     const rules = patterns.map((pattern): Rule => ({ permission, pattern, action: "allow" }));
     this.always.push(...rules);
-    void this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission: rules } }).catch((err) => this.notice("persist_failed", `Could not save the rule: ${(err as Error).message}`));
+    void this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission: rules } }).catch((err) => this.occurrence("persist_failed", `Could not save the rule: ${(err as Error).message}`));
   }
 
   /**
@@ -887,7 +941,7 @@ class OpenCodeSession implements EngineSession {
         .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
         .then(done, (err) => {
           done();
-          this.notice("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
+          this.occurrence("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
           this.shellRun = false;
           this.toIdle();
         });
