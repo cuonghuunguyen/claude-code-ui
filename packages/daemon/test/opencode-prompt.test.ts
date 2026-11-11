@@ -165,6 +165,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
   it("Allow always on Bash replies always and appends the rule to the session; on an edit it replies once and switches to acceptEdits", async () => {
     const d = await boot({ script: ["bash", "edit"] });
     const s = await d.open();
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
     await s.prompt("run ls");
     await until(() => !!s.find("permission_request"));
     await d.ok({ type: "permission.respond", requestId: s.find("permission_request")!.requestId, decision: "allow_always" });
@@ -185,6 +186,20 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(block).toContainEqual({ permission: "edit", pattern: "*", action: "allow" });
     // The rule saved before stays in every later block.
     expect(block.slice(block.findIndex((r) => r.pattern === "always") + 1)).toEqual([{ permission: "bash", pattern: "ls *", action: "allow" }]);
+  });
+
+  it("Allow always on an edit in Use OpenCode config replies always, saves edit * allow and keeps the mode (GH-705)", async () => {
+    const d = await boot({ script: ["edit"] });
+    const s = await d.open();
+    await s.prompt("edit a.txt");
+    await until(() => !!s.find("permission_request"));
+    const edit = s.find("permission_request")!;
+    expect(edit.suggestions).toEqual([{ type: "addRules", rules: [{ toolName: "Edit", ruleContent: "*" }], behavior: "allow", destination: "session" }]);
+    await d.ok({ type: "permission.respond", requestId: edit.requestId, decision: "allow_always" });
+    await until(() => d.requests("PATCH", `/session/${s.id}`).length > 0);
+    expect(d.requests("POST", `/permission/${edit.requestId}/reply`)[0]!.body).toEqual({ reply: "always" });
+    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).toEqual([{ permission: "edit", pattern: "*", action: "allow" }]);
+    expect(s.find("session_permission_mode")).toBeUndefined();
   });
 
   it("Deny with a message rejects with it, the card stays denied and the turn goes on; Deny without a message rejects and the turn ends", async () => {

@@ -898,7 +898,8 @@ class OpenCodeSession implements EngineSession {
     // The ask can come before the call has its input (the call is still pending): the permission's own metadata then names it (bash: the command).
     const fallback = mapTool(e.permission, e.metadata);
     const tool = mapped?.tool ?? fallback.tool;
-    const edit = e.permission === "edit" && !!e.always?.includes("*");
+    // In config, "all edits" is a saved edit rule: acceptEdits would add asks the OpenCode config does not have (GH-705).
+    const edit = e.permission === "edit" && !!e.always?.includes("*") && this.permissionMode !== "config";
     // worker_start: no "always" rule, the card is the user's only gate on new workers (as for Claude).
     const start = tool === WORKER_START;
     const suggestions: PermissionUpdate[] = edit
