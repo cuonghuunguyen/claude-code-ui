@@ -8,9 +8,10 @@
 // GET /command lists `init`, `review` and `fail`; POST /session/:id/command plays the next script (command `fail` answers 500).
 // MCP: GET|POST /mcp and POST /mcp/:name/disconnect keep a status map per directory (POST connects, disconnect sets `disabled`).
 // Fork, DELETE and PATCH {title|time} of a session. Revert: POST /session/:id/revert|unrevert set and clear `revert` of the row (session.updated); the next prompt_async removes the cut messages (message.removed) and clears it.
-// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500.
+// Test routes (no auth): POST /__revert {sessionId, messageID} and /__unrevert {sessionId} (an unrevert from OpenCode's own UI), POST /__script {files} queues turns, POST /__emit {directory?, events} sends payloads, POST /__drop closes the event streams, POST /__fail {path} makes the next request to that path answer 500, POST /__zombie stops listening but keeps the open connections and resets every one that sends a request (a server that died while the kernel has not closed its sockets yet).
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_LOG (JSON lines of starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not).
 import { createServer } from "node:http";
+import { Server } from "node:net";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -42,6 +43,7 @@ let current;
 let asks = data.asks ?? [];
 const busy = new Set(data.busy ?? []);
 let generation = 0;
+let zombie = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (directory, payload) => {
   for (const c of clients) c.write(`data: ${JSON.stringify({ directory, payload })}\n\n`);
@@ -93,6 +95,7 @@ async function play(node, sessionId, directory, messageID, recorded) {
 }
 
 const server = createServer(async (req, res) => {
+  if (zombie) return req.socket.resetAndDestroy();
   const url = new URL(req.url ?? "/", "http://x");
   const json = (code, body) => (res.writeHead(code, { "content-type": "application/json" }), res.end(JSON.stringify(body)));
   if (url.pathname.startsWith("/__")) {
@@ -114,6 +117,8 @@ const server = createServer(async (req, res) => {
       (delete s.revert, updated(s));
     }
     if (url.pathname === "/__fail") failNext.add(body.path);
+    // net's close, not http's: http's also ends the idle keep-alive connections.
+    if (url.pathname === "/__zombie") (Server.prototype.close.call(server), (zombie = true));
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
     return json(200, { ok: true });
   }
