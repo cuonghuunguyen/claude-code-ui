@@ -16,9 +16,9 @@ import { visualizeSystem } from "./visualize.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions accept; no `auto` or `dontAsk`. `plan` is the `plan` agent (GH-684): accepted as input, never offered. */
-export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-/** Modes offered: plan is the plan agent (GH-684). */
-export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "bypassPermissions"];
+export const OPENCODE_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "plan", "bypassPermissions"];
+/** Modes offered: config first (the default, GH-705); plan is the plan agent (GH-684). */
+export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "bypassPermissions"];
 export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
@@ -68,12 +68,14 @@ const ORCHESTRATION = { name: "orchestration", source: "sdk" };
  * change appends a whole new block). Marker rules (`claude-ui`) match no tool: they tell a restore which mode is in force and where the
  * "always allow" rules start. `agentRules`: the current agent's denials (`denialsOf`), appended after the mode's rules: OpenCode evaluates the
  * session's rules after the agent's, so without them a custom agent's `edit: deny` (or plan's) would lose to the mode.
+ * `config` has no tool rules of its own: OpenCode's config and the agent decide (GH-705).
  * shortcut: every mode change appends one block; fine for hundreds of switches.
  */
-export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule[], { readOnly = false, mcp, agent }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string; /** The agent the block was written for. */ agent?: string } = {}): Rule[] {
+export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule[], { readOnly = false, mcp, agent, config }: { /** `config` mode: the agent's whole ruleset, re-applied to undo an earlier block's tool rules; absent on create. */ config?: Rule[]; readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string; /** The agent the block was written for. */ agent?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
-    mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"].map((p) => star(p, "allow"))
+    mode === "config" ? (config ?? [])
+    : mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
   // Orchestration MCP servers are attached per folder: hide every session's tools but the own ones; worker_start asks (the user's gate on new workers).
@@ -266,9 +268,9 @@ class OpenCodeSession implements EngineSession {
     private readonly history?: OpenCodeHistory,
   ) {
     this.model = opts.model ?? "default";
-    // A restored session without a saved mode has the one of its last block in OpenCode (bypass only when the daemon allows it).
+    // A restored session without a saved mode has the one of its last block in OpenCode (bypass only when the daemon allows it); without a block it ran under OpenCode's config (GH-705).
     const marked = history && modeOf(history.permission);
-    const mode = opts.permissionMode ?? (marked && OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
+    const mode = opts.permissionMode ?? (!marked ? "config" : OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
     // Plan is the plan agent (GH-684): a saved, restored or requested plan mode opens as agent `plan` with the default permission mode.
     this.permissionMode = mode === "plan" ? "default" : mode;
     if (mode === "plan") this.chosen = "plan";
@@ -432,8 +434,10 @@ class OpenCodeSession implements EngineSession {
   private async writeBlock(mode: PermissionMode, agent = this.agentName()) {
     const mcp = this.mcpOn;
     const known = await this.engine.agents(this.cwd);
-    const agentRules = denialsOf(known.find((a) => a.name === agent)?.permission ?? []);
-    const permission = modeBlock(mode, this.always, agentRules, { agent, readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }) });
+    const own = known.find((a) => a.name === agent)?.permission ?? [];
+    const agentRules = denialsOf(own);
+    // shortcut: a config block copies the agent's rules as GET /agent gave them (cached 60 s), so later opencode.json edits reach this session after the next block write; upgrade: track whether the session ruleset has anything to undo.
+    const permission = modeBlock(mode, this.always, agentRules, { agent, readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }), ...(mode === "config" && { config: own }) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
     this.writtenAgent = agent;

@@ -470,7 +470,7 @@ export class ClaudeSession implements EngineSession {
         // Not a canUseTool deny: a user settings allow rule (e.g. Edit) would skip canUseTool.
         ...(disallowed && { disallowedTools: disallowed }),
         model: this.model === "default" ? undefined : this.model,
-        permissionMode: this.permissionMode,
+        permissionMode: this.permissionMode as Exclude<PermissionMode, "config">, // config is OpenCode's; never set on a Claude session
         allowDangerouslySkipPermissions: !!this.opts.allowBypass,
         effort: this.effort === "default" ? undefined : this.effort,
         includePartialMessages: true,
@@ -740,7 +740,7 @@ export class ClaudeSession implements EngineSession {
   async setPermissionMode(mode: PermissionMode) {
     if (!this.session.isLive()) throw new Error(`session ${this.id} is not live (${this.session.currentState()})`);
     if (!this.session.info().permissionModes.includes(mode)) throw new Error(`permission mode ${mode} is not enabled`);
-    await this.query?.setPermissionMode(mode);
+    await this.query?.setPermissionMode(mode as Exclude<PermissionMode, "config">); // refused above unless offered
     // The user's pick is saved even when unchanged here: another daemon may have saved a different mode meanwhile.
     if (mode === this.permissionMode) this.settingsChanged(["permissionMode"]);
     else this.setMode(mode);

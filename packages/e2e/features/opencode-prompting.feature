@@ -1,12 +1,16 @@
 Feature: OpenCode prompting (GH-656)
 
   # The engine choice is remembered per run folder: every scenario picks OpenCode itself.
-  # Needs a real OpenCode binary (E2E_OPENCODE_BIN) and its free model: no login. Prompts name the tool; only structure is asserted.
+  # Needs a real OpenCode binary (E2E_OPENCODE_BIN). Prompts name the tool; only structure is asserted.
+  # @model: DeepSeek V4.1 Flash with the owner's login (E2E_OPENCODE_AUTH names a copy of its auth file).
   # A skipped tool call fails the scenario once; the runner retries it once.
+  @model
   Scenario: A prompt streams a reply and the turn ends
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Reply with exactly: OK"
     Then I see my prompt in the transcript
     And I see a reply from Claude
@@ -18,21 +22,28 @@ Feature: OpenCode prompting (GH-656)
     And I capture "rewind enabled"
 
   # GH-682: OpenCode keeps a request cut off during a folder's MCP load as the folder's state, and every turn there then aborts. No request of ours is cut off.
+  @model
   Scenario: A prompt in a folder whose MCP server loads slowly gets a reply
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode has an MCP server that takes 8 seconds to load
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Reply with exactly: OK"
     Then I see a reply from Claude
     And the turn has finished
     And I capture "slow mcp reply"
 
+  @model
   Scenario Outline: Allow once runs a bash command at <width>x<height>
     Given the viewport is <width>x<height>
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
-    When I send the first prompt "Run `echo hi` with the bash tool and nothing else"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
+    When I pick the permission mode "Ask before edits"
+    And I send the first prompt "Run `echo hi` with the bash tool and nothing else"
     Then I see a permission request
     And the permission panel has no Edit content button
     And the page has no horizontal scroll
@@ -51,11 +62,15 @@ Feature: OpenCode prompting (GH-656)
       | 1440  | 900    |
       | 390   | 844    |
 
+  @model
   Scenario: Allow always shows the rule and skips the next panel
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
-    When I send the first prompt "Run `echo hi` with the bash tool and nothing else"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
+    When I pick the permission mode "Ask before edits"
+    And I send the first prompt "Run `echo hi` with the bash tool and nothing else"
     Then I see a permission request
     And the permission rule line shows "Bash(echo *)"
     When I allow the permission request always
@@ -67,11 +82,15 @@ Feature: OpenCode prompting (GH-656)
     And the turn has finished
     And I capture "always"
 
+  @model
   Scenario: Deny with feedback marks the card denied and the assistant continues
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
-    When I send the first prompt "Run `echo hi` with the bash tool and nothing else"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
+    When I pick the permission mode "Ask before edits"
+    And I send the first prompt "Run `echo hi` with the bash tool and nothing else"
     Then I see a permission request
     When I deny the permission request with the feedback "Use another approach"
     Then the permission request is gone
@@ -79,10 +98,13 @@ Feature: OpenCode prompting (GH-656)
     And the turn has finished
     And I capture "denied"
 
+  @model
   Scenario Outline: A question panel is answered at <width>x<height>
     Given the viewport is <width>x<height>
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Use the question tool to ask me whether I prefer red or blue, with exactly those two options"
     Then I see a question request
     And the page has no horizontal scroll
@@ -100,10 +122,13 @@ Feature: OpenCode prompting (GH-656)
       | 1440  | 900    |
       | 390   | 844    |
 
+  @model
   Scenario: Stop interrupts a long turn
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Without using any tool, write 60 long paragraphs about the history of numbers"
     And the reply has started streaming
     And I stop the turn
@@ -111,8 +136,10 @@ Feature: OpenCode prompting (GH-656)
     And the transcript shows the interrupted divider
     And I capture "stopped"
 
+  @model
   Scenario Outline: The model picker is grouped and a picked model runs the next turn at <width>x<height>
     Given the viewport is <width>x<height>
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     When I open the model chooser
@@ -123,7 +150,8 @@ Feature: OpenCode prompting (GH-656)
     And I switch the theme mode to "dark"
     And I open the model chooser
     Then I capture "models dark"
-    When I pick the first model of the group "OpenCode"
+    When I close the open chooser
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     And I send the first prompt "Reply with exactly: OK"
     Then I see a reply from Claude
     And the turn has finished
@@ -138,14 +166,17 @@ Feature: OpenCode prompting (GH-656)
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     When I open the mode chooser
-    Then the permission chooser offers exactly "Ask before edits, Edit automatically"
+    Then the permission chooser offers exactly "Use OpenCode config, Ask before edits, Edit automatically"
     And the effort chooser is absent
     And I capture "modes"
 
+  @model
   Scenario Outline: Rewind and Ask aside are enabled at <width>x<height>
     Given the viewport is <width>x<height>
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Reply with exactly: OK"
     And the turn has finished
     Then the rewind button is enabled
@@ -157,10 +188,13 @@ Feature: OpenCode prompting (GH-656)
       | width | height |
       | 390   | 844    |
 
+  @model
   Scenario: A subagent runs as a nested card
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     And the project has a file "a.txt" with the text "alpha"
     When I send the first prompt "Use the task tool with subagent_type general to read a.txt and report its content"
     Then a subagent card is shown

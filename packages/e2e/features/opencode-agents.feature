@@ -1,7 +1,7 @@
 Feature: OpenCode agents (GH-684)
 
   # Needs a real OpenCode binary (E2E_OPENCODE_BIN) with an isolated config: the scratch project's opencode.json adds the primary agent "review" (edit denied).
-  # The free OpenCode model needs no login. Prompts name the tool; only structure and files are asserted.
+  # @model: DeepSeek V4.1 Flash with the owner's login (E2E_OPENCODE_AUTH names a copy of its auth file). Prompts name the tool; only structure and files are asserted.
   Scenario: The agent chooser lists the primary agents next to the permission chooser
     Given the viewport is 1440x900
     And the OpenCode project has a primary agent "review" that cannot edit
@@ -18,14 +18,17 @@ Feature: OpenCode agents (GH-684)
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     When I open the permission chooser
-    Then the permission chooser offers exactly "Ask before edits, Edit automatically"
+    Then the permission chooser offers exactly "Use OpenCode config, Ask before edits, Edit automatically"
     And I capture "permission chooser"
 
+  @model
   Scenario: Plan runs the next prompt as the plan agent and survives a daemon restart
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And the OpenCode project has a primary agent "review" that cannot edit
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I pick the agent "Plan"
     And I send the first prompt "Create a file named x.txt with the text hi using the write tool"
     And the turn has finished
@@ -44,7 +47,7 @@ Feature: OpenCode agents (GH-684)
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     Then the agent chooser shows "Build"
-    And the permission mode is still "Ask before edits"
+    And the permission mode is still "Use OpenCode config"
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Plan"
     And I capture "cycled plan"
@@ -56,13 +59,16 @@ Feature: OpenCode agents (GH-684)
     Then the agent chooser shows "Review"
     When I press "Shift+Tab" in the prompt box
     Then the agent chooser shows "Build"
-    And the permission mode is still "Ask before edits"
+    And the permission mode is still "Use OpenCode config"
 
+  @model
   Scenario: After a reload the open session still lists the custom agent and Shift+Tab reaches it
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And the OpenCode project has a primary agent "review" that cannot edit
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Reply with the single word ok"
     And the turn has finished
     And I reload the page
@@ -76,22 +82,28 @@ Feature: OpenCode agents (GH-684)
     Then the agent chooser shows "Review"
     And I capture "reload agents"
 
+  @model
   Scenario: A session created from the new-session tab lists the custom agent without a reload
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And the OpenCode project has a primary agent "review" that cannot edit
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Reply with the single word ok"
     And the turn has finished
     And I open the agent chooser
     Then the agent chooser offers exactly "Build, Plan, Review"
     And I capture "new session agents"
 
+  @model
   Scenario: An agent that denies edits wins over Edit automatically
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And the OpenCode project has a primary agent "review" that cannot edit
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I pick the agent "Review"
     And I pick the permission mode "Edit automatically"
     And I send the first prompt "Create a file named x.txt with the text hi using the write tool"

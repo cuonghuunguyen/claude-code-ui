@@ -250,6 +250,9 @@ describe("workerMode", () => {
       expect([o.mode, o.note !== undefined]).toEqual([mode, note]);
     }
     expect(workerMode("bypassPermissions", undefined, false).wanted).toBe("auto");
+    // config is OpenCode's: a Claude worker of a coordinator in config runs in default, an OpenCode worker inherits it.
+    expect(workerMode("config", undefined, false).mode).toBe("default");
+    expect(workerMode("config", undefined, false, true, false, true).mode).toBe("config");
     expect(workerMode("auto", undefined, false, false).note).toMatch(/model list is not loaded/);
   });
 });

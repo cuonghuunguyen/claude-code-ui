@@ -134,6 +134,22 @@ describe("permission blocks", () => {
     expect(ro.slice(-2)).toEqual([rule("edit", "*", "deny"), rule("claude-ui", "always")]);
   });
 
+  it("config: a new-session block has no tool rules; a later one re-applies the agent's rules after every earlier block", () => {
+    expect(modeBlock("config", [], [], { agent: "build" }).map((r) => `${r.permission}:${r.pattern}`)).toEqual(["claude-ui:mode:config", "claude-ui:agent:build", "orchestration-*:*", "claude-ui:always"]);
+    const last = (rules: { permission: string; pattern: string; action: string }[], perm: string, pat: string) => [...rules].reverse().find((r) => (r.permission === "*" || r.permission === perm) && (r.pattern === "*" || r.pattern === pat))?.action ?? "ask";
+    const A = [rule("*", "*"), rule("external_directory", "*", "ask")];
+    const after = (earlier: ReturnType<typeof modeBlock>, cfg = A) => [...cfg, ...earlier, ...modeBlock("config", [], [], { agent: "build", config: cfg })];
+    for (const earlier of [modeBlock("default", [], []), modeBlock("bypassPermissions", [], [])]) {
+      const rules = after(earlier);
+      expect(["bash", "edit"].map((p) => last(rules, p, "x"))).toEqual(["allow", "allow"]);
+      expect(last(rules, "external_directory", "/x")).toBe("ask");
+    }
+    expect(last(after(modeBlock("default", [], []), [rule("*", "*"), rule("bash", "*", "ask")]), "bash", "ls")).toBe("ask");
+    const denied = [rule("*", "*"), rule("edit", "*", "deny")];
+    expect(last([...denied, ...modeBlock("config", [], denied.slice(1), { config: denied })], "edit", "x")).toBe("deny");
+    expect(modeBlock("config", [], [], { mcp: "orchestration-abcdefghij" })).toContainEqual(rule("orchestration-abcdefghij_worker_start", "*", "ask"));
+  });
+
   it("orchestration rules: every block hides all orchestration servers; an attached one allows its own tools and asks for worker_start except in bypass", () => {
     expect(modeBlock("default", [], [])).toContainEqual(rule("orchestration-*", "*", "deny"));
     expect(modeBlock("default", [], [], { mcp: "orchestration-abcdefghij" }).slice(-4, -1)).toEqual([rule("orchestration-*", "*", "deny"), rule("orchestration-abcdefghij_*", "*"), rule("orchestration-abcdefghij_worker_start", "*", "ask")]);

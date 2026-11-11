@@ -117,6 +117,8 @@ export default {
   "app.quickOpen.insertKey": "Chèn @{path} vào prompt ({key})",
   "app.quickOpen.searchKey": "Tìm tệp ({key})",
   // toolbar.tsx
+  "app.toolbar.mode.config": "Theo cấu hình OpenCode",
+  "app.toolbar.modeShort.config": "Cấu hình",
   "app.toolbar.mode.default": "Hỏi trước khi sửa",
   "app.toolbar.modeShort.default": "Hỏi",
   "app.toolbar.mode.acceptEdits": "Tự động sửa",

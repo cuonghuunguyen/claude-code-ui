@@ -367,11 +367,12 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
-    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:build:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session).toMatchObject({ permissionMode: "config", permissionModes: ["config", "default", "acceptEdits"] });
     for (const mode of ["auto", "dontAsk", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
     const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
-    expect(reply.session).toMatchObject({ permissionMode: "default", agent: "plan" });
-    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:plan:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(reply.session).toMatchObject({ permissionMode: "config", agent: "plan" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:plan:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     await s.prompt("plan it");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
@@ -386,12 +387,27 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[1].pattern).toBe("agent:build");
   });
 
+  it("config: default then config re-applies the agent's whole ruleset", async () => {
+    const d = await boot({ script: ["text"] });
+    const build = [{ permission: "*", pattern: "*", action: "allow" }, { permission: "external_directory", pattern: "*", action: "ask" }];
+    const s = await d.open();
+    await d.fake("/__agents", { agents: [{ name: "build", mode: "primary", permission: build }] });
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/agent").length >= 2);
+    const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toContain("bash:*:ask");
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "config" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "*:*:allow", "external_directory:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+  });
+
   it("agents: the agents part lists build, docs and plan; setAgent writes a block with the agent's denials and prompts as it; an unknown or subagent name is refused", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("agents"));
     expect(s.find("agents")!.agents).toEqual([{ name: "build" }, { name: "docs", description: "Writes docs" }, { name: "plan" }]);
     const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
     expect((await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" })).session.agent).toBe("docs");
     expect(s.find("session_agent")?.agent).toBe("docs");
     expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:docs:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
@@ -417,6 +433,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
     const first = await boot({ root });
     const s = await first.open();
+    await first.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
     await first.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
     const saved = JSON.parse(readFileSync(join(root, "sessions.json"), "utf8"))[s.id];
     expect(saved).toMatchObject({ agent: "docs", permissionMode: "default" });
@@ -1023,7 +1040,7 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     expect((await c.listTools()).tools.map((t) => t.name)).toEqual(expect.arrayContaining(["worker_start", "worker_list", "worker_wait"]));
     // A worker started through the route belongs to this coordinator; absent engine = the coordinator's (OpenCode).
     const started = json(await c.callTool({ name: "worker_start", arguments: { name: "w1", cwd: d.project, prompt: "do it" } }));
-    expect(started).toMatchObject({ name: "w1", engine: "opencode", mode: "default" });
+    expect(started).toMatchObject({ name: "w1", engine: "opencode", mode: "config" });
     expect(started.sessionId).toMatch(/^ses_/);
     await until(() => d.requests("POST", `/session/${started.sessionId}/prompt_async`).length === 1);
     expect(d.requests("POST", `/session/${started.sessionId}/prompt_async`)[0]!.body.parts[0].text).toBe("do it");
@@ -1081,7 +1098,7 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     await d.fake("/__emit", { directory: d.project, events: [{ type: "message.part.updated", properties: { part: call } }, { type: "permission.asked", properties: { id: "per_ws", sessionID: s.id, permission: call.tool, patterns: ["*"], always: ["*"], metadata: {}, tool: { messageID: "msg_ws", callID: "call_ws" } } }] });
     await until(() => !!s.find("permission_request"));
     expect(s.last("call_ws")).toMatchObject({ type: "tool_call", tool: "mcp__orchestration__worker_start" });
-    expect(s.find("permission_request")).toMatchObject({ tool: "mcp__orchestration__worker_start", suggestions: [], title: expect.stringMatching(/^Start OpenCode worker w2 in default mode/) });
+    expect(s.find("permission_request")).toMatchObject({ tool: "mcp__orchestration__worker_start", suggestions: [], title: expect.stringMatching(/^Start OpenCode worker w2 in config mode/) });
   });
 
   it("no attach while orchestration is off; the session's close disconnects it", async () => {

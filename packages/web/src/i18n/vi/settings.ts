@@ -178,7 +178,7 @@ export default {
   "settings.section.chat": "Trò chuyện",
   "settings.section.sessions": "Phiên mới",
   "settings.row.sessions.defaultMode.label": "Chế độ quyền mặc định",
-  "settings.row.sessions.defaultMode.hint": "Chế độ quyền của phiên mới khi Claude settings (permissions.defaultMode) không đặt. Auto chạy như Mặc định trên model không hỗ trợ auto.",
+  "settings.row.sessions.defaultMode.hint": "Chế độ quyền của phiên Claude mới khi Claude settings (permissions.defaultMode) không đặt. Auto chạy như Mặc định trên model không hỗ trợ auto. Phiên OpenCode bắt đầu ở Theo cấu hình OpenCode.",
   "settings.section.usageLimit": "Giới hạn mức dùng",
   "settings.section.performance": "Hiệu năng",
   "settings.section.history": "Lịch sử cục bộ",

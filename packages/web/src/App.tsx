@@ -3085,13 +3085,13 @@ export function App() {
     );
   }, [listKey, status, modelsRetry, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
-  const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? (draftModes.includes(defaultMode) ? defaultMode : draftModes.includes("default") ? "default" : draftModes[0]!) };
+  const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? draftStartMode(draftModes, defaultMode) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
   const changeDraft = (d: StartOptions) => {
     if (d.engine !== draft.engine) {
       // Another Engine has its own models, modes and effort levels.
       const offered = modesFor(d.engine!, "default");
-      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: offered.includes(d.mode) ? d.mode : offered[0] });
+      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: pick.mode && offered.includes(pick.mode) ? pick.mode : undefined });
     }
     const list = modelsOf(draftEngine, draftProject);
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
@@ -5171,6 +5171,8 @@ const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.aut
 export type StartOptions = { model: string; mode: PermissionMode; effort: Effort; draft?: string; engine?: Engine; /** OpenCode: the agent the session starts as. */ agent?: string };
 /** What starts a session: a first prompt, or a bash mode command (`!` in the first prompt box). */
 export type FirstMessage = { text: string; images: string[] } | { command: string };
+/** The mode a new-session draft starts in: config when the Engine offers it (OpenCode, GH-705), else the settings default when offered, else Ask. */
+export const draftStartMode = (modes: PermissionMode[], defaultMode: PermissionMode): PermissionMode => (modes.includes("config") ? "config" : modes.includes(defaultMode) ? defaultMode : modes.includes("default") ? "default" : modes[0]!);
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
 type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
 const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
