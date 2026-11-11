@@ -102,7 +102,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(listed.sessions.length).toBeGreaterThan(0);
     for (const s of listed.sessions) expect(s).toMatchObject({ engine: "claude", capabilities: ALL_CAPABILITIES });
     expect(listed.engines.map((e: any) => e.engine)).toEqual(["claude", "opencode"]);
-    expect(listed.engines[1]).toMatchObject({ capabilities: OPENCODE_CAPABILITIES, permissionModes: ["default", "acceptEdits", "plan"] });
+    expect(listed.engines[1]).toMatchObject({ capabilities: OPENCODE_CAPABILITIES, permissionModes: ["default", "acceptEdits"] });
     expect(d.starts()).toHaveLength(0);
   });
 

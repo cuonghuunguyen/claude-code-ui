@@ -136,6 +136,7 @@ Then("the OpenCode session is tagged in its sidebar row", async ({ page }) => {
 
 When("I open the first session row", async ({ page }) => {
   await openDrawer(page);
+  await expect(sidebarRow(page).first()).toBeVisible({ timeout: 60_000 });
   await sidebarRow(page).first().click();
 });
 

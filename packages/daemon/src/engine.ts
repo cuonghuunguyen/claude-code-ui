@@ -42,6 +42,10 @@ export interface EngineSession {
   setModel(model: string): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setEffort(effort: Effort): Promise<void>;
+  /** Engines with `agents` (OpenCode); Claude has none. */
+  setAgent?(agent: string): Promise<void>;
+  /** Engines with `agents`: reads the agent list again and emits the `agents` part (the chooser's retry). */
+  refreshAgents?(): Promise<void>;
   interrupt(): Promise<void>;
   stopSubagent(callId: string): Promise<boolean>;
   backgroundShell(toolUseId: string): Promise<boolean>;

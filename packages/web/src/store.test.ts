@@ -155,6 +155,38 @@ describe("applyEvent", () => {
   });
 });
 
+describe("OpenCode agents (GH-684)", () => {
+  it("session_agent and agents parts set the view's agent and list; a session_agent older than the settings read is ignored", () => {
+    const list = [{ name: "build" }, { name: "plan", description: "Plans" }];
+    let s = [ev(1, { type: "agents", id: "agents", agents: list }), ev(2, { type: "session_agent", id: "session_agent", agent: "plan" })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: list, order: [] });
+    s = withSubscribe(s, { logEpoch: "e", seq: 5, session: { id: "s", cwd: "/", state: "idle", model: "m", permissionMode: "default", effort: "default", agent: "build", permissionModes: [] } });
+    expect(s.agent).toBe("build");
+    // A replayed change older than the reply's values must not win.
+    s = applyEvent(s, ev(3, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("build");
+    s = applyEvent(s, ev(6, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("plan");
+  });
+
+  it("GH-684: a paged subscribe snapshot with an agents head gives the view its agent list (and a failed one its flag)", () => {
+    const list = [{ name: "build" }, { name: "plan" }, { name: "review" }];
+    const info = { id: "s", cwd: "/", state: "idle" as const, model: "m", permissionMode: "default" as const, effort: "default" as const, agent: "plan", permissionModes: [] };
+    const snap = (part: Part) => ({ heads: [{ type: "event" as const, sessionId: "s", seq: 2, part }], attentionSeq: 0, page: { parts: [] }, aux: [] });
+    const ok = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: list }) } as never);
+    expect(ok).toMatchObject({ agent: "plan", agents: list, agentsFailed: false });
+    const failed = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: [], failed: true }) } as never);
+    expect(failed).toMatchObject({ agents: [], agentsFailed: true });
+  });
+
+  it("a failed agents part keeps the agent and sets agentsFailed; the next list clears it", () => {
+    let s = [ev(1, { type: "session_agent", id: "session_agent", agent: "plan" }), ev(2, { type: "agents", id: "agents", agents: [], failed: true })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: [], agentsFailed: true });
+    s = applyEvent(s, ev(3, { type: "agents", id: "agents", agents: [{ name: "build" }] }));
+    expect(s).toMatchObject({ agents: [{ name: "build" }], agentsFailed: false });
+  });
+});
+
 describe("withSubscribe", () => {
   const filled = (): SessionView => ({ ...[ev(1, text("a", "x")), ev(2, text("b", "y"))].reduce(applyEvent, emptySession()), logEpoch: "e1" });
   const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };

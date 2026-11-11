@@ -15,11 +15,27 @@ import { mapLimit } from "./session-scan.ts";
 import { visualizeSystem } from "./visualize.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
-/** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
+/** Modes OpenCode sessions accept; no `auto` or `dontAsk`. `plan` is the `plan` agent (GH-684): accepted as input, never offered. */
 export const OPENCODE_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
+/** Modes offered: plan is the plan agent (GH-684). */
+export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "bypassPermissions"];
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
+/** An entry of `GET /agent`. */
+export type OpenCodeAgent = { name: string; description?: string; mode?: string; hidden?: boolean | null; permission: Rule[] };
+/** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
+export const primaryAgents = (list: OpenCodeAgent[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
+/**
+ * The rules of `permission` that must win over the permission mode: for each key, its deny rules and the rules that follow its first deny (the
+ * exceptions to it: plan's plan-file `edit` allow). An agent's allow rules before that (`bash * allow`) are not appended: they would turn
+ * Ask before edits into allow, while the deny still wins.
+ */
+export const denialsOf = (permission: readonly Rule[]): Rule[] => {
+  const first = new Map<string, number>();
+  permission.forEach((r, i) => r.action === "deny" && !first.has(r.permission) && first.set(r.permission, i));
+  return permission.filter((r, i) => i >= (first.get(r.permission) ?? Infinity));
+};
 const MARK = "claude-ui";
 const marker = (pattern: string): Rule => ({ permission: MARK, pattern, action: "allow" });
 const star = (permission: string, action: Rule["action"]): Rule => ({ permission, pattern: "*", action });
@@ -43,20 +59,20 @@ const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 /**
  * The rules a permission mode appends to a session (OpenCode evaluates last match wins; rules cannot be removed through the API, so a mode
  * change appends a whole new block). Marker rules (`claude-ui`) match no tool: they tell a restore which mode is in force and where the
- * "always allow" rules start. `planEdit`: the `plan` agent's own `edit` rules, so earlier edit rules no longer win.
+ * "always allow" rules start. `agentRules`: the current agent's denials (`denialsOf`), appended after the mode's rules: OpenCode evaluates the
+ * session's rules after the agent's, so without them a custom agent's `edit: deny` (or plan's) would lose to the mode.
  * shortcut: every mode change appends one block; fine for hundreds of switches.
  */
-export function modeBlock(mode: PermissionMode, always: Rule[], planEdit: Rule[], { readOnly = false, mcp }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string } = {}): Rule[] {
+export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule[], { readOnly = false, mcp, agent }: { readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string; /** The agent the block was written for. */ agent?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
     mode === "bypassPermissions" ? ["bash", "edit", "webfetch", "websearch", "external_directory", "doom_loop"].map((p) => star(p, "allow"))
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
-    : mode === "plan" ? [star("bash", "ask"), ...asks, ...planEdit]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
   // Orchestration MCP servers are attached per folder: hide every session's tools but the own ones; worker_start asks (the user's gate on new workers).
   const orchestration = [star("orchestration-*", "deny"), ...(mcp ? [star(`${mcp}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [star(`${mcp}_worker_start`, "ask")])] : [])];
   // A read-only Aside: the last matching rule hides edit, write and apply_patch, whatever the mode allows.
-  return [marker(`mode:${mode}`), ...rules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
+  return [marker(`mode:${mode}`), ...(agent ? [marker(`agent:${agent}`)] : []), ...rules, ...agentRules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
 }
 const lastMarker = (rules: readonly Rule[], test: (pattern: string) => boolean) => rules.map((r) => r.permission === MARK && test(r.pattern)).lastIndexOf(true);
 /** The "always allow" rules of a session: the ones after the last `always` marker. */
@@ -66,6 +82,12 @@ export const alwaysOf = (rules: readonly Rule[]): Rule[] => {
 };
 /** The rules of the last block (all rules when there is none). */
 const lastBlock = (rules: readonly Rule[]) => rules.slice(Math.max(lastMarker(rules, (p) => p.startsWith("mode:")), 0));
+/** The agent of the last block, undefined for a session without one (or a block from before agents). */
+export const agentOf = (rules: readonly Rule[]): string | undefined => {
+  const block = lastBlock(rules);
+  const i = lastMarker(block, (p) => p.startsWith("agent:"));
+  return i < 0 ? undefined : block[i]!.pattern.slice(6);
+};
 /** The mode of the last block, undefined for a session without one. */
 export const modeOf = (rules: readonly Rule[]): PermissionMode | undefined => {
   const i = lastMarker(rules, (p) => p.startsWith("mode:"));
@@ -179,7 +201,12 @@ class OpenCodeSession implements EngineSession {
   private stopped = false;
   /** When the last prompt was posted, Infinity while it is on its way (OpenCode may not be busy yet: a resync must not end that turn). */
   private sentAt = 0;
-  private leavingPlan = false;
+  /** The agent chosen with `setAgent`, the plan alias, or followed from OpenCode's own UI; else the worker link's agent, else build. */
+  private chosen: string | undefined;
+  /** The agent of the last block written (the block holds its denials). */
+  private writtenAgent: string | undefined;
+  /** A followed agent switch is being written (one block per switch, however many `message.updated` events). */
+  private following = false;
   /** A bash mode command (`POST /shell`, no model call) is running as the turn: its end sends no `turn_result`. */
   private shellRun = false;
   /** Settles when the running turn goes idle. */
@@ -234,10 +261,14 @@ class OpenCodeSession implements EngineSession {
     this.model = opts.model ?? "default";
     // A restored session without a saved mode has the one of its last block in OpenCode (bypass only when the daemon allows it).
     const marked = history && modeOf(history.permission);
-    this.permissionMode = opts.permissionMode ?? (marked && OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
+    const mode = opts.permissionMode ?? (marked && OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
+    // Plan is the plan agent (GH-684): a saved, restored or requested plan mode opens as agent `plan` with the default permission mode.
+    this.permissionMode = mode === "plan" ? "default" : mode;
+    if (mode === "plan") this.chosen = "plan";
     this.effort = opts.effort ?? "default";
-    // A new session got its block with `POST /session`.
+    // A new session got its block with `POST /session` (the plan agent for a plan start, else build); a legacy plan block has no agent marker.
     this.written = history ? modeOf(history.permission) : this.permissionMode;
+    this.writtenAgent = history ? agentOf(history.permission) : (this.chosen ?? "build");
     this.always = history ? alwaysOf(history.permission) : [];
     this.revertAt = history?.revert;
     this.writtenMcp = !!history && lastBlock(history.permission).some((r) => r.permission === `${mcpName(session.id)}_*` && r.action === "allow");
@@ -257,6 +288,7 @@ class OpenCodeSession implements EngineSession {
   begin() {
     this.engine.add(this);
     void this.emitCommands();
+    void this.emitAgents();
     void this.attach();
     if (!this.history) return;
     this.apply(this.history);
@@ -284,6 +316,14 @@ class OpenCodeSession implements EngineSession {
     this.commandNames = new Set(commands.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
     this.session.emit({ type: "commands", id: "commands", commands });
   }
+
+  /** The `agents` part; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). Never waits for the caller. */
+  refreshAgents = async () => {
+    const list = await this.engine.agents(this.cwd).catch(() => undefined);
+    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
+    this.session.emit({ type: "agents", id: "agents", agents: primaryAgents(list).map(({ name, description }) => ({ name, ...(description && { description }) })) });
+  };
+  private emitAgents = () => this.refreshAgents();
 
   private noteUsage(info: OpenCodeMessage["info"]) {
     if (info.role === "assistant" && info.time?.completed && info.tokens && info.providerID && info.modelID) this.usage = { tokens: info.tokens, providerID: info.providerID, modelID: info.modelID };
@@ -314,6 +354,7 @@ class OpenCodeSession implements EngineSession {
         // A status event that came while the read ran is newer than the read.
         if (seen === this.statusEvents) this.setRetry(h.retry);
         void this.emitCommands();
+        void this.emitAgents();
         this.requests(h);
         const state = this.session.currentState();
         if (h.busy && state === "idle" && !this.hiding()) (this.beginTurn(), this.noteLastUser(h.messages), this.session.setState("running"));
@@ -325,10 +366,10 @@ class OpenCodeSession implements EngineSession {
   }
 
   settings(): SessionSettings {
-    return { model: this.model, permissionMode: this.permissionMode, effort: this.effort };
+    return { model: this.model, permissionMode: this.permissionMode, effort: this.effort, agent: this.agentName() };
   }
-  private changed(field: keyof SessionSettings) {
-    this.opts.onSettings?.(this.settings(), this.id, [field]);
+  private changed(...fields: (keyof SessionSettings)[]) {
+    this.opts.onSettings?.(this.settings(), this.id, fields);
   }
   private notice(id: string, text: string) {
     this.session.emit({ type: "notice", id: `${this.id}:${id}`, level: "warning", text });
@@ -354,6 +395,7 @@ class OpenCodeSession implements EngineSession {
     this.changed("model");
   }
   async setPermissionMode(mode: PermissionMode) {
+    if (mode === "plan") return this.setAgent("plan");
     if (!this.session.info().permissionModes.includes(mode)) throw new Error(`permission mode ${mode} is not enabled`);
     await this.writeBlock(mode);
     this.permissionMode = mode;
@@ -366,11 +408,28 @@ class OpenCodeSession implements EngineSession {
     this.changed("effort");
   }
 
-  private async writeBlock(mode: PermissionMode) {
+  /** Applies from the next prompt: the block gets the agent's denials; `agent` must be a primary agent of OpenCode here. */
+  async setAgent(agent: string) {
+    const list = primaryAgents(await this.engine.agents(this.cwd));
+    if (!list.some((a) => a.name === agent)) throw new Error(`unknown agent ${agent}. OpenCode agents here: ${list.map((a) => a.name).join(", ")}`);
+    await this.writeBlock(this.permissionMode, agent);
+    this.chosen = agent;
+    this.session.emit({ type: "session_agent", id: "session_agent", agent });
+    this.changed("agent", "permissionMode"); // a saved legacy `plan` mode must not win over the agent at the next restore
+  }
+
+  /** The agent prompts run as. `opts.agent` (the worker link) is read lazily: orchestration writes it after the session is created. */
+  private agentName = () => this.chosen ?? this.opts.agent?.(this.id) ?? "build";
+
+  /** Writes a block for `mode` and `agent` (the agent's denials come from `GET /agent`). */
+  private async writeBlock(mode: PermissionMode, agent = this.agentName()) {
     const mcp = this.mcpOn;
-    const permission = modeBlock(mode, this.always, mode === "plan" ? await this.engine.planEdit(this.cwd) : [], { readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }) });
+    const known = await this.engine.agents(this.cwd);
+    const agentRules = denialsOf(known.find((a) => a.name === agent)?.permission ?? []);
+    const permission = modeBlock(mode, this.always, agentRules, { agent, readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
+    this.writtenAgent = agent;
     this.writtenMcp = mcp;
   }
 
@@ -497,9 +556,6 @@ class OpenCodeSession implements EngineSession {
     });
   }
 
-  /** The OpenCode agent of a prompt: `plan` in plan mode, else the worker's `agent` (a primary agent of `GET /agent`), else `build`. */
-  private agent = () => (this.permissionMode === "plan" ? "plan" : (this.opts.agent?.(this.id) ?? "build"));
-
   private async send(messageID: string, text: string, images: string[], command?: { name: string; args: string }) {
     const run = this.stops.begin();
     // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
@@ -508,14 +564,21 @@ class OpenCodeSession implements EngineSession {
       // Events of the turn must find the stream open; the attach waits for OpenCode's MCP load (30-300 s) and is never cancelled (see brokenMcp);
       // prompts an earlier Stop left on their way must not start a turn this prompt would join.
       if (!(await run.prepare(Promise.all([this.server.streamReady(), this.attach(), this.stale])))) return;
-      // A block of a mode the session was restored with (or the first one) goes in before the turn.
-      if ((this.written !== this.permissionMode || this.writtenMcp !== this.mcpOn) && !(await run.prepare(this.writeBlock(this.permissionMode)))) return;
+      // A block of a mode or agent the session was restored with (or the first one) goes in before the turn.
+      let agent = this.agentName();
+      if ((this.written !== this.permissionMode || this.writtenAgent !== agent || this.writtenMcp !== this.mcpOn) && !(await run.prepare(this.writeBlock(this.permissionMode)))) return;
+      // An agent the config no longer has: this prompt runs as build (the chosen agent stays, it may come back). The list is cached per folder.
+      const known = this.engine.agents(this.cwd);
+      if (!(await run.prepare(known))) return;
+      if (!primaryAgents(await known).some((a) => a.name === agent)) {
+        this.notice("agent_missing", `OpenCode has no agent ${agent} here any more; this prompt runs as build`);
+        agent = "build";
+      }
       const levels = this.effort !== "default" ? this.engine.effortLevels(this.model) : Promise.resolve([] as EffortLevel[]);
       if (!(await run.prepare(levels))) return;
       // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
       const variant = this.effort !== "default" && (await levels).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
       const [providerID, ...rest] = this.model.split("/");
-      const agent = this.agent();
       this.turnPosted = true;
       const stops = this.stops.count;
       // A failure after a Stop is no failed prompt: the Stop ended the turn.
@@ -726,6 +789,12 @@ class OpenCodeSession implements EngineSession {
     }
   }
 
+  private async followAgent(agent: unknown) {
+    if (typeof agent !== "string") return;
+    const list = await this.engine.agents(this.cwd).catch(() => []);
+    if (primaryAgents(list).some((a) => a.name === agent) && agent !== this.agentName()) await this.setAgent(agent).catch(() => {});
+  }
+
   /** One event of the server for this session or one of its subagent sessions. */
   event(payload: Payload) {
     const p = payload.properties;
@@ -733,10 +802,10 @@ class OpenCodeSession implements EngineSession {
     switch (payload.type) {
       case "message.updated": {
         const info = p.info;
-        // plan_exit "Yes" (or a build prompt from OpenCode's own UI) leaves plan mode.
-        if (root && info.role === "user" && info.agent === "build" && !this.mapper.own.has(info.id) && this.permissionMode === "plan" && !this.leavingPlan) {
-          this.leavingPlan = true;
-          void this.setPermissionMode("default").catch(() => {}).finally(() => (this.leavingPlan = false));
+        // plan_exit "Yes" (agent build), or another agent chosen in OpenCode's own UI: follow it. Hidden agents (compaction, title) never match.
+        if (root && info.role === "user" && !this.mapper.own.has(info.id) && info.agent !== this.agentName() && !this.following) {
+          this.following = true;
+          void this.followAgent(info.agent).finally(() => (this.following = false));
         }
         if (root && this.hiding()) return;
         if (root) this.noteUsage(info);
@@ -931,7 +1000,7 @@ class OpenCodeSession implements EngineSession {
     void this.afterStale().then((go) => {
       if (!go) return void done();
       this.server
-        .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agent(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
+        .request(`/session/${this.id}/shell`, { method: "POST", directory: this.cwd, timeoutMs: 0, body: { messageID, command, agent: this.agentName(), ...(this.model !== "default" && model.length > 1 && { model: { providerID: model[0], modelID: model.slice(1).join("/") } }) } })
         .then(done, (err) => {
           done();
           this.occurrence("shell_failed", `Could not run the command in OpenCode: ${(err as Error).message}`);
@@ -1007,7 +1076,6 @@ class OpenCodeEngineImpl implements Engine {
   readonly capabilities = OPENCODE_CAPABILITIES;
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
-  private plan: Promise<Rule[]> | undefined;
   private providers: Promise<ProviderList> | undefined;
 
   constructor(
@@ -1016,7 +1084,7 @@ class OpenCodeEngineImpl implements Engine {
     readonly mcp?: OpenCodeMcpRoute,
   ) {}
 
-  permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_MODES });
+  permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
 
   open(session: Session, opts: SessionOpts, restored?: Restored) {
     return new OpenCodeSession(this, session, opts, restored?.history as OpenCodeHistory | undefined);
@@ -1030,7 +1098,7 @@ class OpenCodeEngineImpl implements Engine {
         const sid: string | undefined = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id;
         if (sid) for (const o of this.sessions) if (o.owns(sid)) o.event(payload);
       },
-      resync: () => (this.commandLists.clear(), this.sessions.forEach((o) => void o.resync())),
+      resync: () => (this.commandLists.clear(), this.agentLists.clear(), this.sessions.forEach((o) => void o.resync())),
     });
   }
   remove(s: OpenCodeSession) {
@@ -1038,12 +1106,17 @@ class OpenCodeEngineImpl implements Engine {
     if (!this.sessions.size) (this.unsubscribe?.(), (this.unsubscribe = undefined));
   }
 
-  /** The `plan` agent's `edit` rules, read once (shortcut: until the daemon restarts; a changed OpenCode config needs one). */
-  planEdit(cwd: string): Promise<Rule[]> {
-    return (this.plan ??= this.server
-      .request<{ name: string; permission: Rule[] }[]>("/agent", { directory: cwd, timeoutMs: 0 })
-      .then((agents) => agents.find((a) => a.name === "plan")?.permission.filter((r) => r.permission === "edit") ?? [])
-      .catch((err) => ((this.plan = undefined), Promise.reject(err))));
+  private agentLists = new Map<string, { at: number; list: Promise<OpenCodeAgent[]> }>();
+  /** `GET /agent` of a folder (project agents differ per folder), cached 60 s; dropped when the server restarts. */
+  agents(cwd: string): Promise<OpenCodeAgent[]> {
+    const hit = this.agentLists.get(cwd);
+    if (hit && Date.now() - hit.at < 60_000) return hit.list;
+    // Waits for OpenCode's load of the folder (first answers take 2-5 s): never cut off (see brokenMcp); a callback that must not wait is not given one.
+    // A failure drops the entry, so the next call (session open, resync, the chooser's retry) asks again.
+    const list = this.server.request<OpenCodeAgent[]>("/agent", { directory: cwd, timeoutMs: 0 });
+    this.agentLists.set(cwd, { at: Date.now(), list });
+    list.catch(() => this.agentLists.delete(cwd));
+    return list;
   }
 
   /** `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); empty when it fails (read again next time). */
@@ -1118,8 +1191,12 @@ class OpenCodeEngineImpl implements Engine {
   }
   dropLimits = () => (this.providers = undefined);
 
-  /** The rules `POST /session` gets for a new session in `mode`. */
-  block = async (mode: PermissionMode, cwd: string): Promise<Rule[]> => modeBlock(mode, [], mode === "plan" ? await this.planEdit(cwd) : []);
+  /** The rules `POST /session` gets for a new session in `mode` (`plan` = agent plan, mode default), else as agent `agent`. */
+  block = async (mode: PermissionMode, cwd: string, agent = "build"): Promise<Rule[]> => {
+    const as = mode === "plan" ? "plan" : agent;
+    const known = await this.agents(cwd);
+    return modeBlock(mode === "plan" ? "default" : mode, [], denialsOf(known.find((a) => a.name === as)?.permission ?? []), { agent: as });
+  };
 }
 
 /** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */

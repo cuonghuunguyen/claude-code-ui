@@ -37,7 +37,11 @@ let counter = 0;
 const expected = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
 
 const clients = new Set();
-const failNext = new Set();
+const failNext = new Set(data.fail ?? []);
+/** GET /agent answers this when set (POST /__agents {agents}). */
+let agents;
+/** path -> ms: the next request to that path answers that much later (POST /__delay {path, ms}), like a folder whose state is still loading. */
+const delays = new Map(Object.entries(data.delays ?? {}));
 const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boolean);
 /** The node waiting for a reply or abort, the asks not answered yet, the sessions that are busy. */
 let current;
@@ -160,6 +164,8 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/__break") broken.add(body.directory);
     if (url.pathname === "/__heal") broken.delete(body.directory);
     if (url.pathname === "/__fail") failNext.add(body.path);
+    if (url.pathname === "/__agents") agents = body.agents;
+    if (url.pathname === "/__delay") delays.set(body.path, body.ms);
     // net's close, not http's: http's also ends the idle keep-alive connections.
     if (url.pathname === "/__zombie") (Server.prototype.close.call(server), (zombie = true));
     if (url.pathname === "/__drop") (clients.forEach((c) => c.end()), clients.clear());
@@ -171,6 +177,11 @@ const server = createServer(async (req, res) => {
   const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : undefined;
   log({ type: "request", method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), authed, ...(body !== undefined && { body }) });
   if (!authed) return json(401, { error: "unauthorized" });
+  if (delays.has(url.pathname)) {
+    const ms = delays.get(url.pathname);
+    delays.delete(url.pathname);
+    await new Promise((r) => setTimeout(r, ms));
+  }
   if (failNext.delete(url.pathname)) return json(500, { name: "UnknownError", data: { message: "failed on purpose" } });
   const dir = url.searchParams.get("directory");
   const reply = (key) => {
@@ -233,7 +244,7 @@ const server = createServer(async (req, res) => {
   if (m3 && req.method === "POST") return (await mcpGate(dir, res)) ? (((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true)) : undefined;
   if (url.pathname === "/command" && !(await mcpGate(dir, res))) return;
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }]);
-  if (url.pathname === "/agent") return json(200, [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
+  if (url.pathname === "/agent") return json(200, agents ?? [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", description: "Writes docs", permission: [{ permission: "edit", pattern: "*", action: "deny" }] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, { ...Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])), ...Object.fromEntries(statuses) });
   if (url.pathname === "/permission") return json(200, asks.filter((a) => a.type === "permission.asked").map(({ type, ...a }) => a));
   if (url.pathname === "/question") return json(200, asks.filter((a) => a.type === "question.asked").map(({ type, ...a }) => a));
