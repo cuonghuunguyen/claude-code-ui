@@ -52,6 +52,15 @@ describe("applyEvent", () => {
     expect(applyEvent(s, ev(2, { type: "limit_stop", id: "limit_stop", stopped: false })).limitStop).toBeUndefined();
   });
 
+  it("model_retry sets and clears the view's retry and adds nothing to the order (GH-683)", () => {
+    const retry = { attempt: 2, message: "Rate limit reached", next: 9000 };
+    const s = applyEvent(emptySession(), ev(1, { type: "model_retry", id: "model_retry", retry }));
+    expect(s.retry).toEqual(retry);
+    expect(s.order).toEqual([]);
+    expect(applyEvent(s, ev(2, { type: "model_retry", id: "model_retry", retry: { attempt: 3, message: "x" } })).retry).toEqual({ attempt: 3, message: "x" });
+    expect(applyEvent(s, ev(2, { type: "model_retry", id: "model_retry", retry: null })).retry).toBeUndefined();
+  });
+
   it("prompt_suggestion sets and clears the suggestion and adds no timeline item (GH-305)", () => {
     const s = applyEvent(emptySession(), ev(1, { type: "prompt_suggestion", id: "prompt_suggestion", text: "run the tests" }));
     expect(s.suggestion).toBe("run the tests");
@@ -143,6 +152,38 @@ describe("applyEvent", () => {
       ev(2, { type: "session_effort", id: "session_effort", effort: "high" }),
     ].reduce(applyEvent, emptySession());
     expect(s).toMatchObject({ permissionMode: "plan", effort: "high", order: [] });
+  });
+});
+
+describe("OpenCode agents (GH-684)", () => {
+  it("session_agent and agents parts set the view's agent and list; a session_agent older than the settings read is ignored", () => {
+    const list = [{ name: "build" }, { name: "plan", description: "Plans" }];
+    let s = [ev(1, { type: "agents", id: "agents", agents: list }), ev(2, { type: "session_agent", id: "session_agent", agent: "plan" })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: list, order: [] });
+    s = withSubscribe(s, { logEpoch: "e", seq: 5, session: { id: "s", cwd: "/", state: "idle", model: "m", permissionMode: "default", effort: "default", agent: "build", permissionModes: [] } });
+    expect(s.agent).toBe("build");
+    // A replayed change older than the reply's values must not win.
+    s = applyEvent(s, ev(3, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("build");
+    s = applyEvent(s, ev(6, { type: "session_agent", id: "session_agent", agent: "plan" }));
+    expect(s.agent).toBe("plan");
+  });
+
+  it("GH-684: a paged subscribe snapshot with an agents head gives the view its agent list (and a failed one its flag)", () => {
+    const list = [{ name: "build" }, { name: "plan" }, { name: "review" }];
+    const info = { id: "s", cwd: "/", state: "idle" as const, model: "m", permissionMode: "default" as const, effort: "default" as const, agent: "plan", permissionModes: [] };
+    const snap = (part: Part) => ({ heads: [{ type: "event" as const, sessionId: "s", seq: 2, part }], attentionSeq: 0, page: { parts: [] }, aux: [] });
+    const ok = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: list }) } as never);
+    expect(ok).toMatchObject({ agent: "plan", agents: list, agentsFailed: false });
+    const failed = withSubscribe(emptySession(), { logEpoch: "e", seq: 2, session: info, snapshot: snap({ type: "agents", id: "agents", agents: [], failed: true }) } as never);
+    expect(failed).toMatchObject({ agents: [], agentsFailed: true });
+  });
+
+  it("a failed agents part keeps the agent and sets agentsFailed; the next list clears it", () => {
+    let s = [ev(1, { type: "session_agent", id: "session_agent", agent: "plan" }), ev(2, { type: "agents", id: "agents", agents: [], failed: true })].reduce(applyEvent, emptySession());
+    expect(s).toMatchObject({ agent: "plan", agents: [], agentsFailed: true });
+    s = applyEvent(s, ev(3, { type: "agents", id: "agents", agents: [{ name: "build" }] }));
+    expect(s).toMatchObject({ agents: [{ name: "build" }], agentsFailed: false });
   });
 });
 

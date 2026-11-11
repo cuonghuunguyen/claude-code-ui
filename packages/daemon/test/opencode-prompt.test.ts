@@ -360,18 +360,18 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const s = await d.open();
     await d.fake("/__fail", { path: `/session/${s.id}/shell` });
     await d.ok({ type: "session.bash", sessionId: s.id, command: "echo x" });
-    await until(() => !!s.last(`${s.id}:shell_failed`) && s.states().at(-1) === "idle");
+    await until(() => s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:shell_failed:`)) && s.states().at(-1) === "idle");
   });
 
-  it("modes: create writes the default block; plan appends the plan agent's edit rules and prompts as the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to default", async () => {
+  it("modes: the plan mode is the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to build", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
-    const created = d.requests("POST", "/session")[0]!.body.permission as { permission: string; pattern: string; action: string }[];
-    expect(created.map((r) => `${r.permission}:${r.pattern}:${r.action}`)).toEqual(["claude-ui:mode:default:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:build:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     for (const mode of ["auto", "dontAsk", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
-    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
-    const plan = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as { permission: string; pattern: string; action: string }[];
-    expect(plan.map((r) => `${r.permission}:${r.pattern}:${r.action}`)).toEqual(["claude-ui:mode:plan:allow", "bash:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
+    expect(reply.session).toMatchObject({ permissionMode: "default", agent: "plan" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:plan:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     await s.prompt("plan it");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
@@ -380,10 +380,128 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const buildMessage = (id: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent: "build", sessionID: s.id } } });
     // OpenCode repeats message.updated: one block only.
     await d.fake("/__emit", { events: [buildMessage("msg_fromtui"), buildMessage("msg_fromtui")] });
-    await until(() => s.find("session_permission_mode")?.mode === "default");
+    await until(() => s.find("session_agent")?.agent === "build");
     await new Promise((r) => setTimeout(r, 300));
     expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches + 1);
-    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[0].pattern).toBe("mode:default");
+    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission[1].pattern).toBe("agent:build");
+  });
+
+  it("agents: the agents part lists build, docs and plan; setAgent writes a block with the agent's denials and prompts as it; an unknown or subagent name is refused", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    expect(s.find("agents")!.agents).toEqual([{ name: "build" }, { name: "docs", description: "Writes docs" }, { name: "plan" }]);
+    const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
+    expect((await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" })).session.agent).toBe("docs");
+    expect(s.find("session_agent")?.agent).toBe("docs");
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:docs:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    // Edit automatically: the agent's denial still comes after the allow.
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "acceptEdits" });
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).filter((r) => r.startsWith("edit:"))).toEqual(["edit:*:allow", "edit:*:deny"]);
+    await s.prompt("write docs");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("docs");
+    for (const agent of ["general", "title", "nope"]) expect(await d.request({ type: "session.setAgent", sessionId: s.id, agent })).toMatchObject({ type: "error" });
+    const claude = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
+    expect(await d.request({ type: "session.setAgent", sessionId: claude, agent: "docs" })).toMatchObject({ type: "error" });
+  });
+
+  it("session.agents lists a folder's primary agents for the draft; Claude gets none", async () => {
+    const d = await boot();
+    expect((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents.map((a: { name: string }) => a.name)).toEqual(["build", "docs", "plan"]);
+    expect((await d.ok({ type: "session.agents", cwd: d.project })).agents).toEqual([]);
+    expect(await d.request({ type: "session.agents", cwd: join(d.root, "..", "elsewhere"), engine: "opencode" })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+  });
+
+  it("the chosen agent is saved and survives a daemon restart; a saved plan mode opens as the plan agent", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const first = await boot({ root });
+    const s = await first.open();
+    await first.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    const saved = JSON.parse(readFileSync(join(root, "sessions.json"), "utf8"))[s.id];
+    expect(saved).toMatchObject({ agent: "docs", permissionMode: "default" });
+    first.ws.close();
+    first.http.close();
+    const project = join(root, "project");
+    const block = (agent: string) => [{ permission: "claude-ui", pattern: "mode:default", action: "allow" }, { permission: "claude-ui", pattern: `agent:${agent}`, action: "allow" }, { permission: "claude-ui", pattern: "always", action: "allow" }];
+    const row = (id: string, permission: object[]) => ({ id, slug: id, projectID: "global", directory: project, title: id, version: "1.18.34", time: { created: 1, updated: 2 }, permission });
+    writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_old: saved, ses_legacy: { permissionMode: "plan" } }));
+    const legacy = [{ permission: "claude-ui", pattern: "mode:plan", action: "allow" }, { permission: "claude-ui", pattern: "always", action: "allow" }];
+    const d = await boot({ root, script: ["text", "text"], data: { sessions: [row("ses_old", block("docs")), row("ses_legacy", legacy)] } });
+    const one = await d.ok({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    expect(one.session).toMatchObject({ agent: "docs", permissionMode: "default" });
+    await d.ok({ type: "session.prompt", sessionId: "ses_old", text: "hi" });
+    await until(() => d.requests("POST", "/session/ses_old/prompt_async").length === 1);
+    expect(d.requests("POST", "/session/ses_old/prompt_async")[0]!.body.agent).toBe("docs");
+    const two = await d.ok({ type: "session.subscribe", sessionId: "ses_legacy", sinceSeq: 0 });
+    expect(two.session).toMatchObject({ agent: "plan", permissionMode: "default" });
+    await d.ok({ type: "session.prompt", sessionId: "ses_legacy", text: "hi" });
+    await until(() => d.requests("POST", "/session/ses_legacy/prompt_async").length === 1);
+    const log = d.log().filter((l) => l.type === "request" && l.path.startsWith("/session/ses_legacy"));
+    const patch = log.findIndex((l) => l.method === "PATCH");
+    expect(patch).toBeGreaterThanOrEqual(0);
+    expect(log[patch]!.body.permission[1].pattern).toBe("agent:plan");
+    expect(patch).toBeLessThan(log.findIndex((l) => l.path.endsWith("/prompt_async")));
+    expect(d.requests("POST", "/session/ses_legacy/prompt_async")[0]!.body.agent).toBe("plan");
+  });
+
+  it("a user message of another visible agent from OpenCode's UI switches the agent; a hidden agent's does not", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const msg = (id: string, agent: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent, sessionID: s.id } } });
+    await d.fake("/__emit", { events: [msg("msg_a", "docs")] });
+    await until(() => s.find("session_agent")?.agent === "docs");
+    await d.fake("/__emit", { events: [msg("msg_b", "title")] });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.find("session_agent")?.agent).toBe("docs");
+  });
+
+  it("GH-684: a paged subscribe (the web's, also of a session created in the new-session tab, whose agents part came before the subscribe) carries the agents part", async () => {
+    const d = await boot();
+    const s = await d.open();
+    // The part is emitted at begin(): it is in the log before the paged subscribe below, as for a tab that opens the session after create.
+    await until(() => !!s.find("agents"));
+    const sub = await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0, paged: true });
+    const heads = sub.snapshot.heads as { part: { type: string; agents?: { name: string }[] } }[];
+    expect(heads.find((h) => h.part.type === "agents")?.part.agents?.map((a) => a.name)).toEqual(["build", "docs", "plan"]);
+  });
+
+  it("GH-684: GET /agent that answers after 3 s is not cut off: the agents part arrives, the session.agents draft request waits for it", async () => {
+    const d = await boot({ data: { delays: { "/agent": 4500 } } });
+    const draft = d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" });
+    const s = await d.open();
+    await until(() => !!s.find("agents"), 15000);
+    expect(s.find("agents")).toMatchObject({ agents: [{ name: "build" }, { name: "docs" }, { name: "plan" }] });
+    expect(s.find("agents")).not.toHaveProperty("failed");
+    expect((await draft).agents.map((a: { name: string }) => a.name)).toEqual(["build", "docs", "plan"]);
+    expect(d.requests("GET", "/agent")).toHaveLength(1);
+  });
+
+  it("GH-684: a failed GET /agent shows as a failed agents part and is read again by session.agents with the session id", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    // A reconnect clears the cache and reads again: that read fails.
+    await d.fake("/__fail", { path: "/agent" });
+    await d.fake("/__drop");
+    await until(() => s.find("agents")?.failed === true);
+    expect(s.find("agents")!.agents).toEqual([]);
+    await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode", sessionId: s.id });
+    await until(() => s.find("agents")?.failed !== true && s.find("agents")!.agents.length === 3);
+  });
+
+  it("an agent gone from OpenCode's list runs the prompt as build with a notice", async () => {
+    const d = await boot({ script: ["text"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    await d.fake("/__agents", { agents: [{ name: "build", mode: "primary", permission: [] }] });
+    // A dropped event stream is a reconnect: the agent lists are read again.
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/agent").length >= 2);
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("build");
+    expect(s.parts().some((p) => p.type === "notice" && p.id.endsWith("agent_missing"))).toBe(true);
   });
 
   it("bypass is offered and applied only with the daemon flag", async () => {
@@ -447,7 +565,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const s = await d.open();
     await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
     await s.prompt("hello");
-    await until(() => !!s.last(`${s.id}:prompt_failed`) && s.states().at(-1) === "idle");
+    await until(() => s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:prompt_failed:`)) && s.states().at(-1) === "idle");
     // A turn started in OpenCode's own UI; it ends while the stream is down: the reconnect read ends it (3 s after the failed send).
     await d.fake("/__emit", { events: [{ type: "session.status", properties: { sessionID: s.id, status: { type: "busy" } } }] });
     await until(() => s.states().at(-1) === "running");
@@ -553,7 +671,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(s.parts().filter((p) => p.type === "user_text").map((p: any) => p.text)).toEqual(["/review main"]);
 
     await s.prompt("/fail");
-    await until(() => !!s.find("notice", (n) => n.id.endsWith("prompt_failed")));
+    await until(() => !!s.find("notice", (n) => n.id.startsWith(`${s.id}:prompt_failed:`)));
     expect(s.states().at(-1)).toBe("idle");
 
     await s.prompt("/unknown x");
@@ -921,7 +1039,7 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     const s = await d.open();
     await s.prompt("hi");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"), 15_000);
-    expect(s.parts().some((p) => p.type === "notice" && p.id === `${s.id}:mcp_failed`)).toBe(false);
+    expect(s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:mcp_failed:`))).toBe(false);
     expect((await attached(d, s.id)).name).toBe(mcpName(s.id));
     const log = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
     expect(log.indexOf("POST /mcp")).toBeLessThan(log.indexOf(`POST /session/${s.id}/prompt_async`));
@@ -938,7 +1056,7 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     await d.fake("/__fail", { path: "/mcp" });
     await s.prompt("hi");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
-    expect(s.find("notice", (n) => n.id === `${s.id}:mcp_failed`)).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
+    expect(s.find("notice", (n) => n.id.startsWith(`${s.id}:mcp_failed:`))).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(1);
     expect(s.find("turn_result")).toMatchObject({ isError: false });
   });
@@ -1015,6 +1133,19 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
     expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body).toMatchObject({ parts: [{ text: "go" }], agent: "docs", model: { providerID: "opencode", modelID: "alpha" } });
     expect(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[w.sessionId]).toMatchObject({ agent: "docs" });
+  });
+
+  it("GH-684: a worker started in mode plan runs as the plan agent with the default permission mode, whatever agent it names", async () => {
+    const d = await boot({ script: ["text"] });
+    await on(d);
+    const coord: string = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
+    await d.ok({ type: "session.setPermissionMode", sessionId: coord, mode: "default" });
+    const r = (await d.http.orchestration.tools(coord).find((t) => t.name === "worker_start")!.handler({ name: "pl", cwd: d.project, prompt: "go", engine: "opencode", mode: "plan", agent: "docs" } as never, {})) as { content: { text: string }[] };
+    const w = JSON.parse(r.content[0]!.text);
+    expect((await d.ok({ type: "session.subscribe", sessionId: w.sessionId, sinceSeq: 0 })).session).toMatchObject({ agent: "plan", permissionMode: "default" });
+    expect(d.requests("POST", "/session").at(-1)!.body.permission.map((x: { pattern: string }) => x.pattern)).toContain("agent:plan");
+    await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
+    expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body.agent).toBe("plan");
   });
 });
 
@@ -1691,5 +1822,148 @@ describe("OpenCode model list: provider reads are never cut off and a broken pro
     expect(providerReads(d).at(-1)!.query.directory).toBe(d.project);
     expect(values(await models(d, d.project)).length).toBeGreaterThan(2);
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+});
+
+/** The retry states of a session in order (`null` = cleared). */
+const retries = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "model_retry").map((p) => (p as Extract<Part, { type: "model_retry" }>).retry);
+const errorNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "notice" && p.id.startsWith("error:")) as Extract<Part, { type: "notice" }>[];
+const status = (id: string, status: object) => ({ type: "session.status", properties: { sessionID: id, status } });
+const RETRY_3 = { type: "retry", attempt: 3, message: "Rate limit reached", next: 4102444800000 };
+
+describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => {
+  it("a retry shows model_retry with attempt, reason and next; the next busy clears it; the reply ends the turn without a warning", async () => {
+    const d = await boot({ script: ["retry"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(retries(s)).toEqual([{ attempt: 1, message: "Rate limit reached for m1", next: 4102444800000 }, null]);
+    expect(s.parts().some((p) => p.type === "notice")).toBe(false);
+    expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
+    const d = await boot({ script: ["retry-fail", "retry-fail"] });
+    const s = await d.open();
+    await s.prompt("first");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
+    await s.prompt("second");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2 && s.states().at(-1) === "idle");
+    const order = s.parts().map((p) => p.id);
+    const users = s.parts().filter((p) => p.type === "user_text").map((p) => p.id);
+    const [a, b] = errorNotices(s);
+    expect(errorNotices(s).map((n) => n.id).filter((id, i, all) => all.indexOf(id) === i)).toHaveLength(2);
+    expect(a!.id).not.toBe(b!.id);
+    expect(order.indexOf(users[0]!)).toBeLessThan(order.indexOf(a!.id));
+    expect(order.indexOf(a!.id)).toBeLessThan(order.indexOf(users[1]!));
+    expect(order.indexOf(users[1]!)).toBeLessThan(order.lastIndexOf(b!.id));
+    for (const n of [a!, b!]) expect(n.text).toMatch(/HTTP 429.*gave up after 2 retries/);
+    expect(retries(s).at(-1)).toBeNull();
+    expect(s.parts().filter((p) => p.type === "turn_result").every((p) => (p as { isError: boolean }).isError)).toBe(true);
+  });
+
+  it("a retry in a later turn shows model_retry again and clears it at the reply", async () => {
+    const d = await boot({ script: ["retry-fail", "retry"] });
+    const s = await d.open();
+    await s.prompt("first");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
+    await s.prompt("second");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2 && s.states().at(-1) === "idle");
+    expect(retries(s).map((r) => r?.attempt ?? null)).toEqual([1, null, 2, null, 1, null]);
+    expect(new Set(errorNotices(s).map((n) => n.id)).size).toBe(1);
+  });
+
+  it("an unknown model ends the turn with one notice naming the model; the second error with the stack does not replace it", async () => {
+    const d = await boot({ script: ["model-missing"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await new Promise((r) => setTimeout(r, 300)); // the second session.error comes after idle
+    expect(errorNotices(s)).toHaveLength(1);
+    const text = errorNotices(s)[0]!.text;
+    expect(text).toContain("stub/nope");
+    expect(text).toContain("Settings › OpenCode");
+    expect(text).not.toContain("    at ");
+    expect(s.parts().filter((p) => p.type === "notice")).toHaveLength(1);
+    expect(s.find("turn_result")).toMatchObject({ isError: true });
+  });
+
+  it("a provider 404 model_not_found names the model the session uses", async () => {
+    const d = await boot({ script: ["model-404"] });
+    const s = await d.open({ model: "stub/m1" });
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(new Set(errorNotices(s).map((n) => n.id)).size).toBe(1);
+    expect(errorNotices(s).at(-1)!.text).toMatch(/stub\/m1.*not available.*HTTP 404/);
+  });
+
+  it("Stop during a retry clears the retry state and ends interrupted", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await until(() => !!retries(s).at(-1));
+    expect(s.states().at(-1)).toBe("running");
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    expect(retries(s).at(-1)).toBeNull();
+    expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
+  });
+
+  it("Stop during the retry wait ends interrupted (one marker, no result) although OpenCode sends no abort error", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    await until(() => !!retries(s).at(-1));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.parts().filter((p) => p.type === "turn_interrupted")).toHaveLength(1);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(retries(s).at(-1)).toBeNull();
+  });
+
+  it("a stream drop during a retry keeps the turn running and its retry state", async () => {
+    const d = await boot();
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await until(() => !!retries(s).at(-1));
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    const before = d.requests("GET", `/session/${s.id}/message`).length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/global/event").length === 2 && d.requests("GET", `/session/${s.id}/message`).length > before, 12000);
+    await new Promise((r) => setTimeout(r, 3300)); // past the 3 s a resync waits before it may end a turn
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/global/event").length === 3 && d.requests("GET", `/session/${s.id}/message`).length > before + 1, 12000);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states().at(-1)).toBe("running");
+    expect(retries(s).at(-1)).toMatchObject({ attempt: 3 });
+  });
+
+  it("a session restored while OpenCode retries is running with its retry state", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_retry", slug: "r", projectID: "global", directory: project, title: "Retrying", version: "1.19.5", time: { created: 1, updated: 2 } };
+    const d = await boot({ root, data: { sessions: [row], messages: { ses_retry: [] }, statuses: { ses_retry: { type: "retry", attempt: 2, message: "Rate limit reached", next: 4102444800000 } } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_retry", sinceSeq: 0 });
+    expect(sub.session.state).toBe("running");
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
+    const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
+    expect(last).toMatchObject({ retry: { attempt: 2, message: "Rate limit reached" } });
+  });
+
+  it("a failed prompt has a notice id per turn, so a second failure does not update the first", async () => {
+    const d = await boot();
+    const s = await d.open();
+    for (const n of [1, 2]) {
+      await d.fake("/__fail", { path: `/session/${s.id}/prompt_async` });
+      await s.prompt(`hello ${n}`);
+      await until(() => new Set(s.parts().filter((p) => p.type === "notice").map((p) => p.id)).size === n);
+      await until(() => s.states().at(-1) === "idle");
+    }
   });
 });

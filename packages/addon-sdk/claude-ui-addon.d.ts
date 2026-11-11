@@ -23,6 +23,8 @@ export type Part = { parentId?: string } & (
   | { type: "session_model"; id: string; model: string }
   | { type: "session_permission_mode"; id: string; mode: string }
   | { type: "session_effort"; id: string; effort: string }
+  | { type: "session_agent"; id: "session_agent"; agent: string }
+  | { type: "agents"; id: "agents"; agents: { name: string; description?: string }[]; failed?: true }
   | { type: "commands"; id: "commands"; commands: { name: string; description: string; argumentHint: string; aliases?: string[] }[] }
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }
   | { type: "context_usage"; id: "context_usage"; usage: { totalTokens: number; maxTokens: number; percentage: number; categories: { name: string; tokens: number; kind: "used" | "free" | "buffer" }[] } }
@@ -38,6 +40,7 @@ export type Part = { parentId?: string } & (
   | { type: "external_turn"; id: "external_turn"; running: boolean }
   | { type: "auto_continue"; id: "auto_continue"; at: number | null }
   | { type: "limit_stop"; id: "limit_stop"; stopped: boolean; resetsAt?: number }
+  | { type: "model_retry"; id: "model_retry"; retry: { attempt: number; message: string; next?: number } | null }
   | { type: "prompt_suggestion"; id: "prompt_suggestion"; text: string | null }
   | { type: "prompt_queue"; id: "prompt_queue"; items: { id: string; text: string; imageCount: number; bash?: true; error?: string }[]; held?: { reason: "usage_limit" | "not_live"; until?: number } }
 );

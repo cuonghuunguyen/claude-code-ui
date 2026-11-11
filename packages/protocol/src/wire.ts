@@ -1,5 +1,5 @@
 // WebSocket wire protocol (docs/spec.md "Wire protocol"). JSON, one message per frame.
-import type { Effort, EffortLevel, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
+import type { AgentInfo, Effort, EffortLevel, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
 import type { HistSummary } from "./histogram.ts";
 
 /** A model an Engine offers (models.list). `value` goes to session.setModel; "default" = the Engine's default. */
@@ -39,6 +39,8 @@ export type EngineCapabilities = {
   contextUsage: boolean;
   /** Bash mode (`!`): shell commands run in the session cwd. */
   shell: boolean;
+  /** Primary agents to choose from (OpenCode): the agent chooser; Shift+Tab cycles agents. Absent = false. */
+  agents?: boolean;
 };
 export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
 /** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
@@ -61,6 +63,8 @@ export type SessionInfo = {
   model: string;
   permissionMode: PermissionMode;
   effort: Effort;
+  /** The primary agent prompts run as (Engines with `agents`); absent for Claude. */
+  agent?: string;
   permissionModes: PermissionMode[];
   /** What the session's Engine supports; absent (an older daemon) = everything (capabilitiesOf). */
   capabilities?: EngineCapabilities;
@@ -101,6 +105,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.defaultMode"; cwd: string }
   /** Commands and skills of a project, for the new-session tab's `/` menu (no session yet); the daemon caches the list per cwd for a minute. */
   | { type: "session.commands"; cwd: string; engine?: Engine }
+  /** The primary agents of `cwd` for the new-session draft; none for Claude. */
+  | { type: "session.agents"; cwd: string; engine?: Engine; /** A live session: its `agents` part is emitted again (the chooser's retry). */ sessionId?: string }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   /** `background`: follow only (unread markers); it does not keep the session's CLI from the idle close (docs/spec.md "Idle close"). */
   | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string }
@@ -125,6 +131,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.setPermissionMode"; sessionId: string; mode: PermissionMode }
   /** Applies from the next turn on (`applyFlagSettings({effortLevel})`); the `effort` start option before the query runs. */
   | { type: "session.setEffort"; sessionId: string; effort: Effort }
+  /** Applies from the next prompt; one of the session's `agents`. */
+  | { type: "session.setAgent"; sessionId: string; agent: string }
   /**
    * Attach button, non-image file: the daemon stores it in a folder of its own (a browser cannot tell a file's path)
    * and replies its absolute path, which the prompt gets as an `@path` mention. `data`: base64 content.
@@ -503,7 +511,7 @@ export type PosPart = { part: Part; pos: number };
 /** Whole turns, oldest part first (parts as `omitMedia` leaves them); `older` absent = the start of the session. */
 export type TimelinePage = { parts: Part[]; older?: Cursor };
 /**
- * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, limit_stop, prompt_queue, todo_update events; `aux` = parts of the
+ * Paged subscribe reply: `heads` = the latest session_state, commands, context_usage, external_turn, auto_continue, limit_stop, model_retry, prompt_queue, todo_update events; `aux` = parts of the
  * unloaded region that whole-session features need (subagent, turn_result, running background Bash calls).
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
@@ -575,7 +583,7 @@ export type AsideOpenResult = { session: SessionInfo; title: string; from: strin
 /** `title`: as `session.list` titles the session, for a tab opened before (or without) the list. */
 /** `planDirs`: the folders the session's CLI keeps plan files in (absolute), to find the plan of an ExitPlanMode call written there. */
 export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
-/** session.setModel, session.setPermissionMode, session.setEffort. */
+/** session.setModel, session.setPermissionMode, session.setEffort, session.setAgent. */
 export type SetModelResult = { session: SessionInfo };
 /** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */
 export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; path?: string; message?: string };
@@ -591,6 +599,8 @@ export type OpenCodeLoginStart = { url: string; mode: "auto" | "code"; instructi
 export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
 export type CommandsResult = { commands: SlashCommand[] };
+/** session.agents. */
+export type AgentsResult = { agents: AgentInfo[] };
 export type UploadResult = { path: string };
 /** fs.upload / session.create `draft`: a secret token, 32 random bytes as lowercase hex. */
 export const DRAFT_TOKEN = /^[0-9a-f]{64}$/;

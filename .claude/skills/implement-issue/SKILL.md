@@ -125,7 +125,10 @@ PID, and fails if anything of the run landed in the real config dir.
    (`npm run e2e:steps`); add a step only when none fits. Assert structure (reply shown, card
    shown, turn stopped), never reply wording. End each scenario with `Then I capture "<name>"`;
    cover 1440×900 and 390×844 (`scrollWidth` = viewport width) for layout criteria, and the
-   daemon-restart step for the restored-transcript path.
+   daemon-restart step for the restored-transcript path. An OpenCode scenario that needs a real
+   model reply uses DeepSeek V4.1 Flash, the paid DeepSeek provider, never a "Free" model (too
+   slow): tag it `@model`, start with `OpenCode has the owner's login` (needs
+   `E2E_OPENCODE_AUTH`) and pick it with `I pick the OpenCode model "DeepSeek V4.1 Flash 1017"`.
 2. Run it: Commands › e2e with `-g "<Feature name>"`.
 3. Green: look at every captured screenshot in `<scratch>/evidence` and record them per
    criterion in `notes.md`. For OpenCode parity, put each next to its OpenCode screenshot

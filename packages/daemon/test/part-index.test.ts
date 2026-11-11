@@ -62,6 +62,18 @@ function allPages(index: PartIndex) {
 }
 
 describe("PartIndex", () => {
+  it("GH-684: the agents part (and its latest version only) reaches a paged snapshot as a head, like commands", () => {
+    const { index } = build([
+      { type: "commands", id: "commands", commands: [] },
+      { type: "agents", id: "agents", agents: [], failed: true },
+      { type: "agents", id: "agents", agents: [{ name: "build" }, { name: "plan" }, { name: "review" }] },
+    ]);
+    const heads = index.heads().filter((h) => h.part.type === "agents");
+    expect(heads).toHaveLength(1);
+    expect(heads[0]!.part).toMatchObject({ agents: [{ name: "build" }, { name: "plan" }, { name: "review" }] });
+    expect(index.heads().some((h) => h.part.type === "commands")).toBe(true);
+  });
+
   it("pages concatenated oldest to newest equal the client fold of the whole log", () => {
     const parts = [
       ...turns(12),
@@ -278,5 +290,16 @@ describe("prompt_queue part", () => {
     expect(TIMELINE_EXCLUDED.has("prompt_queue")).toBe(true);
     expect(index.heads().filter((e) => e.part.type === "prompt_queue").map((e) => (e.part as { items: unknown[] }).items.length)).toEqual([0]);
     expect(fold(log).order).toEqual(["u1"]);
+  });
+});
+
+describe("model_retry part (GH-683)", () => {
+  it("is a head (latest wins) and not a timeline part", () => {
+    const r = (retry: { attempt: number; message: string; next?: number } | null): Part => ({ type: "model_retry", id: "model_retry", retry });
+    const { index, log } = build([user(1), r({ attempt: 1, message: "Rate limit" }), r({ attempt: 2, message: "Rate limit", next: 5000 })]);
+    expect(TIMELINE_EXCLUDED.has("model_retry")).toBe(true);
+    expect(index.heads().filter((e) => e.part.type === "model_retry").map((e) => (e.part as { retry: { attempt: number } | null }).retry?.attempt)).toEqual([2]);
+    expect(fold(log).order).toEqual(["u1"]);
+    expect(allPages(index)[0]!.parts.some((p) => p.type === "model_retry")).toBe(false);
   });
 });

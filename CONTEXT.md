@@ -171,6 +171,10 @@ _Avoid_: CLI turn, foreign message
 The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code.
 _Avoid_: approval mode, auto-approve
 
+**Agent** (OpenCode only):
+The primary agent a session's prompts run as (build, plan, or a custom one from the OpenCode config). Chosen separately from the Permission mode; for OpenCode, plan is the `plan` agent, not a Permission mode. Claude's subagents are a different thing.
+_Avoid_: persona, mode (for the agent)
+
 **Coordinator**:
 A session that started a worker; a worker that starts a worker is also a coordinator. While orchestration is on in Settings, every session gets the daemon's `worker_*` tools to start and drive worker sessions. **Root coordinator**: a coordinator that is not a worker.
 _Avoid_: orchestrator, manager, parent session

@@ -1,5 +1,6 @@
 development-docs
-node_modules/
+# No trailing slash: a node_modules symlink (a worktree linking the main checkout's) is ignored too.
+node_modules
 dist/
 .playwright-cli/
 __pycache__/

@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import { isAttention, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
+import { isAttention, type AgentInfo, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -18,6 +18,11 @@ export type SessionView = {
   model?: string;
   permissionMode?: PermissionMode;
   effort?: Effort;
+  /** OpenCode: the agent prompts run as (session_agent), and the primary agents to choose from (`agents` part). */
+  agent?: string;
+  agents?: AgentInfo[];
+  /** OpenCode did not answer the agent list: the chooser offers a retry. */
+  agentsFailed?: boolean;
   /** Seq of the subscribe reply: replayed changes up to it are older than the reply's values. */
   settingsSeq: number;
   commands: SlashCommand[];
@@ -29,6 +34,8 @@ export type SessionView = {
   continueAt?: number;
   /** The last turn ended at the usage limit (limit_stop), with or without a scheduled continue; undefined = none. */
   limitStop?: { resetsAt?: number };
+  /** OpenCode is retrying the model call (model_retry); undefined = not. */
+  retry?: { attempt: number; message: string; next?: number };
   /** "Next for you": the predicted next prompt after the last turn (prompt_suggestion); undefined = none. */
   suggestion?: string;
   /** Queued messages (prompt_queue) the daemon sends when the session is idle; undefined = none. */
@@ -72,11 +79,13 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
     const todos = part.state === "idle" || part.state === "error" ? [] : s.todos;
     return { ...s, lastSeq: e.seq, state: part.state, working: !!part.working, attentionSeq: attention ? e.seq : s.attentionSeq, todos };
   }
-  if ((part.type === "session_model" || part.type === "session_permission_mode" || part.type === "session_effort") && e.seq <= s.settingsSeq)
+  if ((part.type === "session_model" || part.type === "session_permission_mode" || part.type === "session_effort" || part.type === "session_agent") && e.seq <= s.settingsSeq)
     return { ...s, lastSeq: e.seq };
   if (part.type === "session_model") return { ...s, lastSeq: e.seq, model: part.model };
   if (part.type === "session_permission_mode") return { ...s, lastSeq: e.seq, permissionMode: part.mode };
   if (part.type === "session_effort") return { ...s, lastSeq: e.seq, effort: part.effort };
+  if (part.type === "session_agent") return { ...s, lastSeq: e.seq, agent: part.agent };
+  if (part.type === "agents") return { ...s, lastSeq: e.seq, agents: part.agents, agentsFailed: !!part.failed };
   if (part.type === "commands") return { ...s, lastSeq: e.seq, commands: part.commands };
   if (part.type === "context_usage") return { ...s, lastSeq: e.seq, contextUsage: part.usage };
   if (part.type === "rewind") {
@@ -97,6 +106,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "prompt_queue") return { ...s, lastSeq: e.seq, queue: part.items.length ? { items: part.items, ...(part.held && { held: part.held }) } : undefined };
   if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
   if (part.type === "limit_stop") return { ...s, lastSeq: e.seq, limitStop: part.stopped ? { ...(part.resetsAt && { resetsAt: part.resetsAt }) } : undefined };
+  if (part.type === "model_retry") return { ...s, lastSeq: e.seq, retry: part.retry ?? undefined };
   if (part.type === "prompt_suggestion") return { ...s, lastSeq: e.seq, suggestion: part.text ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };
@@ -132,6 +142,7 @@ export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot
       model: session.model,
       permissionMode: session.permissionMode,
       effort: session.effort,
+      agent: session.agent,
       attentionSeq: snapshot.attentionSeq,
       order: page.parts.map((p) => p.id),
       parts: new Map(page.parts.map((p) => [p.id, p])),
@@ -144,7 +155,7 @@ export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot
     };
   }
   const view = s.logEpoch === logEpoch ? s : { ...emptySession(), logEpoch };
-  return { ...view, model: session.model, permissionMode: session.permissionMode, effort: session.effort, settingsSeq: seq, planDirs: planDirs ?? view.planDirs };
+  return { ...view, model: session.model, permissionMode: session.permissionMode, effort: session.effort, agent: session.agent, settingsSeq: seq, planDirs: planDirs ?? view.planDirs };
 }
 
 /** The page before `before` arrived: prepends it. Ignored when the view's cursor moved on (reset, double request). Aux entries the page now holds are dropped. */
