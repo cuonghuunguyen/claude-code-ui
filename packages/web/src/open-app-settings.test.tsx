@@ -6,7 +6,6 @@ import type { SettingsResult } from "@claude-ui/protocol";
 import { OpenAppSection } from "./open-app-settings.tsx";
 import { customEditor } from "./open-external-menu.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => (act(() => root?.unmount()), (document.body.innerHTML = "")));
 

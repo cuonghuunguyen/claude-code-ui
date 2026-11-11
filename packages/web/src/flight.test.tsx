@@ -4,8 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelFlight, FLIGHT_MS, launchFlight, useLanding } from "./flight.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function Row({ text }: { text: string }) {
   const r = useRef<HTMLDivElement>(null);
   useLanding(r, text);

@@ -118,16 +118,12 @@ it("GH-399 an item tab: no move to a dock, Move to Files, copy paths and Reveal 
   expect(tabMenuSections({ ...all, pane: { label: "File", item: "file" }, split: { can: true } })[2]!.map((e) => e.id)).toEqual(["pin"]);
 });
 
-it("GH-400 an artifact tab: no dock moves, no file entries; Go to session and split stay", () => {
+it("GH-400 an artifact tab: no dock moves, no file entries; Go to session and split stay; GH-176 one Move to Artifacts row", () => {
   const sections = tabMenuSections({ ...all, pinned: undefined, pane: { label: "Artifact", item: "artifact" }, split: { can: true } });
   const ids = sections.flat().map((e) => e.id);
   for (const gone of ["moveSide", "moveBottom", "moveToFiles", "copyPath", "copyRel", "revealInFiles"]) expect(ids).not.toContain(gone);
   expect(ids).toEqual(expect.arrayContaining(["goToSession", "splitRight", "splitDown", "close"]));
-});
-
-it("GH-176 an artifact tab menu has one Move to Artifacts row", () => {
-  const flat = tabMenuSections({ ...all, pinned: undefined, pane: { label: "Artifact", item: "artifact" }, split: { can: true } }).flat();
-  expect(flat.filter((e) => e.id === "moveToArtifacts")).toEqual([expect.objectContaining({ label: "Move to Artifacts", testId: "tab-menu-moveToArtifacts" })]);
+  expect(sections.flat().filter((e) => e.id === "moveToArtifacts")).toEqual([expect.objectContaining({ label: "Move to Artifacts", testId: "tab-menu-moveToArtifacts" })]);
 });
 
 it("GH-612 a file tab gets the open-in-app section after its file section, and no other tab does", () => {

@@ -6,9 +6,10 @@ Feature: Remove worktree dialog and background removal
     And the scratch project is a git repository with an origin
     And the scratch project ignores .claude and *.log
 
-  Scenario: The dialog opens at once with Checking…, removal runs in the background and reports the ignored files
+  Scenario: The dialog opens at once with Checking…, removal runs in the background and reports the ignored files, and the dialog shows what will be lost
     Given the scratch project has a clean worktree "wt-ignored"
     And the worktree "wt-ignored" has 3 ignored files
+    And the scratch project has a worktree "wt-work" with an uncommitted edit
     And I open the scratch project
     When I open the Remove worktree dialog of "wt-ignored"
     Then the Remove worktree dialog is titled "Remove worktree wt-ignored?"
@@ -20,6 +21,9 @@ Feature: Remove worktree dialog and background removal
     And the worktree folder "wt-ignored" is gone
     And a toast reports "3 ignored files deleted"
     And I capture "removed with ignored files"
+    When I open the Remove worktree dialog of "wt-work"
+    Then the Remove worktree dialog says "1 uncommitted file"
+    And I capture "work dialog"
 
   Scenario: The row shows Removing… while a large worktree is deleted
     Given the scratch project has a clean worktree "wt-big"
@@ -32,13 +36,6 @@ Feature: Remove worktree dialog and background removal
     And the row of "wt-big" showed Removing… dimmed before it disappeared
     And the worktree folder "wt-big" is gone
     And a toast reports an ignored files count
-
-  Scenario: The dialog shows what will be lost and a blocked removal never starts
-    Given the scratch project has a worktree "wt-work" with an uncommitted edit
-    And I open the scratch project
-    When I open the Remove worktree dialog of "wt-work"
-    Then the Remove worktree dialog says "1 uncommitted file"
-    And I capture "work dialog"
 
   Scenario: The Remove dialog on a phone fits the screen
     Given the viewport is 390x844

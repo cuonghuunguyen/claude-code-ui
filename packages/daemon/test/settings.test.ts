@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -37,17 +37,24 @@ it("a corrupt file gives the defaults and is logged once", () => {
   log.mockRestore();
 });
 
-it("an invalid hand-edited field falls back to its default, the valid ones stay", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+it("an invalid hand-edited field falls back to its default, the valid ones stay; a stored coordinatorPermissions keeps its value; a stored invalid workerMode falls back to coordinator", () => {
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  }
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { coordinatorPermissions: true } }));
+    expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
+  }
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  }
 });
 
-it("a stored coordinatorPermissions keeps its value over the default", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { coordinatorPermissions: true } }));
-  expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
-});
 
 it("workerCapTotal defaults to 0 and takes 0 to 100; a stored workerCap keeps its value", () => {
   const f = file();
@@ -103,11 +110,6 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: {} });
 });
 
-it("a stored invalid workerMode falls back to coordinator", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
-});
 
 it("the file keeps only fields that differ from their default", () => {
   const f = file();
@@ -120,26 +122,28 @@ it("the file keeps only fields that differ from their default", () => {
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { coordinatorPermissions: true } });
 });
 
-it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean (GH-305)", () => {
-  const f = file();
-  const s = createSettings({ file: f });
-  expect(s.get().focus).toEqual({ nextForYou: false });
-  s.set({ focus: { nextForYou: true } });
-  expect(createSettings({ file: f }).get().focus).toEqual({ nextForYou: true });
-  expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
+it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean; usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean", () => {
+  {
+    const f = file();
+    const s = createSettings({ file: f });
+    expect(s.get().focus).toEqual({ nextForYou: false });
+    s.set({ focus: { nextForYou: true } });
+    expect(createSettings({ file: f }).get().focus).toEqual({ nextForYou: true });
+    expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
+  }
+  {
+    const f = file();
+    const s = createSettings({ file: f });
+    expect(s.get().usageLimit).toEqual({ autoContinue: true });
+    expect(s.set({ usageLimit: { autoContinue: false } }).usageLimit).toEqual({ autoContinue: false });
+    expect(JSON.parse(readFileSync(f, "utf8")).usageLimit).toEqual({ autoContinue: false });
+    expect(createSettings({ file: f }).get().usageLimit.autoContinue).toBe(false);
+    s.set({ usageLimit: { autoContinue: true } });
+    expect(JSON.parse(readFileSync(f, "utf8")).usageLimit?.autoContinue).toBeUndefined();
+    expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
+  }
 });
 
-it("usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean (GH-524)", () => {
-  const f = file();
-  const s = createSettings({ file: f });
-  expect(s.get().usageLimit).toEqual({ autoContinue: true });
-  expect(s.set({ usageLimit: { autoContinue: false } }).usageLimit).toEqual({ autoContinue: false });
-  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit).toEqual({ autoContinue: false });
-  expect(createSettings({ file: f }).get().usageLimit.autoContinue).toBe(false);
-  s.set({ usageLimit: { autoContinue: true } });
-  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit?.autoContinue).toBeUndefined();
-  expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
-});
 
 it("an install that saved nothing for autoContinue gets it on after the update (GH-524)", () => {
   const f = file();
@@ -190,10 +194,6 @@ it("workerNotifications defaults to on, saves off, refuses a non-boolean with 'N
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { workerNotifications: false } });
   expect(createSettings({ file: f }).get().orchestration.workerNotifications).toBe(false);
   for (const bad of ["off", 0, null]) expect(() => s.set({ orchestration: { workerNotifications: bad as never } })).toThrow(/^Notifications from workers must be on or off$/);
-});
-
-it("git defaults are VS Code's, except openRepositoryInParentFolders always", () => {
-  expect(createSettings({ file: file() }).get().git).toEqual(GIT);
 });
 
 it("git arrays: default not stored, a changed array stored and read back, the default again removes it", () => {
@@ -395,4 +395,13 @@ it("editor: defaults empty; accepts a command and a name; refuses newline, NUL, 
   for (const command of ["a\nb", "a\rb", "a\0b", 'a "b', '""', "   ", "x".repeat(1025)]) expect(() => s.set({ editor: { command } })).toThrow(/^Editor command must be/);
   expect(() => s.set({ editor: { name: "a\nb" } })).toThrow(/^Editor name must be/);
   expect(s.set({ editor: { command: "" } }).editor.command).toBe("");
+});
+
+it("chat.visualize defaults to on (also for a settings.json without chat), saves, refuses a non-boolean", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
+  const s = createSettings({ file: f });
+  expect(s.get().chat).toEqual({ visualize: true });
+  expect(s.set({ chat: { visualize: false } }).chat).toEqual({ visualize: false });
+  expect(() => s.set({ chat: { visualize: "yes" as never } })).toThrow("Inline visualizations must be on or off");
 });

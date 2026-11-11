@@ -369,7 +369,7 @@ export function ChangesPanel({
       (r) => {
         // A reply of an older read (another mode, branch or reload since) is dropped.
         if (!live || seq !== diffSeq.current) return;
-        if (r.diff === null) return known ? setGd({ mode: effective, repo: gitCwd, error: t("files.changes.notRepo") }) : setGit(false);
+        if (!r.diff) return known ? setGd({ mode: effective, repo: gitCwd, error: t("files.changes.notRepo") }) : setGit(false);
         setGd({ mode: effective, repo: gitCwd, diff: r.diff });
         if (r.diff.branches) setBranches(r.diff.branches);
         setGen((n) => n + 1);

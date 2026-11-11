@@ -804,6 +804,7 @@ const SessionRow = memo(function SessionRow({
           onClick={() => onOpen(s.id)}
           title={workerName ? `${displayTitle(s.title)}\n${s.cwd}` : stateText ? `${displayTitle(s.title)} (${stateText}${branch ? `, ${branch}` : ""})` : label ? `${displayTitle(s.title)} (${label})` : displayTitle(s.title)}
         >
+          <EngineTag engine={s.engine} />
           {workerName ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate font-medium text-foreground">{workerName}</span>
@@ -822,7 +823,6 @@ const SessionRow = memo(function SessionRow({
           ) : (
             <span className="min-w-0 flex-1 truncate font-medium text-foreground">{displayTitle(s.title)}</span>
           )}
-          <EngineTag engine={s.engine} />
           {unread && <span className="size-1.5 shrink-0 rounded-full bg-info" data-testid="unread-marker" aria-hidden />}
           <StateIcon state={st} />
           <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{ago}</span>

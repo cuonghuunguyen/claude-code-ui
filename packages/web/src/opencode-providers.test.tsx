@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenCodeProvider, OpenCodeStatus } from "@claude-ui/protocol";
 import { OpenCodeProviders } from "./opencode-providers.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const el = document.createElement("div");
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {

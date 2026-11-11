@@ -79,13 +79,6 @@ Then("the toolbar shows no plan meter, no account switcher and no effort chooser
   for (const id of ["plan-meter", "plan-account", "effort-select"]) await expect(area.getByTestId(id)).toHaveCount(0);
 });
 
-Then("typing {string} in the prompt box does not start bash mode", async ({ page }, text: string) => {
-  await promptBox(page).click();
-  await page.keyboard.type(text);
-  await expect.poll(() => promptBox(page).inputValue()).toContain(text);
-  await expect(page.getByTestId("bash-mode")).toHaveCount(0);
-});
-
 Then("I see no notice {string}", async ({ page }, text: string) => {
   await expect(page.getByText(text, { exact: false })).toHaveCount(0);
 });

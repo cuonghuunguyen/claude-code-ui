@@ -11,6 +11,7 @@ import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type Open
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { StopControl } from "./opencode-stop.ts";
 import { mapLimit } from "./session-scan.ts";
+import { visualizeSystem } from "./visualize.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
@@ -509,13 +510,14 @@ class OpenCodeSession implements EngineSession {
       ];
       // No caller timeout: a slow answer (a cold folder) is not a failed prompt; the turn runs whatever the answer's delay.
       // A Stop meanwhile leaves this wait as it is: OpenCode may run the turn already (interrupt() tells by its status).
+      const system = visualizeSystem(this.opts.visualizePlugin?.()); // per prompt: the setting applies from the next one
       await run
         .post(
           this.server.request(`/session/${this.id}/prompt_async`, {
             method: "POST",
             directory: this.cwd,
             timeoutMs: 0,
-            body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+            body: { messageID, parts, agent, ...(system && { system }), ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
           }),
         )
         .catch(unlessStopped);

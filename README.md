@@ -35,6 +35,7 @@ With the daemon running, other terminals can ask it: `claude-ui status`, `claude
 - File tree and editor, diffs, a git graph and a terminal next to the chat.
 - Works on a phone and installs as an app (over HTTPS).
 - [Addons](https://cuonghuunguyen.github.io/claude-code-ui/features/addons): themes, panes, a band, slash commands and drawings for code blocks, installed from git.
+- [Inline visualizations](https://cuonghuunguyen.github.io/claude-code-ui/features/visualize): Claude draws charts, diagrams and small widgets in its replies, in a sandboxed frame.
 - Windows with WSL, and Docker containers, from one install.
 
 Read more:

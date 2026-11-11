@@ -4,8 +4,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import { DeleteDialog } from "./session-actions.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => root?.unmount());
 

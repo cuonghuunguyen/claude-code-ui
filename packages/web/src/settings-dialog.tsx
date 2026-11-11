@@ -813,6 +813,12 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "chat",
+    rows: [
+      { key: "visualize", kind: "switch" },
+    ],
+  },
+  {
     id: "usageLimit",
     rows: [
       { key: "autoContinue", kind: "switch" },
@@ -1014,6 +1020,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const performance = daemonGroup("performance");
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
+  const chat = daemonGroup("chat");
   const sessions = daemonGroup("sessions");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
@@ -1053,6 +1060,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(orchestration ? [{ id: "orchestration", title: sectionTitle(orchestration.id), category: "Sessions" as const, body: daemonSection(orchestration) }] : []),
     ...(sessions ? [{ id: "sessions", title: sectionTitle(sessions.id), category: "Sessions" as const, body: daemonSection(sessions) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
+    ...(chat ? [{ id: "chat", title: sectionTitle(chat.id), category: "Sessions" as const, body: daemonSection(chat) }] : []),
     ...(usageLimit
       ? [
           {

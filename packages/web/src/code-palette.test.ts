@@ -124,17 +124,6 @@ it("the dark diff sits on the app's card surface (#161616), not pierre's #0a0a0a
   expect((adjustTheme("dark", themes.dark).colors as Record<string, string>)["editor.background"]).toBe("#161616");
 });
 
-it("registerDiffThemes registers both themes with @pierre/diffs, once", async () => {
-  const { resolveTheme } = await import("@pierre/diffs");
-  registerDiffThemes();
-  registerDiffThemes();
-  for (const mode of ["light", "dark"] as const) {
-    const t = await resolveTheme(DIFF_THEMES[mode] as never);
-    expect(t.name).toBe(DIFF_THEMES[mode]);
-    expect(t.bg).toBe(cssVar(MODE[mode].selector, "card"));
-  }
-});
-
 // GH-468: one diff theme per colour theme and mode, built from the theme's own --syntax-* values.
 // Known gap (accepted): light pierre uses #636363 for punctuation and parameter, a colour-keyed map cannot split them, so light-theme diffs show parameters in the muted colour (editor: foreground).
 describe.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("diff theme %s %s", (id, mode) => {
@@ -181,9 +170,11 @@ it("diffThemes: Dracula's light is Default's light theme; others have their own"
   expect(diffThemes("catppuccin").dark).toBe("claude-ui-catppuccin-dark");
 });
 
-it("registerDiffThemes registers Default and every theme and mode (13 names)", async () => {
+it("registerDiffThemes, called twice, registers Default (on the app's card) and every theme and mode (13 names)", async () => {
   const { resolveTheme } = await import("@pierre/diffs");
   registerDiffThemes();
+  registerDiffThemes();
+  for (const mode of ["light", "dark"] as const) expect((await resolveTheme(DIFF_THEMES[mode] as never)).bg).toBe(cssVar(MODE[mode].selector, "card"));
   const names = new Set(THEMES.flatMap((t) => Object.values(diffThemes(t.id))));
   expect(names.size).toBe(13);
   for (const n of names) expect((await resolveTheme(n as never)).name).toBe(n);

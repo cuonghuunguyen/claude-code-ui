@@ -6,8 +6,6 @@ import { ToolCard } from "./tool-card.tsx";
 import { BackgroundShellContext } from "./viewer.ts";
 import type { ToolCall } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const call = (over: Partial<ToolCall> = {}): ToolCall =>
   ({ type: "tool_call", id: "t1", toolUseId: "t1", tool: "Bash", input: { command: "sleep 60" }, status: "running", shell: "foreground", ...over }) as ToolCall;
 

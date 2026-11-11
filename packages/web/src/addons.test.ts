@@ -24,11 +24,10 @@ describe("addon panes", () => {
     { id: "wide", title: "Wide", entry: "wide.html", kind: "pane" },
     { id: "info", title: "Info", entry: "band.html", kind: "band" },
   ]);
-  it("paneIdsOf hides phone:false views on phone", () => {
+  it("paneIdsOf skips band views and hides phone:false views on phone", () => {
     expect(paneIdsOf([a], false)).toEqual(["addon:example:stats", "addon:example:wide"]);
     expect(paneIdsOf([a], true)).toEqual(["addon:example:wide"]);
   });
-  it("paneIdsOf skips band views", () => expect(paneIdsOf([a], false)).not.toContain("addon:example:info"));
   it("titles and view lookup", () => {
     expect(paneTitlesOf([a]).get("addon:example:stats")).toBe("Stats");
     expect(addonViewOf([a], "addon:example:wide")?.view.entry).toBe("wide.html");

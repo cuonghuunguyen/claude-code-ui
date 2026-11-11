@@ -66,11 +66,6 @@ When("I open the next saved session", async ({ page }) => {
   await openSaved(page, titles[opened++]!);
 });
 
-Then("{int} saved sessions are open", async ({ page }, n: number) => {
-  expect(opened).toBe(n);
-  void page;
-});
-
 Then("no toast shows", async ({ page }) => {
   await expect(page.getByTestId("toast-region")).toBeAttached();
   await expect(page.getByTestId("toast-region").locator('[data-testid="toast"]')).toHaveCount(0);
@@ -86,14 +81,6 @@ Then("the toast {string} shows with the button {string}", async ({ page }, text:
   await expect(t).toHaveAttribute("data-state", "open"); // slid in, so the capture shows it fully
   await expect(t.getByRole("button")).toHaveCount(2); // the action and Dismiss
   await expect(t.getByRole("button", { name: button, exact: true })).toBeVisible();
-});
-
-Then("the toast {string} shows with no button but Dismiss", async ({ page }, text: string) => {
-  const t = page.getByTestId("toast").filter({ hasText: text });
-  await expect(t).toHaveCount(1);
-  await expect(t).toHaveAttribute("data-state", "open");
-  await expect(t.getByRole("button")).toHaveCount(1);
-  await expect(t.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
 });
 
 When("I hover the toast {string}", async ({ page }, text: string) => {
@@ -120,9 +107,4 @@ Then("the palette shows the Clean up tabs page", async ({ page }) => {
 
 Then("compact tabs are on and tabs are grouped by project", async ({ page }) => {
   await expect(page.locator("[data-group-chip]")).toHaveCount(3);
-});
-
-Then("only {string} was marked as shown", async ({ page }, id: string) => {
-  const shown = await page.evaluate(() => (JSON.parse(localStorage.getItem("claude-ui.recommendations") ?? "{}") as { shown?: string[] }).shown);
-  expect(shown).toEqual([id]);
 });

@@ -210,10 +210,6 @@ Then("the link menu offers only Open in tab and Open on claude.ai", async ({ pag
   await settle(page);
 });
 
-Then("the link menu has no menu", async ({ page }) => {
-  await expect(menuItems(page)).toHaveCount(0);
-});
-
 When("I choose {string} in the link menu", async ({ page }, id: string) => {
   await page.getByTestId(`artifact-link-${id}`).click();
 });

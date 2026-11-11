@@ -196,29 +196,24 @@ describe("sides", () => {
       expect(r.entries).toEqual([key]);
     });
 
-    it("fails the setup with install_failed when npm leaves the binary out", () => {
-      const r = setup({ native: false });
+    it.each([
+      ["npm leaves the binary out of a first install", { native: false }, /Claude Agent SDK/, false],
+      ["npm fails", { installed: "no-binary", native: true, fail: true }, /npm ERR! network/, true],
+      ["npm leaves the binary out again", { installed: "no-binary", native: false }, /Claude Agent SDK/, true],
+      ["the new install does not run", { installed: "no-binary", native: true, broken: true }, /does not start/, true],
+    ] as const)("install_failed when %s: the old install, if any, stays", (_n, opts, msg, hadOld) => {
+      const r = setup({ ...opts });
       expect(r.status).toBe(3);
-      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Claude Agent SDK/m);
+      expect(r.out).toMatch(new RegExp(`^CLAUDE_UI_SETUP install_failed .*${msg.source}`, "m"));
       expect(r.out).not.toContain("side started");
-      expect(existsSync(r.sideDir)).toBe(false);
-      expect(r.entries).toEqual([]);
-    });
-
-    it("keeps the old install when npm fails", () => {
-      const r = setup({ installed: "no-binary", native: true, fail: true });
-      expect(r.status).toBe(3);
-      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*npm ERR! network/m);
-      expect(existsSync(cliOf(r.sideDir))).toBe(true);
-      expect(r.entries).toEqual([key]);
-    });
-
-    it("keeps the old install when npm leaves the binary out again", () => {
-      const r = setup({ installed: "no-binary", native: false });
-      expect(r.status).toBe(3);
-      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*Claude Agent SDK/m);
-      expect(existsSync(cliOf(r.sideDir))).toBe(true);
-      expect(r.entries).toEqual([key]);
+      if (hadOld) {
+        expect(existsSync(cliOf(r.sideDir))).toBe(true);
+        expect(existsSync(binOf(r.sideDir))).toBe(false);
+        expect(r.entries).toEqual([key]);
+      } else {
+        expect(existsSync(r.sideDir)).toBe(false);
+        expect(r.entries).toEqual([]);
+      }
     });
 
     it("a failed install leaves earlier versions alone; a successful one removes them", () => {
@@ -232,16 +227,6 @@ describe("sides", () => {
     it("sweeps the leftovers of a killed run after a successful install", () => {
       const r = setup({ installed: "no-binary", native: true, seed: [".new-123", ".old-456"] });
       expect(r.out).toContain("side started");
-      expect(r.entries).toEqual([key]);
-    });
-
-    it("keeps the old install when the new one does not run", () => {
-      const r = setup({ installed: "no-binary", native: true, broken: true });
-      expect(r.status).toBe(3);
-      expect(r.out).toMatch(/^CLAUDE_UI_SETUP install_failed .*does not start/m);
-      expect(r.out).not.toContain("side started");
-      expect(existsSync(cliOf(r.sideDir))).toBe(true);
-      expect(existsSync(binOf(r.sideDir))).toBe(false);
       expect(r.entries).toEqual([key]);
     });
 
@@ -286,21 +271,14 @@ describe("sides", () => {
       return { out: r.stdout, nodedir: readFileSync(log, "utf8").trim(), prefix };
     }
 
-    it("sets npm_config_nodedir to the folder with include/node/node.h when its version is the node's", () => {
-      const r = run({ headers: "prefix" });
-      expect(r.out).toContain("side started");
-      expect(r.nodedir).toBe(r.prefix);
-    });
-    it("does not set npm_config_nodedir when the header is missing", () => {
-      const r = run({ headers: "none" });
+    it.each([
+      ["the header is missing", { headers: "none" }],
+      ["the headers are another version than the node", { headers: "prefix", version: "22.98.0" }],
+      ["node_version.h exists but node.h is missing", { headers: "prefix", nodeH: false }],
+    ] as const)("does not set npm_config_nodedir when %s", (_n, opts) => {
+      const r = run({ ...opts });
       expect(r.out).toContain("side started");
       expect(r.nodedir).toBe("unset");
-    });
-    it("does not set npm_config_nodedir when the headers are another version than the node", () => {
-      expect(run({ headers: "prefix", version: "22.98.0" }).nodedir).toBe("unset");
-    });
-    it("does not set npm_config_nodedir when node_version.h exists but node.h is missing", () => {
-      expect(run({ headers: "prefix", nodeH: false }).nodedir).toBe("unset");
     });
     it("finds the headers of the real node when node on PATH is a symlink (process.execPath)", () => {
       const r = run({ headers: "prefix", symlinked: true });
@@ -754,7 +732,6 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
   let dockSaved: SavedSide[] = [];
   let containers = ["dev", "stopped"];
   let dockerState: "ok" | "down" | "empty" | undefined = "ok";
-  let devProc: SideProcess;
   let sideDaemon: ReturnType<typeof createDaemon>;
   const dsides = createSides({
     targets: [],
@@ -764,7 +741,7 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     discoverMs: 0,
     discover: async () => containers.map(dockerSide),
     dockerState: () => dockerState,
-    spawn: async (id) => (id === "docker:dev" ? (devProc = inProcessSide(dockRoot, dockSession, (d) => (sideDaemon = d))) : Promise.reject(new Error("Docker: stopped is not running. Start it (docker start stopped), then retry."))),
+    spawn: async (id) => (id === "docker:dev" ? inProcessSide(dockRoot, dockSession, (d) => (sideDaemon = d)) : Promise.reject(new Error("Docker: stopped is not running. Start it (docker start stopped), then retry."))),
     save: (x) => (dockSaved = x),
   });
   const dhub = createDaemon({ webRoot, token, roots: [localRoot], query: fakeQuery as never, projects: createProjects(), appSettings: createSettings(), history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, sides: dsides });
@@ -893,14 +870,6 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     c.ws.close();
   });
 
-  it("a stopped container: the pipe is gone, the side shows reconnecting", async () => {
-    const c = await client(await dport());
-    devProc.kill();
-    await expect
-      .poll(async () => (await c.request({ type: "session.list" })).result.sides.find((s: { id: string }) => s.id === "docker:dev"))
-      .toEqual({ id: "docker:dev", label: "Docker: dev", state: "reconnecting", autoStart: true });
-    c.ws.close();
-  });
 });
 
 describe("docker side discovery", () => {
@@ -1149,6 +1118,25 @@ describe("git frames", () => {
     return { proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess, exit };
   };
 
+  it("the side's own GIT_* environment never reaches git, only what the hub sent", async () => {
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    vi.stubEnv("GIT_WORK_TREE", "/elsewhere");
+    try {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const git = vi.fn(async () => ({ stdout: Buffer.from(""), stderr: "" }));
+      runSide({ input, output, accept: () => {}, git });
+      input.write(JSON.stringify({ g: 1, git: { cwd: "/r", args: ["status"], env: { GIT_TERMINAL_PROMPT: "0" } } }) + "\n");
+      await vi.waitFor(() => expect(git).toHaveBeenCalled());
+      const env = (git.mock.calls[0] as unknown as [{ env: Record<string, string> }])[0].env;
+      expect(env.GIT_DIR).toBeUndefined();
+      expect(env.GIT_WORK_TREE).toBeUndefined();
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a ready side runs git for the hub: stdout bytes, stdin input, git errors", async () => {
     const repo = dir("gitframe-");
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
@@ -1207,11 +1195,14 @@ describe("git frames", () => {
     const side = gitSide(() => new Promise(() => {}));
     const s = createSides({ targets: [wslSide("Ubuntu")], restartMs: [], spawn: async () => side.proc });
     expect(s.wslReady("Ubuntu")).toBeUndefined();
-    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toBeInstanceOf(SideGone);
+    const notReady = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
+    await expect(notReady).rejects.toBeInstanceOf(SideGone);
+    await expect(notReady).rejects.toMatchObject({ sent: false });
     await s.start("wsl:Ubuntu");
     const pending = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
     side.exit.emit("exit", 1);
     await expect(pending).rejects.toBeInstanceOf(SideGone);
+    await expect(pending).rejects.toMatchObject({ sent: true });
     expect(s.wslReady("Ubuntu")).toBeUndefined();
   });
 

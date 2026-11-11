@@ -20,21 +20,16 @@ it("seed: a request in a replay or snapshot makes no signal, and the same reques
   expect(t.observe(ev("b", perm("r1", { tier: "low" })), true)).toEqual([]);
 });
 
-it("a live request is one signal; its second event with the tier is not another", () => {
-  const t = createTracker();
-  expect(t.observe(ev("b", perm("r1")), true)).toEqual([{ type: "request", sessionId: "b", requestId: "r1", kind: "permission", escalated: false }]);
-  expect(t.observe(ev("b", perm("r1", { tier: "low" })), true)).toEqual([]);
-});
-
 it("a question is a question signal; a settled request is none", () => {
   const t = createTracker();
   expect(t.observe(ev("b", ask("q1")), true)).toEqual([{ type: "request", sessionId: "b", requestId: "q1", kind: "question", escalated: false }]);
   expect(t.observe(ev("b", perm("r2", { settled: true })), true)).toEqual([]);
 });
 
-it("a request a coordinator escalates later is a second signal, flagged escalated", () => {
+it("a live request is one signal, its tier event is not another; a later coordinator escalation is a second signal, flagged escalated", () => {
   const t = createTracker();
-  t.observe(ev("w", perm("r1")), true);
+  expect(t.observe(ev("w", perm("r1")), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: false }]);
+  expect(t.observe(ev("w", perm("r1", { tier: "low" })), true)).toEqual([]);
   expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder" })), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: true }]);
   expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder", tier: "low" })), true)).toEqual([]);
 });
@@ -119,7 +114,7 @@ it("reconcile moves a card to the session's other waiting request when one settl
   expect(out).toEqual([card({ kind: "question", requestId: "q2" })]);
 });
 
-it("reconcile drops cards of the shown session, of an archived or unlisted one, all of them on the Focus page and when in-app is off", () => {
+it("reconcile drops cards of the shown session, of an archived or unlisted one, all request cards on the Focus page and all cards when in-app is off", () => {
   const views = { a: view([perm("r1")]), b: view([perm("r2")]) };
   const cards = [card({ sessionId: "a", requestId: "r1" }), card({ sessionId: "b", requestId: "r2" })];
   expect(reconcile(cards, ctx(views, { shown: (id) => id === "a" })).map((c) => c.sessionId)).toEqual(["b"]);

@@ -17,12 +17,6 @@ vi.mock("@pierre/diffs/react", () => ({
   FileDiff: () => <div data-testid="pierre-diff" />,
 }));
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 // jsdom has no layout: CodeMirror measures text through Range rects when it scrolls to the first line.
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();

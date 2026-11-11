@@ -13,6 +13,8 @@ import { createProjects } from "../src/projects.ts";
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
 import { fakeJira, type FakeJira } from "./fake-jira.ts";
+// Windows, full suite: this file's git-heavy tests (worktree creates and removes: up to 23 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const JIRA_TOKEN = "jira-PAT-do-not-leak-0123456789";

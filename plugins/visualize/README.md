@@ -1,0 +1,3 @@
+# visualize
+
+Skill `visualize` for claude-ui: Claude answers with a ```` ```visualize ```` fence holding a self-contained HTML fragment, and claude-ui draws it inline in a sandboxed frame (no access to the app, files or network except script CDNs). claude-ui loads this plugin itself when Settings › Chat › Inline visualizations is on; it needs no install.

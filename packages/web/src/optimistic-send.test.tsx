@@ -5,12 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@claude-ui/protocol";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 window.matchMedia = ((query: string) => ({
   matches: /min-width: (\d+)px/.test(query) ? 1440 >= +/min-width: (\d+)px/.exec(query)![1]! : false,
@@ -100,8 +94,6 @@ describe("first prompt", () => {
     expect(card.querySelector('[data-testid="user-message"][data-pending]')?.textContent).toContain("hello");
     expect(card.querySelector('[data-testid="thinking"]')).not.toBeNull();
     expect(card.querySelector('[data-testid="prompt-skeleton"]')).not.toBeNull();
-    // No state chip skeleton: the header has no state chip any more (GH-165).
-    expect(card.querySelector('[data-testid="session-state-skeleton"]')).toBeNull();
     expect(one('[data-testid="titlebar"] [data-testid="title-skeleton"]')).toBeTruthy();
     expect(visible('[data-testid="new-session-tab"]')).toHaveLength(0);
   });

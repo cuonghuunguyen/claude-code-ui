@@ -6,8 +6,6 @@ import type { PluginsListResult } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LIST: PluginsListResult = {
   installed: [
     { id: "ponytail@ponytail", scope: "user", enabled: true, description: "Lazy senior dev", mcpServers: ["lazy", "docs"], updatable: true },

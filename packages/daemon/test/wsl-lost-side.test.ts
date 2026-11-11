@@ -1,9 +1,6 @@
 // GH-298: a side lost after a git call was sent never re-runs a non-idempotent command via wsl.exe.
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { GitRunOptions } from "../src/git-runner.ts";
-import { createSides, runSide, wslSide, type SideProcess } from "../src/sides.ts";
 import { SideGone, wslGitRunner } from "../src/wsl-git.ts";
 
 const UNC = "\\\\wsl.localhost\\Ubuntu\\home\\me\\repo";
@@ -33,19 +30,5 @@ describe("GH-298 lost side", () => {
     const local2 = vi.fn(async () => out);
     await wslGitRunner({ local: local2, side: ready, sideRun: async () => Promise.reject(lost()) })({ cwd: UNC, args: ["status"], env: {}, idempotent: true } as GitRunOptions);
     expect(local2).toHaveBeenCalledTimes(1);
-  });
-
-  it("sides: not ready rejects SideGone sent=false; a side that exits with the call pending rejects sent=true", async () => {
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const exit = new EventEmitter();
-    runSide({ ready: { schema: [1, 1], version: "1.0.0" },  input: stdin, output: stdout, accept: () => {}, git: (() => new Promise(() => {})) as never });
-    const proc = { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 0), on: (e: "exit", l: (c: number | null) => void) => exit.on(e, l) } satisfies SideProcess;
-    const s = createSides({ targets: [wslSide("Ubuntu")], spawn: async () => proc });
-    await expect(s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} })).rejects.toMatchObject({ sent: false });
-    await s.start("wsl:Ubuntu");
-    const pending = s.git("wsl:Ubuntu", { cwd: "/", args: [], env: {} });
-    exit.emit("exit", 1);
-    await expect(pending).rejects.toMatchObject({ sent: true });
   });
 });

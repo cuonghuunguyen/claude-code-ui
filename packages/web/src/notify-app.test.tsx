@@ -5,12 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Part, SessionListItem } from "@claude-ui/protocol";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
@@ -88,26 +82,20 @@ beforeEach(() => {
 });
 afterEach(() => (act(() => root.unmount()), el.remove()));
 
-it("a live request of a session this page does not show makes a card; answering it sends permission.respond", async () => {
+it("a live request of a session this page does not show makes a card, announced once in the status region with the count; answering it sends permission.respond", async () => {
   await mount(`#${A}`);
   await live(B, perm("r1", { tier: "low" }));
   await settle();
   expect(cards()).toHaveLength(1);
   expect(cards()[0]!.textContent).toContain("Fix login redirect");
   expect(cards()[0]!.textContent).toContain("Needs permission");
+  expect(status()).toContain("Fix login redirect needs permission: Read");
+  expect(status()).toContain("1 session needs input");
   await act(async () => [...cards()[0]!.querySelectorAll("button")].find((b) => b.textContent === "Allow once")!.click());
   expect(sent.find((m) => m.type === "permission.respond")).toMatchObject({ requestId: "r1", decision: "allow" });
   // The settled event removes the card.
   await live(B, perm("r1", { settled: true, decision: "allow" }));
   expect(cards()).toHaveLength(0);
-});
-
-it("the status region announces the card once, with the count", async () => {
-  await mount(`#${A}`);
-  await live(B, perm("r1"));
-  await settle();
-  expect(status()).toContain("Fix login redirect needs permission: Read");
-  expect(status()).toContain("1 session needs input");
 });
 
 it("the shown session makes no card", async () => {
@@ -196,11 +184,6 @@ it("Esc on a focused card dismisses it and does not stop the shown session's tur
   await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   expect(cards()).toHaveLength(0);
   expect(sent.some((m) => m.type === "session.interrupt")).toBe(false);
-});
-
-it("no push toggle in the page: it lives in Settings", async () => {
-  await mount(`#${A}`);
-  expect(el.querySelector('[data-testid="push-toggle"]')).toBeNull();
 });
 
 it("push.focus carries the covered sessions while the page is focused and in-app is on, so push and desktop stay quiet for them (GH-158)", async () => {

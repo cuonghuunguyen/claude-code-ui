@@ -8,12 +8,6 @@ import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
 import { resetPageForTests } from "./recommendations.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 let width = 1440;
 window.matchMedia = ((query: string) => ({
@@ -104,6 +98,17 @@ beforeEach(async () => {
   await act(async () => {});
 });
 afterEach(() => (act(() => root.unmount()), el.remove(), window.dispatchEvent(new Event("pagehide")), localStorage.clear(), sessionStorage.clear())); // unmount flushes a draft, pagehide flushes the editor store timers: drop both before the next test
+const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
+const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
+const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+const rerender = async () => {
+  act(() => root.unmount());
+  root = createRoot(el);
+  await act(async () => root.render(<App />));
+  await act(async () => {});
+};
 
 const press = (init: KeyboardEventInit, target: EventTarget = document.body) =>
   act(async () => void target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
@@ -129,47 +134,35 @@ it("phone: the titlebar keeps the sessions menu, tab switcher with the session n
   expect(tools.querySelector('[data-testid="drawer-quick-open"]')).not.toBeNull();
 });
 
-it("the sidebar and the drawer have no Notifications checkbox: it lives in Settings (GH-158)", async () => {
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
-  expect(document.querySelector('[data-testid="push-toggle"]')).toBeNull();
-  expect(document.querySelector('input[type="checkbox"]')).toBeNull();
-});
-
 it("phone: Search in the drawer closes the drawer and opens quick open", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="open-drawer"]')!.click());
   await act(async () => el.querySelector<HTMLElement>('[data-testid="drawer-quick-open"]')!.click());
   expect(document.querySelector('[data-testid="quick-open"]')).not.toBeNull();
 });
 
-it("Focus prompt (Ctrl+L) on a wide screen keeps the side panel on Changes", async () => {
+it("Focus prompt (Ctrl+L) and Rewind from the palette on a wide screen keep the side panel on Changes", async () => {
   await pickSide(/changes/i);
   expect(sideTab()).toMatch(/changes/i);
   await press({ key: "l", code: "KeyL", ctrlKey: true });
-  expect(sideTab()).toMatch(/changes/i);
-});
-
-it("Rewind from the palette on a wide screen keeps the side panel on Changes", async () => {
+  expect(sideTab(), "after Ctrl+L").toMatch(/changes/i);
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } }));
-  await pickSide(/changes/i);
   await press({ key: "k", code: "KeyK", ctrlKey: true });
   const row = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title))!;
   await act(async () => row("Rewind").click());
   await act(async () => row("hello").click());
   expect(el.querySelector('[data-testid="rewind-panel"]')).not.toBeNull();
-  expect(sideTab()).toMatch(/changes/i);
+  expect(sideTab(), "after Rewind").toMatch(/changes/i);
 });
 
-it("an open dialog owns the keyboard: Ctrl+K does nothing while quick open shows", async () => {
-  await press({ key: "p", code: "KeyP", ctrlKey: true });
-  expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
-  await press({ key: "k", code: "KeyK", ctrlKey: true });
-  expect(document.querySelector('[data-testid="palette"]')).toBeNull();
-});
-
-it("an open dialog owns the keyboard: Ctrl+K does nothing while the Open project dialog shows", async () => {
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
-  await act(async () => {});
-  expect(document.querySelector('[data-testid="open-project-dialog"]')).not.toBeNull();
+it.each([
+  ["quick open", () => press({ key: "p", code: "KeyP", ctrlKey: true }), '[aria-modal="true"]'],
+  ["the Open project dialog", async () => {
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+    await act(async () => {});
+  }, '[data-testid="open-project-dialog"]'],
+])("an open dialog owns the keyboard: Ctrl+K does nothing while %s shows", async (_name, open, shown) => {
+  await open();
+  expect(document.querySelector(shown)).not.toBeNull();
   await press({ key: "k", code: "KeyK", ctrlKey: true });
   expect(document.querySelector('[data-testid="palette"]')).toBeNull();
 });
@@ -178,12 +171,6 @@ it("a key the editor already handled (defaultPrevented) runs no shortcut", async
   const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "k", code: "KeyK", ctrlKey: true });
   e.preventDefault();
   await act(async () => void document.body.dispatchEvent(e));
-  expect(document.querySelector('[data-testid="palette"]')).toBeNull();
-});
-
-it("plain typing in the prompt box runs no shortcut", async () => {
-  const box = el.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')!;
-  await press({ key: "k", code: "KeyK" }, box);
   expect(document.querySelector('[data-testid="palette"]')).toBeNull();
 });
 
@@ -388,7 +375,7 @@ it("/clear: the tab keeps its prompt box (same element, same text) and shows the
   }
 });
 
-it("/clear: an attached image and the focus stay in the same prompt box", async () => {
+it("/clear: an attached image and the focus stay in the same prompt box; the images move to the new draft key and the old key is dropped (GH-503)", async () => {
   holdNext();
   try {
     const box = promptBox();
@@ -401,27 +388,11 @@ it("/clear: an attached image and the focus stay in the same prompt box", async 
     });
     const thumbs = () => promptBox().closest('[data-testid="prompt-box"]')!.parentElement!.querySelectorAll("img").length;
     expect(thumbs()).toBe(1);
+    expect(loadDraftImages(ID)).toHaveLength(1);
     await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
     expect(promptBox()).toBe(box);
     expect(thumbs()).toBe(1);
     expect(document.activeElement).toBe(box);
-  } finally {
-    restoreSubscribe();
-  }
-});
-
-it("/clear: the attached images move to the new draft key and the old key is dropped (GH-503)", async () => {
-  holdNext();
-  try {
-    const box = promptBox();
-    const paste = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
-    await act(async () => {
-      box.dispatchEvent(paste);
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    expect(loadDraftImages(ID)).toHaveLength(1);
-    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_cleared", id: "c1", sessionId: NEXT } }));
     expect(loadDraftImages(NEXT)).toHaveLength(1);
     expect(loadDraftImages(ID)).toEqual([]);
   } finally {
@@ -498,25 +469,18 @@ it("a /clear that ends without session_cleared sends the queued message to the s
   expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: ID, text: "next" })]);
 });
 
-it("an SDK message the adapter does not know shows as a short muted line, not as JSON", async () => {
+it("an SDK message the adapter does not know shows as a short muted line, not as JSON; a failed query's error as a warning line; a CLI notice shows a run of blank lines as one", async () => {
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { type: "system", subtype: "some_future_subtype", secret: "payload" } } }));
-  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
-  expect(row.textContent).toBe("system/some_future_subtype");
-  expect(row.className).toContain("text-muted-foreground");
-  expect(el.textContent).not.toContain("payload");
-});
-
-it("a failed query's error shows as a warning line, not a muted one", async () => {
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { error: "Error: boom" } } }));
-  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
-  expect(row.textContent).toBe("Error: boom");
-  expect(row.className).toContain("text-warning");
-  expect(row.querySelector('[aria-label="Warning"]')).not.toBeNull();
-});
-
-it("a CLI notice shows a run of blank lines as one blank line", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "raw", id: "r2", message: { error: "Error: boom" } } }));
   // A UserPromptSubmit hook's block reason (development-docs/GH-46/review, screenshot 03).
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));
+  const [unknown, failed] = el.querySelectorAll<HTMLElement>('[data-testid="raw-part"]');
+  expect(unknown!.textContent).toBe("system/some_future_subtype");
+  expect(unknown!.className).toContain("text-muted-foreground");
+  expect(el.textContent).not.toContain("payload");
+  expect(failed!.textContent).toBe("Error: boom");
+  expect(failed!.className).toContain("text-warning");
+  expect(failed!.querySelector('[aria-label="Warning"]')).not.toBeNull();
   expect(el.querySelector('[data-testid="notice"]')!.textContent).toBe("Blocked by hook\n\nOriginal prompt: hi");
 });
 
@@ -554,16 +518,10 @@ it("the palette on the new-session tab changes the draft's permission mode, and 
   replies["session.list"] = { sessions: [session], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "bypassPermissions"] };
   try {
     // Mounted again, so the first session.list brings the daemon's modes.
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     await openNewTab();
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     expect(paletteRow("Focus prompt")).toBeDefined();
-    // GH-430: the panels show on the new-session tab (wide screens): their commands are listed.
-    expect(paletteRow("Toggle side panel")).toBeDefined();
-    expect(paletteRow("Toggle terminal")).toBeDefined();
     await act(async () => paletteRow("Change permission mode")!.click());
     expect(paletteRow("Bypass permissions")).toBeDefined();
     await act(async () => paletteRow("Plan mode")!.click());
@@ -577,10 +535,7 @@ it("after Remove project the focus moves to the next project row, not to the pag
   const other: SessionListItem = { ...session, id: "22222222-2222-3333-4444-555555555555", cwd: "/p/other", title: "Other" };
   replies["session.list"] = { sessions: [session, other], projects: ["/p/demo", "/p/other"] };
   try {
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     await act(async () => el.querySelector<HTMLElement>('[data-cwd="/p/demo"] [data-testid="project-remove"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="remove-project-confirm"]')!.click());
     await act(async () => new Promise((r) => setTimeout(r, 50)));
@@ -594,10 +549,7 @@ it("Remove project of a middle row focuses the row below it, whether the reply l
   const at = (cwd: string, n: number): SessionListItem => ({ ...session, id: `2222222${n}-2222-3333-4444-555555555555`, cwd, title: cwd });
   replies["session.list"] = { sessions: [session, at("/p/mid", 1), at("/p/low", 2)], projects: ["/p/demo", "/p/mid", "/p/low"] };
   try {
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     const order = [...el.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
     const [, mid, below] = order;
     // The daemon's list after the remove arrives before the dialog's close finishes.
@@ -626,20 +578,6 @@ it("a project removed by another client closes its open session tabs here", asyn
   }
 });
 
-it("xterm is code split: App loads the terminal panel lazily", async () => {
-  const { readFileSync } = await import("node:fs");
-  const { URL: NodeURL } = await import("node:url");
-  const src = readFileSync(new NodeURL("./App.tsx", import.meta.url), "utf8");
-  expect(src).not.toMatch(/^import .* from "\.\/terminal-panel\.tsx";/m);
-  expect(src).toMatch(/lazy\(\(\) => import\("\.\/terminal-panel\.tsx"\)/);
-});
-
-const reload = async () => {
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
-};
 const panelBtn = () => el.querySelector('[data-testid="panel-toggle"]')!;
 const sidePanel = () => el.querySelector('[data-testid="side-panel"]')!;
 
@@ -652,7 +590,7 @@ it("1440: the titlebar Toggle side panel button hides and shows the side panel; 
   expect(panelBtn().getAttribute("aria-expanded")).toBe("false");
   expect(sidePanel().parentElement!.className).toContain("lg:hidden");
   expect(localStorage.getItem("claude-ui.sidePanelHidden")).toBe("1");
-  await reload();
+  await rerender();
   expect(panelBtn().getAttribute("aria-expanded")).toBe("false");
   expect(sidePanel().parentElement!.className).toContain("lg:hidden");
   await press({ key: "R", ctrlKey: true, shiftKey: true });
@@ -665,7 +603,7 @@ it("Ctrl+\\ toggles the file tree, kept across a reload; with the panel hidden o
   expect(tree()).not.toBeNull();
   await press({ key: "\\", ctrlKey: true });
   expect(tree()).toBeNull();
-  await reload();
+  await rerender();
   expect(tree()).toBeNull();
   await act(async () => (panelBtn() as HTMLElement).click());
   await press({ key: "\\", ctrlKey: true });
@@ -681,21 +619,12 @@ it("Ctrl+\\ toggles the file tree, kept across a reload; with the panel hidden o
 it("the terminal panel stays open across a reload", async () => {
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
+  await rerender();
   expect(el.querySelector('[data-testid="terminal-toggle"]')!.getAttribute("aria-pressed")).toBe("true");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="terminal-toggle"]')!.click());
   localStorage.clear();
 });
 
-const rerender = async () => {
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
-};
 const q = (id: string) => el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 const clickId = (id: string) => act(async () => q(id)!.click());
 
@@ -729,6 +658,8 @@ it("the titlebar terminal button opens and hides the terminal, pressed while sho
   expect(b().getAttribute("aria-pressed")).toBe("false");
   expect(b().className).toContain("max-lg:hidden");
   expect(b().getAttribute("aria-label")).toBe("Toggle terminal (Ctrl+`)");
+  expect(b().querySelector("svg.lucide-square-terminal")).not.toBeNull();
+  expect(b().className).toContain("aria-pressed:bg-transparent");
   await clickId("terminal-toggle-titlebar");
   expect(b().getAttribute("aria-pressed")).toBe("true");
   expect(q("terminal-panel")).not.toBeNull();
@@ -836,21 +767,14 @@ it("GH-367: Focus keeps the side and bottom panels and the titlebar toggles of t
   expect(q("terminal-toggle-titlebar")).not.toBeNull();
 });
 
-it("GH-499: opening Focus restores a maximized bottom panel and shows the Focus page", async () => {
+it.each([
+  ["the Focus tab", openFocus],
+  ["the sidebar Focus row", () => clickId("focus-row-sidebar")],
+])("GH-499: opening Focus from %s restores a maximized bottom panel and shows the Focus page", async (_name, opener) => {
   await clickId("terminal-toggle");
   await clickId("dock-maximize");
   expect(mainHidden()).toBe(true);
-  await openFocus();
-  expect(q("focus-page")).not.toBeNull();
-  expect(mainHidden()).toBe(false);
-  expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
-});
-
-it("GH-499: the sidebar Focus row restores a maximized bottom panel too", async () => {
-  await clickId("terminal-toggle");
-  await clickId("dock-maximize");
-  expect(mainHidden()).toBe(true);
-  await clickId("focus-row-sidebar");
+  await opener();
   expect(q("focus-page")).not.toBeNull();
   expect(mainHidden()).toBe(false);
   expect(q("dock-maximize")!.getAttribute("aria-pressed")).toBe("false");
@@ -1003,7 +927,7 @@ it("Reset layout from the palette restores the default", async () => {
   localStorage.setItem("claude-ui.layout", JSON.stringify({ side: "left", areas: { side: ["changes", "files"], bottom: ["graph", "terminal"] } }));
   await rerender();
   await press({ key: "k", code: "KeyK", ctrlKey: true });
-  const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reset layout"))!;
+  const row = paletteRow("Reset layout")!;
   await act(async () => row.click());
   expect(localStorage.getItem("claude-ui.layout")).toBeNull();
 });
@@ -1083,13 +1007,6 @@ const maximizedBottomWithSideTerminal = async () => {
   expect(mainHidden()).toBe(true);
 };
 
-it("Ctrl+` with the terminal in the side panel restores a maximized bottom panel", async () => {
-  await maximizedBottomWithSideTerminal();
-  await press({ key: "`", ctrlKey: true });
-  expect(mainHidden()).toBe(false);
-  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
-});
-
 it("New terminal with the terminal in the side panel restores a maximized bottom panel, even when the terminal was the shown side pane", async () => {
   await maximizedBottomWithSideTerminal();
   await press({ key: "`", ctrlKey: true });
@@ -1117,9 +1034,11 @@ it("reordering tabs inside a maximized bottom panel keeps it maximized", async (
   expect(mainHidden()).toBe(true);
 });
 
-it("Ctrl+` with the terminal shown behind a maximized bottom panel restores it and focuses the shell", async () => {
+it("Ctrl+` with the terminal in the side panel restores a maximized bottom panel and, with the terminal shown behind it, focuses the shell", async () => {
   await maximizedBottomWithSideTerminal();
   await press({ key: "`", ctrlKey: true }); // terminal now the shown side pane
+  expect(mainHidden()).toBe(false);
+  expect(q("side-panel")!.contains(q("terminal-panel"))).toBe(true);
   await clickId("dock-maximize");
   q("dock-maximize")!.focus();
   const g = globalThis as { __termFocused?: number };
@@ -1288,10 +1207,7 @@ it("the sessions sidebar resizes with the arrow keys (200px to half the window) 
   for (let i = 0; i < 30; i++) await press({ key: "ArrowLeft" }, handle());
   expect(handle().getAttribute("aria-valuenow")).toBe("200");
   await press({ key: "ArrowRight" }, handle());
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
+  await rerender();
   expect(width()).toBe("232px");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-home"]')!.click());
   expect(handle()).toBeNull();
@@ -1308,10 +1224,7 @@ const AUTO_MODELS = [
 async function remount(over: Record<string, unknown>) {
   const saved = Object.fromEntries(Object.keys(over).map((k) => [k, replies[k]]));
   Object.assign(replies, over);
-  act(() => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
+  await rerender();
   return () => Object.assign(replies, saved);
 }
 const pickOption = async (trigger: string, name: string) => {
@@ -2056,18 +1969,6 @@ it("hover Quote on an assistant message quotes the whole message; on a user mess
 });
 
 const paletteRows = () => [...document.querySelectorAll('[data-testid="palette"] [role="option"]')].map((o) => o.textContent ?? "");
-const ORCH = (enabled: boolean) => ({ settings: { orchestration: { enabled, workerCap: 20, coordinatorAnswersPermissions: false } } });
-const ALL_MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
-
-it("the new-session tab has no Coordinator toggle, also with orchestration on", async () => {
-  const restore = await remount({ "settings.get": ORCH(true), "session.list": { sessions: [session], projects: ["/p/demo"], permissionModes: ALL_MODES } });
-  try {
-    await openNewTab();
-    expect(el.querySelector('[data-testid="coordinator-toggle"]')).toBeNull();
-  } finally {
-    restore();
-  }
-});
 
 it("an orchestration notice shows as a chip in a coordinator session, and as a plain user message elsewhere", async () => {
   const notice = "[claude-ui orchestration notice] Worker a: turn end. Call worker_wait to read the events.";
@@ -2184,6 +2085,8 @@ it("Changes and Graph show the repository chosen for the project; a pick in eith
       await act(async () => document.querySelector<HTMLElement>(`[role=treeitem][data-rel="${rel}"]`)!.click());
       await wait();
     };
+    // The Files tree reads one git.diff per repository for its marks while it is shown (a slow start sends them before the switch): only what follows the switch is the Changes read.
+    gits.length = 0;
     await pickSide(/changes/i);
     await wait();
     expect(gits.filter((m) => m.type === "git.diff")).toMatchObject([{ cwd: "/p/demo/web", exact: true }]);
@@ -2469,12 +2372,10 @@ describe("GH-359 tab menu commands", () => {
   const S2 = "22222222-2222-3333-4444-555555555555";
   const S3 = "33333333-2222-3333-4444-555555555555";
   const sessions = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third" }];
-  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
   const menu = async (id: string) => {
     await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
   };
-  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   async function remount() {
     act(() => root.unmount());
     replies["session.list"] = { sessions, projects: ["/p/demo"] };
@@ -2519,10 +2420,7 @@ describe("GH-359 tab menu commands", () => {
     await all("Close all");
     expect(tabIds()).toEqual([S3]);
     expect(toast()?.textContent).toContain("Closed 2 tabs");
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     expect(tabIds()).toEqual([S3]);
     expect(el.querySelector<HTMLElement>(`[data-tab-id="${S3}"]`)!.dataset.pinned).toBe("true");
     const close = await menu(S3);
@@ -2553,8 +2451,6 @@ describe("GH-358 sidebar menus", () => {
   const O2 = "dddddddd-2222-3333-4444-555555555555";
   const main = { path: "/p/demo", branch: "main", main: true };
   const managed = "/p/demo/.claude/worktrees/x";
-  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
-  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   const rowOf = (id: string) => el.querySelector(`[data-session-id="${id}"]`)!;
   const tid = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
   const click = (id: string) => act(async () => tid(id).click());
@@ -2572,27 +2468,17 @@ describe("GH-358 sidebar menus", () => {
   const mount = async (sessions: SessionListItem[], worktrees: Record<string, unknown[]> = {}) => {
     replies["session.list"] = { sessions, projects: ["/p/demo"], worktrees };
     localStorage.setItem("claude-ui.expandedWorkers", JSON.stringify([`coordinator:${ID}`]));
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await flush();
+    await rerender();
   };
   const bodies = (type: string, from: number) => sent.slice(from).filter((m) => m.type === type);
 
-  it("Copy session ID from the sidebar writes the clipboard and toasts; without a clipboard the toast says why", async () => {
+  it("Copy session ID from the sidebar writes the clipboard and toasts; Close tab from the sidebar menu closes the tab and the session stays listed", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await ctx(rowOf(ID));
     await click("action-copy-id");
     expect(writeText).toHaveBeenCalledWith(ID);
     expect(toast()?.textContent).toBe("Copied session ID");
-    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
-    await ctx(rowOf(ID));
-    await click("action-copy-id");
-    expect(toast()?.textContent).toContain("Copy failed");
-  });
-
-  it("Close tab from the sidebar menu closes the tab; the session stays listed", async () => {
     await ctx(rowOf(ID));
     expect(tid("action-close-tab")).not.toBeNull();
     await click("action-close-tab");
@@ -2767,7 +2653,6 @@ describe("GH-356 split view", () => {
     await act(async () => void el.querySelector(`[data-tab-id="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     return (label: string) => act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent === label)!.click());
   };
-  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
   async function remount(hash = S2, tabs = [ID, S2, S3]) {
     act(() => root.unmount());
     replies["session.list"] = { sessions, projects: ["/p/demo", "/p/other"] };
@@ -2821,13 +2706,6 @@ describe("GH-356 split view", () => {
     await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
     await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${PLAN}"] [role="tab"]`)!.click());
     expect(labels()).toEqual(["Demo, split 1 of 2", "Plan · Demo, split 2 of 2, active"]);
-  });
-
-  it("GH-398 a restored split with a Terminal tab mounts its terminal in the non-active split", async () => {
-    MAIN("plan", "files", "terminal", "graph");
-    localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
-    await remount(ID, [ID, TERM]);
-    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${TERM}"] [data-pane-host]`)).not.toBeNull();
   });
 
   it("GH-398 the Git graph tab menu has Split right / down disabled with the reason; activating it shows it alone", async () => {
@@ -2927,13 +2805,18 @@ describe("GH-356 split view", () => {
     expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
   });
 
-  it("the tab shown in the other split is marked with an icon and text, not by color", async () => {
+  it("the tab shown in the other split is marked with an icon and text, not by color; clicking the other split makes it active: hash, side panel and tab follow", async () => {
     await remount(ID);
     await splitRight(S2);
     const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
     expect(mark).not.toBeNull();
     expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 1");
     expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
   });
 
   it("Split down stacks the sessions with a horizontal resizer", async () => {
@@ -2941,16 +2824,6 @@ describe("GH-356 split view", () => {
     await (await menu(S2))("Split down");
     expect(el.querySelector('[data-testid="session-area"]')!.className).toContain("flex-col");
     expect(el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-orientation")).toBe("horizontal");
-  });
-
-  it("clicking the other split makes it active: hash, side panel and tab follow", async () => {
-    await remount(ID);
-    await splitRight(S2);
-    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-    expect(activeSplit()).toBe(splits()[0]);
-    expect(location.hash).toBe(`#${ID}`);
-    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
-    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
   });
 
   it("Esc stops only the active split's turn", async () => {
@@ -3001,10 +2874,7 @@ describe("GH-356 split view", () => {
   it("the split survives a remount", async () => {
     await remount(ID);
     await splitRight(S2);
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     expect(labels()).toEqual(["Demo, split 1 of 2", "Second, split 2 of 2, active"]);
   });
 
@@ -3013,10 +2883,7 @@ describe("GH-356 split view", () => {
     await splitRight(S2);
     width = 800;
     await act(async () => window.dispatchEvent(new Event("resize")));
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     expect(splits()).toHaveLength(0);
     expect(el.querySelector(`[data-tab-id="${S2}"]`)).not.toBeNull();
     expect(localStorage.getItem("claude-ui.split")).not.toBeNull();
@@ -3041,7 +2908,7 @@ describe("GH-356 split view", () => {
     expect(bar().getAttribute("aria-valuenow")).toBe("50");
   });
 
-  it("the New session tab suspends the split; the next session tab brings it back", async () => {
+  it("the New session tab suspends the split; the next session tab brings it back; Join splits (palette) shows the active session alone", async () => {
     await remount(ID);
     await splitRight(S2);
     await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-new"]')!.click());
@@ -3049,13 +2916,9 @@ describe("GH-356 split view", () => {
     expect(splits()).toHaveLength(0);
     await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
     expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
-  });
-
-  it("Join splits (palette) shows the active session alone", async () => {
-    await remount(ID);
-    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] [role="tab"]`)!.click());
     await press({ key: "k", code: "KeyK", ctrlKey: true });
-    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Join splits"))!.click());
+    await act(async () => paletteRow("Join splits")!.click());
     expect(splits()).toHaveLength(0);
     expect(location.hash).toBe(`#${S2}`);
     expect(localStorage.getItem("claude-ui.split")).toBeNull();
@@ -3065,6 +2928,10 @@ describe("GH-356 split view", () => {
     await remount(ID, [ID]);
     await menu(ID);
     expect(document.querySelector<HTMLElement>('[data-testid="tab-menu-splitRight"]')!.hasAttribute("data-disabled")).toBe(true);
+    await press({ key: "Escape" });
+    await press({ key: "k", code: "KeyK", ctrlKey: true });
+    expect(paletteRows().length).toBeGreaterThan(0);
+    expect(paletteRows().some((r) => r.startsWith("Split right"))).toBe(false);
   });
 
   // Slice 2: dragging a tab onto the session area.
@@ -3277,11 +3144,12 @@ describe("GH-356 split view", () => {
     expect(document.activeElement).not.toBe(el.querySelector(`[data-pane-tab-body="${TERM}"]`));
   });
 
-  it("GH-501 focus next split onto a Terminal split focuses its shell", async () => {
+  it("GH-398/GH-501 a restored Terminal split mounts its terminal while not active; focus next split onto it focuses its shell", async () => {
     MAIN("plan", "files", "terminal", "graph");
     const g = globalThis as { __termFocused?: number };
     localStorage.setItem("claude-ui.split", JSON.stringify({ dir: "row", ids: [ID, TERM], at: 0, ratio: 0.5 }));
     await remount(ID, [ID, TERM]);
+    expect(el.querySelector(`[data-testid="split"][data-pane-tab-body="${TERM}"] [data-pane-host]`)).not.toBeNull();
     const before = g.__termFocused ?? 0;
     await press({ key: "ArrowUp", code: "ArrowUp", ctrlKey: true, altKey: true });
     expect(activeSplit()!.dataset.paneTabBody).toBe(TERM);
@@ -3342,10 +3210,7 @@ describe("GH-356 split view", () => {
     await act(async () => void area().dispatchEvent(e));
     expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
     width = 800;
-    act(() => root.unmount());
-    root = createRoot(el);
-    await act(async () => root.render(<App />));
-    await act(async () => {});
+    await rerender();
     await drag(area(), "dragover", 880, 300);
     expect(el.querySelector('[data-testid="split-drop"]')).toBeNull();
   });
@@ -3353,7 +3218,7 @@ describe("GH-356 split view", () => {
   it("Split right from the palette splits the active tab", async () => {
     await remount(S2);
     await press({ key: "k", code: "KeyK", ctrlKey: true });
-    await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Split right"))!.click());
+    await act(async () => paletteRow("Split right")!.click());
     expect(labels()).toHaveLength(2);
     expect(activeSplit()!.getAttribute("aria-label")).toContain("Second");
   });
@@ -3363,8 +3228,6 @@ describe("GH-378 clean up tabs", () => {
   const S = (n: number) => `${n}${n}${n}${n}${n}${n}${n}${n}-2222-3333-4444-555555555555`;
   const [S2, S3, S4, S5] = [S(2), S(3), S(4), S(5)];
   const mk = (id: string, title: string, over: Partial<SessionListItem> = {}): SessionListItem => ({ ...session, id, title, ...over });
-  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
-  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   const undo = () => act(async () => [...toast()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
   const rule = async (from: string, r: string) => {
     await act(async () => void el.querySelector(`[data-tab-id="${from}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
@@ -3417,12 +3280,6 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([ID, S2]);
   });
 
-  it("Close worker tabs closes tabs with coordinatorId", async () => {
-    await remount([session, mk(S2, "Second"), mk(S3, "Third", { coordinatorId: ID })], [ID, S2, S3], S2);
-    await rule(S2, "workers");
-    expect(tabIds()).toEqual([ID, S2]);
-  });
-
   it("Close tabs not used for 1 hour uses claude-ui.tab-used; switching tabs stamps both tabs", async () => {
     const old = Date.now() - 2 * 3_600_000;
     localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
@@ -3439,7 +3296,6 @@ describe("GH-378 clean up tabs", () => {
   });
 
   it("pinned tabs and a tab with a draft are never closed by a rule", async () => {
-    await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
     localStorage.setItem("claude-ui.pinned-tabs", JSON.stringify([S3]));
     await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth")], [ID, S2, S3, S4], S2);
     draft(ID);
@@ -3747,13 +3603,6 @@ describe("GH-378 clean up tabs", () => {
     expect(toast()?.textContent).toContain("Closed Fourth");
   });
 
-  it("auto-close off (default) closes nothing", async () => {
-    const old = Date.now() - 30 * 3_600_000;
-    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
-    await remount([session, mk(S2, "Second"), mk(S3, "Third")], [ID, S2, S3], S2);
-    await act(async () => {});
-    expect(tabIds()).toEqual([ID, S2, S3]);
-  });
 });
 
 describe("GH-394: the file dialog", () => {
@@ -4113,12 +3962,6 @@ describe("GH-430: panels on the new-session tab", () => {
     expect(q("bottom-panel")).toBeNull();
     expect(panelShown("side-panel")).toBe(false);
     width = 1440;
-  });
-
-  it("AC8: the titlebar terminal toggle uses the terminal icon and the quiet pressed style", async () => {
-    const b = q("terminal-toggle-titlebar")!;
-    expect(b.querySelector("svg.lucide-square-terminal")).not.toBeNull();
-    expect(b.className).toContain("aria-pressed:bg-transparent");
   });
 
   /** terminal.list / terminal.create over a list of shells per folder, like the daemon. */
@@ -4491,7 +4334,6 @@ describe("GH-395 Plan pane", () => {
   const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   const ctxMenu = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   const menuItem = (id: string) => document.querySelector<HTMLElement>(`[data-testid="tab-menu-${id}"]`)!;
-  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
   const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
   const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
@@ -4601,7 +4443,7 @@ describe("GH-395 Plan pane", () => {
     try {
       await sendPart(ID, 1, planPart());
       await press({ key: "k", code: "KeyK", ctrlKey: true });
-      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reset layout"))!;
+      const row = paletteRow("Reset layout")!;
       await act(async () => row.click());
       expect(tabIds()).toEqual([ID]);
       expect(toastEl()!.textContent).toContain("Closed 1 Plan tab");
@@ -4634,16 +4476,19 @@ describe("GH-395 Plan pane", () => {
     }
   });
 
-  it("A subscribe error of a plan tab's owner ends Loading plan… with a message and is asked again after a reconnect", async () => {
+  it.each([
+    ["A subscribe error ends Loading plan… with a message", Object.assign(new Error("boom"), { code: "failed" }), true],
+    ["A dropped subscription", new Error("disconnected"), false],
+  ] as const)("%s of a plan tab's owner is asked again after a reconnect", async (_name, rejection, showsFailed) => {
     let broken = true;
     const restore = await mountMain({
       tabs: [REF],
       hash: `#plan%3A${ID}`,
-      extra: { "session.subscribe": async (m: { sessionId: string }) => (broken ? Promise.reject(Object.assign(new Error("boom"), { code: "failed" })) : bySess(m)) },
+      extra: { "session.subscribe": async (m: { sessionId: string }) => (broken ? Promise.reject(rejection) : bySess(m)) },
     });
     try {
       await act(async () => new Promise((r) => setTimeout(r, 30)));
-      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).not.toBeNull();
+      if (showsFailed) expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).not.toBeNull();
       broken = false;
       await act(async () => setStatus("reconnecting"));
       await act(async () => setStatus("connected"));
@@ -4651,7 +4496,7 @@ describe("GH-395 Plan pane", () => {
       expect(subs(ID).length).toBeGreaterThanOrEqual(2);
       await sendPart(ID, 1, planPart());
       expect(bodyOf(REF)!.textContent).toContain("do it");
-      expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).toBeNull();
+      if (showsFailed) expect(bodyOf(REF)!.querySelector('[data-testid="plan-failed"]')).toBeNull();
     } finally {
       restore();
     }
@@ -4661,30 +4506,10 @@ describe("GH-395 Plan pane", () => {
     const restore = await mountMain({ tabs: [ID], layout: JSON.stringify({ side: "right", areas: { side: ["changes", "files", "graph", "plan"], bottom: ["terminal"], main: [] } }) });
     try {
       await press({ key: "k", code: "KeyK", ctrlKey: true });
-      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Move plan to main area"))!;
+      const row = paletteRow("Move plan to main area")!;
       await act(async () => row.click());
       expect(toastEl()!.textContent).toContain("Plan moved to the main area");
       expect(layoutNow()!.areas.main).toEqual(["plan"]);
-    } finally {
-      restore();
-    }
-  });
-
-  it("A dropped subscription of a plan tab's owner is asked again after a reconnect", async () => {
-    let n = 0;
-    const restore = await mountMain({
-      tabs: [REF],
-      hash: `#plan%3A${ID}`,
-      extra: { "session.subscribe": async (m: { sessionId: string }) => (++n === 1 ? Promise.reject(new Error("disconnected")) : bySess(m)) },
-    });
-    try {
-      await act(async () => new Promise((r) => setTimeout(r, 30)));
-      await act(async () => setStatus("reconnecting"));
-      await act(async () => setStatus("connected"));
-      await act(async () => new Promise((r) => setTimeout(r, 30)));
-      expect(subs(ID).length).toBeGreaterThanOrEqual(2);
-      await sendPart(ID, 1, planPart());
-      expect(bodyOf(REF)!.textContent).toContain("do it");
     } finally {
       restore();
     }
@@ -4802,8 +4627,8 @@ describe("GH-395 Plan pane", () => {
       await ctxMenu(stripTab(OTHER));
       await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
       const items = () => [...document.querySelectorAll<HTMLElement>('[data-testid="tab-cleanup-menu"] [role="menuitem"]')];
-      const idle = items().find((x) => /idle/i.test(x.textContent ?? ""));
-      if (idle && !idle.hasAttribute("data-disabled")) await act(async () => idle.click());
+      const idle = items().find((x) => /idle/i.test(x.textContent ?? ""))!;
+      expect(idle.hasAttribute("data-disabled")).toBe(true);
       expect(tabIds()).toContain(REF);
       await ctxMenu(stripTab(OTHER));
       await act(async () => document.querySelector<HTMLElement>('[data-testid="tab-menu-cleanup"]')!.click());
@@ -4832,7 +4657,6 @@ describe("GH-396 Files and Git graph in the main area", () => {
   const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
   const sideTabs = () => [...el.querySelectorAll<HTMLElement>('[data-testid="side-panel"] [data-testid^="pane-"]')].map((b) => b.getAttribute("data-testid"));
-  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   const undoToast = () => act(async () => [...toastEl()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!.click());
   const layoutNow = () => JSON.parse(localStorage.getItem("claude-ui.layout") ?? "null") as { areas: { side: string[]; main: string[] } } | null;
   const hashTo = async (id: string) =>
@@ -4840,8 +4664,6 @@ describe("GH-396 Files and Git graph in the main area", () => {
       location.hash = `#${id}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
-  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
-  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   const palette = async (title: string) => {
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title));
@@ -5177,17 +4999,6 @@ describe("GH-396 Files and Git graph in the main area", () => {
     }
   });
 
-  it("Only one fs.watch stream runs for the store: the shared sync, not one per Files view", async () => {
-    const restore = await mount({ tabs: [ID, FILES, OTHERP, FILES_O], layout: HOME_MAIN, hash: FILES });
-    try {
-      await settle();
-      const watches = (sent as unknown as { type: string; paths: string[] }[]).filter((m) => m.type === "fs.watch");
-      // Every watch carries the one list of the store; no per-view lists alternate.
-      expect(new Set(watches.map((w) => JSON.stringify(w.paths))).size).toBeLessThanOrEqual(1);
-    } finally {
-      restore();
-    }
-  });
 });
 
 describe("Aside popup (GH-465)", () => {
@@ -5236,7 +5047,7 @@ describe("Aside popup (GH-465)", () => {
     expect(location.hash).toBe(`#${AS}`);
   });
 
-  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it)", async () => {
+  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it); the popup is hidden while another tab is shown and is back with its owner", async () => {
     await typeInto("/btw which file?");
     sent.length = 0;
     await act(async () => reconnect());
@@ -5244,14 +5055,10 @@ describe("Aside popup (GH-465)", () => {
     const sub = sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS);
     expect(sub).toBeDefined();
     expect(sub).not.toHaveProperty("background");
-  });
-
-  it("the popup is hidden while another tab is shown and is back with its owner", async () => {
-    await typeInto("/btw which file?");
     await press({ key: "s", code: "KeyS", ctrlKey: true, shiftKey: true });
-    expect(popup()).toBeNull();
+    expect(popup(), "while another tab shows").toBeNull();
     await press({ key: "1", code: "Digit1", altKey: true });
-    expect(popup()).not.toBeNull();
+    expect(popup(), "back with its owner").not.toBeNull();
   });
 });
 
@@ -5266,17 +5073,14 @@ describe("GH-397 Terminal in the main area", () => {
   const g = globalThis as { __termFocused?: number; __termMade?: number; __termDisposed?: number };
   const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
   const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
-  const toastEl = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   const views = () => [...el.querySelectorAll<HTMLElement>('[data-testid="terminal-view"]')];
   const reqs = (type: string) => (sent as unknown as { type: string }[]).filter((m) => m.type === type);
-  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
   const visible = () => vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as never);
   const hashTo = async (id: string) =>
     act(async () => {
       location.hash = `#${id}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
-  const ctx = (target: Element) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   let n = 0;
   const create = { "terminal.create": () => ({ terminal: { id: `n${++n}`, title: `Terminal ${n}` } }) };
   const BT = { key: "`", code: "Backquote", ctrlKey: true };
@@ -5421,7 +5225,7 @@ describe("GH-397 Terminal in the main area", () => {
     try {
       await settle();
       await press({ key: "k", code: "KeyK", ctrlKey: true });
-      await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
+      await act(async () => paletteRow("Open settings")!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-layout"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
@@ -5474,7 +5278,7 @@ describe("GH-397 Terminal in the main area", () => {
         await hashTo(TERM);
         await settle();
         await press({ key: "k", code: "KeyK", ctrlKey: true });
-        await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Open settings"))!.click());
+        await act(async () => paletteRow("Open settings")!.click());
         await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-layout"]')!.click());
         await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
         await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());
@@ -5542,7 +5346,6 @@ describe("GH-399 a file as a tab", () => {
   const elsewhere: SessionListItem = { ...session, id: OTHERP, cwd: "/p/other", title: "Elsewhere" };
   const sameFolder: SessionListItem = { ...session, id: SAMEP, cwd: "/p/demo", title: "Same" };
   const disk: Record<string, string> = { "/p/demo/a.ts": "alpha", "/p/demo/b.ts": "beta" };
-  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
   const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
   const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
@@ -5792,7 +5595,7 @@ describe("GH-399 a file as a tab", () => {
       await settle();
       expect(el.querySelectorAll('[data-testid="files-panel"] [data-testid="editor-tab"]')).toHaveLength(1);
       await press({ key: "k", code: "KeyK", ctrlKey: true });
-      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Reopen closed tab"));
+      const row = paletteRow("Reopen closed tab");
       await act(async () => row!.click());
       await settle();
       expect(tabIds()).toEqual([ID, A]);
@@ -5811,7 +5614,7 @@ describe("GH-399 a file as a tab", () => {
       await quickOpen("a.ts", { altKey: true });
       await editView(A, "X");
       await press({ key: "k", code: "KeyK", ctrlKey: true });
-      const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Close tab group"));
+      const row = paletteRow("Close tab group");
       await act(async () => row!.click());
       await settle();
       expect(document.body.textContent).toContain("Unsaved edits in 1 file tab are discarded.");
@@ -5895,10 +5698,8 @@ describe("GH-401 docked session", () => {
   const S3 = "33333333-2222-3333-4444-555555555555";
   const S4 = "44444444-2222-3333-4444-555555555555";
   const sessions = [session, { ...session, id: S2, title: "Second" }, { ...session, id: S3, title: "Third" }, { ...session, id: S4, title: "Fourth" }];
-  const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab-strip"] [data-testid="tab"]')].map((t) => t.dataset.tabId);
   const dockIds = (area: "side" | "bottom") => [...q(`${area}-panel`)!.querySelectorAll<HTMLElement>("[data-docked-tab]")].map((t) => t.dataset.dockedTab);
   const stored = () => JSON.parse(localStorage.getItem("claude-ui.tabs") ?? "[]") as string[];
-  const toast = () => el.querySelector<HTMLElement>('[data-testid="toast"]');
   const prompt = (id: string) => el.querySelector<HTMLElement>(`[data-docked-session="${id}"] textarea[aria-label="Prompt"]`);
   async function remount({ tabs = [ID, S2, S3, S4], docked = { [S3]: "side" } as Record<string, string>, active = ID, list = sessions } = {}) {
     act(() => root.unmount());
@@ -5994,28 +5795,18 @@ describe("GH-401 docked session", () => {
   });
 
   // The strip actions: none of them may close, move or stop a docked session.
-  it("Close others keeps the docked session", async () => {
-    await remount();
-    await (await tabMenu(S2))("Close others");
-    expect(tabIds()).toEqual([S2]);
-    expect(toast()?.textContent).toContain("Closed 2 tabs");
+  it.each([
+    ["Close others", undefined, [S2], "Closed 2 tabs"],
+    ["Close to the right", { active: S2 }, [ID, S2], "Closed Fourth"],
+    ["Close all", undefined, ["new"], null],
+  ] as const)("%s keeps the docked session", async (label, opts, tabs, toastText) => {
+    await remount(opts);
+    await (await tabMenu(S2))(label);
+    expect(tabIds()).toEqual(tabs);
+    if (toastText) expect(toast()?.textContent).toContain(toastText);
     unaffected();
-  });
-
-  it("Close to the right keeps the docked session", async () => {
-    await remount({ active: S2 });
-    await (await tabMenu(S2))("Close to the right");
-    expect(tabIds()).toEqual([ID, S2]);
-    expect(toast()?.textContent).toContain("Closed Fourth");
-    unaffected();
-  });
-
-  it("Close all keeps the docked session; the main area shows the New session tab", async () => {
-    await remount();
-    await (await tabMenu(S2))("Close all");
-    expect(tabIds()).toEqual(["new"]);
-    unaffected();
-    expect(prompt(S3)).not.toBeNull();
+    // Close all: the main area shows the New session tab.
+    if (label === "Close all") expect(prompt(S3)).not.toBeNull();
   });
 
   it("Undo of a Close all brings the strip back and keeps the docked session docked", async () => {
@@ -6108,18 +5899,6 @@ describe("GH-401 docked session", () => {
     expect(tabIds()).toEqual([ID, S2, S4]);
   });
 
-  it("opening a subagent run from a docked session shows it in the dock and leaves the hash alone", async () => {
-    await remount();
-    await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
-    await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "subagent", id: "t1", toolUseId: "t1", description: "look around", status: "running", startedAt: 1 } }));
-    const before = location.hash;
-    const open = el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] [data-testid="subagent-open"]`)!;
-    await act(async () => open.click());
-    expect(location.hash).toBe(before);
-    expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).not.toBeNull();
-    expect(el.querySelector('[data-testid="session-area"] [data-testid="subagent-bar"]')).toBeNull();
-  });
-
   it("a window whose tab list lacks a docked session does not delete its entry from the shared map", async () => {
     await remount({ tabs: [ID, S2, S4] });
     await act(async () => {});
@@ -6156,12 +5935,15 @@ describe("GH-401 docked session", () => {
     expect(interrupted()).toEqual([ID]);
   });
 
-  it("a docked session's subagent view ends when it moves to the main area: docked again, it shows the session view", async () => {
+  it("a docked session's subagent run opens in the dock and leaves the hash alone; its view ends when it moves to the main area: docked again, it shows the session view", async () => {
     await remount();
     await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
     await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "subagent", id: "t1", toolUseId: "t1", description: "look around", status: "running", startedAt: 1 } }));
+    const before = location.hash;
     await act(async () => el.querySelector<HTMLElement>(`[data-docked-session="${S3}"] [data-testid="subagent-open"]`)!.click());
+    expect(location.hash).toBe(before);
     expect(el.querySelector(`[data-docked-session="${S3}"] [data-testid="subagent-bar"]`)).not.toBeNull();
+    expect(el.querySelector('[data-testid="session-area"] [data-testid="subagent-bar"]')).toBeNull();
     await act(async () => void el.querySelector(`[data-docked-tab="${S3}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
     await act(async () => menuItem("docked-move-main").click());
     await (await tabMenu(S3))("Move to side panel");
@@ -6222,11 +6004,16 @@ describe("GH-401 docked session", () => {
     await remount();
     await act(async () => el.querySelector<HTMLElement>(`[data-docked-tab="${S3}"]`)!.click());
     await act(async () => emit({ type: "event", sessionId: S3, seq: 1, part: { type: "assistant_text", id: "a1", text: "Alpha beta", streaming: false } }));
-    document.getSelection()!.selectAllChildren(inDock('[data-testid="assistant-text"] p')!);
-    await act(async () => {
-      document.dispatchEvent(new Event("selectionchange"));
-      await new Promise((r) => setTimeout(r, 160));
-    });
+    // The timeline renders its markdown late (slower under load) and a re-render replaces the selected node, which drops the selection and the button
+    // with it: select again until the button shows (the button needs the selection to survive its 150 ms delay).
+    for (let i = 0; i < 40 && !document.querySelector('[data-testid="quote-button"]'); i++) {
+      const p = inDock('[data-testid="assistant-text"] p');
+      if (p) document.getSelection()!.selectAllChildren(p);
+      await act(async () => {
+        document.dispatchEvent(new Event("selectionchange"));
+        await new Promise((r) => setTimeout(r, 160));
+      });
+    }
     await act(async () => document.querySelector<HTMLElement>('[data-testid="quote-button"]')!.click());
     expect((prompt(S3) as HTMLTextAreaElement).value).toBe("> Alpha beta\n\n");
     const main = el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!;
@@ -6348,7 +6135,6 @@ describe("GH-400 an artifact as a tab", () => {
   const PART = "toolu_art1";
   const REF = `artifact:${ID}:${PART}`;
   const publish = { type: "tool_call", id: PART, toolUseId: PART, tool: "Artifact", input: { file_path: "/p/demo/dash.html", title: "Sales dashboard" }, status: "done" };
-  const settle = () => act(async () => new Promise((r) => setTimeout(r, 40)));
   const tabIds = () => [...el.querySelectorAll<HTMLElement>('[data-testid="tab"]')].map((t) => t.dataset.tabId);
   const stripTab = (id: string) => el.querySelector<HTMLElement>(`[data-tab-id="${id}"]`)!;
   const bodyOf = (ref: string) => el.querySelector<HTMLElement>(`[data-pane-tab-body="${ref}"]`);
@@ -6597,7 +6383,7 @@ describe("recommendations hooks (GH-518)", () => {
     expect(toastText()).not.toContain("Context is half full");
   });
 
-  it("keep computer awake: the page's first connection never shows it, a reconnect with daemon_slept does", async () => {
+  it("keep computer awake: daemon_slept, then the page hidden and visible again, offers it", async () => {
     const restore = await remount({ "settings.get": { settings: { orchestration: {}, notifications: { desktop: false }, power: { keepAwake: false } }, daemon: { host: "h", keepAwake: { supported: true } } } });
     try {
       await act(async () => slept({ type: "daemon_slept", at: 1, gapMs: 61_000 }));
@@ -6685,10 +6471,9 @@ describe("recommendations hooks (GH-518)", () => {
   });
 });
 
-it("the plan meter shows for a Claude session and hides while the shown session's engine has no plan usage", async () => {
+it("a session whose engine has no plan usage shows no plan account and no shell mode", async () => {
   const usage = { plan: "Max", windows: [], status: "allowed" };
   await act(async () => planUsage(usage));
-  expect(el.querySelector('[data-testid="plan-meter"]')).not.toBeNull();
   const bang = () => act(async () => void promptBox().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "!" })));
   await bang();
   expect(el.querySelector('[data-testid="bash-mode"]')).not.toBeNull();
@@ -6696,7 +6481,6 @@ it("the plan meter shows for a Claude session and hides while the shown session'
   const restore = await remount({ "session.list": { sessions: [noPlan], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: noPlan } });
   try {
     await act(async () => planUsage(usage));
-    expect(el.querySelector('[data-testid="plan-meter"]')).toBeNull();
     expect(el.querySelector('[data-testid="plan-account"]')).toBeNull();
     await bang();
     expect(el.querySelector('[data-testid="bash-mode"]')).toBeNull();

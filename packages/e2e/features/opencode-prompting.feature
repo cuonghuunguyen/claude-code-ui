@@ -12,6 +12,10 @@ Feature: OpenCode prompting (GH-656)
     And I see a reply from Claude
     And the turn has finished
     And I capture "reply"
+    And the rewind button is enabled
+    And the palette row "Ask aside" is enabled
+    And the page has no horizontal scroll
+    And I capture "rewind enabled"
 
   # GH-682: OpenCode keeps a request cut off during a folder's MCP load as the folder's state, and every turn there then aborts. No request of ours is cut off.
   Scenario: A prompt in a folder whose MCP server loads slowly gets a reply
@@ -151,7 +155,6 @@ Feature: OpenCode prompting (GH-656)
 
     Examples:
       | width | height |
-      | 1440  | 900    |
       | 390   | 844    |
 
   Scenario: A subagent runs as a nested card

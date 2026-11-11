@@ -6,8 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import { FilesPanel, chromeTheme } from "./files-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const files: Record<string, string> = { "/p/sub/c.ts": "see", "/p/a.ts": "one\ntwo", "/p/b.ts": "bee", "/o/out.ts": "outside" };
 

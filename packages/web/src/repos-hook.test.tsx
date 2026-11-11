@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { GitRepo } from "@claude-ui/protocol";
 import { useRepos } from "./repos.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);

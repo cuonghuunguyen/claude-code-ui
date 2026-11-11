@@ -24,6 +24,29 @@ it("a request that times out is left running: the caller gets a TimeoutError, th
   expect(paths.filter((p: string) => p === "/command")).toHaveLength(2);
 }, 20_000);
 
+it("two concurrent requests to a server that died restart it once; the one that times out still runs to its answer on the new server (GH-682 merged with GH-685)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocr-")));
+  const logFile = join(root, "fake.log");
+  const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN], env: () => ({ FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_MCP_LOAD_MS: "1500" }) });
+  cleanups.push(() => server.close());
+  const log = () => readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, any>);
+  const srv = await server.ensure();
+  // The server stops answering and its process stays (no exit event): both requests meet it, each probes it, only the first drops it, both are sent
+  // again to the one new server.
+  await fetch(`${srv.url}/__deaf`, { method: "POST", body: "{}" });
+  await new Promise((r) => setTimeout(r, 200));
+  const [cut, status] = await Promise.all([server.request("/command", { directory: root, timeoutMs: 300 }).catch((err: Error) => err), server.request("/session/status", { directory: root })]);
+  expect(cut).toMatchObject({ name: "TimeoutError" });
+  expect(status).toEqual({});
+  const starts = log().filter((l) => l.type === "start");
+  expect(starts).toHaveLength(2);
+  // The timed-out GET /command was not cut off: it waits for the load on the new server, so the folder is not broken there.
+  await new Promise((r) => setTimeout(r, 2000));
+  expect(await server.request("/mcp", { directory: root })).toEqual({});
+  expect(log().filter((l) => l.type === "start")).toHaveLength(2);
+  expect(server.running()).toBe(true);
+}, 30_000);
+
 it("E2E harness: with CLAUDE_UI_E2E_OPENCODE_INFO the daemon writes the url and auth of its OpenCode server there; without it nothing is written", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ocr-")));
   const info = join(root, "opencode-server.json");

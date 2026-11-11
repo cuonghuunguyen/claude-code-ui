@@ -147,22 +147,7 @@ describe("reset", () => {
     expect(read(r.dir, "a.txt")).toBe("1\n");
     expect(run(r.dir, "status", "--porcelain")).toBe("");
   });
-  it("the hard preview lists a modified file and an untracked file the target would overwrite", async () => {
-    const r = repo();
-    run(r.dir, "checkout", "-q", "other");
-    put(r.dir, "n.txt", "n\n");
-    run(r.dir, "add", "-A");
-    run(r.dir, "commit", "-q", "-m", "n");
-    run(r.dir, "checkout", "-q", "main");
-    put(r.dir, "a.txt", "dirty\n");
-    put(r.dir, "n.txt", "mine\n");
-    const m = await menu(r, other(r), true);
-    expect(m.lose).toEqual(["a.txt", "n.txt"]);
-    expect(m.loseCount).toBe(2);
-    await act(r, "reset", other(r), "hard");
-    expect(read(r.dir, "n.txt")).toBe("n\n");
-  });
-  it("hard snapshots each lost file (modified tracked and overwritten untracked) with reason reset; soft and mixed snapshot nothing", async () => {
+  it("hard previews and snapshots each lost file (modified tracked and overwritten untracked) with reason reset; soft and mixed snapshot nothing", async () => {
     const r = repo();
     run(r.dir, "checkout", "-q", "other");
     put(r.dir, "n.txt", "n\n");
@@ -174,7 +159,11 @@ describe("reset", () => {
     await act(r, "reset", head(r.dir, "HEAD~1"), "soft");
     await act(r, "reset", head(r.dir, "HEAD"), "mixed");
     expect(r.seen).toEqual([]);
+    const m = await menu(r, other(r), true);
+    expect(m.lose).toEqual(["a.txt", "n.txt"]);
+    expect(m.loseCount).toBe(2);
     await act(r, "reset", other(r), "hard");
+    expect(read(r.dir, "n.txt")).toBe("n\n");
     expect(r.seen.map((s) => ({ ...s, path: s.path.slice(r.dir.length + 1) })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
       { path: "a.txt", reason: "reset", text: "dirty\n" },
       { path: "n.txt", reason: "reset", text: "mine\n" },

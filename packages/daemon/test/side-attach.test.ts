@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeDaemonFile } from "../src/ctl/daemon-file.ts";
@@ -14,6 +14,11 @@ let server: Server | undefined;
 const servers: Server[] = [];
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "side-attach-"))));
 afterEach(() => (servers.forEach((x) => x.close()), servers.length = 0, rmSync(dir, { recursive: true, force: true })));
+
+/** Where a test socket lives: a file in `dir`; Windows has no socket files, a named pipe stands in (the pipe vanishes with its server, no stale file). */
+const sockPath = (name: string) => (process.platform === "win32" ? `\\\\.\\pipe\\${basename(dir)}-${name}` : join(dir, name));
+const uid = process.getuid?.() ?? 0; // Windows reports st.uid 0 for every file
+const posixOnly = process.platform !== "win32"; // file modes (0700, 0600) do not exist on Windows
 
 const listen = (sock: string) =>
   new Promise<void>((ok) => {
@@ -36,7 +41,7 @@ const bridged = async (r: ReturnType<typeof run>) => {
 };
 
 it("a live Hub with an attach socket: bridges stdin to the socket and back; ends when stdin ends", async () => {
-  const sock = join(dir, "d.sock");
+  const sock = sockPath("d.sock");
   await listen(sock);
   writeDaemonFile(dir, info(sock));
   const r = run();
@@ -54,7 +59,7 @@ it("a live Hub without an attach socket: prints hub_no_attach with its version a
 });
 
 it("a dead pid and --start: starts a Hub, then connects once its daemon.json appears", async () => {
-  const sock = join(dir, "s.sock");
+  const sock = sockPath("s.sock");
   writeDaemonFile(dir, info(sock, 999999));
   let started = 0;
   const r = run({ start: () => (started++, void listen(sock).then(() => writeDaemonFile(dir, info(sock)))) });
@@ -69,8 +74,8 @@ it("no Hub and no --start: no_daemon, exit 3", async () => {
 });
 
 it("a live Hub whose socket refuses, then a new daemon.json with a listening socket: bridges, never starts a second Hub", async () => {
-  const gone = join(dir, "gone.sock");
-  const fresh = join(dir, "fresh.sock");
+  const gone = sockPath("gone.sock");
+  const fresh = sockPath("fresh.sock");
   writeDaemonFile(dir, info(gone));
   setTimeout(() => void listen(fresh).then(() => writeDaemonFile(dir, info(fresh))), 250);
   const start = vi.fn();
@@ -87,46 +92,46 @@ it("nothing appears within waitMs: --start ran once, then no_daemon", async () =
 });
 
 it("the attach socket path is CLAUDE_UI_ATTACH_SOCK, else next to daemon.json", () => {
-  expect(attachSocketPath({}, "/home/u/.config/claude-ui", 1, "linux")).toBe("/home/u/.config/claude-ui/attach.sock");
+  expect(attachSocketPath({}, "/home/u/.config/claude-ui", 1, "linux")).toBe(join("/home/u/.config/claude-ui", "attach.sock"));
   expect(attachSocketPath({ CLAUDE_UI_ATTACH_SOCK: "/x/y.sock" }, "/home/u/.config/claude-ui")).toBe("/x/y.sock");
 });
 
 it("a too long path falls back to XDG_RUNTIME_DIR, else /tmp/claude-ui-<uid>", () => {
   const cfg = "/h/" + "x".repeat(100);
-  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, cfg, 1000, "linux")).toBe("/run/user/1000/claude-ui-attach.sock");
-  expect(attachSocketPath({}, cfg, 1000, "linux")).toBe("/tmp/claude-ui-1000/attach.sock");
-  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/r/" + "y".repeat(100) }, cfg, 7, "darwin")).toBe("/tmp/claude-ui-7/attach.sock");
+  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, cfg, 1000, "linux")).toBe(join("/run/user/1000/claude-ui-attach.sock"));
+  expect(attachSocketPath({}, cfg, 1000, "linux")).toBe(join("/tmp/claude-ui-1000/attach.sock"));
+  expect(attachSocketPath({ XDG_RUNTIME_DIR: "/r/" + "y".repeat(100) }, cfg, 7, "darwin")).toBe(join("/tmp/claude-ui-7/attach.sock"));
   // The limit is 103 bytes on macOS, 107 on Linux.
   const at = (n: number) => "/" + "h".repeat(n - "/attach.sock".length - 1);
-  expect(attachSocketPath({}, at(103), 1, "darwin")).toContain("/attach.sock");
-  expect(attachSocketPath({}, at(104), 1, "darwin")).toBe("/tmp/claude-ui-1/attach.sock");
+  expect(attachSocketPath({}, at(103), 1, "darwin")).toContain("attach.sock");
+  expect(attachSocketPath({}, at(104), 1, "darwin")).toBe(join("/tmp/claude-ui-1/attach.sock"));
   expect(attachSocketPath({}, at(107), 1, "linux")).toContain("hhh");
-  expect(attachSocketPath({}, at(108), 1, "linux")).toBe("/tmp/claude-ui-1/attach.sock");
+  expect(attachSocketPath({}, at(108), 1, "linux")).toBe(join("/tmp/claude-ui-1/attach.sock"));
 });
 
 it("a Daemon records its install folder next to the installs, for the sweep", () => {
-  expect(liveInstall("/h/.local/share/claude-ui/side/1.2-3/node_modules/claude-code-ui/dist/cli.js")).toEqual({ file: "/h/.local/share/claude-ui/side/.live", dir: "/h/.local/share/claude-ui/side/1.2-3" });
-  expect(liveInstall("/src/packages/daemon/src/main.ts")).toBeUndefined();
+  expect(liveInstall(join("/h/.local/share/claude-ui/side/1.2-3/node_modules/claude-code-ui/dist/cli.js"))).toEqual({ file: join("/h/.local/share/claude-ui/side/.live"), dir: join("/h/.local/share/claude-ui/side/1.2-3") });
+  expect(liveInstall(join("/src/packages/daemon/src/main.ts"))).toBeUndefined();
 });
 
 it("the socket folder is made mode 0700 and a folder of another user is refused", () => {
   const d = join(dir, "a", "b");
-  prepareSockDir(d, process.getuid!());
-  expect(statSync(d).mode & 0o777).toBe(0o700);
+  prepareSockDir(d, uid);
+  if (posixOnly) expect(statSync(d).mode & 0o777).toBe(0o700);
   chmodSync(d, 0o755);
-  prepareSockDir(d, process.getuid!());
-  expect(statSync(d).mode & 0o777).toBe(0o700);
-  expect(() => prepareSockDir(d, process.getuid!() + 1)).toThrow("another user");
+  prepareSockDir(d, uid);
+  if (posixOnly) expect(statSync(d).mode & 0o777).toBe(0o700);
+  expect(() => prepareSockDir(d, uid + 1)).toThrow("another user");
 });
 
 it("listenPrivate: the socket is 0600 and the process umask is restored (children must not inherit 0177)", async () => {
   const before = process.umask();
   const { listenPrivate } = await import("../src/side-attach.ts");
   const { statSync } = await import("node:fs");
-  const sock = join(dir, "p.sock");
+  const sock = sockPath("p.sock");
   server = createServer();
   await new Promise<void>((ok) => (listenPrivate(server!, sock), server!.once("listening", ok)));
-  expect(statSync(sock).mode & 0o777).toBe(0o600);
+  if (posixOnly) expect(statSync(sock).mode & 0o777).toBe(0o600);
   expect(process.umask()).toBe(before);
 });
 
@@ -134,15 +139,15 @@ it("prepareSockDir refuses a symlink in place of the folder", () => {
   const real = join(dir, "real");
   mkdirSync(real);
   const link = join(dir, "link");
-  symlinkSync(real, link);
-  expect(() => prepareSockDir(link, process.getuid!())).toThrow("not a folder");
+  symlinkSync(real, link, "junction");
+  expect(() => prepareSockDir(link, uid)).toThrow("not a folder");
   writeFileSync(join(dir, "file"), "");
-  expect(() => prepareSockDir(join(dir, "file"), process.getuid!())).toThrow();
+  expect(() => prepareSockDir(join(dir, "file"), uid)).toThrow();
 });
 
 it("claimSocket: two Daemons that meet a stale socket file: exactly one owns the socket, the other leaves", async () => {
-  const sock = join(dir, "c.sock");
-  writeFileSync(sock, ""); // stale: a regular file of a dead Daemon
+  const sock = sockPath("c.sock");
+  if (posixOnly) writeFileSync(sock, ""); // stale: a regular file of a dead Daemon (a Windows pipe dies with its process: nothing stale to meet, the two just race)
   const a = createServer();
   const b = createServer();
   const live: string[] = [];
@@ -161,11 +166,11 @@ it("claimSocket: two Daemons that meet a stale socket file: exactly one owns the
 });
 
 it("claimSocket: a live Daemon owns the socket: the second start leaves it alone", async () => {
-  const sock = join(dir, "l.sock");
+  const sock = sockPath("l.sock");
   await listen(sock);
   const second = createServer();
   const live = await new Promise<boolean>((ok) => claimSocket(second, sock, { onLive: () => ok(true), onError: () => ok(false) }));
   expect(live).toBe(true);
   expect(second.listening).toBe(false);
-  expect(statSync(sock).isSocket()).toBe(true); // not removed
+  if (posixOnly) expect(statSync(sock).isSocket()).toBe(true); // not removed
 });
