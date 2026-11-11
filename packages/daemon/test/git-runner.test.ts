@@ -208,5 +208,29 @@ describe("git-runner", () => {
         k.release();
         expect(await p).toMatchObject({ killed: true });
       }));
+
+    // GH-698: an aborted read keeps its entry until the thread reports the group's end. When the thread ends first (`reset()`, the watchdog's restart), its exit must not
+    // kill that group again, synchronously, with whatever kill command is set by then: here the next call's slow killer, which waits for a release only the blocked loop can give.
+    it("the thread ending after an aborted read does not kill its group again with the next call's kill command", { timeout: 30_000 }, async () => {
+      const k1 = slowKill();
+      gitRunnerConfig.killCommand = k1.command;
+      const ctl = new AbortController();
+      const p = runGit(sleeper({ idempotent: true, timeout: 30_000, signal: ctl.signal })).then(() => undefined, (x: Error) => x);
+      setTimeout(() => ctl.abort(), 300);
+      expect(await p).toMatchObject({ code: "ABORT_ERR" });
+      gitRunnerConfig.reset();
+      try {
+        await withSlowKill(async (k) => {
+          setTimeout(k.release, 500);
+          const t0 = Date.now();
+          const e = await runGit(sleeper()).then(() => undefined, (x: Error) => x);
+          expect(e).toMatchObject({ killed: true });
+          expect(Date.now() - t0).toBeLessThan(5000);
+        });
+      } finally {
+        await k1.invoked();
+        await k1.finish();
+      }
+    });
   });
 });

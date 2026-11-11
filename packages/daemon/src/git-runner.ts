@@ -95,9 +95,12 @@ function failCalls(w: Worker, why: string) {
     if (c.w === w) {
       calls.delete(id);
       clearTimeout(c.timer);
+      if (c.pid !== undefined) trees.delete(c.pid);
+      // A settled call already failed and its kill is in flight (`onAbort`): a second, synchronous kill here ran the kill command set by then (GH-698).
+      if (c.settled) continue;
       // The lock of a remote operation is released with this failure: nothing may still run.
-      if (c.pid !== undefined) (trees.delete(c.pid), killProcessTree(c.pid, true));
-      if (!c.settled) c.fail(new Error(why));
+      if (c.pid !== undefined) killProcessTree(c.pid, true);
+      c.fail(new Error(why));
     }
 }
 
