@@ -10,6 +10,7 @@ import { ascending } from "./opencode-id.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
+import { visualizeSystem } from "./visualize.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** Modes OpenCode sessions switch to; no `auto` or `dontAsk`. */
@@ -436,10 +437,11 @@ class OpenCodeSession implements EngineSession {
         ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
         ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
       ];
+      const system = visualizeSystem(this.opts.visualizePlugin?.()); // per prompt: the setting applies from the next one
       await this.server.request(`/session/${this.id}/prompt_async`, {
         method: "POST",
         directory: this.cwd,
-        body: { messageID, parts, agent, ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
+        body: { messageID, parts, agent, ...(system && { system }), ...variant, ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }) },
       });
     } finally {
       this.sentAt = Date.now();

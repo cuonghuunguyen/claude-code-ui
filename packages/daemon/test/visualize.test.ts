@@ -1,7 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { VISUALIZE_CSP, VISUALIZE_SHELL, visualizePluginDir } from "../src/visualize.ts";
+import { VISUALIZE_CSP, VISUALIZE_SHELL, visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
 
 it("the CSP is exactly the documented policy", () => {
   expect(VISUALIZE_CSP).toBe(
@@ -11,6 +13,22 @@ it("the CSP is exactly the documented policy", () => {
 
 it("the plugin folder is found in the source checkout", () => {
   expect(existsSync(join(visualizePluginDir()!, "skills/visualize/SKILL.md"))).toBe(true);
+});
+
+it("a side install finds the plugin next to its cli.js", () => {
+  const dist = join(mkdtempSync(join(tmpdir(), "viz-")), "node_modules/claude-code-ui/dist");
+  mkdirSync(join(dist, "plugins/visualize/skills/visualize"), { recursive: true });
+  writeFileSync(join(dist, "cli.js"), "");
+  expect(visualizePluginDir(pathToFileURL(join(dist, "cli.js")).href)).toBe(join(dist, "plugins/visualize"));
+});
+
+it("visualizeSystem is the description and the body of the skill, without frontmatter", () => {
+  const s = visualizeSystem(visualizePluginDir())!;
+  expect(s.startsWith("Draw a chart, diagram")).toBe(true);
+  expect(s).toContain("```visualize");
+  expect(s).not.toMatch(/^---$|^name:/m);
+  expect(visualizeSystem(undefined)).toBeUndefined();
+  expect(visualizeSystem(join(tmpdir(), "no-such-plugin"))).toBeUndefined();
 });
 
 it("the shell script is valid and renders only a render message from the parent", () => {

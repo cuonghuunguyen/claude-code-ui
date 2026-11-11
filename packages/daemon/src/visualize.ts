@@ -1,11 +1,24 @@
 // Inline visualizations (GH-690, docs/spec.md "Inline visualizations"): the visualize plugin's location and the GET /visualize shell page of the sandboxed frame.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The visualize plugin folder: the bundled dist copy, else the source checkout; undefined when neither exists. */
-export function visualizePluginDir(): string | undefined {
-  for (const u of [new URL("./plugins/visualize", import.meta.url), new URL("../../../plugins/visualize", import.meta.url)]) if (existsSync(fileURLToPath(u))) return fileURLToPath(u);
+export function visualizePluginDir(base = import.meta.url): string | undefined {
+  for (const u of [new URL("./plugins/visualize", base), new URL("../../../plugins/visualize", base)]) if (existsSync(fileURLToPath(u))) return fileURLToPath(u);
   return undefined;
+}
+
+/** The skill as OpenCode's per-prompt `system` text: its description (the "when") and body, no frontmatter; undefined when `dir` is none or has no readable skill. */
+export function visualizeSystem(dir: string | undefined): string | undefined {
+  if (!dir) return undefined;
+  try {
+    const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(readFileSync(join(dir, "skills/visualize/SKILL.md"), "utf8").replace(/\r\n/g, "\n"));
+    const desc = m && /^description:\s*(.+)$/m.exec(m[1]!)?.[1];
+    return desc ? `${desc}\n\n${m![2]!.trim()}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The CSP of the shell page, one directive per entry with its reason; it stays in force after the shell's document.write. Relax here only (docs/spec.md "Security"). */

@@ -52,6 +52,6 @@ const sdkDir = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/cla
 writeFileSync(at("../dist/side/side.json"), JSON.stringify({ sdk: JSON.parse(readFileSync(join(sdkDir, "package.json"), "utf8")).version }));
 for (const f of ["cli.js", "launcher.js"]) chmodSync(at(`../dist/${f}`), 0o755);
 cpSync(at("../../web/dist"), at("../dist/web"), { recursive: true });
-// The visualize skill (GH-690): the daemon passes this folder to the CLI as a local plugin. Not in dist/side: the side bundle packs only JS, so sides have no skill.
-cpSync(at("../../../plugins/visualize"), at("../dist/plugins/visualize"), { recursive: true });
+// The visualize skill (GH-690): the daemon passes this folder to the CLI as a local plugin. A copy in dist/side/plugins too: the side bundles pack it next to the side JS (GH-693).
+for (const d of ["../dist/plugins/visualize", "../dist/side/plugins/visualize"]) cpSync(at("../../../plugins/visualize"), at(d), { recursive: true });
 for (const f of ["README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]) copyFileSync(at(`../../../${f}`), at(`../${f}`));
