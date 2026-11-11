@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { open as openHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -1115,11 +1115,17 @@ describe("gitLog / gitShow / gitFileAt", () => {
   });
 
   /** The git argv of every call made while `fn` runs (a logging wrapper first on PATH; one write per call, so parallel calls never interleave). */
+  // One wrapper for the file: the first run of a new script costs about 0.5 s on macOS (its security scan), and a full suite multiplies that.
+  let wrapper: { bin: string; log: string } | undefined;
   async function recorded(fn: () => Promise<unknown>): Promise<string[][]> {
-    const bin = mkdtempSync(join(tmpdir(), "gitbin-"));
-    const log = join(bin, "log");
-    const real = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ -z "$GIT_WRAP" ]; then\nprintf 'LAZY=%s\\037%s\\n' "$GIT_NO_LAZY_FETCH" "$(printf '%s\\037' "$@")" >> '${log}'\nfi\nexport GIT_WRAP=1\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    if (!wrapper) {
+      const bin = mkdtempSync(join(tmpdir(), "gitbin-"));
+      const real = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      wrapper = { bin, log: join(bin, "log") };
+      writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ -z "$GIT_WRAP" ]; then\nprintf 'LAZY=%s\\037%s\\n' "$GIT_NO_LAZY_FETCH" "$(printf '%s\\037' "$@")" >> '${wrapper.log}'\nfi\nexport GIT_WRAP=1\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    }
+    const { bin, log } = wrapper;
+    rmSync(log, { force: true });
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {
@@ -1257,16 +1263,20 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitFileAt(sub, r.c1, "a.txt", inSub, 1000)).rejects.toMatchObject({ code: "cwd_not_allowed" });
   });
   it.skipIf(process.platform === "win32")("git.log page 0, git.commit and a file diff each run at most 2 git processes", async () => {
+    // One repository built (about 15 git processes, seconds under a full suite) and copied: each step needs a folder no cache has seen.
     const r = graphRepo();
-    expect((await recorded(() => gitLog(r.dir, { allowed: all }))).length).toBeLessThanOrEqual(2);
-    const r2 = graphRepo();
-    expect((await recorded(() => gitLog(r2.dir, { ref: "HEAD", allowed: all }))).length).toBeLessThanOrEqual(2);
-    const r3 = graphRepo();
-    expect((await recorded(() => gitLog(r3.dir, { ref: "refs/heads/f", allowed: all }))).length).toBeLessThanOrEqual(2);
-    const r4 = graphRepo();
-    expect((await recorded(() => gitShow(r4.dir, r4.c3, all))).length).toBeLessThanOrEqual(2);
-    const r5 = graphRepo();
-    expect((await recorded(() => Promise.all([gitFileAt(r5.dir, r5.c1, "a.txt", all, 1000), gitFileAt(r5.dir, r5.c3, "a.txt", all, 1000)]))).length).toBeLessThanOrEqual(2);
+    const copy = () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), "gg-")));
+      cpSync(r.dir, dir, { recursive: true });
+      return dir;
+    };
+    expect((await recorded(() => gitLog(copy(), { allowed: all }))).length).toBeLessThanOrEqual(2);
+    expect((await recorded(() => gitLog(copy(), { ref: "HEAD", allowed: all }))).length).toBeLessThanOrEqual(2);
+    expect((await recorded(() => gitLog(copy(), { ref: "refs/heads/f", allowed: all }))).length).toBeLessThanOrEqual(2);
+    const d4 = copy();
+    expect((await recorded(() => gitShow(d4, r.c3, all))).length).toBeLessThanOrEqual(2);
+    const d5 = copy();
+    expect((await recorded(() => Promise.all([gitFileAt(d5, r.c1, "a.txt", all, 1000), gitFileAt(d5, r.c3, "a.txt", all, 1000)]))).length).toBeLessThanOrEqual(2);
   });
 
   it.skipIf(process.platform === "win32")("a repeated git.log with unchanged refs runs no git process; a commit, branch or tag reads again", async () => {

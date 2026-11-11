@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:net";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -67,12 +67,16 @@ describe("findHub", () => {
 
 describe.skipIf(process.platform === "win32")("HUB_PROBE in a real sh", () => {
   const servers: Server[] = [];
-  afterEach(() => servers.splice(0).forEach((v) => v.close()));
+  const short: string[] = [];
+  afterEach(() => (servers.splice(0).forEach((v) => v.close()), short.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }))));
   /** `socket`: a real Unix socket at `attach` (the probe tests `-S`). */
   const cfg = async (pid: number, socket = true) => {
     const x = realpathSync(mkdtempSync(join(tmpdir(), "hub-")));
     mkdirSync(join(x, "claude-ui"));
-    const sock = join(x, "claude-ui", "attach.sock");
+    // The socket lives in a short folder: a socket path over 104 bytes (macOS) is cut silently, and the run's temp root makes tmpdir() paths that long.
+    const s = mkdtempSync("/tmp/hub-");
+    short.push(s);
+    const sock = join(s, "attach.sock");
     if (socket) await new Promise<void>((r) => servers.push(createServer().listen(sock, r)));
     const text = JSON.stringify(info({ pid, attach: sock })) + "\n";
     writeFileSync(join(x, "claude-ui", "daemon.json"), text);

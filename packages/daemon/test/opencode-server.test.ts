@@ -166,7 +166,8 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     process.kill(pid);
     await until(() => !alive(pid));
     // The create right after the crash must wait for the restarted server, not fail: the daemon may not have seen the exit yet (the pid is gone before the watcher's exit event arrives, a moment longer on Windows).
-    expect(await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "reply" });
+    const after = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(after, JSON.stringify(after)).toMatchObject({ type: "reply" });
     expect(d.starts()).toHaveLength(2);
   });
 
