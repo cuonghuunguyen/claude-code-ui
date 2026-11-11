@@ -38,13 +38,13 @@ type Answer = { decision: "allow" | "allow_always" | "deny"; ruleIndex?: number;
 
 /** `allowBypass`: daemon config enables bypassPermissions (docs/spec.md "Security"). */
 /** `uploadDir`: the folder of this session's fs.uploads by its id (created on call), readable by Claude without a permission request. */
-export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort">;
+export type SessionSettings = Pick<SessionInfo, "model" | "permissionMode" | "effort"> & { /** Engines with `agents` only. */ agent?: string };
 /**
  * `onSettings`: called after model, permission mode or effort changed (the daemon persists them for a restore). `fields`: the
  * settings this change set; none when the first query starts or a /clear heir begins (saved only if the session has no entry).
  * `onCleared`: a /clear handed the live query of `from` (the session that was cleared) to `heir`, a new session (the daemon lists it).
  */
-export type SessionOpts = Partial<SessionSettings> & {
+export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   /** The Engine the session runs on; default: the Claude Engine. */
   engine?: Engine;
   allowBypass?: boolean;
@@ -164,12 +164,12 @@ export class Session {
   }
 
   /** The new session of a /clear (engine use): same cwd and options, the settings of the cleared one. */
-  heir(id: string, settings: SessionSettings) {
+  heir(id: string, settings: Omit<SessionSettings, "agent">) {
     return Session.restore(id, this.cwd, [], { ...this.opts, ...settings });
   }
 
   info(): SessionInfo {
-    const { model, permissionMode, effort } = this.run.settings();
+    const { model, permissionMode, effort, agent } = this.run.settings();
     return {
       id: this.id,
       cwd: this.cwd,
@@ -177,6 +177,7 @@ export class Session {
       model,
       permissionMode,
       effort,
+      ...(agent !== undefined && { agent }),
       permissionModes: this.engine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model) }),
       capabilities: this.engine.capabilities,
       engine: this.engine.name,
@@ -285,6 +286,13 @@ export class Session {
   }
   setPermissionMode(mode: PermissionMode) {
     return this.run.setPermissionMode(mode);
+  }
+  refreshAgents() {
+    return this.run.refreshAgents?.();
+  }
+  setAgent(agent: string) {
+    if (!this.run.setAgent) throw new Error("this session's engine has no agents");
+    return this.run.setAgent(agent);
   }
   setEffort(effort: Effort) {
     return this.run.setEffort(effort);

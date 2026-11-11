@@ -9,6 +9,9 @@ export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 /** Claude's rule shape (inside `permission_request.suggestions`); stays the SDK type until another Engine maps its rules. */
 export type { PermissionUpdate };
 
+/** A primary agent of an Engine with `agents` (OpenCode): what the agent chooser lists. */
+export type AgentInfo = { name: string; description?: string };
+
 /** Thinking effort; "default" = the model's default (no `effort` option). */
 export type Effort = EffortLevel | "default";
 
@@ -146,6 +149,10 @@ export type Part = { parentId?: string } & (
   | { type: "session_permission_mode"; id: string; mode: PermissionMode }
   /** Effort changed with session.setEffort. */
   | { type: "session_effort"; id: string; effort: Effort }
+  /** The agent prompts run as changed (Engines with `agents`): session.setAgent, or the user's choice in the Engine's own UI. */
+  | { type: "session_agent"; id: "session_agent"; agent: string }
+  /** The primary agents to choose from (Engines with `agents`), read at begin and every resync. */
+  | { type: "agents"; id: "agents"; agents: AgentInfo[]; /** OpenCode did not answer: the list is empty for now; the web offers a retry. */ failed?: true }
   | { type: "commands"; id: "commands"; commands: SlashCommand[] }
   /** `costUsd`: this turn's cost; absent when unknown (first turn after a daemon restart). */
   | { type: "turn_result"; id: string; durationMs: number; costUsd?: number; usage: TokenUsage; isError: boolean }
@@ -201,7 +208,7 @@ export type QueuedPrompt = { id: string; text: string; imageCount: number; /** B
 
 /** Part types that are not timeline entries: they set session state or edit the order (never in `order`). The daemon's PartIndex skips them; the web store handles each one explicitly in applyEvent. */
 export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]>([
-  "session_state", "session_model", "session_permission_mode", "session_effort", "commands", "context_usage", "todo_update", "external_turn", "auto_continue", "limit_stop", "model_retry", "prompt_suggestion", "prompt_queue", "session_cleared", "rewind", "retract",
+  "session_state", "session_model", "session_permission_mode", "session_effort", "session_agent", "agents", "commands", "context_usage", "todo_update", "external_turn", "auto_continue", "limit_stop", "model_retry", "prompt_suggestion", "prompt_queue", "session_cleared", "rewind", "retract",
 ]);
 
 /** A session_state that makes the session unread: needs input, or finished (idle without background work, or error) after being busy. */

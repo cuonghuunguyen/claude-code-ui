@@ -13,7 +13,7 @@ let unmount = () => {};
 // App owns the draft's model, mode and effort; the harness holds them like App does.
 type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes"> & { engine?: StartOptions["engine"] };
 // Like App: another engine's draft starts clean and takes that engine's flags.
-const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false, shell: false } as EngineCapabilities;
+const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false, shell: false, agents: true } as EngineCapabilities;
 function Draft({ engine, ...p }: Props) {
   const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default", engine });
   return <NewSession {...p} draft={draft} onDraft={(d) => setDraft(d.engine !== draft.engine ? { ...d, model: "default", effort: "default" } : d)} modes={["default", "acceptEdits", "plan"]} caps={draft.engine === "opencode" ? OPENCODE_CAPS : undefined} />;
@@ -288,6 +288,65 @@ it("the new-session tab asks for the commands of the draft's engine and names it
   const { box } = await render({ onCommands, engine: "opencode" });
   expect(onCommands).toHaveBeenCalledWith("/p/a", "opencode");
   expect(box.placeholder).toBe("Ask OpenCode in a…");
+});
+
+it("GH-684: an OpenCode draft fetches the agents of its folder, shows build, and the first prompt carries the picked agent; a Claude draft asks for none", async () => {
+  const onAgents = vi.fn(async () => [{ name: "build" }, { name: "plan" }, { name: "review", description: "Reviews code" }]);
+  const onStart = vi.fn(async () => {});
+  const claude = await render({ onAgents });
+  expect(onAgents).not.toHaveBeenCalled();
+  expect(claude.el.querySelector('[data-testid="agent-select"]')).toBeNull();
+  unmount();
+  const { el, box } = await render({ onAgents, onStart, engine: "opencode" });
+  expect(onAgents).toHaveBeenCalledWith("/p/a", "opencode");
+  const chooser = el.querySelector<HTMLElement>('[data-testid="agent-select"]')!;
+  expect(chooser.textContent).toContain("Build");
+  // Shift+Tab cycles the agents and leaves the permission mode alone.
+  await key(box, { key: "Tab", shiftKey: true });
+  expect(chooser.textContent).toContain("Plan");
+  expect(el.querySelector('[data-testid="mode-select"]')?.textContent).toContain("Ask");
+  await type(box, "hi");
+  await key(box, { key: "Enter" });
+  expect(onStart).toHaveBeenCalledWith("/p/a", expect.objectContaining({ engine: "opencode", agent: "plan", mode: "default" }), { text: "hi", images: [] });
+});
+
+it("GH-684: an OpenCode draft shows the agent chooser with Build before the list arrives and after the request failed; Retry asks again", async () => {
+  let n = 0;
+  const onAgents = vi.fn(() => (++n === 1 ? new Promise<never>(() => {}) : n === 2 ? Promise.reject(new Error("aborted")) : Promise.resolve([{ name: "build" }, { name: "plan" }])));
+  const { el, rerender } = await render({ onAgents, engine: "opencode" });
+  const chooser = () => el.querySelector<HTMLElement>('[data-testid="agent-select"]')!;
+  expect(chooser().textContent).toContain("Build");
+  // A project change asks again; that answer fails: the chooser stays and offers Retry.
+  await rerender({ cwd: "/p/b" });
+  expect(chooser().textContent).toContain("Build");
+  const rows = () => [...document.querySelectorAll<HTMLElement>("[role=option]")].map((o) => o.textContent);
+  const open = async () => {
+    await act(async () => chooser().click());
+    return rows();
+  };
+  // The failed request is settled when the picker lists the Retry entry (no fixed wait): reopen until it does.
+  await vi.waitFor(async () => {
+    expect(await open()).toEqual(["Build", "Retry loading agents"]);
+  });
+  await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")][1]!.click());
+  await vi.waitFor(async () => {
+    expect(await open()).toEqual(["Build", "Plan"]);
+  });
+});
+
+it("GH-684: startSession sets the picked agent before the first prompt, only when it differs from the session's", async () => {
+  const sent: { type: string; agent?: string }[] = [];
+  const request = vi.fn(async (m: { type: string; agent?: string }) => {
+    sent.push(m);
+    return { session: { id: "ses_1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default", agent: m.type === "session.setAgent" ? m.agent : "build" } };
+  });
+  const base = { model: "default", mode: "default", effort: "default", engine: "opencode" } as const;
+  await startSession(request as never, {}, "/p/a", { ...base, agent: "plan" }, { text: "x", images: [] });
+  expect(sent.map((m) => m.type)).toEqual(["session.create", "session.setAgent", "session.prompt"]);
+  expect(sent[1]).toMatchObject({ agent: "plan" });
+  sent.length = 0;
+  await startSession(request as never, {}, "/p/a", { ...base, agent: "build" }, { text: "x", images: [] });
+  expect(sent.map((m) => m.type)).toEqual(["session.create", "session.prompt"]);
 });
 
 it("the new-session tab asks for the commands again when the project's config changed", async () => {
