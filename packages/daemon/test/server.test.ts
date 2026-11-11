@@ -975,24 +975,26 @@ describe("daemon", () => {
     expect(await (await client()).request({ type: "fs.upload", name: "x", data: 5 })).toMatchObject({ code: "bad_upload" });
   });
 
-  it("rejects an empty or non-string model", async () => {
-    const c = await client();
-    expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const id = (created as { result: { session: { id: string } } }).result.session.id;
-    expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
+  it("rejects an empty or non-string model; accepts an image-only prompt and rejects invalid images", async () => {
+    {
+      const c = await client();
+      expect(await c.request({ type: "session.create", cwd: webRoot, model: 5 })).toMatchObject({ code: "bad_model" });
+      const created = await c.request({ type: "session.create", cwd: webRoot });
+      const id = (created as { result: { session: { id: string } } }).result.session.id;
+      expect(await c.request({ type: "session.setModel", sessionId: id, model: "" })).toMatchObject({ code: "bad_model" });
+    }
+    {
+      const c = await client();
+      const created = await c.request({ type: "session.create", cwd: webRoot });
+      const sessionId = (created as { result: { session: { id: string } } }).result.session.id;
+      const prompt = (images: unknown) => c.request({ type: "session.prompt", sessionId, text: "", images });
+      for (const bad of ["data:image/png;base64,x", ["data:text/html;base64,PGI+"], [42]])
+        expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
+      expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
+      expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
+    }
   });
 
-  it("accepts an image-only prompt and rejects invalid images", async () => {
-    const c = await client();
-    const created = await c.request({ type: "session.create", cwd: webRoot });
-    const sessionId = (created as { result: { session: { id: string } } }).result.session.id;
-    const prompt = (images: unknown) => c.request({ type: "session.prompt", sessionId, text: "", images });
-    for (const bad of ["data:image/png;base64,x", ["data:text/html;base64,PGI+"], [42]])
-      expect(await prompt(bad)).toMatchObject({ type: "error", code: "bad_images" });
-    expect(await prompt([])).toMatchObject({ type: "error", code: "bad_prompt" });
-    expect(await prompt(["data:image/png;base64,iVBORw0KGgo="])).toMatchObject({ type: "reply" });
-  });
 
   it("rejects a cwd outside the allowlisted roots", async () => {
     const c = await client();
@@ -1646,29 +1648,42 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
-  it("two consecutive saves with the returned mtime both succeed (GH-282)", async () => {
-    const file = join(webRoot, "proj", "twice.txt");
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    writeFileSync(file, "one");
-    const c = await client();
-    const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
-    const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
-    expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
-    expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
-    expect(readFileSync(file, "utf8")).toBe("three");
+  it("two consecutive saves with the returned mtime both succeed; fs.write keeps the inode, leaves no tail bytes, and refuses a directory; fs.read keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
+    {
+      const file = join(webRoot, "proj", "twice.txt");
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      writeFileSync(file, "one");
+      const c = await client();
+      const read = (await c.request({ type: "fs.read", path: file })) as { result: { mtime: number } };
+      const w1 = (await c.request({ type: "fs.write", path: file, content: "two", baseMtime: read.result.mtime })) as { result: { mtime: number } };
+      expect(w1.result.mtime).toBe(statSync(file).mtimeMs);
+      expect(await c.request({ type: "fs.write", path: file, content: "three", baseMtime: w1.result.mtime })).toMatchObject({ result: {} });
+      expect(readFileSync(file, "utf8")).toBe("three");
+    }
+    {
+      const file = join(webRoot, "proj", "w.txt");
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      writeFileSync(file, "long content here");
+      const ino = statSync(file).ino;
+      const c = await client();
+      await c.request({ type: "fs.write", path: file, content: "short" });
+      expect(readFileSync(file, "utf8")).toBe("short");
+      expect(statSync(file).ino).toBe(ino);
+      expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
+    }
+    {
+      mkdirSync(join(webRoot, "proj"), { recursive: true });
+      const c = await client();
+      const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
+      const file = join(webRoot, "proj", "bom.txt");
+      writeFileSync(file, bytes);
+      const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
+      expect(read.result.content).toBe("\ufeffa\r\nb");
+      await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
+      expect(readFileSync(file).equals(bytes)).toBe(true);
+    }
   });
 
-  it("fs.write keeps the inode, leaves no tail bytes, and refuses a directory (GH-282)", async () => {
-    const file = join(webRoot, "proj", "w.txt");
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    writeFileSync(file, "long content here");
-    const ino = statSync(file).ino;
-    const c = await client();
-    await c.request({ type: "fs.write", path: file, content: "short" });
-    expect(readFileSync(file, "utf8")).toBe("short");
-    expect(statSync(file).ino).toBe(ino);
-    expect(await c.request({ type: "fs.write", path: join(webRoot, "proj"), content: "x" })).toMatchObject({ code: "not_a_file" });
-  });
 
   describe("file tree operations (GH-360)", () => {
     const base = join(webRoot, "ops");
@@ -1969,17 +1984,6 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.read", path: join(mkdtempSync(join(tmpdir(), "outside-")), "f.txt") })).toMatchObject({ code: "path_not_allowed" });
   });
 
-  it("fs.read keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
-    mkdirSync(join(webRoot, "proj"), { recursive: true });
-    const c = await client();
-    const bytes = Buffer.from("\ufeffa\r\nb", "utf8");
-    const file = join(webRoot, "proj", "bom.txt");
-    writeFileSync(file, bytes);
-    const read = (await c.request({ type: "fs.read", path: file })) as { result: { content: string; mtime: number } };
-    expect(read.result.content).toBe("\ufeffa\r\nb");
-    await c.request({ type: "fs.write", path: file, content: read.result.content, baseMtime: read.result.mtime });
-    expect(readFileSync(file).equals(bytes)).toBe(true);
-  });
 
   it("notifies watchers when a watched file changes on disk", { timeout: 10_000 }, async () => {
     const file = join(webRoot, "proj", "w.txt");
@@ -4752,14 +4756,20 @@ describe("sessions.search", () => {
   };
   const results = (c: Awaited<ReturnType<typeof client>>) => c.inbox.filter((m): m is Extract<ServerMessage, { type: "sessions.search.result" }> => m.type === "sessions.search.result");
 
-  it("streams hits of transcripts inside the roots only, then replies the scan stats", async () => {
-    const { d } = setup();
+  it("streams hits of transcripts inside the roots only, then replies the scan stats; cwd limits the search to that project; a cwd outside the roots is cwd_not_allowed; a 1-char query replies empty; 201 chars is bad_query", async () => {
+    const { d, inside, outside } = setup();
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     try {
       const c = await client((d.address() as AddressInfo).port);
       const reply = (await c.request({ type: "sessions.search", query: "ZEBRA" })) as { reqId: string; result: { scannedFiles: number } };
       expect(results(c).map((r) => [r.sessionId, r.reqId, r.hits[0]!.messageId])).toEqual([["a1", reply.reqId, "u-a1"], ["a2", reply.reqId, "u-a2"]]);
       expect(reply.result.scannedFiles).toBe(2);
+      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
+      expect(results(c).slice(2).map((r) => r.sessionId), "cwd inside").toEqual(["a1"]);
+      expect(await c.request({ type: "sessions.search", query: "zebra", cwd: outside })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(await c.request({ type: "sessions.search", query: "z" })).toMatchObject({ type: "reply", result: { scannedFiles: 0 } });
+      expect(await c.request({ type: "sessions.search", query: "z".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
+      expect(results(c)).toHaveLength(3);
     } finally {
       d.close();
     }
@@ -4785,23 +4795,7 @@ describe("sessions.search", () => {
     }
   });
 
-  it("cwd limits the search to that project; a cwd outside the roots is cwd_not_allowed; a 1-char query replies empty; 201 chars is bad_query", async () => {
-    const { d, inside, outside } = setup();
-    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
-    try {
-      const c = await client((d.address() as AddressInfo).port);
-      await c.request({ type: "sessions.search", query: "zebra", cwd: inside });
-      expect(results(c).map((r) => r.sessionId)).toEqual(["a1"]);
-      expect(await c.request({ type: "sessions.search", query: "zebra", cwd: outside })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
-      expect(await c.request({ type: "sessions.search", query: "z" })).toMatchObject({ type: "reply", result: { scannedFiles: 0 } });
-      expect(await c.request({ type: "sessions.search", query: "z".repeat(201) })).toMatchObject({ type: "error", code: "bad_query" });
-      expect(results(c)).toHaveLength(1);
-    } finally {
-      d.close();
-    }
-  });
-
-  it("a new sessions.search cancels the running one", async () => {
+  it("a new sessions.search cancels the running one; closing the connection cancels the running search", async () => {
     const { d } = setup(150);
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     try {
@@ -4812,26 +4806,21 @@ describe("sessions.search", () => {
       expect(await first).toMatchObject({ type: "reply", result: { stopped: "canceled" } });
       expect(((await second) as { result: { stopped?: string } }).result.stopped).toBeUndefined();
       expect(results(c).map((r) => r.sessionId)).toEqual(["a1"]);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const c2 = await client((d.address() as AddressInfo).port);
+        c2.ws.send(JSON.stringify({ type: "sessions.search", query: "zebra", reqId: "1" }));
+        await new Promise((r) => setTimeout(r, 30));
+        c2.ws.close();
+        await vi.waitFor(() => expect(log.mock.calls.map((a) => String(a[0])).some((l) => l.startsWith("sessions.search:") && l.endsWith("stopped: canceled"))).toBe(true), { timeout: 5000 });
+      } finally {
+        log.mockRestore();
+      }
     } finally {
       d.close();
     }
   });
 
-  it("closing the connection cancels the running search", async () => {
-    const { d } = setup(150);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
-    try {
-      const c = await client((d.address() as AddressInfo).port);
-      c.ws.send(JSON.stringify({ type: "sessions.search", query: "zebra", reqId: "1" }));
-      await new Promise((r) => setTimeout(r, 30));
-      c.ws.close();
-      await vi.waitFor(() => expect(log.mock.calls.map((a) => String(a[0])).some((l) => l.startsWith("sessions.search:") && l.endsWith("stopped: canceled"))).toBe(true), { timeout: 5000 });
-    } finally {
-      log.mockRestore();
-      d.close();
-    }
-  });
 });
 
 describe("fs.media and /media", () => {
