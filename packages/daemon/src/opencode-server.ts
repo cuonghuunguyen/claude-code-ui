@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
+import { winQuote } from "./update.ts";
 
 export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed";
 /** A non-2xx answer: `status` and the parsed `body` let callers map OpenCode's error `name`. */
@@ -40,14 +41,20 @@ export const parseVersion = (text: string) => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.
 /** a < b for `x.y.z` lists. */
 export const olderThan = (a: number[], b: number[]) => (a.find((n, i) => n !== b[i]) ?? 0) < (b.find((n, i) => n !== a[i]) ?? 0);
 
-/** The binary on PATH: `opencode`; on Windows `opencode.exe`, else `opencode.cmd` (run through cmd.exe). */
+/** The binary on PATH: `opencode`; on Windows `opencode.exe`, else `opencode.cmd` (run through cmd.exe, see invocation). */
 function lookup(env: NodeJS.ProcessEnv): string[] | undefined {
   const win = process.platform === "win32";
   for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean))
     for (const name of win ? ["opencode.exe", "opencode.cmd"] : ["opencode"]) {
       const file = join(dir, name);
-      if (existsSync(file)) return name.endsWith(".cmd") ? ["cmd.exe", "/d", "/s", "/c", file] : [file];
+      if (existsSync(file)) return [file];
     }
+}
+
+/** How to run `binary ...args`: a Windows .cmd/.bat goes through cmd.exe as one quoted line (`/s` strips the outer quotes), passed verbatim, so a path with spaces survives. */
+export function invocation(binary: string, args: string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[]; verbatim: boolean } {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(binary)) return { file: binary, args, verbatim: false };
+  return { file: "cmd.exe", args: ["/d", "/s", "/c", `"${[binary, ...args].map(winQuote).join(" ")}"`], verbatim: true };
 }
 
 /** A consumer of the server's event stream: `event` per payload of `GET /global/event`; `resync` after a reconnect (events may be lost). */
@@ -95,8 +102,9 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   async function check() {
     const cmd = argv();
     if (!cmd) throw missing();
+    const run = invocation(cmd[0]!, [...cmd.slice(1), "--version"]);
     const out = await new Promise<string>((resolve, reject) =>
-      execFile(cmd[0]!, [...cmd.slice(1), "--version"], { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
+      execFile(run.file, run.args, { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: run.verbatim }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
@@ -122,7 +130,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     // A start that fails counts as a quick exit, once (the exit event may count it too).
     let counted = false;
     const count = () => !counted && ((counted = true), fastExits.push(startedAt));
-    const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, cmd[0]!, ...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"], {
+    const run = invocation(cmd[0]!, [...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"]);
+    const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, run.file, ...run.args], {
       env: { ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,

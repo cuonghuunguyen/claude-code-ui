@@ -118,7 +118,7 @@ it("one group per working directory with the project name as header and the full
 
 it("rows show title and relative time; only running and needs input get a state, closed and idle none", async () => {
   const { rows, el, onOpen } = await render();
-  expect(rows().map((r) => r.textContent)).toEqual(["Fix loginClaude1m", "Old ideaClaude2h", "Docs passClaude5m", "RefactorClaude2d"]);
+  expect(rows().map((r) => r.textContent)).toEqual(["ClaudeFix login1m", "ClaudeOld idea2h", "ClaudeDocs pass5m", "ClaudeRefactor2d"]);
   expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Fix login, running", "Old idea, unread", "Docs pass, needs input", "Refactor"]);
   expect(rows().map((r) => r.querySelectorAll("svg").length)).toEqual([2, 1, 2, 1]);
   expect(el.textContent).not.toMatch(/closed|idle/);
@@ -145,7 +145,7 @@ it("groups collapse and the collapsed state survives a reload", async () => {
   let r = await render();
   await act(async () => r.toggle("/home/u/web").click());
   expect(r.toggle("/home/u/web").getAttribute("aria-expanded")).toBe("false");
-  expect(r.rows().map((x) => x.textContent?.slice(0, 4))).toEqual(["Docs", "Refa"]);
+  expect(r.rows().map((x) => x.textContent?.replace(/^Claude/, "").slice(0, 4))).toEqual(["Docs", "Refa"]);
   root!.unmount();
   r = await render();
   expect(r.toggle("/home/u/web").getAttribute("aria-expanded")).toBe("false");
@@ -158,7 +158,7 @@ it("search filters by session title and project name, also inside collapsed grou
   const { toggle, rows, search, el } = await render();
   await act(async () => toggle("/home/u/api").click());
   await search("refac");
-  expect(rows().map((r) => r.textContent?.slice(0, 8))).toEqual(["Refactor"]);
+  expect(rows().map((r) => r.textContent?.replace(/^Claude/, "").slice(0, 8))).toEqual(["Refactor"]);
   await search("web");
   expect(rows()).toHaveLength(2);
   await search("nothing");
@@ -290,7 +290,7 @@ it("each project splits its sessions under OpenCode's day headers", async () => 
 
 it("read titles use the base text colour like OpenCode, not the muted one", async () => {
   const { rows } = await render();
-  const title = rows()[3]!.querySelector("span")!;
+  const title = rows()[3]!.querySelector(":scope > span:not([data-testid])")!;
   expect(title.className).toContain("text-foreground");
   expect(rows()[3]!.className).not.toContain("text-muted-foreground");
 });
