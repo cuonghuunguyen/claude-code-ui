@@ -506,6 +506,8 @@ export default {
   "shortcut.plan.show": "Hiện kế hoạch",
   "shortcut.pane.files": "Hiện tệp",
   "shortcut.pane.changes": "Hiện thay đổi",
+  "shortcut.git.commit": "Commit",
+  "shortcut.git.push": "Push",
   "shortcut.pane.graph": "Hiện đồ thị git",
   "shortcut.signal.toggle": "Bật/tắt chỉ tín hiệu",
   "shortcut.terminal.toggle": "Bật/tắt terminal",

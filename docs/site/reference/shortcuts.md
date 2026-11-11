@@ -55,6 +55,8 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 | Show files | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> |
 | Show changes | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>G</kbd> |
 | Show git graph | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> |
+| Commit | <kbd>Alt</kbd>+<kbd>K</kbd> | <kbd>⌃</kbd> <kbd>K</kbd> |
+| Push | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>K</kbd> |
 | Toggle signal only | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd> | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>S</kbd> |
 | Toggle terminal | <kbd>Ctrl</kbd>+<kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | New terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>\`</kbd> |

@@ -29,6 +29,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   toggleTerminal: vi.fn(),
   toggleSignalOnly: vi.fn(),
   showPane: vi.fn(),
+  commitBox: vi.fn(),
   newTerminal: vi.fn(),
   resetLayout: vi.fn(),
   flipSide: vi.fn(),

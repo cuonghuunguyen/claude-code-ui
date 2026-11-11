@@ -504,6 +504,8 @@ export default {
   "shortcut.plan.show": "Show plan",
   "shortcut.pane.files": "Show files",
   "shortcut.pane.changes": "Show changes",
+  "shortcut.git.commit": "Commit",
+  "shortcut.git.push": "Push",
   "shortcut.pane.graph": "Show git graph",
   "shortcut.signal.toggle": "Toggle signal only",
   "shortcut.terminal.toggle": "Toggle terminal",

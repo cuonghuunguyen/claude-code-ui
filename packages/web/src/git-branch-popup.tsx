@@ -1,5 +1,5 @@
 // Branch popup of the Graph tab (docs/spec.md "Layout", Graph tab; IntelliJ parity): speed search over All branches, HEAD, Local and Remote;
-// click or Enter filters the graph; `›` or ArrowRight opens the branch actions (the same component as the chip's context menu).
+// click or Enter filters the graph; mouse hover, `›` or ArrowRight opens the branch actions (the same component as the chip's context menu).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
@@ -48,6 +48,8 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const [sub, setSub] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
   const subEl = useRef<HTMLDivElement>(null);
+  // Hover opens the actions without moving focus, so typing stays in the search box.
+  const hovered = useRef(false);
   const needle = q.trim();
   const rows = useMemo<Row[]>(() => {
     const ok = (l: string) => !needle || l.toLowerCase().includes(needle.toLowerCase());
@@ -71,7 +73,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
     if (open) document.getElementById(`bp-${cur?.id}`)?.scrollIntoView?.({ block: "nearest" });
   }, [cur?.id, open]);
   useEffect(() => {
-    if (sub) subEl.current?.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled])")?.focus();
+    if (sub && !hovered.current) subEl.current?.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled])")?.focus();
   }, [sub]);
   const close = () => (setOpen(false), setQ(""), setSub(undefined));
   const choose = (r: Row) => {
@@ -100,7 +102,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
       choose(cur);
     } else if (e.key === "ArrowRight" && cur && atEnd) {
       e.preventDefault();
-      if (hasActions(cur)) setSub(cur.value);
+      if (hasActions(cur)) (hovered.current = false), setSub(cur.value);
       else if (cur.kind === "remotes") setRemotesOpen(true);
     } else if (e.key === "ArrowLeft" && sub) {
       e.preventDefault();
@@ -152,12 +154,12 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
                     r.kind === "title" ? (
                       <div key={r.id} className="px-2 pt-1 font-medium text-muted-foreground text-xs">{r.label}</div>
                     ) : (
-                      <div key={r.id} id={`bp-${r.id}`} role={r.kind === "remotes" ? "button" : "option"} aria-selected={r.kind === "remotes" ? undefined : r.value === value} aria-expanded={r.kind === "remotes" ? needle !== "" || remotesOpen : undefined} onClick={() => choose(r)} className={cn("group/row flex h-8 cursor-pointer select-none items-center gap-1 rounded-md pr-0.5 pl-2 hover:bg-secondary max-md:min-h-11", r === cur && "bg-secondary", r.kind === "remotes" && "font-medium text-muted-foreground text-xs")} data-testid="branch-popup-row" data-ref={hasActions(r) ? r.value : undefined}>
+                      <div key={r.id} id={`bp-${r.id}`} role={r.kind === "remotes" ? "button" : "option"} aria-selected={r.kind === "remotes" ? undefined : r.value === value} aria-expanded={r.kind === "remotes" ? needle !== "" || remotesOpen : undefined} onClick={() => choose(r)} onPointerEnter={(e) => e.pointerType === "mouse" && sub !== (hasActions(r) ? r.value : undefined) && ((hovered.current = true), setSub(hasActions(r) ? r.value : undefined))} className={cn("group/row flex h-8 cursor-pointer select-none items-center gap-1 rounded-md pr-0.5 pl-2 hover:bg-secondary max-md:min-h-11", r === cur && "bg-secondary", r.kind === "remotes" && "font-medium text-muted-foreground text-xs")} data-testid="branch-popup-row" data-ref={hasActions(r) ? r.value : undefined}>
                         {r.kind === "remotes" && <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", (needle || remotesOpen) && "rotate-90")} aria-hidden />}
                         <span className="min-w-0 flex-1 truncate"><Highlight text={r.label} q={needle} /></span>
                         {r.kind === "local" && r.value === head && <CheckIcon className="size-4 shrink-0 text-ref-head" aria-label={t("files.graph.currentBranch")} data-testid="branch-popup-current" />}
                         {hasActions(r) && (
-                          <button type="button" tabIndex={-1} aria-label={t("files.graph.branchActions", { branch: r.label })} onClick={(e) => (e.stopPropagation(), setSub(r.value))} className={cn("flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-accent group-hover/row:opacity-100 max-md:size-11 max-md:opacity-100", r === cur && "opacity-100")} data-testid="branch-popup-more">
+                          <button type="button" tabIndex={-1} aria-label={t("files.graph.branchActions", { branch: r.label })} onClick={(e) => (e.stopPropagation(), (hovered.current = false), setSub(r.value))} className={cn("flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-accent group-hover/row:opacity-100 max-md:size-11 max-md:opacity-100", r === cur && "opacity-100")} data-testid="branch-popup-more">
                             <ChevronRightIcon className="size-4" aria-hidden />
                           </button>
                         )}

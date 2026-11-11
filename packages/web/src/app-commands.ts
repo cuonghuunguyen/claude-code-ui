@@ -77,6 +77,8 @@ export type CommandContext = {
   toggleTerminal: () => void;
   /** Shows the side panel pane (files, changes, git graph); where it already shows, focus goes back to the prompt. */
   showPane: (pane: "files" | "changes" | "graph") => void;
+  /** Reveals the Changes tab's commit box and focuses its message (`push`: opens the push dialog of HEAD's branch there). */
+  commitBox: (what: "commit" | "push") => void;
   /** Adds a terminal to the terminal panel (opens the panel or the terminal tab first). */
   newTerminal: () => void;
   resetLayout: () => void;
@@ -205,6 +207,8 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.panels && cmd("pane.files", t("app.cmd.paneFiles"), () => c.showPane("files")),
     c.panels && cmd("pane.changes", t("app.cmd.paneChanges"), () => c.showPane("changes")),
     c.panels && c.isGit && cmd("pane.graph", t("app.cmd.paneGraph"), () => c.showPane("graph")),
+    c.panels && c.isGit && cmd("git.commit", t("app.cmd.gitCommit"), () => c.commitBox("commit")),
+    c.panels && c.isGit && cmd("git.push", t("app.cmd.gitPush"), () => c.commitBox("push")),
     s && !s.draft && c.viewChanges && cmd("viewer.changes", t("app.cmd.viewerChanges"), c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", t("app.cmd.viewerPlan"), c.viewPlan),
     c.showPlan && cmd("plan.show", t("app.cmd.planShow"), c.showPlan),

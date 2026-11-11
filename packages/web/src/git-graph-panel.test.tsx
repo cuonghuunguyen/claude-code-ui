@@ -1339,6 +1339,25 @@ it("the › button of a row opens the same actions; Push there opens its dialog"
   await flush();
 });
 
+it("mouse hover on a branch row opens its actions without taking focus from the search box; hover on All branches closes them", async () => {
+  await mount(fake(withRefs()));
+  await openPopup();
+  const hover = async (el: Element, pointerType = "mouse") => {
+    const e = new MouseEvent("pointerover", { bubbles: true });
+    Object.defineProperty(e, "pointerType", { value: pointerType });
+    await act(async () => void el.dispatchEvent(e));
+    await flush();
+  };
+  const row = document.querySelector("[data-testid=branch-popup-row][data-ref='refs/heads/main']")!;
+  await hover(row, "touch");
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+  await hover(row);
+  expect(byId("branch-popup-sub")).not.toBeNull();
+  expect(document.activeElement).toBe(search());
+  await hover(document.querySelector("[data-testid=branch-popup-row]")!);
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+});
+
 it("an outside press closes the popup at once, with a query typed or the actions open", async () => {
   await mount(fake(withRefs()));
   const outside = async () => {

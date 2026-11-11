@@ -197,6 +197,8 @@ export default {
   "app.cmd.filetreeToggle": "Toggle file tree",
   "app.cmd.paneFiles": "Show files",
   "app.cmd.paneChanges": "Show changes",
+  "app.cmd.gitCommit": "Git: Commit",
+  "app.cmd.gitPush": "Git: Push",
   "app.cmd.paneGraph": "Show git graph",
   "app.cmd.viewerChanges": "View changes in popup",
   "app.cmd.viewerPlan": "View plan",

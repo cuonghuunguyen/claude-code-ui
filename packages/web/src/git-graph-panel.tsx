@@ -308,11 +308,11 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
     <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 max-md:py-2">
         {toolbar}
+        <BranchPopup client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} branches={branches} head={head} value={ref} label={ref === ALL ? tr("files.graph.allBranches") : ref === HEAD ? headLabel : short(ref)} headLabel={headLabel} allLabel={tr("files.graph.allBranches")} onChange={setRef} />
         <label className="relative flex min-w-32 flex-1 items-center">
           <SearchIcon className="pointer-events-none absolute left-2 size-4 text-faint" aria-hidden />
           <input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder={tr("files.graph.textOrHash")} aria-label={tr("files.graph.textOrHash")} className={cn(INPUT, "pl-8")} data-testid="graph-filter-text" />
         </label>
-        <BranchPopup client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} branches={branches} head={head} value={ref} label={ref === ALL ? tr("files.graph.allBranches") : ref === HEAD ? headLabel : short(ref)} headLabel={headLabel} allLabel={tr("files.graph.allBranches")} onChange={setRef} />
         <input type="search" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder={tr("files.graph.author")} aria-label={tr("files.graph.author")} className={cn(INPUT, "w-32 flex-none")} data-testid="graph-filter-author" />
         <Button size="icon-sm" variant="ghost" className="max-md:size-11 aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={!!op || notGit} onClick={() => runRemote({ type: "git.fetch", cwd, ...ex }, of(tr("files.graph.fetched")), `${of(tr("files.graph.fetching"))}…`)} title={tr("files.graph.fetchAll")} aria-label={tr("files.graph.fetch")} aria-busy={!!op} data-testid="graph-fetch">
           {op ? <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" /> : <CloudDownloadIcon />}

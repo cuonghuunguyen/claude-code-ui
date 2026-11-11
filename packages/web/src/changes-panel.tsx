@@ -516,6 +516,27 @@ export function ChangesPanel({
         <input type="checkbox" className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={checked.has(r.path)} onChange={() => toggle(r.path)} aria-label={t("files.changes.checkFile", { path: relPath(r.path, cwd) })} data-testid="commit-check" data-path={r.path} />
       </label>
     ) : null;
+  // Folder checkbox (tree view): checks or clears every commitable file under it; a mixed folder shows indeterminate.
+  const folderCheck = (d: Folder) => {
+    const paths = commitMode ? treeOrder(d).filter(commitable).map((r) => r.path) : [];
+    if (!paths.length) return null;
+    const n = paths.filter((p) => checked.has(p)).length;
+    const all = n === paths.length;
+    return (
+      <label className="-mr-1 flex size-11 shrink-0 cursor-pointer items-center justify-center md:size-7">
+        <input
+          type="checkbox"
+          className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring"
+          checked={all}
+          ref={(el) => void (el && (el.indeterminate = n > 0 && !all))}
+          onChange={() => setChecked((c) => (all ? new Set([...c].filter((p) => !paths.includes(p))) : new Set([...c, ...paths])))}
+          aria-label={t("files.changes.checkFolder", { path: d.path })}
+          data-testid="commit-check-folder"
+          data-path={d.path}
+        />
+      </label>
+    );
+  };
   const [filter, setFilter] = useState("");
   const [listWidth, setListWidth] = useState(loadListWidth);
   useEffect(() => saveListWidth(listWidth), [listWidth]);
@@ -631,9 +652,11 @@ export function ChangesPanel({
     <>
       {f.folders.map((d) => (
         <li key={d.path}>
+          <div className={commitMode ? "flex items-center" : undefined} style={commitMode ? { paddingLeft: `${depth * 16}px` } : undefined}>
+          {folderCheck(d)}
           <button
             className={treeRow}
-            style={pad(depth)}
+            style={commitMode ? undefined : pad(depth)}
             aria-expanded={!closed[d.path]}
             onClick={() => setClosed((c) => ({ ...c, [d.path]: !c[d.path] }))}
             data-testid="changed-folder"
@@ -641,6 +664,7 @@ export function ChangesPanel({
             {closed[d.path] ? <ChevronRightIcon className="size-4 shrink-0 text-faint" aria-hidden /> : <ChevronDownIcon className="size-4 shrink-0 text-faint" aria-hidden />}
             <span className="min-w-0 flex-1 truncate">{d.name}</span>
           </button>
+          </div>
           {!closed[d.path] && <ul className="mt-0.5 flex flex-col gap-0.5">{branch(d, depth + 1)}</ul>}
         </li>
       ))}

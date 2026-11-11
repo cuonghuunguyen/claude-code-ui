@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
+import { askCommitBox } from "./commit-ask.ts";
 import { CommitBox } from "./commit-box.tsx";
 import { commitPaths } from "./git-changes.ts";
 import { forgetRemoteOps, remoteOpOf } from "./git-remote-ops.ts";
@@ -211,4 +212,30 @@ it("unmounting during a generation sends a cancel", async () => {
   expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toHaveLength(0);
   await m.unmount();
   expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toHaveLength(1);
+});
+
+it("Mod+Enter commits, Alt+M toggles Amend", async () => {
+  const m = mount({ checked: ["/p/a.txt"] });
+  const key = (init: KeyboardEventInit) => act(async () => void byId("commit-message").dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })));
+  await key({ key: "µ", code: "KeyM", altKey: true });
+  await flush();
+  expect((byId("commit-amend") as HTMLInputElement).checked).toBe(true);
+  await type("msg");
+  await key({ key: "Enter", ctrlKey: true });
+  await flush();
+  expect(m.sent.at(-1)).toMatchObject({ type: "git.commitFiles", message: "msg", amend: true });
+  expect(m.sent.at(-1)).not.toHaveProperty("push");
+});
+
+it("the app's Commit key focuses the message; Push opens the push dialog of HEAD's branch", async () => {
+  const info = { ref: "refs/heads/main", local: "a".repeat(40), remote: "origin", push: ["push", "origin", "refs/heads/main:refs/heads/main"] };
+  const m = mount({ reply: { log: { commits: [], more: false, head: "refs/heads/main" }, branch: info } });
+  askCommitBox("commit");
+  await flush();
+  expect(document.activeElement).toBe(byId("commit-message"));
+  askCommitBox("push");
+  await flush();
+  await flush();
+  expect(m.sent.slice(-2)).toEqual([{ type: "git.log", cwd: "/p", limit: 1 }, { type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
+  expect(byId("git-command").textContent).toContain("push origin refs/heads/main:refs/heads/main");
 });

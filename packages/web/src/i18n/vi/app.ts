@@ -199,6 +199,8 @@ export default {
   "app.cmd.filetreeToggle": "Bật/tắt cây tệp",
   "app.cmd.paneFiles": "Hiện tệp",
   "app.cmd.paneChanges": "Hiện thay đổi",
+  "app.cmd.gitCommit": "Git: Commit",
+  "app.cmd.gitPush": "Git: Push",
   "app.cmd.paneGraph": "Hiện đồ thị git",
   "app.cmd.viewerChanges": "Xem thay đổi trong cửa sổ nổi",
   "app.cmd.viewerPlan": "Xem kế hoạch",
