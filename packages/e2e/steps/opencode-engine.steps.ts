@@ -1,10 +1,10 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject } from "../support/flow.ts";
-import { createOpenCodeSession, opencodeEnv } from "../support/opencode.ts";
-import { runDir } from "../support/paths.ts";
+import { createOpenCodeSession, opencodeEnv, openCodeInfoFile } from "../support/opencode.ts";
+import { configHome, runDir } from "../support/paths.ts";
 import { openSettings } from "../support/ui.ts";
 import { After, Given, Then, When } from "./fixtures.ts";
 
@@ -27,6 +27,21 @@ export const openDrawer = async (page: Page) => {
   if ((await drawer.isVisible()) && !(await page.getByTestId("sidebar").isVisible().then((v) => v && page.getByTestId("sidebar").evaluate((e) => e.getBoundingClientRect().right > 0)))) await drawer.click();
 };
 
+/** The OpenCode config of a scenario that needs an MCP server (the run's config home is shared by its OpenCode scenarios: removed after). */
+const slowConfig = () => join(configHome(runDir()), "opencode", "opencode.json");
+/**
+ * Written by the slow MCP server when OpenCode starts it for a folder: that folder's MCP load is running from then on. OpenCode starts a local
+ * MCP server in the folder of its instance, so the marker is per scenario project (the config is shared by the run and its workers).
+ */
+export const MCP_MARKER = ".slow-mcp-started";
+export const slowMcpStarted = (folder: string) => join(folder, MCP_MARKER);
+Given("OpenCode has an MCP server that takes 8 seconds to load", async () => {
+  mkdirSync(join(configHome(runDir()), "opencode"), { recursive: true });
+  // A local server that never answers: OpenCode gives up on it after its own `timeout`, so the folder's MCP load takes 8 s. It marks its start.
+  const code = `require("fs").writeFileSync(${JSON.stringify(MCP_MARKER)}, String(process.pid));setInterval(()=>{},1000)`;
+  writeFileSync(slowConfig(), JSON.stringify({ mcp: { slow: { type: "local", command: [process.execPath, "-e", code], enabled: true, timeout: 8000 } } }));
+});
+
 Given("OpenCode is set up in a scratch project", async ({ page, project, $test, $testInfo }) => {
   $test.skip(!BIN(), "E2E_OPENCODE_BIN is not set: point it at a real opencode binary (1.18 or newer) to run the OpenCode engine scenarios");
   const run = runDir();
@@ -34,7 +49,10 @@ Given("OpenCode is set up in a scratch project", async ({ page, project, $test, 
   // The run's OpenCode state is shared by its scenarios: a server stopped with an earlier scenario's daemon can leave its lock (a folder with a
   // heartbeat), and the next server waits about a minute for it to go stale. No OpenCode of this run is running here.
   rmSync(join(run, "opencode-state", "opencode", "locks"), { recursive: true, force: true });
-  own = await startDaemon(run, 2000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: opencodeEnv(run) });
+  const port = await freePort(ownerPorts(), "");
+  // The info file of an earlier scenario on this port names a server that is gone.
+  rmSync(openCodeInfoFile(run, port), { force: true });
+  own = await startDaemon(run, 2000 + $testInfo.workerIndex, { port, env: opencodeEnv(run, port) });
   await openApp(page, own);
   // The binary path is a Settings value, set like a user does.
   await setOpenCodePath(page, BIN());
@@ -170,6 +188,10 @@ When("I click the inline engine error button", async ({ page }) => {
 Then("Settings shows the OpenCode section", async ({ page }) => {
   await expect(page.getByTestId("settings-opencode")).toBeVisible();
   await expect(page.getByTestId("settings-opencode-path")).toBeVisible();
+});
+
+After({ name: "remove the slow MCP config" }, async () => {
+  rmSync(slowConfig(), { force: true });
 });
 
 After({ name: "stop the OpenCode scenario daemon" }, async () => {

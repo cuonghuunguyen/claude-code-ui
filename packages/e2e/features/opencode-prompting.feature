@@ -17,6 +17,17 @@ Feature: OpenCode prompting (GH-656)
     And the page has no horizontal scroll
     And I capture "rewind enabled"
 
+  # GH-682: OpenCode keeps a request cut off during a folder's MCP load as the folder's state, and every turn there then aborts. No request of ours is cut off.
+  Scenario: A prompt in a folder whose MCP server loads slowly gets a reply
+    Given the viewport is 1440x900
+    And OpenCode has an MCP server that takes 8 seconds to load
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    When I send the first prompt "Reply with exactly: OK"
+    Then I see a reply from Claude
+    And the turn has finished
+    And I capture "slow mcp reply"
+
   Scenario Outline: Allow once runs a bash command at <width>x<height>
     Given the viewport is <width>x<height>
     And OpenCode is set up in a scratch project

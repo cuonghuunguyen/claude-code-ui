@@ -94,6 +94,22 @@ Feature: OpenCode parity features (GH-658)
     And the OpenCode server lists a connected orchestration MCP for the project
     And I capture "orchestration attached"
 
+  # GH-681: the attach waits for the folder's MCP load instead of timing out at 3 s.
+  @model
+  Scenario: With a slow MCP server, a new OpenCode session attaches the orchestration tools without a warning and the first prompt gets a reply
+    Given the viewport is 1440x900
+    And OpenCode has an MCP server that takes 8 seconds to load
+    And OpenCode is set up in a scratch project
+    And I choose the engine "OpenCode"
+    And the OpenCode server of the daemon is running
+    When I enable orchestration in Settings
+    And I send the first prompt "Reply with exactly: OK"
+    Then I see a reply from Claude
+    And the turn has finished
+    And the OpenCode server lists a connected orchestration MCP for the project
+    And I see no notice "Could not attach the orchestration tools"
+    And I capture "slow mcp orchestration attached"
+
   @model
   Scenario: Ask aside forks the session, answers, and Close removes the fork
     Given the viewport is 1440x900

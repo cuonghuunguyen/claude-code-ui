@@ -1,15 +1,20 @@
 // A second `opencode serve` on the daemon's OpenCode data dir: creates a session "from outside", as the OpenCode CLI or app would. No Playwright import.
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cacheHome, configHome } from "./paths.ts";
 import { killTreeAsync } from "./daemon.ts";
 
-/** OpenCode's own store of the run: keeps test sessions out of ~/.local/share/opencode. */
-export const opencodeEnv = (run: string): NodeJS.ProcessEnv => ({
+/**
+ * OpenCode's own store of the run: keeps test sessions out of ~/.local/share/opencode. `port`: the env of a scenario daemon on that port,
+ * which also writes its OpenCode server to its own info file (one per daemon: workers of a run each have theirs).
+ */
+export const opencodeEnv = (run: string, port?: number): NodeJS.ProcessEnv => ({
   XDG_DATA_HOME: join(run, "opencode-data"),
   XDG_STATE_HOME: join(run, "opencode-state"),
   XDG_CACHE_HOME: cacheHome(run),
   XDG_CONFIG_HOME: configHome(run),
+  ...(port !== undefined && { CLAUDE_UI_E2E_OPENCODE_INFO: openCodeInfoFile(run, port) }),
 });
 
 /** Creates a session titled `title` in `cwd` with one user message that needs no model (`noReply`), then stops the helper server (by PID). */
@@ -51,21 +56,15 @@ export async function createOpenCodeSession(bin: string, run: string, cwd: strin
   }
 }
 
-/** The OpenCode server the daemon `daemonPid` started (POSIX): the descendant that listens on a port and holds the server password. Found through `ps` and `lsof`, so the test asks the same server the app uses. */
-export function daemonOpenCodeServer(daemonPid: number): { url: string; auth: string } {
-  const rows = execFileSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n").map((l) => l.trim().split(/\s+/).map(Number));
-  const todo = [daemonPid];
-  for (let i = 0; i < todo.length; i++) for (const [pid, ppid] of rows) if (ppid === todo[i] && !todo.includes(pid!)) todo.push(pid!);
-  for (const pid of todo.slice(1)) {
-    const env = execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-    const password = /OPENCODE_SERVER_PASSWORD=(\S+)/.exec(env)?.[1];
-    if (!password) continue;
-    let listen = "";
-    try {
-      listen = execFileSync("lsof", ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"], { encoding: "utf8" });
-    } catch {}
-    const port = /^n[^\n]*:(\d+)$/m.exec(listen)?.[1];
-    if (port) return { url: `http://127.0.0.1:${port}`, auth: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
-  }
+/** Where the scenario daemon on `port` writes the url and auth of its OpenCode server (only when `CLAUDE_UI_E2E_OPENCODE_INFO` is set: `opencodeEnv`). */
+export const openCodeInfoFile = (run: string, port: number) => join(run, `opencode-server-${port}.json`);
+
+/** The OpenCode server of the scenario daemon, as the daemon wrote it to its info file: the test asks the same server the app uses. Throws until the daemon started it. */
+export function daemonOpenCodeServer(run: string, daemon: { port: number } | undefined): { url: string; auth: string } {
+  try {
+    if (!daemon) throw new Error("no scenario daemon");
+    const info = JSON.parse(readFileSync(openCodeInfoFile(run, daemon.port), "utf8")) as { url?: string; auth?: string };
+    if (info.url && info.auth) return { url: info.url, auth: info.auth };
+  } catch {}
   throw new Error("the daemon has no OpenCode server yet");
 }

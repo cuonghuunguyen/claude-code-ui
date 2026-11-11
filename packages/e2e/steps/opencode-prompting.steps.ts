@@ -50,6 +50,10 @@ Then("the transcript shows the interrupted divider", async ({ page }) => {
   await expect(page.getByTestId("turn-interrupted")).toBeVisible();
 });
 
+Then("the transcript shows exactly {int} interrupted markers", async ({ page }, n: number) => {
+  await expect(page.getByTestId("turn-interrupted")).toHaveCount(n);
+});
+
 When("I open the model chooser", async ({ page }) => {
   await settingsOpen(page);
   await page.getByTestId("session-model").click();
