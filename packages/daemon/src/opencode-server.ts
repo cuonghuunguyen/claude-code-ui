@@ -34,9 +34,10 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const FAST_EXITS = 3;
 const FAST_MS = 30_000;
 const GUARD_MS = 5 * 60_000;
-/** On every fetch to the server: a new connection each time, never a pooled one. A dead server then only fails the connect, which proves the request never
- * reached it (see request()); a pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and takes the request. */
-const CLOSE = { connection: "close" } as const;
+/** Every fetch to the server goes through here: a new connection each time (`connection: close`), so a dead server only fails the connect, which proves the
+ * request never reached it (see request()). A pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and
+ * takes the request. One fetch to the server without the header puts a socket in the pool that the next request may reuse. */
+const ocFetch = (url: string | URL, init: RequestInit & { headers: Record<string, string> }) => fetch(url, { ...init, headers: { ...init.headers, connection: "close" } });
 const missing = () => new OpenCodeError("opencode_missing", "OpenCode is not installed or not found on PATH. Install it (https://opencode.ai/docs) or set its path in Settings › OpenCode.");
 
 /** `x.y.z` as numbers; undefined when the text has none. */
@@ -168,7 +169,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         new Promise<never>((_, reject) => (timer = setTimeout(() => reject(failed(`no answer in ${(o.startTimeoutMs ?? START_TIMEOUT_MS) / 1000} s. Last output: ${tail()}`)), o.startTimeoutMs ?? START_TIMEOUT_MS))),
       ]);
       const health = await Promise.race([
-        fetch(`${url}/global/health`, { headers: { authorization: auth, ...CLOSE }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
+        ocFetch(`${url}/global/health`, { headers: { authorization: auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
         exited,
       ]);
       if (!health.healthy) throw new Error("health says not healthy");
@@ -244,7 +245,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         const u = await ensure();
         if (!handlers.size) break;
         streamAbort = new AbortController();
-        const res = await fetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream", ...CLOSE }, signal: streamAbort.signal });
+        const res = await ocFetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
         if (again) for (const h of [...handlers]) h.resync();
         again = true;
@@ -316,7 +317,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
     async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
-      // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the connect fails (no pooled connections, CLOSE).
+      // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the connect fails (no pooled connections, ocFetch).
       // If the server does not answer a health probe either, drop it, start the next one and send the request once more. Any other failure, also a connection that
       // broke after the connect, is the caller's (OpenCode may have got the request), and a live server is never restarted.
       let res: Response;
@@ -325,9 +326,9 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         const url = new URL(path, `${srv.url}/`);
         if (r.directory) url.searchParams.set("directory", r.directory);
         try {
-          res = await fetch(url, {
+          res = await ocFetch(url, {
             method: r.method ?? "GET",
-            headers: { authorization: srv.auth, ...CLOSE, ...(r.body !== undefined && { "content-type": "application/json" }) },
+            headers: { authorization: srv.auth, ...(r.body !== undefined && { "content-type": "application/json" }) },
             body: r.body === undefined ? undefined : JSON.stringify(r.body),
             // `timeoutMs: 0` = no timeout (a command answers when its turn ends).
             signal: AbortSignal.any([...(r.signal ? [r.signal] : []), ...(r.timeoutMs === 0 ? [] : [AbortSignal.timeout(r.timeoutMs ?? REQUEST_TIMEOUT_MS)])]),
@@ -357,11 +358,14 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   };
 }
 
-/** A fetch whose connect failed (any code: ECONNREFUSED, a reset, ...): with a new connection per request (CLOSE) the server read nothing. */
-const neverArrived = (err: unknown): boolean => (err as { cause?: { syscall?: string } } | undefined)?.cause?.syscall === "connect";
+/** A fetch whose connect failed (any code: ECONNREFUSED, a reset, undici's connect timeout): with a new connection per request (ocFetch) the server read nothing. */
+const neverArrived = (err: unknown): boolean => {
+  const c = (err as { cause?: { syscall?: string; code?: string } } | undefined)?.cause;
+  return c?.syscall === "connect" || c?.code === "UND_ERR_CONNECT_TIMEOUT";
+};
 /** Whether the server answers its health check at all. */
 const alive = (srv: { url: string; auth: string }) =>
-  fetch(`${srv.url}/global/health`, { headers: { authorization: srv.auth, ...CLOSE }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
+  ocFetch(`${srv.url}/global/health`, { headers: { authorization: srv.auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
     () => true,
     () => false,
   );
