@@ -31,6 +31,7 @@ vi.mock("./client.ts", async (orig) => ({
         sent.push(m);
         if (m.type === "session.list") return list;
         if (m.type === "settings.get") return { settings };
+        if (m.type === "session.agents") return { agents: [] };
         if (m.type === "session.subscribe") return { logEpoch: "e1", seq: 0, session: (list.sessions as SessionListItem[]).find((s) => s.id === m.sessionId) };
         if (m.type === "models.list") return { models: [{ value: "default", displayName: "Default", description: "" }] };
         return {};
