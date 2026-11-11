@@ -292,3 +292,14 @@ describe("prompt_queue part", () => {
     expect(fold(log).order).toEqual(["u1"]);
   });
 });
+
+describe("model_retry part (GH-683)", () => {
+  it("is a head (latest wins) and not a timeline part", () => {
+    const r = (retry: { attempt: number; message: string; next?: number } | null): Part => ({ type: "model_retry", id: "model_retry", retry });
+    const { index, log } = build([user(1), r({ attempt: 1, message: "Rate limit" }), r({ attempt: 2, message: "Rate limit", next: 5000 })]);
+    expect(TIMELINE_EXCLUDED.has("model_retry")).toBe(true);
+    expect(index.heads().filter((e) => e.part.type === "model_retry").map((e) => (e.part as { retry: { attempt: number } | null }).retry?.attempt)).toEqual([2]);
+    expect(fold(log).order).toEqual(["u1"]);
+    expect(allPages(index)[0]!.parts.some((p) => p.type === "model_retry")).toBe(false);
+  });
+});

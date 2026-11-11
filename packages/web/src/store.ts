@@ -34,6 +34,8 @@ export type SessionView = {
   continueAt?: number;
   /** The last turn ended at the usage limit (limit_stop), with or without a scheduled continue; undefined = none. */
   limitStop?: { resetsAt?: number };
+  /** OpenCode is retrying the model call (model_retry); undefined = not. */
+  retry?: { attempt: number; message: string; next?: number };
   /** "Next for you": the predicted next prompt after the last turn (prompt_suggestion); undefined = none. */
   suggestion?: string;
   /** Queued messages (prompt_queue) the daemon sends when the session is idle; undefined = none. */
@@ -104,6 +106,7 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   if (part.type === "prompt_queue") return { ...s, lastSeq: e.seq, queue: part.items.length ? { items: part.items, ...(part.held && { held: part.held }) } : undefined };
   if (part.type === "auto_continue") return { ...s, lastSeq: e.seq, continueAt: part.at ?? undefined };
   if (part.type === "limit_stop") return { ...s, lastSeq: e.seq, limitStop: part.stopped ? { ...(part.resetsAt && { resetsAt: part.resetsAt }) } : undefined };
+  if (part.type === "model_retry") return { ...s, lastSeq: e.seq, retry: part.retry ?? undefined };
   if (part.type === "prompt_suggestion") return { ...s, lastSeq: e.seq, suggestion: part.text ?? undefined };
   // Not rendered: App moves a tab that shows the session live.
   if (part.type === "session_cleared") return { ...s, lastSeq: e.seq };

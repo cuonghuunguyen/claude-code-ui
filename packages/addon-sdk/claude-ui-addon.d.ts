@@ -40,6 +40,7 @@ export type Part = { parentId?: string } & (
   | { type: "external_turn"; id: "external_turn"; running: boolean }
   | { type: "auto_continue"; id: "auto_continue"; at: number | null }
   | { type: "limit_stop"; id: "limit_stop"; stopped: boolean; resetsAt?: number }
+  | { type: "model_retry"; id: "model_retry"; retry: { attempt: number; message: string; next?: number } | null }
   | { type: "prompt_suggestion"; id: "prompt_suggestion"; text: string | null }
   | { type: "prompt_queue"; id: "prompt_queue"; items: { id: string; text: string; imageCount: number; bash?: true; error?: string }[]; held?: { reason: "usage_limit" | "not_live"; until?: number } }
 );

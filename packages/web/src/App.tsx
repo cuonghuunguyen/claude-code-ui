@@ -138,6 +138,7 @@ import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
 import { FoldRow } from "./signal-fold.tsx";
 import { FocusPage, FocusRow, useNow } from "./focus-page.tsx";
+import { RetryRow } from "./retry-row.tsx";
 import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
@@ -5404,9 +5405,9 @@ export function SessionPane({
   // Reasoning text stays hidden (OpenCode default); this row shows the turn (or the shown run) is working.
   // GH-133: a sent prompt shows its bubble and the Thinking row before the daemon's own state arrives.
   const shownPending = current ? [] : unechoed(pending, view);
-  const thinking = ((view.state === "running" && (!current || current.status === "running")) || shownPending.length > 0) && (
-    <ThinkingRow className={shownPending.length ? "mt-3" : ""} />
-  );
+  // GH-683: while OpenCode waits to retry a failed model call, the retry line (why, and when) stands in for Thinking.
+  const thinking = ((view.state === "running" && (!current || current.status === "running")) || shownPending.length > 0) &&
+    (view.retry && view.state === "running" && !current ? <RetryRow retry={view.retry} className="mt-3" /> : <ThinkingRow className={shownPending.length ? "mt-3" : ""} />);
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
   const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; bash?: boolean; error?: string }>();
