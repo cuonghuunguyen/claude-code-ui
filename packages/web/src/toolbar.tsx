@@ -40,6 +40,8 @@ export const nextMode = (modes: PermissionMode[], mode: PermissionMode) => {
 };
 
 /** OpenCode shows agent names capitalized (build -> Build). */
+/** OpenCode's default primary agent: shown until the session reports its agent. */
+export const DEFAULT_AGENT = "build";
 export const agentLabel = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 /** Shift+Tab in a session with agents: the next agent in the Engine's order, wrapping around; an unknown current agent gives the first. */
@@ -390,7 +392,7 @@ export function PromptToolbar(props: {
           <SettingsChip {...props} models={models} efforts={efforts} effort={effort} modelFooter={props.modelFooter} modelItems={modelItems} showAgents={showAgents} />
         ) : (
           <>
-            {showAgents && <AgentPicker agent={props.agent ?? "build"} agents={props.agentList ?? []} onAgent={props.onAgent!} onRetry={props.agentsFailed ? props.onRetryAgents : undefined} />}
+            {showAgents && <AgentPicker agent={props.agent ?? DEFAULT_AGENT} agents={props.agentList ?? []} onAgent={props.onAgent!} onRetry={props.agentsFailed ? props.onRetryAgents : undefined} />}
             <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} cycles={!showAgents} />
             <ModelChooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" footer={props.modelFooter && ((close) => <ModelFooter {...props.modelFooter!} close={close} />)} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
@@ -412,7 +414,7 @@ function EffortPicker({ efforts, effort, onEffort, className = "shrink-0" }: { e
 }
 
 /** Phone toolbar (GH-166): mode, model and effort behind one chip, so the toolbar is one row. The chip always shows the permission mode (Plan and Bypass matter for safety); the popover stacks the three choosers. */
-function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, modelFooter, showAgents, agent = "build", agentList = [], onAgent, agentsFailed, onRetryAgents }: {
+function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, efforts, effort, modelItems, modelFooter, showAgents, agent = DEFAULT_AGENT, agentList = [], onAgent, agentsFailed, onRetryAgents }: {
   modelFooter?: ModelFooterProps;
   models: ModelInfo[]; model: string; mode: PermissionMode; modes: PermissionMode[]; onMode: (m: PermissionMode) => void; onModel: (m: string) => void; onEffort: (e: Effort) => void;
   efforts: Effort[]; effort: Effort; modelItems: ChooserItem<string>[]; showAgents: boolean; agent?: string; agentList?: AgentInfo[]; onAgent?: (a: string) => void; agentsFailed?: boolean; onRetryAgents?: () => void;
