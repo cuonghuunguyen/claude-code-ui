@@ -37,17 +37,24 @@ it("a corrupt file gives the defaults and is logged once", () => {
   log.mockRestore();
 });
 
-it("an invalid hand-edited field falls back to its default, the valid ones stay", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+it("an invalid hand-edited field falls back to its default, the valid ones stay; a stored coordinatorPermissions keeps its value; a stored invalid workerMode falls back to coordinator", () => {
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  }
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { coordinatorPermissions: true } }));
+    expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
+  }
+  {
+    const f = file();
+    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  }
 });
 
-it("a stored coordinatorPermissions keeps its value over the default", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { coordinatorPermissions: true } }));
-  expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
-});
 
 it("workerCapTotal defaults to 0 and takes 0 to 100; a stored workerCap keeps its value", () => {
   const f = file();
@@ -103,11 +110,6 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: {} });
 });
 
-it("a stored invalid workerMode falls back to coordinator", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
-});
 
 it("the file keeps only fields that differ from their default", () => {
   const f = file();
@@ -120,26 +122,28 @@ it("the file keeps only fields that differ from their default", () => {
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { coordinatorPermissions: true } });
 });
 
-it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean (GH-305)", () => {
-  const f = file();
-  const s = createSettings({ file: f });
-  expect(s.get().focus).toEqual({ nextForYou: false });
-  s.set({ focus: { nextForYou: true } });
-  expect(createSettings({ file: f }).get().focus).toEqual({ nextForYou: true });
-  expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
+it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean; usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean", () => {
+  {
+    const f = file();
+    const s = createSettings({ file: f });
+    expect(s.get().focus).toEqual({ nextForYou: false });
+    s.set({ focus: { nextForYou: true } });
+    expect(createSettings({ file: f }).get().focus).toEqual({ nextForYou: true });
+    expect(() => s.set({ focus: { nextForYou: "yes" as never } })).toThrow("Next for you suggestions on the Focus page must be on or off");
+  }
+  {
+    const f = file();
+    const s = createSettings({ file: f });
+    expect(s.get().usageLimit).toEqual({ autoContinue: true });
+    expect(s.set({ usageLimit: { autoContinue: false } }).usageLimit).toEqual({ autoContinue: false });
+    expect(JSON.parse(readFileSync(f, "utf8")).usageLimit).toEqual({ autoContinue: false });
+    expect(createSettings({ file: f }).get().usageLimit.autoContinue).toBe(false);
+    s.set({ usageLimit: { autoContinue: true } });
+    expect(JSON.parse(readFileSync(f, "utf8")).usageLimit?.autoContinue).toBeUndefined();
+    expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
+  }
 });
 
-it("usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean (GH-524)", () => {
-  const f = file();
-  const s = createSettings({ file: f });
-  expect(s.get().usageLimit).toEqual({ autoContinue: true });
-  expect(s.set({ usageLimit: { autoContinue: false } }).usageLimit).toEqual({ autoContinue: false });
-  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit).toEqual({ autoContinue: false });
-  expect(createSettings({ file: f }).get().usageLimit.autoContinue).toBe(false);
-  s.set({ usageLimit: { autoContinue: true } });
-  expect(JSON.parse(readFileSync(f, "utf8")).usageLimit?.autoContinue).toBeUndefined();
-  expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
-});
 
 it("an install that saved nothing for autoContinue gets it on after the update (GH-524)", () => {
   const f = file();
