@@ -39,6 +39,7 @@ export default {
   "settings.opencode.old": "Too old: {version}, minimum {min}",
   "settings.opencode.failed": "OpenCode failed to start",
   "settings.opencode.check": "Check again",
+  "settings.opencode.restart": "Restart OpenCode",
   "settings.opencode.providers.title": "Providers",
   "settings.opencode.providers.loading": "Loading providers… the first time can take half a minute.",
   "settings.opencode.providers.notRunning": "OpenCode is not running.",

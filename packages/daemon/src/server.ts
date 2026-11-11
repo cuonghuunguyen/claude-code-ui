@@ -155,6 +155,7 @@ type History = {
   forkSession?: typeof forkSession;
 };
 
+const OPENCODE_RESTART_BUSY = "OpenCode is busy: a turn runs, a login waits or a session is being created. Restart it when that is done.";
 const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloaded when no OpenCode turn runs: press Retry then.";
 /** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
 const ARCHIVED_TAG = "archived";
@@ -559,6 +560,15 @@ export function createDaemon(opts: {
   let openCodeCreating = 0;
   let openCodeRestarts = 0;
   let openCodeRestart: Promise<void> | undefined;
+  /** A restart of OpenCode's server now would lose a turn, an OAuth login or a session creation. */
+  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0;
+  /** Stops OpenCode's server (the next request starts it again; open sessions resync on the new event stream) and drops its cached limits. One at a time. */
+  const restartOpenCode = () =>
+    (openCodeRestart ??= (async () => {
+      await openCode.reset();
+      openCodeEngine.dropLimits();
+      openCodeRestarts++;
+    })().finally(() => (openCodeRestart = undefined)));
   /**
    * OpenCode's model list. Only a read that still answers 499 after the folder's instance was disposed means the provider state is broken server-wide
    * (nothing else clears it): then OpenCode's server restarts, unless a turn, an OAuth login or a session creation would be lost. A refused or failed
@@ -571,12 +581,8 @@ export function createDaemon(opts: {
     } catch (err) {
       if (err instanceof ProviderStateBroken) {
         if (seen === openCodeRestarts) {
-          if (openCodeBusy() || oauthWaits.size || openCodeCreating) throw new Error(PROVIDERS_BROKEN_BUSY);
-          await (openCodeRestart ??= (async () => {
-            await openCode.reset(); // the next request starts it again; open sessions resync on the new event stream
-            openCodeEngine.dropLimits();
-            openCodeRestarts++;
-          })().finally(() => (openCodeRestart = undefined)));
+          if (openCodeHeld()) throw new Error(PROVIDERS_BROKEN_BUSY);
+          await restartOpenCode();
         } else await openCodeRestart;
         return openCodeModels(openCodeEngine, cwd);
       }
@@ -2251,6 +2257,11 @@ export function createDaemon(opts: {
         }
         case "opencode.status":
           return reply(await openCode.status());
+        case "opencode.restart":
+          if (openCodeHeld()) return fail("opencode_busy", OPENCODE_RESTART_BUSY);
+          await restartOpenCode();
+          broadcast({ type: "opencode.providersChanged" });
+          return reply({});
         case "opencode.providers":
         case "opencode.login":
         case "opencode.loginFinish":
@@ -2732,7 +2743,7 @@ export function createDaemon(opts: {
             const before = appSettings.get().claude.account;
             const openCodePath = appSettings.get().opencode.path;
             const settings = appSettings.set(msg.patch);
-            if (settings.opencode.path !== openCodePath) void openCode.reset();
+            if (settings.opencode.path !== openCodePath) void restartOpenCode().then(() => broadcast({ type: "opencode.providersChanged" }));
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
             const urlPatched = msg.patch?.jira?.url !== undefined;

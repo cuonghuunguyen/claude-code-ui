@@ -1341,6 +1341,9 @@ it("Settings › OpenCode: the daemon judges the path (a Windows-style path is s
   const before = asked();
   await act(async () => q("settings-opencode-check")!.click());
   expect(asked()).toBe(before + 1);
+  await act(async () => q("settings-opencode-restart")!.click());
+  expect(calls.filter((c) => c.type === "opencode.restart")).toHaveLength(1);
+  expect(asked()).toBe(before + 2);
   await type("");
   expect(q("settings-opencode-path-error")).toBeNull();
   expect(sets().at(-1)).toEqual({ type: "settings.set", patch: { opencode: { path: "" } } });

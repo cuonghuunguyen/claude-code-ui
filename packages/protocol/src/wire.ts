@@ -91,6 +91,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
   /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
   | { type: "opencode.status" }
+  /** Stops OpenCode's server (the next use starts it again) and drops its cached model data; broadcasts opencode.providersChanged. Reply `{}`; error `opencode_busy` while a turn runs, an OAuth login waits or a session is created. */
+  | { type: "opencode.restart" }
   /** Providers of the OpenCode server with their login methods (starts the server). Reply OpenCodeProvidersResult. */
   | { type: "opencode.providers" }
   /** `api` method: stores `key` (`inputs` = the method's prompt values), reply OpenCodeProvidersResult. `oauth` method: reply OpenCodeLoginStart. `method` = index in the provider's `methods`. The daemon never logs or keeps `key`. */

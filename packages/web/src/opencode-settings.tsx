@@ -16,6 +16,9 @@ export function OpenCodeSection({ opencode, saving, save, request, onProviders }
   const [failed, setFailed] = useState<string>();
   const check = () => request<OpenCodeStatus>({ type: "opencode.status" }).then((s) => (setStatus(s), setFailed(undefined)), (e: Error) => setFailed(e.message));
   useEffect(() => void check(), []);
+  const [restarting, setRestarting] = useState(false);
+  // The daemon broadcasts opencode.providersChanged after the restart: the model lists reload from there.
+  const restart = () => (setRestarting(true), request({ type: "opencode.restart" }).then(check, (e: Error) => setFailed(e.message)).finally(() => setRestarting(false)));
 
   const commit = () => {
     if (draft === undefined) return;
@@ -59,6 +62,9 @@ export function OpenCodeSection({ opencode, saving, save, request, onProviders }
         </p>
         <Button variant="secondary" size="sm" onClick={() => void check()} className="max-md:h-11" data-testid="settings-opencode-check">
           {t("settings.opencode.check")}
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => void restart()} disabled={restarting} className="max-md:h-11" data-testid="settings-opencode-restart">
+          {t("settings.opencode.restart")}
         </Button>
       </div>
       <OpenCodeProviders status={status} request={request} onProviders={onProviders ?? (() => {})} onLoaded={() => void check()} />

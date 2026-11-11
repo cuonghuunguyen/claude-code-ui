@@ -41,6 +41,7 @@ export default {
   "settings.opencode.old": "Quá cũ: {version}, tối thiểu {min}",
   "settings.opencode.failed": "OpenCode không khởi động được",
   "settings.opencode.check": "Kiểm tra lại",
+  "settings.opencode.restart": "Khởi động lại OpenCode",
   "settings.opencode.providers.title": "Nhà cung cấp",
   "settings.opencode.providers.loading": "Đang tải nhà cung cấp… lần đầu có thể mất nửa phút.",
   "settings.opencode.providers.notRunning": "OpenCode chưa chạy.",

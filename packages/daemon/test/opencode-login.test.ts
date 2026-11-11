@@ -205,6 +205,32 @@ describe("OpenCode provider login", { timeout: 30_000 }, () => {
     await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
   });
 
+  it("opencode.restart stops the server, drops the model cache and tells clients; the next request starts it again; refused while a turn runs", async () => {
+    const d = await boot({ script: ["bash"] });
+    await d.ok({ type: "opencode.providers" });
+    const starts = () => d.log().filter((l) => l.type === "start").length;
+    expect(starts()).toBe(1);
+    expect(await d.ok({ type: "opencode.restart" })).toEqual({});
+    expect(d.inbox.filter((m) => m.type === "opencode.providersChanged")).toHaveLength(1);
+    expect((await d.ok({ type: "opencode.status" })).state).toBe("stopped");
+    await d.ok({ type: "opencode.providers" });
+    expect(starts()).toBe(2);
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    await d.ok({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await d.ok({ type: "session.prompt", sessionId: id, text: "run ls" });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.sessionId === id && m.part.type === "permission_request"));
+    expect(await d.send({ type: "opencode.restart" })).toMatchObject({ type: "error", code: "opencode_busy" });
+    expect(starts()).toBe(2);
+  });
+
+  it("a changed opencode.path restarts the server and tells clients to reload models", async () => {
+    const d = await boot();
+    await d.ok({ type: "opencode.providers" });
+    await d.ok({ type: "settings.set", patch: { opencode: { path: BIN } } });
+    await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
+    expect((await d.ok({ type: "opencode.status" })).state).not.toBe("running");
+  });
+
   it("a model refresh held by a running Aside runs when that Aside is closed", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ocl-")));
     const project = join(root, "project");
