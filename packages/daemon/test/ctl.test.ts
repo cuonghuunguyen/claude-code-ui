@@ -87,52 +87,56 @@ function run(argv: string[], over: Partial<ClientIo> = {}) {
 }
 
 describe("client against a real daemon", () => {
-  it("status: text and json", async () => {
-    const t = await run(["status"]);
-    expect(t.code).toBe(0);
-    expect(t.out).toContain(`127.0.0.1:${port}`);
-    expect(t.out).toMatch(/sessions: 3/);
-    const j = await run(["status", "--json"]);
-    const v = JSON.parse(j.out);
-    expect(v).toMatchObject({ running: true, port, sessions: { total: 3 } });
+  it("status: text and json; status uses daemon.json for version and pid; sessions: json equals the daemon list after filters, --project, --state, text; projects and workers", async () => {
+    {
+      const t = await run(["status"]);
+      expect(t.code).toBe(0);
+      expect(t.out).toContain(`127.0.0.1:${port}`);
+      expect(t.out).toMatch(/sessions: 3/);
+      const j = await run(["status", "--json"]);
+      const v = JSON.parse(j.out);
+      expect(v).toMatchObject({ running: true, port, sessions: { total: 3 } });
+    }
+    {
+      writeDaemonFile(dir, { port, pid: process.pid, version: "9.9.9", startedAt: "2026-02-02T00:00:00.000Z" });
+      const v = JSON.parse((await run(["status", "--json"])).out);
+      expect(v).toMatchObject({ version: "9.9.9", pid: process.pid, startedAt: "2026-02-02T00:00:00.000Z" });
+      removeDaemonFile(dir, process.pid);
+    }
+    {
+      const all = JSON.parse((await run(["sessions", "--json"])).out) as SessionListItem[];
+      expect(all.map((s) => s.id)).toEqual(sessionIds);
+      expect(JSON.parse((await run(["ls", "--json", "--project", projectDir])).out).map((s: SessionListItem) => s.id)).toEqual(sessionIds.slice(0, 2));
+      expect(JSON.parse((await run(["sessions", "--json", "--state", "needs_input"])).out)).toEqual([]);
+      const text = (await run(["sessions"])).out;
+      expect(text).toContain("Alpha");
+      expect(text).toContain(sessionIds[0]);
+    }
+    {
+      const p = JSON.parse((await run(["projects", "--json"])).out);
+      expect(p.projects.sort()).toEqual([other, projectDir].sort());
+      expect((await run(["projects"])).out).toContain(projectDir);
+      const w = await run(["workers"]);
+      expect(w).toMatchObject({ code: 0, out: "No workers.\n" });
+      expect(JSON.parse((await run(["workers", "--json"])).out)).toEqual([]);
+    }
   });
-  it("status uses daemon.json for version and pid", async () => {
-    writeDaemonFile(dir, { port, pid: process.pid, version: "9.9.9", startedAt: "2026-02-02T00:00:00.000Z" });
-    const v = JSON.parse((await run(["status", "--json"])).out);
-    expect(v).toMatchObject({ version: "9.9.9", pid: process.pid, startedAt: "2026-02-02T00:00:00.000Z" });
-    removeDaemonFile(dir, process.pid);
-  });
-  it("sessions: json equals the daemon list after filters; --project; --state; text", async () => {
-    const all = JSON.parse((await run(["sessions", "--json"])).out) as SessionListItem[];
-    expect(all.map((s) => s.id)).toEqual(sessionIds);
-    expect(JSON.parse((await run(["ls", "--json", "--project", projectDir])).out).map((s: SessionListItem) => s.id)).toEqual(sessionIds.slice(0, 2));
-    expect(JSON.parse((await run(["sessions", "--json", "--state", "needs_input"])).out)).toEqual([]);
-    const text = (await run(["sessions"])).out;
-    expect(text).toContain("Alpha");
-    expect(text).toContain(sessionIds[0]);
-  });
-  it("projects and workers", async () => {
-    const p = JSON.parse((await run(["projects", "--json"])).out);
-    expect(p.projects.sort()).toEqual([other, projectDir].sort());
-    expect((await run(["projects"])).out).toContain(projectDir);
-    const w = await run(["workers"]);
-    expect(w).toMatchObject({ code: 0, out: "No workers.\n" });
-    expect(JSON.parse((await run(["workers", "--json"])).out)).toEqual([]);
-  });
-  it("open: browser by default, token only with --print", async () => {
-    const o = await run(["open"]);
-    expect(o.code).toBe(0);
-    expect(o.opened).toEqual([`http://127.0.0.1:${port}/#token=${token}`]);
-    expect(o.out + o.err).not.toContain(token);
-    const p = await run(["open", "--print"]);
-    expect(p.out.trim()).toBe(`http://127.0.0.1:${port}/#token=${token}`);
-    expect(p.opened).toEqual([]);
-  });
-  it("open <sessionId>: deep link without the token; unknown id is exit 1", async () => {
-    const o = await run(["open", sessionIds[1]!, "--print"]);
-    expect(o.out.trim()).toBe(`http://127.0.0.1:${port}/#${sessionIds[1]}`);
-    expect(o.out).not.toContain(token);
-    expect((await run(["open", "44444444-4444-4444-8444-444444444444"])).code).toBe(1);
+  it("open: browser by default, token only with --print; open <sessionId>: deep link without the token, unknown id is exit 1", async () => {
+    {
+      const o = await run(["open"]);
+      expect(o.code).toBe(0);
+      expect(o.opened).toEqual([`http://127.0.0.1:${port}/#token=${token}`]);
+      expect(o.out + o.err).not.toContain(token);
+      const p = await run(["open", "--print"]);
+      expect(p.out.trim()).toBe(`http://127.0.0.1:${port}/#token=${token}`);
+      expect(p.opened).toEqual([]);
+    }
+    {
+      const o = await run(["open", sessionIds[1]!, "--print"]);
+      expect(o.out.trim()).toBe(`http://127.0.0.1:${port}/#${sessionIds[1]}`);
+      expect(o.out).not.toContain(token);
+      expect((await run(["open", "44444444-4444-4444-8444-444444444444"])).code).toBe(1);
+    }
   });
   it("no output of any command holds the token, except open --print", async () => {
     for (const argv of [["status"], ["status", "--json"], ["sessions"], ["sessions", "--json"], ["projects"], ["projects", "--json"], ["workers"], ["workers", "--json"], ["open"], ["open", sessionIds[0]!]]) {

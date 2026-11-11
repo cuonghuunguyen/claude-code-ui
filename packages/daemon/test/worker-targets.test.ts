@@ -22,18 +22,20 @@ const deps: TargetDeps = {
 const code = async (p: Promise<unknown>) => p.then(() => "ok", (e) => (e instanceof TargetError ? `${e.code}: ${e.message}` : String(e)));
 
 describe("listTargets", () => {
-  it("lists own-side projects and their worktrees inside the roots", async () => {
-    const t = await listTargets(deps);
-    expect(t.map((e) => e.path)).toEqual(["/r/a/app", "/r/a/app/.claude/worktrees/feat", "/r/a/app/.claude/worktrees/lk", "/r/b/app", "/r/b/app/.claude/worktrees/feat", "/r/tools", "/r/plain"]);
-    expect(t[0]).toEqual({ project: "app", projectPath: "/r/a/app", path: "/r/a/app", branch: "main", main: true });
-    expect(t[1]).toEqual({ project: "app", projectPath: "/r/a/app", worktree: "feat", path: "/r/a/app/.claude/worktrees/feat", branch: "feat", main: false });
-    expect(t[2]!.locked).toBe(true);
-    expect(t.at(-1)).toEqual({ project: "plain", projectPath: "/r/plain", path: "/r/plain", main: true });
-  });
-  it("filters by project name or path; an ambiguous name throws", async () => {
-    expect((await listTargets(deps, { project: "tools" })).map((e) => e.path)).toEqual(["/r/tools"]);
-    expect((await listTargets(deps, { project: "/r/b/app" })).length).toBe(2);
-    expect(await code(listTargets(deps, { project: "app" }))).toMatch(/^ambiguous/);
+  it("lists own-side projects and their worktrees inside the roots; filters by project name or path, an ambiguous name throws", async () => {
+    {
+      const t = await listTargets(deps);
+      expect(t.map((e) => e.path)).toEqual(["/r/a/app", "/r/a/app/.claude/worktrees/feat", "/r/a/app/.claude/worktrees/lk", "/r/b/app", "/r/b/app/.claude/worktrees/feat", "/r/tools", "/r/plain"]);
+      expect(t[0]).toEqual({ project: "app", projectPath: "/r/a/app", path: "/r/a/app", branch: "main", main: true });
+      expect(t[1]).toEqual({ project: "app", projectPath: "/r/a/app", worktree: "feat", path: "/r/a/app/.claude/worktrees/feat", branch: "feat", main: false });
+      expect(t[2]!.locked).toBe(true);
+      expect(t.at(-1)).toEqual({ project: "plain", projectPath: "/r/plain", path: "/r/plain", main: true });
+    }
+    {
+      expect((await listTargets(deps, { project: "tools" })).map((e) => e.path)).toEqual(["/r/tools"]);
+      expect((await listTargets(deps, { project: "/r/b/app" })).length).toBe(2);
+      expect(await code(listTargets(deps, { project: "app" }))).toMatch(/^ambiguous/);
+    }
   });
 });
 
@@ -64,53 +66,57 @@ describe("checkShape", () => {
 });
 
 describe("resolveTarget", () => {
-  it("project name: main checkout; with branch: new; repo is an alias", async () => {
-    expect(await resolveTarget({ project: "tools" }, deps)).toMatchObject({ kind: "main", cwd: "/r/tools" });
-    expect(await resolveTarget({ project: "tools", branch: "b" }, deps)).toEqual({ kind: "new", project: "tools", projectPath: "/r/tools", branch: "b" });
-    expect(await resolveTarget({ repo: "tools" }, deps)).toMatchObject({ kind: "main", cwd: "/r/tools" });
+  it("project name: main checkout, with branch: new, repo is an alias; an ambiguous project name lists both paths; an unknown project names the projects", async () => {
+    {
+      expect(await resolveTarget({ project: "tools" }, deps)).toMatchObject({ kind: "main", cwd: "/r/tools" });
+      expect(await resolveTarget({ project: "tools", branch: "b" }, deps)).toEqual({ kind: "new", project: "tools", projectPath: "/r/tools", branch: "b" });
+      expect(await resolveTarget({ repo: "tools" }, deps)).toMatchObject({ kind: "main", cwd: "/r/tools" });
+    }
+    {
+      const m = await code(resolveTarget({ project: "app" }, deps));
+      expect(m).toMatch(/^ambiguous/);
+      expect(m).toContain("/r/a/app");
+      expect(m).toContain("/r/b/app");
+      expect(await resolveTarget({ project: "/r/a/app" }, deps)).toMatchObject({ kind: "main", cwd: "/r/a/app" });
+    }
+    {
+      const m = await code(resolveTarget({ project: "nope" }, deps));
+      expect(m).toMatch(/^unknown/);
+      expect(m).toContain("app, tools, plain");
+      expect(m).not.toContain("x,");
+    }
   });
-  it("an ambiguous project name lists both paths", async () => {
-    const m = await code(resolveTarget({ project: "app" }, deps));
-    expect(m).toMatch(/^ambiguous/);
-    expect(m).toContain("/r/a/app");
-    expect(m).toContain("/r/b/app");
-    expect(await resolveTarget({ project: "/r/a/app" }, deps)).toMatchObject({ kind: "main", cwd: "/r/a/app" });
-  });
-  it("an unknown project names the projects", async () => {
-    const m = await code(resolveTarget({ project: "nope" }, deps));
-    expect(m).toMatch(/^unknown/);
-    expect(m).toContain("app, tools, plain");
-    expect(m).not.toContain("x,");
-  });
-  it("worktree name, scoped and ambiguous", async () => {
-    const m = await code(resolveTarget({ worktree: "feat" }, deps));
-    expect(m).toMatch(/^ambiguous/);
-    expect(m).toContain("/r/a/app/.claude/worktrees/feat");
-    expect(m).toContain("/r/b/app/.claude/worktrees/feat");
-    expect(await resolveTarget({ worktree: "feat", project: "/r/a/app" }, deps)).toMatchObject({ kind: "worktree", cwd: "/r/a/app/.claude/worktrees/feat" });
-    expect(await resolveTarget({ worktree: "lk" }, deps)).toMatchObject({ kind: "worktree", cwd: "/r/a/app/.claude/worktrees/lk" });
-    expect(await resolveTarget({ worktree: "/r/b/app/.claude/worktrees/feat" }, deps)).toMatchObject({ kind: "worktree" });
-    expect(await code(resolveTarget({ worktree: "/r/b/app/.claude/worktrees/feat", project: "/r/a/app" }, deps))).toMatch(/^unknown: .*belongs to project app/);
-    expect(await code(resolveTarget({ worktree: "nope", project: "tools" }, deps))).toMatch(/^unknown: No worktree named nope in project tools/);
-  });
-  it("refuses a worktree outside the roots or being removed", async () => {
-    expect(await code(resolveTarget({ worktree: "old" }, deps))).toMatch(/^outside:.*outside the daemon's allowed roots/);
-    expect(await code(resolveTarget({ worktree: "/out/old" }, deps))).toMatch(/^outside/);
-    expect(await code(resolveTarget({ worktree: "gone", project: "/r/a/app" }, deps))).toMatch(/^removing:.*being removed/);
-    expect(await code(resolveTarget({ worktree: "/r/a/app/.claude/worktrees/gone" }, deps))).toMatch(/^removing/);
-  });
-  it("refuses the main checkout as worktree and another side's paths", async () => {
-    expect(await code(resolveTarget({ worktree: "/r/tools" }, deps))).toMatch(/use project/);
-    expect(await code(resolveTarget({ project: "/side/x" }, deps))).toMatch(/^other_side:.*WSL: Ubuntu/);
-    expect(await code(resolveTarget({ cwd: "/side/x" }, deps))).toMatch(/^other_side/);
-    expect(await code(resolveTarget({ project: "x" }, deps))).toMatch(/^unknown/);
-  });
-  it("cwd takes the deepest listed entry", async () => {
-    const r = await resolveTarget({ cwd: "/r/a/app/.claude/worktrees/feat" }, deps);
-    expect(r).toMatchObject({ kind: "cwd", entry: { worktree: "feat" } });
-    expect(targetLabel(r)).toBe(" in worktree feat of project app");
-    expect(targetLabel(await resolveTarget({ cwd: "/r/tools" }, deps))).toBe(" in project tools");
-    expect(targetLabel(await resolveTarget({ cwd: "/r/elsewhere" }, deps))).toBe(" in /r/elsewhere");
+  it("worktree name, scoped and ambiguous; refuses a worktree outside the roots or being removed; refuses the main checkout as worktree and another side's paths; cwd takes the deepest listed entry", async () => {
+    {
+      const m = await code(resolveTarget({ worktree: "feat" }, deps));
+      expect(m).toMatch(/^ambiguous/);
+      expect(m).toContain("/r/a/app/.claude/worktrees/feat");
+      expect(m).toContain("/r/b/app/.claude/worktrees/feat");
+      expect(await resolveTarget({ worktree: "feat", project: "/r/a/app" }, deps)).toMatchObject({ kind: "worktree", cwd: "/r/a/app/.claude/worktrees/feat" });
+      expect(await resolveTarget({ worktree: "lk" }, deps)).toMatchObject({ kind: "worktree", cwd: "/r/a/app/.claude/worktrees/lk" });
+      expect(await resolveTarget({ worktree: "/r/b/app/.claude/worktrees/feat" }, deps)).toMatchObject({ kind: "worktree" });
+      expect(await code(resolveTarget({ worktree: "/r/b/app/.claude/worktrees/feat", project: "/r/a/app" }, deps))).toMatch(/^unknown: .*belongs to project app/);
+      expect(await code(resolveTarget({ worktree: "nope", project: "tools" }, deps))).toMatch(/^unknown: No worktree named nope in project tools/);
+    }
+    {
+      expect(await code(resolveTarget({ worktree: "old" }, deps))).toMatch(/^outside:.*outside the daemon's allowed roots/);
+      expect(await code(resolveTarget({ worktree: "/out/old" }, deps))).toMatch(/^outside/);
+      expect(await code(resolveTarget({ worktree: "gone", project: "/r/a/app" }, deps))).toMatch(/^removing:.*being removed/);
+      expect(await code(resolveTarget({ worktree: "/r/a/app/.claude/worktrees/gone" }, deps))).toMatch(/^removing/);
+    }
+    {
+      expect(await code(resolveTarget({ worktree: "/r/tools" }, deps))).toMatch(/use project/);
+      expect(await code(resolveTarget({ project: "/side/x" }, deps))).toMatch(/^other_side:.*WSL: Ubuntu/);
+      expect(await code(resolveTarget({ cwd: "/side/x" }, deps))).toMatch(/^other_side/);
+      expect(await code(resolveTarget({ project: "x" }, deps))).toMatch(/^unknown/);
+    }
+    {
+      const r = await resolveTarget({ cwd: "/r/a/app/.claude/worktrees/feat" }, deps);
+      expect(r).toMatchObject({ kind: "cwd", entry: { worktree: "feat" } });
+      expect(targetLabel(r)).toBe(" in worktree feat of project app");
+      expect(targetLabel(await resolveTarget({ cwd: "/r/tools" }, deps))).toBe(" in project tools");
+      expect(targetLabel(await resolveTarget({ cwd: "/r/elsewhere" }, deps))).toBe(" in /r/elsewhere");
+    }
   });
 });
 
