@@ -65,7 +65,9 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
   before writing new ones.
 - UI: OpenCode tokens and anatomy; ui-ux-pro-max Quick Reference §1-§3 must hold (contrast,
   44px touch targets below `md`, focus, no horizontal scroll at 390px). Focused checks:
-  `python3 .claude/skills/ui-ux-pro-max/scripts/search.py "<query>" --domain ux`.
+  `python3 <ui-ux-pro-max skill dir>/scripts/search.py "<query>" --domain ux`. The skill is a
+  user-level install, not part of this repo (usually `~/.claude/skills/ui-ux-pro-max`); the
+  skill's "Base directory" line gives the exact path.
 - Update `docs/spec.md` when behaviour or the wire/part model changes.
 - While building: the scoped command on the touched test files. Finish: `npm run typecheck`
   and one full `npm test` (record pass/fail/skip); commit the fix only as

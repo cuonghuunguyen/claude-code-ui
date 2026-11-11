@@ -30,10 +30,12 @@ Your whole input is the HANDOFF block (`references/handoff.md` of the orchestrat
 
 After the commit, start both verifiers on that SHA, in parallel, each with one `worker_start` call: `{name, worktree: <folder of your worktree>, project, agent, model, mode, prompt: <HANDOFF block>}`.
 
-| name | agent | model | HANDOFF role |
-|---|---|---|---|
-| ui-tester | orchestration:ui-tester | sonnet | ui-tester |
-| reviewer | orchestration:reviewer | opus | reviewer |
+| name | agent | model | mode | HANDOFF role |
+|---|---|---|---|---|
+| ui-tester | orchestration:ui-tester | sonnet | auto | ui-tester |
+| reviewer | orchestration:reviewer | opus | auto | reviewer |
+
+`mode` is always `auto`, never `default`: a verifier in `default` asks the user for every command.
 
 HANDOFF for them: same ticket, worktree, branch and report-dir; `commit` = your SHA; `coordinator` = your own worker name; `attempts` = used/budget of that stage. After the starts, end your turn and wait for the notices; call `worker_wait` once per notice, never in a loop. Answer every notice with one `worker_wait`, even one that looks stale (for a worker you closed or stopped yourself): it can be the only wake-up for events still queued. Read results with `worker_read` (path form `<name>` for your own) and the report files.
 
