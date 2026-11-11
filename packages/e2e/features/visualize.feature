@@ -41,3 +41,25 @@ Feature: Inline visualizations (GH-690)
     And I turn the inline visualizations switch on
     And I close Settings
     Then the visualization frame is shown
+
+  Scenario: A question with visualizations: previews side by side, a slider fills the answer
+    Given the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And the project has the question visual files
+    And I start a new Haiku session
+    When I send "Read q.md, a.md and b.md. Then use the AskUserQuestion tool exactly once: the question is the exact content of q.md, header Chart, two options: Flow with preview the exact content of a.md, and Bars with preview the exact content of b.md. Copy the file contents verbatim."
+    Then the question shows its visualization and 2 option previews
+    And the option previews are side-by-side
+    And I capture "question visuals desktop"
+    When I drag the slider in the question visualization to 70
+    Then the own answer field holds "threshold 70"
+    And I capture "question slider answer desktop"
+    When I choose the option "Bars" from its preview
+    And I capture "question preview chosen desktop"
+    When I set the mode to "dark"
+    And I capture "question visuals dark desktop"
+    Given the viewport is 390x844
+    Then the option previews are side-by-side
+    And the page has no horizontal scroll
+    And I capture "question visuals phone"

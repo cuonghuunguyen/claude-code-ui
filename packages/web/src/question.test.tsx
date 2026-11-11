@@ -64,7 +64,10 @@ describe("QuestionPanel previews", () => {
     expect(html.match(/data-testid="question-preview"/g)).toHaveLength(2);
     expect(html).toMatch(/>alpha<\/em>/);
     expect(html).toMatch(/>beta<\/em>/);
-    expect(html).toContain("sm:grid-cols-2");
+    expect(html).toContain("grid-cols-2");
+    // Above the options, so they compare without scrolling past the list.
+    expect(html.indexOf("question-previews")).toBeLessThan(html.indexOf('type="radio"'));
+    expect(html.match(/aria-pressed="false"/g)).toHaveLength(2);
   });
 
   it("no preview: no preview grid", () => {

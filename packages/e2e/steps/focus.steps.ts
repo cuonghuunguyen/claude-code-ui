@@ -46,7 +46,7 @@ Then("the Focus detail shows {string} once", async ({ page }, text: string) => {
 });
 
 Then("the Focus detail shows the question text once", async ({ page }) => {
-  const question = (await page.getByTestId("focus-detail").getByTestId("question-panel").locator("legend").innerText()).trim();
+  const question = (await page.getByTestId("focus-detail").getByTestId("question-panel").getByTestId("question-text").innerText()).trim();
   expect(question.length).toBeGreaterThan(0);
   expect(occurrences(await detailText(page), question)).toBe(1);
 });

@@ -1,7 +1,7 @@
 // Question panel (replaces the prompt box) and its timeline marker (docs/spec.md "Questions").
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { Question } from "@claude-ui/protocol";
-import { CircleCheckIcon, CircleHelpIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react";
+import { CircleCheckIcon, CircleHelpIcon, CircleIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useT } from "./i18n.ts";
@@ -60,16 +60,39 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
         </p>
       )}
       <VisualizeAnswerContext value={fillOther}>
-      <fieldset key={q.question} className="flex flex-col gap-2 p-3">
+      <fieldset key={q.question} className="flex flex-col gap-2 p-3" aria-labelledby={`${part.id}-q${page}`}>
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
           <span className="rounded bg-secondary px-1.5 py-0.5 text-secondary-foreground">{q.header}</span>
           {t("session.question.page", { page: page + 1, total: part.questions.length })}
         </p>
-        {/* The legend names the group for assistive tech; the visible question is Markdown (a legend may hold only phrasing content). */}
-        <legend className="sr-only">{q.question}</legend>
-        <div className="font-medium" data-testid="question-text">
+        {/* Markdown, so no <legend> (phrasing content only): the fieldset is named by aria-labelledby. */}
+        <div id={`${part.id}-q${page}`} className="font-medium" data-testid="question-text">
           <MessageResponse mode="static">{q.question}</MessageResponse>
         </div>
+        {previews.length > 0 && (
+          // Above the options, every option's preview side by side so they compare at a glance; the header chooses its option.
+          <div className={`grid gap-2 ${previews.length > 1 ? "grid-cols-2" : ""} ${previews.length > 2 ? "lg:grid-cols-3" : ""}`} data-testid="question-previews">
+            {previews.map((o) => {
+              const on = c.chosen.includes(o.label);
+              return (
+                <div key={o.label} className={`flex min-w-0 flex-col overflow-hidden rounded-md border ${on ? "ring-2 ring-foreground" : ""}`} data-testid="question-preview">
+                  <button
+                    type="button"
+                    className="flex min-h-8 items-center gap-1.5 border-b bg-muted px-2 text-left text-xs hover:bg-card focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
+                    aria-pressed={on}
+                    onClick={() => toggle(o.label)}
+                  >
+                    {on ? <CircleCheckIcon className="size-3.5 shrink-0" aria-hidden /> : <CircleIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                    <span className="min-w-0 truncate font-medium">{o.label}</span>
+                  </button>
+                  <div className="max-h-56 min-w-0 overflow-auto p-2 text-sm">
+                    <MessageResponse mode="static" controls={false}>{o.preview}</MessageResponse>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <p className="text-muted-foreground text-xs">{q.multiSelect ? t("session.question.selectMany") : t("session.question.selectOne")}</p>
         {q.options.map((o) => (
           <label key={o.label} className={card(c.chosen.includes(o.label))}>
@@ -100,21 +123,6 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             />
           </span>
         </label>
-        {previews.length > 0 && (
-          // Every option's preview side by side, so the options can be compared; clicking one chooses its option.
-          <div className={`grid gap-2 ${previews.length > 1 ? "sm:grid-cols-2" : ""}`} data-testid="question-previews">
-            {previews.map((o) => (
-              <div key={o.label} className={`flex min-w-0 flex-col gap-1 rounded-md border p-2 ${c.chosen.includes(o.label) ? "ring-2 ring-foreground" : ""}`} data-testid="question-preview">
-                <button type="button" className="self-start rounded px-1 text-muted-foreground text-xs hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" aria-pressed={c.chosen.includes(o.label)} onClick={() => toggle(o.label)}>
-                  {o.label}
-                </button>
-                <div className="max-h-96 min-w-0 overflow-auto text-sm">
-                  <MessageResponse mode="static">{o.preview}</MessageResponse>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </fieldset>
       </VisualizeAnswerContext>
       </div>

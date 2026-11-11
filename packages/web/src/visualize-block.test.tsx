@@ -145,6 +145,7 @@ it("in a question card the frame's answer message fills the answer; too long or 
   expect(fill).not.toHaveBeenCalled();
   await from(f.contentWindow, { v: 1, type: "answer", text: "threshold 40%" });
   expect(fill).toHaveBeenCalledWith("threshold 40%");
+  expect(el.querySelector('[data-testid="visualize-show-code"]')).toBeNull(); // no source toggle in a question card
   act(() => root?.unmount());
   const plain = await mount(<VisualizeBlock code="<p>q</p>" />);
   const g = frameOf(plain);

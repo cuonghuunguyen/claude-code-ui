@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
 import { openApp, openProject, sendPrompt, waitTurnEnd } from "../support/flow.ts";
 import { runDir } from "../support/paths.ts";
-import { openSettings } from "../support/ui.ts";
+import { openSettings, TURN_MS } from "../support/ui.ts";
 import { writeReplyTranscript } from "../support/fake-transcript.ts";
 import { After, Given, Then, When } from "./fixtures.ts";
 
@@ -106,4 +106,45 @@ After(async () => {
   own = undefined;
   if (transcript) rmSync(dirname(transcript), { recursive: true, force: true });
   transcript = undefined;
+});
+
+// Question card visuals: Haiku copies these files verbatim into AskUserQuestion, so the HTML needs no quoting in the prompt.
+const Q_FILES: Record<string, string> = {
+  "q.md": ["Which chart, and which threshold?", "", "```visualize", `<p style="margin:0 0 4px">Drag to pick a threshold</p><input type="range" id="r" min="0" max="100" value="50" style="width:100%" oninput="parent.postMessage({v:1,type:'answer',text:'threshold '+this.value},'*')">`, "```"].join("\n"),
+  "a.md": ["```mermaid", "flowchart LR", "  A[Input] --> B[Model] --> C[Answer]", "```"].join("\n"),
+  "b.md": ["```visualize", '<svg viewBox="0 0 240 120" width="100%"><rect x="20" y="70" width="40" height="40" fill="var(--primary)"/><rect x="90" y="40" width="40" height="70" fill="#3b82f6"/><rect x="160" y="10" width="40" height="100" fill="#f59e0b"/></svg>', "```"].join("\n"),
+};
+
+Given("the project has the question visual files", async ({ project }) => {
+  for (const [name, text] of Object.entries(Q_FILES)) writeFileSync(join(project.path, name), text + "\n");
+});
+
+const card = (page: Page) => page.getByTestId("question-panel");
+const previews = (page: Page) => card(page).getByTestId("question-preview");
+
+Then("the question shows its visualization and {int} option previews", async ({ page }, n: number) => {
+  await expect(card(page)).toBeVisible({ timeout: TURN_MS });
+  await expect(card(page).getByTestId("question-text").getByTestId("visualize-frame")).toBeVisible({ timeout: 30_000 });
+  await expect(previews(page)).toHaveCount(n);
+  await expect(previews(page).nth(1).getByTestId("visualize-frame")).toBeVisible({ timeout: 30_000 });
+});
+
+Then("the option previews are {word}", async ({ page }, layout: string) => {
+  await previews(page).first().scrollIntoViewIfNeeded();
+  const [a, b] = [(await previews(page).nth(0).boundingBox())!, (await previews(page).nth(1).boundingBox())!];
+  if (layout === "side-by-side") expect(Math.abs(a.y - b.y)).toBeLessThan(2);
+  else expect(b.y).toBeGreaterThan(a.y + a.height - 2);
+});
+
+When("I drag the slider in the question visualization to {int}", async ({ page }, v: number) => {
+  await page.frameLocator('[data-testid="question-text"] [data-testid="visualize-frame"]').locator("#r").fill(String(v));
+});
+
+Then("the own answer field holds {string}", async ({ page }, text: string) => {
+  await expect(card(page).getByPlaceholder("Type your answer...")).toHaveValue(text);
+});
+
+When("I choose the option {string} from its preview", async ({ page }, label: string) => {
+  await previews(page).getByRole("button", { name: label }).click();
+  await expect(previews(page).getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
 });

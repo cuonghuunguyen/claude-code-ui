@@ -89,11 +89,12 @@ export function VisualizeBlock({ code }: { code: string }) {
   useLayoutEffect(() => void frame.current?.contentWindow?.postMessage({ v: 1, type: "theme", vars: themeVars() }, "*"), [dark, theme]);
   return (
     <div ref={box} data-testid="visualize-block" className="flex flex-col gap-1">
-      <div className="flex justify-end">
+      {/* In a question card the source toggle is noise; the card's answer is what matters. */}
+      {!onAnswer && <div className="flex justify-end">
         <button type="button" onClick={() => setShowCode((v) => !v)} aria-pressed={showCode} className="rounded px-1.5 text-muted-foreground text-xs hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" data-testid="visualize-show-code">
           {showCode ? t("visualize.showVisual") : t("visualize.showCode")}
         </button>
-      </div>
+      </div>}
       {showCode ? (
         <CodeBlock code={code} language={"html" as never} />
       ) : near ? (
