@@ -2,6 +2,8 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { Readable } from "node:stream";
 import { delimiter, join } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
@@ -37,7 +39,20 @@ const GUARD_MS = 5 * 60_000;
 /** Every fetch to the server goes through here: a new connection each time (`connection: close`), so a dead server only fails the connect, which proves the
  * request never reached it (see request()). A pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and
  * takes the request. One fetch to the server without the header puts a socket in the pool that the next request may reuse. */
-const ocFetch = (url: string | URL, init: RequestInit & { headers: Record<string, string> }) => fetch(url, { ...init, headers: { ...init.headers, connection: "close" } });
+/* node:http with `agent: false` (a new connection, `Connection: close`), not fetch: undici (6.29 in Node 22, 7.30 too) dies on an uncatchable
+ * `assert(!this.paused)` when the server closes a `connection: close` response while the body read is paused, e.g. GET /provider (7 MB). */
+const ocFetch = (url: string | URL, init: { method?: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) =>
+  new Promise<Response>((resolve, reject) => {
+    const req = httpRequest(url, { method: init.method ?? "GET", headers: init.headers, agent: false, signal: init.signal }, (res) => {
+      const status = res.statusCode ?? 500;
+      const empty = [101, 204, 205, 304].includes(status);
+      if (empty) res.resume();
+      resolve(new Response(empty ? null : (Readable.toWeb(res) as ReadableStream), { status, headers: res.headers as Record<string, string> }));
+    });
+    // fetch's error shape: a failed connect carries `syscall: "connect"` in `cause` (neverArrived).
+    req.on("error", (err) => reject(err.name === "AbortError" ? err : new TypeError("fetch failed", { cause: err })));
+    req.end(init.body);
+  });
 const missing = () => new OpenCodeError("opencode_missing", "OpenCode is not installed or not found on PATH. Install it (https://opencode.ai/docs) or set its path in Settings › OpenCode.");
 
 /** `x.y.z` as numbers; undefined when the text has none. */
