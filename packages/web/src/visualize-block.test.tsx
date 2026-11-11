@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
-import { VisualizeBlock, VisualizeContext, VisualizeFence, VisualizeReadContext } from "./visualize-block.tsx";
+import { ANSWER_MAX, VisualizeAnswerContext, VisualizeBlock, VisualizeContext, VisualizeFence, VisualizeReadContext } from "./visualize-block.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -128,4 +128,26 @@ it("MessageResponse: the setting on draws the frame, off shows the fence as code
   const off = await mount(<MessageResponse mode="static">{md}</MessageResponse>);
   expect(off.querySelector("iframe")).toBeNull();
   expect(off.textContent).toContain("chart");
+});
+
+it("in a question card the frame's answer message fills the answer; too long or not a string is ignored; elsewhere nothing", async () => {
+  const fill = vi.fn();
+  const el = await mount(
+    <VisualizeAnswerContext value={fill}>
+      <VisualizeBlock code="<p>q</p>" />
+    </VisualizeAnswerContext>,
+  );
+  const f = frameOf(el);
+  Object.defineProperty(f, "contentWindow", { value: { postMessage: vi.fn() } });
+  await from({}, { v: 1, type: "answer", text: "spoof" }); // another window
+  await from(f.contentWindow, { v: 1, type: "answer", text: 3 });
+  await from(f.contentWindow, { v: 1, type: "answer", text: "x".repeat(ANSWER_MAX + 1) });
+  expect(fill).not.toHaveBeenCalled();
+  await from(f.contentWindow, { v: 1, type: "answer", text: "threshold 40%" });
+  expect(fill).toHaveBeenCalledWith("threshold 40%");
+  act(() => root?.unmount());
+  const plain = await mount(<VisualizeBlock code="<p>q</p>" />);
+  const g = frameOf(plain);
+  Object.defineProperty(g, "contentWindow", { value: { postMessage: vi.fn() } });
+  await from(g.contentWindow, { v: 1, type: "answer", text: "x" }); // no context: no throw
 });

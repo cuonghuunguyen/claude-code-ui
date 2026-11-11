@@ -15,4 +15,5 @@ Tắt trong [Cài đặt › Sessions › Chat](../reference/settings#chat). Áp
 - Hình chạy trong khung sandbox. Hình không đọc được ứng dụng, tệp, cookie hay bộ nhớ của bạn, và không gửi được yêu cầu mạng. Script chỉ tải inline hoặc từ `cdn.jsdelivr.net`, `cdnjs.cloudflare.com` và `unpkg.com`.
 - Script trong hình vẫn có thể đưa dữ liệu vào địa chỉ của script CDN. Claude đã có thể ghi tệp nên rủi ro này nhỏ, nhưng bạn nên biết.
 - Hình theo giao diện sáng/tối và giao diện màu.
+- Trong câu hỏi của Claude, hình có thể hiện trong câu hỏi và cạnh từng lựa chọn, đặt cạnh nhau để so sánh. Hình tương tác ở đó (thanh trượt, xếp hạng) có thể điền vào ô câu trả lời riêng; bạn vẫn bấm Submit.
 - Hoạt động trên môi trường Docker, WSL và SSH (sau khi môi trường cập nhật lên bản này) và với engine OpenCode. OpenCode nhận hướng dẫn kèm mỗi prompt, nên đổi cài đặt áp dụng từ prompt tiếp theo.

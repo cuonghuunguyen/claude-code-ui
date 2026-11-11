@@ -12,6 +12,10 @@ export const VisualizeContext = createContext(false);
 /** Reads a visualization file's text (fs.read); undefined outside the app. */
 export const VisualizeReadContext = createContext<((path: string) => Promise<string>) | undefined>(undefined);
 /** A fence that is only an absolute .html path: the skill wrote the HTML with the Write tool, so the reply streams no HTML. */
+/** Set inside a question card: a frame there may post `answer {text}` to fill the Other field (never submits). */
+export const VisualizeAnswerContext = createContext<((text: string) => void) | undefined>(undefined);
+/** Longest `answer` text a frame may hand over. */
+export const ANSWER_MAX = 2000;
 const FILE = /^(?:\/|[A-Za-z]:[\\/])[^\n]*\.html?$/;
 
 /** The host colours handed to the frame (a fixed list: the frame never reads the app). */
@@ -65,15 +69,19 @@ export function VisualizeBlock({ code }: { code: string }) {
   const theme = useColorTheme();
   const html = useRef(code);
   html.current = code;
+  const onAnswer = use(VisualizeAnswerContext);
+  const answer = useRef(onAnswer);
+  answer.current = onAnswer;
   // The frame has an opaque origin, so every message to it uses target "*"; its own messages are accepted only from this frame's window.
   useLayoutEffect(() => {
     if (!live) return;
     const on = (e: MessageEvent) => {
       const w = frame.current?.contentWindow;
-      const d = e.data as { v?: unknown; type?: unknown; height?: unknown } | null;
+      const d = e.data as { v?: unknown; type?: unknown; height?: unknown; text?: unknown } | null;
       if (!w || e.source !== w || d?.v !== 1) return;
       if (d.type === "ready") w.postMessage({ v: 1, type: "render", html: html.current, vars: themeVars() }, "*");
       else if (d.type === "height" && typeof d.height === "number" && Number.isFinite(d.height)) setHeight(clampHeight(d.height, 800));
+      else if (d.type === "answer" && typeof d.text === "string" && d.text.length <= ANSWER_MAX) answer.current?.(d.text);
     };
     window.addEventListener("message", on);
     return () => window.removeEventListener("message", on);

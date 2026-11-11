@@ -18,6 +18,10 @@ Writing the file keeps the HTML out of the streamed reply. No such uploads folde
 
 Use it for: data charts, flows and architecture diagrams, comparisons, math, UI mock-ups, small interactive widgets (sliders, toggles). Do not use it for plain lists or tables: write Markdown.
 
+In a question (AskUserQuestion), optional:
+- The question text and each option's `preview` are Markdown: a `visualize` or `mermaid` fence there is drawn. Previews of all options show side by side, so use them to compare options (mock-ups, charts, diagrams).
+- An interactive visual in the question or a preview can hand the user's pick to the answer field: `parent.postMessage({v:1,type:"answer",text:"..."},"*")` (string, at most 2000 characters). It fills the "own answer" field; the user still submits. Use it for answers that options cannot express: a slider value, a ranking, a point or area on a diagram.
+
 Rules:
 - Inline CSS and JS only. Keep the fragment under ~200 KB.
 - Prefer plain inline SVG for simple charts and diagrams: no network needed.

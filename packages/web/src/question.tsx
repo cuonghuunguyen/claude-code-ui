@@ -2,10 +2,12 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { Question } from "@claude-ui/protocol";
 import { CircleCheckIcon, CircleHelpIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useT } from "./i18n.ts";
 import { DOCK, TRAY } from "./permission.tsx";
 import type { QuestionRequest } from "./store.ts";
+import { VisualizeAnswerContext } from "./visualize-block.tsx";
 
 /** `other`: the Other free text, undefined while Other is not chosen. */
 export type Choice = { chosen: string[]; other?: string };
@@ -40,7 +42,9 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
   const c = choices[page]!;
   const type = q.multiSelect ? "checkbox" : "radio";
   const toggle = (label: string) => set(page, q.multiSelect ? { ...c, chosen: c.chosen.includes(label) ? c.chosen.filter((l) => l !== label) : [...c.chosen, label] } : { chosen: [label] });
-  const preview = q.options.find((o) => o.preview && c.chosen.includes(o.label))?.preview;
+  // A visualization in the card may fill the Other text (VisualizeAnswerContext); the user still submits.
+  const fillOther = (text: string) => set(page, q.multiSelect ? { ...c, other: text } : { chosen: [], other: text });
+  const previews = q.options.filter((o) => o.preview);
   const card = (selected: boolean) =>
     `flex cursor-pointer items-start gap-3 rounded-md border bg-muted py-2 pr-2 pl-2.5 hover:bg-card ${selected ? "ring-2 ring-foreground" : ""}`;
   return (
@@ -55,14 +59,17 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
           </span>
         </p>
       )}
+      <VisualizeAnswerContext value={fillOther}>
       <fieldset key={q.question} className="flex flex-col gap-2 p-3">
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
           <span className="rounded bg-secondary px-1.5 py-0.5 text-secondary-foreground">{q.header}</span>
           {t("session.question.page", { page: page + 1, total: part.questions.length })}
         </p>
-        <legend className="contents">
-          <span className="font-medium">{q.question}</span>
-        </legend>
+        {/* The legend names the group for assistive tech; the visible question is Markdown (a legend may hold only phrasing content). */}
+        <legend className="sr-only">{q.question}</legend>
+        <div className="font-medium" data-testid="question-text">
+          <MessageResponse mode="static">{q.question}</MessageResponse>
+        </div>
         <p className="text-muted-foreground text-xs">{q.multiSelect ? t("session.question.selectMany") : t("session.question.selectOne")}</p>
         {q.options.map((o) => (
           <label key={o.label} className={card(c.chosen.includes(o.label))}>
@@ -93,8 +100,23 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             />
           </span>
         </label>
-        {preview && <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs">{preview}</pre>}
+        {previews.length > 0 && (
+          // Every option's preview side by side, so the options can be compared; clicking one chooses its option.
+          <div className={`grid gap-2 ${previews.length > 1 ? "sm:grid-cols-2" : ""}`} data-testid="question-previews">
+            {previews.map((o) => (
+              <div key={o.label} className={`flex min-w-0 flex-col gap-1 rounded-md border p-2 ${c.chosen.includes(o.label) ? "ring-2 ring-foreground" : ""}`} data-testid="question-preview">
+                <button type="button" className="self-start rounded px-1 text-muted-foreground text-xs hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11" aria-pressed={c.chosen.includes(o.label)} onClick={() => toggle(o.label)}>
+                  {o.label}
+                </button>
+                <div className="max-h-96 min-w-0 overflow-auto text-sm">
+                  <MessageResponse mode="static">{o.preview}</MessageResponse>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </fieldset>
+      </VisualizeAnswerContext>
       </div>
       <div className={TRAY}>
         {mode && <span className="min-w-0">{mode}</span>}

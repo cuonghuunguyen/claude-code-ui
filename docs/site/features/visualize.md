@@ -15,4 +15,5 @@ Switch it off in [Settings › Sessions › Chat](../reference/settings#chat). I
 - The drawing runs in a sandboxed frame. It cannot read the app, your files, cookies or storage, and cannot make network requests. Scripts load only inline or from `cdn.jsdelivr.net`, `cdnjs.cloudflare.com` and `unpkg.com`.
 - A script in the drawing could still put data into the address of a CDN script. Claude can already write files, so this adds little, but know it.
 - It follows the light/dark theme and the colour theme.
+- In a question from Claude, drawings can show in the question and next to each option, side by side for comparison. An interactive drawing there (a slider, a ranking) can fill in **Type your own answer**; you still press Submit.
 - It works on Docker, WSL and SSH sides (after the side updates to this build) and with the OpenCode engine. OpenCode gets the guidance with each prompt, so a change of the setting applies from the next prompt.

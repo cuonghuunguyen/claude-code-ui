@@ -56,6 +56,22 @@ describe("QuestionPanel", () => {
   });
 });
 
+describe("QuestionPanel previews", () => {
+  it("renders the question and every option's preview as Markdown, side by side, each with its option's label", () => {
+    const q: Question = { ...manager, question: "Pick **one**", options: [{ label: "A", description: "", preview: "_alpha_" }, { label: "B", description: "", preview: "_beta_" }, { label: "C", description: "" }] };
+    const html = renderToStaticMarkup(<QuestionPanel part={request({ questions: [q] })} onAnswer={() => {}} />);
+    expect(html).toMatch(/data-streamdown="strong">one</);
+    expect(html.match(/data-testid="question-preview"/g)).toHaveLength(2);
+    expect(html).toMatch(/>alpha<\/em>/);
+    expect(html).toMatch(/>beta<\/em>/);
+    expect(html).toContain("sm:grid-cols-2");
+  });
+
+  it("no preview: no preview grid", () => {
+    expect(renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} />)).not.toContain("question-previews");
+  });
+});
+
 describe("QuestionPanel on a phone", () => {
   it("is bounded by the dynamic viewport and scrolls its options; Dismiss, Back and Next/Submit stay outside the scroller", () => {
     const html = renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} onDismiss={() => {}} />);
