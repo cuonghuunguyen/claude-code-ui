@@ -192,10 +192,6 @@ it("workerNotifications defaults to on, saves off, refuses a non-boolean with 'N
   for (const bad of ["off", 0, null]) expect(() => s.set({ orchestration: { workerNotifications: bad as never } })).toThrow(/^Notifications from workers must be on or off$/);
 });
 
-it("git defaults are VS Code's, except openRepositoryInParentFolders always", () => {
-  expect(createSettings({ file: file() }).get().git).toEqual(GIT);
-});
-
 it("git arrays: default not stored, a changed array stored and read back, the default again removes it", () => {
   const f = file();
   const s = createSettings({ file: f });

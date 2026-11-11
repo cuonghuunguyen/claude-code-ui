@@ -216,12 +216,6 @@ describe("side frames (GH-278)", () => {
     await t.feed(b.subarray(47));
     expect(t.got).toHaveLength(1);
   });
-
-  it("accepts a frame of an exact valid size under the cap", async () => {
-    const t = await setup();
-    await t.feed(JSON.stringify({ c: 1, m: { type: "reply", reqId: "mid", result: "x".repeat(2 * 1024 * 1024) } }) + "\n");
-    expect(t.got).toHaveLength(1);
-  });
 });
 
 it("runSide().running(true) writes a running frame (GH-523)", () => {

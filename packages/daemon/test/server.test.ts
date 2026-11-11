@@ -2879,32 +2879,7 @@ describe("daemon", () => {
     type Listed = { projects: string[]; recentProjects: { cwd: string; sessionCount: number; lastActivity: number }[]; sessions: { id: string }[] };
     const list = async (c: Awaited<ReturnType<typeof client>>) => ((await c.request({ type: "session.list" })) as { result: Listed }).result;
 
-    it("a fresh state lists no project and no session while transcripts exist; they are the recent projects, newest first", async () => {
-      const [a, b] = [cwdOf("a"), cwdOf("b")];
-      const x = await start(
-        [
-          { sessionId: sid(1), summary: "a1", lastModified: 10, cwd: a },
-          { sessionId: sid(2), summary: "b1", lastModified: 30, cwd: b },
-          { sessionId: sid(3), summary: "a2", lastModified: 20, cwd: a },
-          { sessionId: sid(4), summary: "outside", lastModified: 40, cwd: "/etc" },
-        ],
-        createProjects(),
-      );
-      try {
-        expect(await list(x.c)).toMatchObject({
-          projects: [],
-          sessions: [],
-          recentProjects: [
-            { cwd: b, sessionCount: 1, lastActivity: 30 },
-            { cwd: a, sessionCount: 2, lastActivity: 20 },
-          ],
-        });
-      } finally {
-        x.d.close();
-      }
-    });
-
-    it("session.ids names every session inside the roots, of added projects or not, and none outside", async () => {
+    it("session.ids names every session inside the roots, of added projects or not, and none outside; a fresh state lists no project and no session, the transcripts are the recent projects, newest first", async () => {
       const [a, b] = [cwdOf("a"), cwdOf("b")];
       const x = await start(
         [
@@ -2918,7 +2893,14 @@ describe("daemon", () => {
       try {
         const r = (await x.c.request({ type: "session.ids" })) as { result: { ids: string[] } };
         expect([...r.result.ids].sort()).toEqual([sid(1), sid(2), sid(3)]);
-        expect((await list(x.c)).sessions).toEqual([]);
+        expect(await list(x.c)).toMatchObject({
+          projects: [],
+          sessions: [],
+          recentProjects: [
+            { cwd: b, sessionCount: 1, lastActivity: 30 },
+            { cwd: a, sessionCount: 2, lastActivity: 20 },
+          ],
+        });
       } finally {
         x.d.close();
       }

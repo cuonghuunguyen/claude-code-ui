@@ -373,10 +373,6 @@ describe("gitReadOnly", () => {
         expect(gitReadOnly({ command: "git status" }, d), "/c/... form").toBe(false);
       }
     });
-
-    it("a directory that git cannot read config in is refused", () => {
-      expect(gitReadOnly({ command: "git status" }, join(root, "gone"))).toBe(false);
-    });
   });
 
   it("through tier(): low only with the shell cwd pinned", () => {

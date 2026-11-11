@@ -77,15 +77,6 @@ describe("gitStashPush", () => {
 });
 
 describe("gitStashList", () => {
-  it("lists newest first with index, hash, message and time", async () => {
-    const r = repo();
-    const list = await two(r);
-    expect(list.map((s) => s.index)).toEqual([0, 1]);
-    expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
-    expect(list[1].hash).toBe(run(r.dir, "rev-parse", "stash@{1}"));
-    expect(list.map((s) => s.message)).toEqual(["On main: second", "On main: first"]);
-    expect(list[0].time).toBeGreaterThan(1_600_000_000);
-  });
   it("lists more than 100 entries whole (output over 8000 chars)", async () => {
     const r = repo();
     // One stash commit and 150 reflog lines written straight into the stash reflog: 150 x (stash create + stash store) is 300 git processes, minutes on Windows.
@@ -109,9 +100,15 @@ describe("gitStashList", () => {
 });
 
 describe("gitStash", () => {
-  it("applies keeps the entries, pops removes one, drops removes one without touching the work tree", async () => {
+  it("list is newest first with index, hash, message and time; apply keeps the entries, pop removes one, drop removes one without touching the work tree", async () => {
     const r = repo();
-    const [s0, s1] = await two(r);
+    const list = await two(r);
+    expect(list.map((s) => s.index)).toEqual([0, 1]);
+    expect(list[0].hash).toBe(run(r.dir, "rev-parse", "stash@{0}"));
+    expect(list[1].hash).toBe(run(r.dir, "rev-parse", "stash@{1}"));
+    expect(list.map((s) => s.message)).toEqual(["On main: second", "On main: first"]);
+    expect(list[0].time).toBeGreaterThan(1_600_000_000);
+    const [s0, s1] = list;
     await gitStash(r.dir, "apply", { ...r.o, ...entry(s1) });
     expect(read(r.dir, "a.txt")).toBe("one\n");
     expect(count(r)).toBe(2);

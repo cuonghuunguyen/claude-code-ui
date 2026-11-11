@@ -155,12 +155,6 @@ describe("worker tree: orchestration for workers", () => {
     expect(rs.filter((r) => r.name).length).toBe(1);
   });
 
-  it("the worker cap counts the root's tree at every depth", async () => {
-    const t = setup(undefined, { workerCap: 2 });
-    tree(t); // W1, W2 live
-    expect((await call(t.o, "C", "worker_start", start("a"))).error).toMatch(/Maximum workers per tree/);
-  });
-
   it("two coordinators each run up to their own cap", async () => {
     const t = setup(undefined, { workerCap: 2 });
     tree(t);

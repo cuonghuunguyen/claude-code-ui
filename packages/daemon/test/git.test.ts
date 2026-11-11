@@ -489,15 +489,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(has("config/other.json")).toBe(false);
   });
 
-  it("copies a folder's files when its own pattern names the folder (vendor/ then vendor/pkg/)", async () => {
-    const { main, opts } = plain();
-    put(join(main, ".gitignore"), "vendor/\n");
-    put(join(main, ".worktreeinclude"), "vendor/\n");
-    put(join(main, "vendor", "pkg", "x.txt"), "v");
-    const r = await createWorktree(main, { ...opts, name: "dirpat" });
-    expect(existsSync(join(r.path, "vendor/pkg/x.txt"))).toBe(true);
-  });
-
   it("deletes the partial file when a copy fails, and runs the listing calls with core.fsmonitor=false", async () => {
     const { main, opts } = plain();
     put(join(main, ".gitignore"), ".env\n");

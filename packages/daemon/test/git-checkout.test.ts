@@ -91,11 +91,6 @@ const tryRevParse = (dir: string, ref: string) => {
 };
 
 describe("gitCheckout", () => {
-  it("checks out a local branch", async () => {
-    const r = repo();
-    await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" });
-    expect(cur(r.dir)).toBe("refs/heads/other");
-  });
   it("checks out a remote branch as a new tracking local branch", async () => {
     const r = repo();
     await gitCheckout(r.dir, { ...r.o, ref: "refs/remotes/origin/feat" });
@@ -131,9 +126,10 @@ describe("gitCheckout", () => {
     expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toContain("mine");
     expect(run(r.dir, "stash", "list")).toBe("");
   });
-  it("smart snapshots the dirty tracked files before the stash with reason checkout; a plain checkout snapshots nothing", async () => {
+  it("smart snapshots the dirty tracked files before the stash with reason checkout; a plain checkout switches and snapshots nothing", async () => {
     const r = repo();
     await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" });
+    expect(cur(r.dir)).toBe("refs/heads/other");
     await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/main" });
     expect(r.seen).toEqual([]);
     put(r.dir, "a.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n");

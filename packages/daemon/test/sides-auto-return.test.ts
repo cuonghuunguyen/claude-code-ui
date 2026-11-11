@@ -527,16 +527,6 @@ describe("updateRemote", () => {
     expect(state(s, "wsl:A")).toMatchObject({ state: "error", message: expect.stringContaining("no update available") });
     s.close();
   });
-
-  it("rejects 'nothing to update' without a mismatch of an older Hub", async () => {
-    vi.useFakeTimers();
-    const p = pipe();
-    p.out(READY);
-    const s = createSides({ targets: [wslSide("A")], spawn: async () => p.proc });
-    await s.start("wsl:A");
-    await expect(s.updateRemote("wsl:A")).rejects.toThrow("nothing to update");
-    s.close();
-  });
 });
 
 describe("side.updateRemote message", () => {
@@ -555,6 +545,7 @@ describe("side.updateRemote message", () => {
     expect(await h.ask({ type: "side.updateRemote", side: "nope" })).toMatchObject({ type: "error", code: "unknown_side" });
     expect(await h.ask({ type: "side.updateRemote" })).toMatchObject({ type: "error", code: "unknown_side" });
     expect(await h.ask({ type: "side.updateRemote", side: "wsl:A" })).toMatchObject({ type: "error", code: "bad_request" });
+    await expect(s.updateRemote("wsl:A")).rejects.toThrow("nothing to update");
     s.close();
   });
 

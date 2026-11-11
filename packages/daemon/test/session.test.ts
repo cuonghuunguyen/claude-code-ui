@@ -1063,14 +1063,6 @@ describe("Session questions", () => {
     });
   });
 
-  it("AskUserQuestion through canUseTool logs a question part and sets needs_input", async () => {
-    const { s, events, q } = await ask();
-    expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });
-    expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
-    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
-    expect(s.info().state).toBe("needs_input");
-  });
-
   it("a question carries the time the daemon asked (Focus wait time)", async () => {
     const before = Date.now();
     const { q } = await ask();
@@ -1078,8 +1070,12 @@ describe("Session questions", () => {
     expect(q.at).toBeLessThanOrEqual(Date.now());
   });
 
-  it("answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
+  it("AskUserQuestion through canUseTool logs a question part and sets needs_input; answer() returns the questions and answers via updatedInput and logs the settlement once", async () => {
     const { s, events, q, answered } = await ask();
+    expect(q).toMatchObject({ requestId: q.id, questions: askInput.questions, settled: false });
+    expect(q.toolUseId).toBe((events.find((e) => e.part.type === "tool_call")!.part as { toolUseId: string }).toolUseId);
+    expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+    expect(s.info().state).toBe("needs_input");
     const answers = { "Which package manager?": "pnpm" };
     expect(s.answer(q.requestId, answers)).toBe(true);
     expect(s.answer(q.requestId, { "Which package manager?": "npm" })).toBe(false);

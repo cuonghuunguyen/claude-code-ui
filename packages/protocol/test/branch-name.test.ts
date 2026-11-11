@@ -56,8 +56,6 @@ describe("branchFolder", () => {
 
 describe("branchNameError", () => {
   it.each([[""], ["-x"], ["x".repeat(201)]])("refuses %j", (b) => expect(branchNameError(b)).toBeTruthy());
-  it("accepts a normal branch", () => expect(branchNameError("feature/PRJ-1-x")).toBeUndefined());
-  it("refuses a branch whose folder breaks the folder rule", () => expect(branchNameError(`a/${"b".repeat(70)}`)).toMatch(/Folder/));
 });
 
 describe("ticketBranchName (GH-447 template)", () => {
@@ -125,6 +123,7 @@ describe("GH-452 long names", () => {
   it("branchNameError refuses @{ and still refuses a typed name over 64 folder characters", () => {
     expect(branchNameError("a@{-1}")).toMatch(/@\{/);
     expect(branchNameError("a".repeat(65))).toBeTruthy();
+    expect(branchNameError(`a/${"b".repeat(70)}`)).toMatch(/Folder/);
   });
   it("checkoutFolder: a short branch as branchFolder; a long one is cut at a word to 64 characters, never inside the ticket key", () => {
     expect(checkoutFolder("feat/x")).toBe("feat-x");

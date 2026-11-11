@@ -277,13 +277,16 @@ describe("orchestration", () => {
     expect(runsOf(id)[1]!.options.mcpServers).toBeUndefined();
   });
 
-  it("auto-allows the coordinator's tools by sdk source; worker_start asks with no rule to save; a configured server of the same name is not trusted", async () => {
+  it("auto-allows the coordinator's tools by sdk source; worker_start and worker_remove (irreversible) ask with no rule to save; a configured server of the same name is not trusted", async () => {
     const { toolPolicy } = daemon.orchestration;
     const sdk = { name: "orchestration", source: "sdk" };
     expect(toolPolicy("mcp__orchestration__worker_wait", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_send", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_targets", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_start", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
+    expect(toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_wait", { name: "orchestration", source: "user" })).toBeUndefined();
     expect(toolPolicy("mcp__orchestration__worker_wait", undefined)).toBeUndefined();
     expect(toolPolicy("mcp__other__worker_wait", { name: "other", source: "sdk" })).toBeUndefined();
@@ -1010,13 +1013,6 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_remove", { name: "nobody" })).error).toMatch(/No worker named nobody/);
     expect((await call(other, "worker_remove", { name: "rm3" })).error).toMatch(/No worker named rm3/);
     expect((await call(coord, "worker_remove", { name: "Bad Name" })).error).toBeDefined();
-  });
-
-  it("worker_remove is not in the no-permission-prompt tools (irreversible): no rules offered either", () => {
-    const sdk = { name: "orchestration", source: "sdk" };
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
   });
 
   it("worker_remove closes an idle worker with a live CLI without a prior worker_close, frees the name and broadcasts the removal", async () => {

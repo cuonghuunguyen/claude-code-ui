@@ -97,9 +97,6 @@ describe("a live Hub there (GH-619)", () => {
       expect(r.message).toBeUndefined();
     }
   });
-  it("verdictOf: no Hub keeps install", () => {
-    expect(verdict({}).verdict).toBe("install");
-  });
 });
 
 describe("verdictOf", () => {

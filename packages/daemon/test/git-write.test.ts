@@ -35,7 +35,7 @@ const hook = (dir: string, name: string, body: string) => {
 const names = (dir: string, ...a: string[]) => run(dir, ...a).split("\n").filter(Boolean);
 
 describe("gitCommitFiles", () => {
-  it("commits only the checked paths; unchecked unstaged and staged entries stay", async () => {
+  it("commits only the checked paths; unchecked unstaged and staged entries stay; no temp index is left", async () => {
     const { dir, inside } = repo();
     put(dir, "a.txt", "a1\n");
     put(dir, "b.txt", "b1\n");
@@ -48,6 +48,8 @@ describe("gitCommitFiles", () => {
     expect(run(dir, "status", "--porcelain")).toBe(" M b.txt\nM  c.txt");
     expect(names(dir, "diff", "--cached", "--name-only")).toEqual(["c.txt"]);
     expect(r?.refs).toBeTruthy();
+    expect(existsSync(join(dir, ".git", "index.lock"))).toBe(false);
+    expect(readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"))).toEqual([]);
   });
 
   it("commits added, untracked, deleted and renamed paths", async () => {
@@ -324,14 +326,6 @@ describe("gitCommitFiles", () => {
     } finally {
       setGitRunner(undefined);
     }
-  });
-
-  it("the temp index file is gone after success", async () => {
-    const { dir, inside } = repo();
-    put(dir, "a.txt", "a1\n");
-    await gitCommitFiles(dir, { paths: ["a.txt"], message: "m", allowed: inside });
-    expect(existsSync(join(dir, ".git", "index.lock"))).toBe(false);
-    expect(readdirSync(join(dir, ".git")).filter((f) => f.includes("claude-ui-commit"))).toEqual([]);
   });
 });
 
