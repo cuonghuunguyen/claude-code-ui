@@ -69,5 +69,7 @@ export default {
   "visualize.showCode": "Hiện mã",
   "visualize.showVisual": "Hiện hình vẽ",
   "visualize.frameTitle": "Hình vẽ",
+  "visualize.drawing": "Đang vẽ…",
+  "visualize.unavailable": "Không đọc được tệp hình vẽ: {path} ({error})",
   "addons.refused": "Addon {name} bị từ chối: {type}",
 } satisfies Partial<Messages>;

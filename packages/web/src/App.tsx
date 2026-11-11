@@ -52,7 +52,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -90,7 +90,7 @@ import { ShellsDialog } from "./shells-dialog.tsx";
 import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { VisualizeContext } from "./visualize-block.tsx";
+import { VisualizeContext, VisualizeReadContext } from "./visualize-block.tsx";
 import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, logAllowed, useAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
@@ -524,6 +524,7 @@ export function App() {
   const [chromeOn, setChromeOn] = useState<boolean>();
   /** GH-690: Settings › Chat › Inline visualizations; a daemon without the setting counts as off. */
   const [visualizeOn, setVisualizeOn] = useState(false);
+  const visualizeRead = useCallback((path: string) => (client.current?.request<FsReadResult>({ type: "fs.read", path }) ?? Promise.reject(new Error("not connected"))).then((r) => r.content), []);
   /** Claude account (GH-615): the setting, the saved token accounts (no tokens) and whether Default is a token of the daemon's environment. */
   const [claudeAccount, setClaudeAccount] = useState("");
   const [claudeAccounts, setClaudeAccounts] = useState<{ id: string; name: string }[]>([]);
@@ -3680,6 +3681,7 @@ export function App() {
     <ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
     <VisualizeContext value={visualizeOn}>
+    <VisualizeReadContext value={visualizeRead}>
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
     <AddonCommandContext value={runAddonCommand}>
@@ -4636,6 +4638,7 @@ export function App() {
     </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
+    </VisualizeReadContext>
     </VisualizeContext>
     </AddonsContext>
     </ClaudeLoginContext>

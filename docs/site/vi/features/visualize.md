@@ -5,7 +5,7 @@ Claude có thể vẽ biểu đồ, sơ đồ hoặc widget tương tác nhỏ n
 ## Cách dùng {#how-to-use}
 
 1. Yêu cầu một hình: "visualize doanh số theo tháng dạng biểu đồ cột".
-2. Claude trả lời bằng một hình trong cuộc trò chuyện. Khi đang viết bạn thấy mã; hình hiện khi khối hoàn chỉnh.
+2. Claude ghi hình vào một tệp trong thư mục uploads của phiên và hiện nó trong cuộc trò chuyện. Khi đang viết bạn thấy "Đang vẽ…"; hình hiện khi khối hoàn chỉnh. Xóa phiên thì tệp bị xóa theo: các câu trả lời cũ báo không đọc được tệp.
 3. **Show code** phía trên hình đổi hình thành mã nguồn của nó.
 
 Tắt trong [Cài đặt › Sessions › Chat](../reference/settings#chat). Áp dụng cho phiên bắt đầu hoặc tiếp tục sau khi đổi. Tắt: hình hiện dưới dạng mã.

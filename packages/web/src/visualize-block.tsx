@@ -1,6 +1,6 @@
 // Inline visualizations (GH-690, docs/spec.md "Inline visualizations"): a ```visualize fence drawn in a sandboxed frame of the daemon's /visualize shell page.
 // The frame mounts only while the block is near the viewport (its last height stays as the placeholder); "Show code" returns the source.
-import { createContext, useLayoutEffect, useRef, useState } from "react";
+import { createContext, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { clampHeight } from "./addons.ts";
 import { useT } from "./i18n.ts";
@@ -9,6 +9,10 @@ import { useColorTheme, useDark } from "./theme.ts";
 
 /** Settings › Chat › Inline visualizations: off (or an older daemon without the setting) shows the fence as code. */
 export const VisualizeContext = createContext(false);
+/** Reads a visualization file's text (fs.read); undefined outside the app. */
+export const VisualizeReadContext = createContext<((path: string) => Promise<string>) | undefined>(undefined);
+/** A fence that is only an absolute .html path: the skill wrote the HTML with the Write tool, so the reply streams no HTML. */
+const FILE = /^(?:\/|[A-Za-z]:[\\/])[^\n]*\.html?$/;
 
 /** The host colours handed to the frame (a fixed list: the frame never reads the app). */
 const VARS = ["--background", "--foreground", "--primary", "--primary-foreground", "--muted", "--muted-foreground", "--border", "--accent"];
@@ -19,9 +23,34 @@ const themeVars = () => {
   return { ...Object.fromEntries(VARS.map((n) => [n, cs.getPropertyValue(n).trim()] as const).filter(([, v]) => v)), "--scheme": scheme };
 };
 
-/** Streamdown renderer of the `visualize` fence: code while the fence streams, the frame once it is closed. */
+/** Streamdown renderer of the `visualize` fence: a placeholder while it streams (re-highlighting a growing HTML block per token stalls the UI), the frame once it is closed. */
 export function VisualizeFence({ code, isIncomplete }: { code: string; isIncomplete: boolean; language: string }) {
-  return isIncomplete ? <CodeBlock code={code} language={"html" as never} /> : <VisualizeBlock code={code} />;
+  const t = useT();
+  if (isIncomplete) return <div data-testid="visualize-pending" className="text-muted-foreground text-xs">{t("visualize.drawing")}</div>;
+  const path = code.trim();
+  return FILE.test(path) ? <VisualizeFile path={path} /> : <VisualizeBlock code={code} />;
+}
+
+function VisualizeFile({ path }: { path: string }) {
+  const t = useT();
+  const read = use(VisualizeReadContext);
+  const [html, setHtml] = useState<string | { error: string }>();
+  useEffect(() => {
+    let live = true;
+    setHtml(undefined);
+    if (!read) return void setHtml({ error: "no reader" });
+    read(path).then(
+      (c) => live && setHtml(c),
+      (e: unknown) => live && setHtml({ error: e instanceof Error ? e.message : String(e) }),
+    );
+    return () => void (live = false);
+  }, [read, path]);
+  if (typeof html === "string") return <VisualizeBlock code={html} />;
+  return (
+    <div data-testid={html ? "visualize-error" : "visualize-pending"} className="text-muted-foreground text-xs">
+      {html ? t("visualize.unavailable", { path, error: html.error }) : t("visualize.drawing")}
+    </div>
+  );
 }
 
 export function VisualizeBlock({ code }: { code: string }) {

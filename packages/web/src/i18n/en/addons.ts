@@ -70,5 +70,7 @@ export default {
   "visualize.showCode": "Show code",
   "visualize.showVisual": "Show visualization",
   "visualize.frameTitle": "Visualization",
+  "visualize.drawing": "Drawing visualization…",
+  "visualize.unavailable": "Visualization file unavailable: {path} ({error})",
   "addons.refused": "Addon {name} was refused: {type}",
 } as const;

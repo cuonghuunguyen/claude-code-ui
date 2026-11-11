@@ -4,7 +4,17 @@ description: Draw a chart, diagram, flow, comparison, formula or small interacti
 ---
 # visualize
 
-Answer with exactly one ```` ```visualize ```` fence per visual. The fence holds a self-contained HTML fragment (no `<html>` wrapper, no `html` fence). claude-ui draws it inline in a sandboxed frame.
+One ```` ```visualize ```` fence per visual. claude-ui draws it inline in a sandboxed frame.
+
+How:
+1. Write the visual as a self-contained HTML fragment (no `<html>` wrapper) with the Write tool to `visualize/<short-name>.html` inside the claude-ui uploads folder: the additional working directory whose path ends in `/uploads/<session id>`.
+2. In the reply, put only that file's absolute path in the fence:
+
+```visualize
+/abs/path/to/uploads/<session id>/visualize/<short-name>.html
+```
+
+Writing the file keeps the HTML out of the streamed reply. No such uploads folder (other engine, no additional directory): put the HTML fragment itself in the fence instead.
 
 Use it for: data charts, flows and architecture diagrams, comparisons, math, UI mock-ups, small interactive widgets (sliders, toggles). Do not use it for plain lists or tables: write Markdown.
 
@@ -18,7 +28,7 @@ Rules:
 - The frame is as tall as the root box: keep every element in normal flow inside it. No `position:absolute`/`fixed` content outside the root box, no negative margins pushing out, no `100vh`/`100%`-height layouts; give the root an explicit height when a chart library needs one.
 - Add one short sentence of text outside the fence about what the visual shows.
 
-Example:
+Example fragment (the file content, or the fence content without an uploads folder):
 
 ```visualize
 <svg viewBox="0 0 240 120" width="100%"><rect x="20" y="70" width="40" height="40" fill="var(--primary)"/><rect x="90" y="40" width="40" height="70" fill="#3b82f6"/><rect x="160" y="10" width="40" height="100" fill="#f59e0b"/></svg>

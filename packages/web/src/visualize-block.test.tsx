@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
-import { VisualizeBlock, VisualizeContext, VisualizeFence } from "./visualize-block.tsx";
+import { VisualizeBlock, VisualizeContext, VisualizeFence, VisualizeReadContext } from "./visualize-block.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,10 +31,36 @@ const frameOf = (el: Element) => el.querySelector<HTMLIFrameElement>('[data-test
 /** A message from `source` to the window, as the frame would post it. */
 const from = (source: unknown, data: unknown) => act(async () => void window.dispatchEvent(new MessageEvent("message", { source: source as Window, data })));
 
-it("an incomplete fence is a code block without a frame", async () => {
+it("an incomplete fence is a placeholder: no frame, no highlighted code", async () => {
   const el = await mount(<VisualizeFence code="<p>x</p>" isIncomplete language="visualize" />);
   expect(el.querySelector("iframe")).toBeNull();
-  expect(el.textContent).toContain("<p>x</p>");
+  expect(el.querySelector('[data-testid="visualize-pending"]')).not.toBeNull();
+  expect(el.textContent).not.toContain("<p>x</p>");
+});
+
+it("a fence holding only an .html path draws the file's content read through the context", async () => {
+  const read = vi.fn(async () => "<p>from file</p>");
+  const el = await mount(
+    <VisualizeReadContext value={read}>
+      <VisualizeFence code={"/tmp/s/visualize/chart.html\n"} isIncomplete={false} language="visualize" />
+    </VisualizeReadContext>,
+  );
+  expect(read).toHaveBeenCalledWith("/tmp/s/visualize/chart.html");
+  const f = frameOf(el);
+  const post = vi.fn();
+  Object.defineProperty(f, "contentWindow", { value: { postMessage: post } });
+  await from(f.contentWindow, { v: 1, type: "ready" });
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "render", html: "<p>from file</p>" }), "*");
+});
+
+it("an unreadable visualization file shows the path and error, no frame", async () => {
+  const el = await mount(
+    <VisualizeReadContext value={async () => Promise.reject(new Error("not_found"))}>
+      <VisualizeFence code="C:\\s\\v.html" isIncomplete={false} language="visualize" />
+    </VisualizeReadContext>,
+  );
+  expect(el.querySelector("iframe")).toBeNull();
+  expect(el.querySelector('[data-testid="visualize-error"]')?.textContent).toContain("not_found");
 });
 
 it("a complete fence is a frame of /visualize with exactly allow-scripts", async () => {
