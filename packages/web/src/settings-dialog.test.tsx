@@ -377,7 +377,7 @@ it("Default diff view is a per-browser choice: picking Session changes saves it 
 });
 
 
-it("Terminal position: Bottom by default, Side panel saved per browser", async () => {
+it("Terminal position: Bottom by default, Side panel saved per browser; offers Main area (GH-397)", async () => {
   localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
   await pick("layout");
@@ -386,13 +386,6 @@ it("Terminal position: Bottom by default, Side panel saved per browser", async (
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.side).toContain("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Side panel");
-  localStorage.removeItem("claude-ui.layout");
-});
-
-it("Terminal position offers Main area (GH-397)", async () => {
-  localStorage.removeItem("claude-ui.layout");
-  const { q, pick } = await render();
-  await pick("layout");
   await act(async () => q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
@@ -400,7 +393,7 @@ it("Terminal position offers Main area (GH-397)", async () => {
   localStorage.removeItem("claude-ui.layout");
 });
 
-it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
+it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159); Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
   localStorage.clear();
   const { q, pick } = await render();
   await pick("layout");
@@ -412,12 +405,6 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(true);
   await act(async () => sw.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
-});
-
-it("Sidebar section: Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
-  localStorage.clear();
-  const { q, pick } = await render();
-  await pick("layout");
   expect(document.getElementById("settings-sidebar-layout-label")!.textContent).toBe("Group by");
   expect(q("settings-sidebar-layout")!.textContent).toContain("Worktree");
   await act(async () => q("settings-sidebar-layout")!.click());

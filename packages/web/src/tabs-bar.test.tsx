@@ -42,17 +42,13 @@ it("a worktree session tab's tooltip names '<project> · <branch>' between title
   expect(tab("b").title).not.toContain("·");
 });
 
-it("each tab shows avatar initial and title; the active one is selected", async () => {
+it("each tab shows avatar initial and title, the active one is selected; tab shows running / needs-input / unread state; needs input and unread differ by shape, not only by colour", async () => {
   const { tab } = await render();
   expect(tab("c").textContent).toContain("Refactor");
   expect(tab("c").querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
   expect(tab("a").querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("false");
   expect(tab("d").textContent).toMatch(/^AOld/);
   expect(tab(NEW_TAB).textContent).toContain("New session");
-});
-
-it("tab shows running / needs-input / unread state", async () => {
-  const { tab } = await render();
   expect(tab("a").dataset.state).toBe("running");
   expect(tab("b").dataset.state).toBe("needs_input");
   expect(tab("c").dataset.state).toBe("unread");
@@ -60,10 +56,6 @@ it("tab shows running / needs-input / unread state", async () => {
   expect(tab(NEW_TAB).dataset.state).toBe("new");
   expect(tab("b").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, needs input");
   expect(tab("c").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Refactor, unread");
-});
-
-it("needs input and unread differ by shape, not only by colour", async () => {
-  const { tab } = await render();
   // Needs input: an alert icon in place of the avatar. Unread: a dot on the avatar.
   expect(tab("b").querySelector(".lucide-circle-alert")).not.toBeNull();
   expect(tab("b").querySelector('[data-dot]')).toBeNull();

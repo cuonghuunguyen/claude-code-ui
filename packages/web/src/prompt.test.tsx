@@ -1247,24 +1247,15 @@ const paste = (box: HTMLTextAreaElement, text: string) => {
 const chips = (el: HTMLElement) => el.querySelectorAll('[data-testid="paste-chip"]');
 const userView = (text: string) => applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "user_text", id: "u1", text, images: [] } });
 
-it("paste of 200 lines inserts one token and one chip; the textarea holds only the token", async () => {
+it("paste of one short line stays plain text; paste of 200 lines inserts one token and one chip, the textarea holds only the token; Backspace after a token removes the whole token and its chip", async () => {
   const d = await render();
+  const short = paste(d.box, "hello world");
+  expect(short.defaultPrevented).toBe(false);
+  expect(chips(d.el)).toHaveLength(0);
   const e = paste(d.box, lines200);
   expect(e.defaultPrevented).toBe(true);
   expect(d.box.value).toBe("[Pasted text #1 +199 lines]");
   expect(chips(d.el)).toHaveLength(1);
-});
-
-it("paste of one short line stays plain text", async () => {
-  const d = await render();
-  const e = paste(d.box, "hello world");
-  expect(e.defaultPrevented).toBe(false);
-  expect(chips(d.el)).toHaveLength(0);
-});
-
-it("Backspace after a token removes the whole token and its chip", async () => {
-  const d = await render();
-  paste(d.box, lines200);
   d.box.setSelectionRange(d.box.value.length, d.box.value.length);
   await key(d.box, { key: "Backspace" });
   expect(d.box.value).toBe("");

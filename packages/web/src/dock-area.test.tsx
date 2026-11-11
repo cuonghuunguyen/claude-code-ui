@@ -21,7 +21,7 @@ const h = (area: DockArea, over: Partial<Parameters<typeof DockHeader>[0]> = {})
 };
 const doc = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 
-it("renders a labelled tablist with the active pane selected; click selects", async () => {
+it("renders a labelled tablist with the active pane selected; click selects; the side menu moves the active pane, flips the side and resets", async () => {
   const { fns, render } = h("side");
   await render();
   expect(el.querySelector('[role="tablist"]')!.getAttribute("aria-label")).toBe("Side panel");
@@ -30,11 +30,6 @@ it("renders a labelled tablist with the active pane selected; click selects", as
   expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["false", "true", "false"]);
   await act(async () => tabs[0]!.click());
   expect(fns.onSelect).toHaveBeenCalledWith("changes");
-});
-
-it("the side menu moves the active pane, flips the side and resets", async () => {
-  const { fns, render } = h("side");
-  await render();
   await act(async () => doc("dock-menu-side").click());
   expect(doc("dock-move").textContent).toBe("Move Files to bottom panel");
   expect(doc("dock-side-flip").textContent).toBe("Move side panel to left");

@@ -19,7 +19,7 @@ const render = (todos: TodoItem[]) => act(async () => root.render(<TodoDock item
 const toggle = () => el.querySelector<HTMLButtonElement>('[data-testid="todo-dock"] button')!;
 
 describe("TodoDock", () => {
-  it("shows progress and each item by its content, the in-progress one too (OpenCode); the list scrolls inside a bounded height", async () => {
+  it("shows progress and each item by its content, the in-progress one too (OpenCode); the list scrolls inside a bounded height; collapses to the header with the active todo as preview and expands again; updates live: a new TodoWrite state replaces the list and keeps the collapse state", async () => {
     await render(items);
     expect(toggle().textContent).toContain("1 of 3 todos completed");
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
@@ -38,10 +38,6 @@ describe("TodoDock", () => {
     expect(list.className).toMatch(/\boverflow-y-auto\b/);
     expect(list.className).toMatch(/max-h-\[min\([^\]]*dvh\)\]/);
     expect(list.className).toContain("overscroll-contain");
-  });
-
-  it("collapses to the header with the active todo as preview, and expands again", async () => {
-    await render(items);
     expect(el.querySelector('[data-testid="todo-preview"]')).toBeNull();
     await act(async () => toggle().click());
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
@@ -52,10 +48,6 @@ describe("TodoDock", () => {
     await act(async () => toggle().click());
     expect(toggle().querySelector("svg")!.getAttribute("class")).not.toContain("rotate-180");
     expect(el.querySelectorAll("[role=listitem]")).toHaveLength(3);
-  });
-
-  it("updates live: a new TodoWrite state replaces the list and keeps the collapse state", async () => {
-    await render(items);
     await act(async () => toggle().click());
     await render([
       { content: "Inspect", status: "completed" },

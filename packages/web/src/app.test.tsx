@@ -140,22 +140,18 @@ it("phone: Search in the drawer closes the drawer and opens quick open", async (
   expect(document.querySelector('[data-testid="quick-open"]')).not.toBeNull();
 });
 
-it("Focus prompt (Ctrl+L) on a wide screen keeps the side panel on Changes", async () => {
+it("Focus prompt (Ctrl+L) and Rewind from the palette on a wide screen keep the side panel on Changes", async () => {
   await pickSide(/changes/i);
   expect(sideTab()).toMatch(/changes/i);
   await press({ key: "l", code: "KeyL", ctrlKey: true });
-  expect(sideTab()).toMatch(/changes/i);
-});
-
-it("Rewind from the palette on a wide screen keeps the side panel on Changes", async () => {
+  expect(sideTab(), "after Ctrl+L").toMatch(/changes/i);
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } }));
-  await pickSide(/changes/i);
   await press({ key: "k", code: "KeyK", ctrlKey: true });
   const row = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith(title))!;
   await act(async () => row("Rewind").click());
   await act(async () => row("hello").click());
   expect(el.querySelector('[data-testid="rewind-panel"]')).not.toBeNull();
-  expect(sideTab()).toMatch(/changes/i);
+  expect(sideTab(), "after Rewind").toMatch(/changes/i);
 });
 
 it.each([
@@ -473,25 +469,18 @@ it("a /clear that ends without session_cleared sends the queued message to the s
   expect(sent.filter((m) => m.type === "session.prompt")).toEqual([expect.objectContaining({ sessionId: ID, text: "next" })]);
 });
 
-it("an SDK message the adapter does not know shows as a short muted line, not as JSON", async () => {
+it("an SDK message the adapter does not know shows as a short muted line, not as JSON; a failed query's error as a warning line; a CLI notice shows a run of blank lines as one", async () => {
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { type: "system", subtype: "some_future_subtype", secret: "payload" } } }));
-  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
-  expect(row.textContent).toBe("system/some_future_subtype");
-  expect(row.className).toContain("text-muted-foreground");
-  expect(el.textContent).not.toContain("payload");
-});
-
-it("a failed query's error shows as a warning line, not a muted one", async () => {
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "raw", id: "r1", message: { error: "Error: boom" } } }));
-  const row = el.querySelector<HTMLElement>('[data-testid="raw-part"]')!;
-  expect(row.textContent).toBe("Error: boom");
-  expect(row.className).toContain("text-warning");
-  expect(row.querySelector('[aria-label="Warning"]')).not.toBeNull();
-});
-
-it("a CLI notice shows a run of blank lines as one blank line", async () => {
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "raw", id: "r2", message: { error: "Error: boom" } } }));
   // A UserPromptSubmit hook's block reason (development-docs/GH-46/review, screenshot 03).
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "notice", id: "h1", level: "warning", text: "Blocked by hook\n\n\n\nOriginal prompt: hi" } }));
+  const [unknown, failed] = el.querySelectorAll<HTMLElement>('[data-testid="raw-part"]');
+  expect(unknown!.textContent).toBe("system/some_future_subtype");
+  expect(unknown!.className).toContain("text-muted-foreground");
+  expect(el.textContent).not.toContain("payload");
+  expect(failed!.textContent).toBe("Error: boom");
+  expect(failed!.className).toContain("text-warning");
+  expect(failed!.querySelector('[aria-label="Warning"]')).not.toBeNull();
   expect(el.querySelector('[data-testid="notice"]')!.textContent).toBe("Blocked by hook\n\nOriginal prompt: hi");
 });
 
@@ -2483,16 +2472,13 @@ describe("GH-358 sidebar menus", () => {
   };
   const bodies = (type: string, from: number) => sent.slice(from).filter((m) => m.type === type);
 
-  it("Copy session ID from the sidebar writes the clipboard and toasts", async () => {
+  it("Copy session ID from the sidebar writes the clipboard and toasts; Close tab from the sidebar menu closes the tab and the session stays listed", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await ctx(rowOf(ID));
     await click("action-copy-id");
     expect(writeText).toHaveBeenCalledWith(ID);
     expect(toast()?.textContent).toBe("Copied session ID");
-  });
-
-  it("Close tab from the sidebar menu closes the tab; the session stays listed", async () => {
     await ctx(rowOf(ID));
     expect(tid("action-close-tab")).not.toBeNull();
     await click("action-close-tab");
@@ -2819,13 +2805,18 @@ describe("GH-356 split view", () => {
     expect(splits().map((s) => s.style.order)).toEqual(["0", "2"]);
   });
 
-  it("the tab shown in the other split is marked with an icon and text, not by color", async () => {
+  it("the tab shown in the other split is marked with an icon and text, not by color; clicking the other split makes it active: hash, side panel and tab follow", async () => {
     await remount(ID);
     await splitRight(S2);
     const mark = el.querySelector(`[data-tab-id="${ID}"] [data-testid="tab-split-mark"]`);
     expect(mark).not.toBeNull();
     expect(el.querySelector(`[data-tab-id="${ID}"] [role="tab"]`)!.getAttribute("aria-label")).toContain("shown in split 1");
     expect(el.querySelector(`[data-tab-id="${S2}"] [data-testid="tab-split-mark"]`)).toBeNull();
+    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(activeSplit()).toBe(splits()[0]);
+    expect(location.hash).toBe(`#${ID}`);
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
+    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
   });
 
   it("Split down stacks the sessions with a horizontal resizer", async () => {
@@ -2833,16 +2824,6 @@ describe("GH-356 split view", () => {
     await (await menu(S2))("Split down");
     expect(el.querySelector('[data-testid="session-area"]')!.className).toContain("flex-col");
     expect(el.querySelector('[data-testid="split-resizer"]')!.getAttribute("aria-orientation")).toBe("horizontal");
-  });
-
-  it("clicking the other split makes it active: hash, side panel and tab follow", async () => {
-    await remount(ID);
-    await splitRight(S2);
-    await act(async () => void splits()[0]!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-    expect(activeSplit()).toBe(splits()[0]);
-    expect(location.hash).toBe(`#${ID}`);
-    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
-    expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
   });
 
   it("Esc stops only the active split's turn", async () => {
@@ -2927,7 +2908,7 @@ describe("GH-356 split view", () => {
     expect(bar().getAttribute("aria-valuenow")).toBe("50");
   });
 
-  it("the New session tab suspends the split; the next session tab brings it back", async () => {
+  it("the New session tab suspends the split; the next session tab brings it back; Join splits (palette) shows the active session alone", async () => {
     await remount(ID);
     await splitRight(S2);
     await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-new"]')!.click());
@@ -2935,11 +2916,7 @@ describe("GH-356 split view", () => {
     expect(splits()).toHaveLength(0);
     await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${ID}"] [role="tab"]`)!.click());
     expect(labels()).toEqual(["Demo, split 1 of 2, active", "Second, split 2 of 2"]);
-  });
-
-  it("Join splits (palette) shows the active session alone", async () => {
-    await remount(ID);
-    await splitRight(S2);
+    await act(async () => el.querySelector<HTMLElement>(`[data-tab-id="${S2}"] [role="tab"]`)!.click());
     await press({ key: "k", code: "KeyK", ctrlKey: true });
     await act(async () => paletteRow("Join splits")!.click());
     expect(splits()).toHaveLength(0);
@@ -5070,7 +5047,7 @@ describe("Aside popup (GH-465)", () => {
     expect(location.hash).toBe(`#${AS}`);
   });
 
-  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it)", async () => {
+  it("after a reconnect the open popup's Aside resubscribes holding (else the daemon's idle cleanup deletes it); the popup is hidden while another tab is shown and is back with its owner", async () => {
     await typeInto("/btw which file?");
     sent.length = 0;
     await act(async () => reconnect());
@@ -5078,14 +5055,10 @@ describe("Aside popup (GH-465)", () => {
     const sub = sent.find((m) => m.type === "session.subscribe" && (m as { sessionId?: string }).sessionId === AS);
     expect(sub).toBeDefined();
     expect(sub).not.toHaveProperty("background");
-  });
-
-  it("the popup is hidden while another tab is shown and is back with its owner", async () => {
-    await typeInto("/btw which file?");
     await press({ key: "s", code: "KeyS", ctrlKey: true, shiftKey: true });
-    expect(popup()).toBeNull();
+    expect(popup(), "while another tab shows").toBeNull();
     await press({ key: "1", code: "Digit1", altKey: true });
-    expect(popup()).not.toBeNull();
+    expect(popup(), "back with its owner").not.toBeNull();
   });
 });
 

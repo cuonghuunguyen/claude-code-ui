@@ -38,7 +38,7 @@ it("loads and lists the entries only while open", async () => {
   expect(q("stash-section").textContent).toContain("Stashes (2)");
 });
 
-it("Apply sends the entry's index and hash, and the result line says Applied or conflicts", async () => {
+it("Apply sends the entry's index and hash, and the result line says Applied or conflicts; Pop sends git.stashPop; Drop sends nothing until the confirm, and Cancel sends nothing", async () => {
   const c = await mount();
   await click(q("stash-apply", document.querySelectorAll("[data-testid=stash-row]")[1] as HTMLElement));
   const [msg, done, running] = c.onRun.mock.calls[0];
@@ -46,23 +46,15 @@ it("Apply sends the entry's index and hash, and the result line says Applied or 
   expect(running).toBe("Applying stash@{1}…");
   expect(done({ written: { output: "", refs: null } } as OpReply)).toBe("Applied stash@{1}");
   expect(done({ written: { output: "", refs: null, operation: { kind: "conflict", conflicted: ["a.txt"] } } } as OpReply)).toBe("Applying stash@{1} stopped on conflicts: see the Changes tab");
-});
-
-it("Pop sends git.stashPop", async () => {
-  const c = await mount();
   await click(q("stash-pop"));
-  expect(c.onRun.mock.calls[0][0]).toEqual({ type: "git.stashPop", cwd: "/p", index: 0, hash: h(1) });
-});
-
-it("Drop sends nothing until the confirm, and Cancel sends nothing", async () => {
-  const c = await mount();
+  expect(c.onRun.mock.calls[1][0]).toEqual({ type: "git.stashPop", cwd: "/p", index: 0, hash: h(1) });
   await click(q("stash-drop"));
   expect(q("git-stash-drop-dialog").textContent).toContain("Drop stash@{0}?");
   await click(q("git-stash-drop-cancel"));
-  expect(c.onRun).not.toHaveBeenCalled();
+  expect(c.onRun, "after Cancel").toHaveBeenCalledTimes(2);
   await click(q("stash-drop"));
   await click(q("git-stash-drop-confirm"));
-  expect(c.onRun.mock.calls[0][0]).toEqual({ type: "git.stashDrop", cwd: "/p", index: 0, hash: h(1) });
+  expect(c.onRun.mock.calls[2][0]).toEqual({ type: "git.stashDrop", cwd: "/p", index: 0, hash: h(1) });
 });
 
 it("the push dialog sends the message and includeUntracked only when set", async () => {
