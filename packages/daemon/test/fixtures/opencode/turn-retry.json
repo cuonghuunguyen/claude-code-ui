@@ -1,0 +1,187 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_1c44044b1001bO5V25tNmY32DS",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794293908657
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "stub",
+      "modelID": "m1"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "text",
+     "text": "Say hello",
+     "messageID": "msg_1c44044b1001bO5V25tNmY32DS",
+     "sessionID": "ses_ROOT",
+     "id": "prt_1c44044b4001ZI7S2U2LCuser"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_1c44044b1001bO5V25tNmY32DS",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "<path>",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "m1",
+     "providerID": "stub",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794293908700
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "retry",
+     "attempt": 1,
+     "message": "Rate limit reached for m1",
+     "next": 4102444800000
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_ASSISTANT_s",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "step-start"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_ASSISTANT_t",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "text",
+     "text": "Hello",
+     "time": {
+      "start": 1794293912800,
+      "end": 1794293912810
+     }
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_1c44044b1001bO5V25tNmY32DS",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "<path>",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "m1",
+     "providerID": "stub",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1794293908700,
+      "completed": 1794293912820
+     },
+     "finish": "stop"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  }
+ ]
+}
