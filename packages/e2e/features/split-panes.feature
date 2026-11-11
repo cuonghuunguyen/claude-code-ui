@@ -1,6 +1,6 @@
 Feature: Split view with a session and one of its panes
 
-  Scenario: A session beside its Plan, then its Terminal
+  Scenario: A session beside its Plan, then its Terminal; a drop that leaves no session is refused; a pane never replaces the only session
     Given the viewport is 1440x900
     And a Haiku session in Plan mode with a plan waiting for approval
     When I toggle the terminal from the titlebar
@@ -14,26 +14,14 @@ Feature: Split view with a session and one of its panes
     And the active split shows the "Plan" tab
     And the command palette lists "Change permission mode"
     And I capture "session-plan-split"
-    When I click the "Terminal" tab
-    Then the "Terminal" tab is shown in a split
-    And the "Plan" tab is not shown in a split
-    And I capture "session-terminal-split"
-    When I reload the page
-    Then the session area is split
-    And the "Terminal" tab is shown in a split
-    And the terminal of the split is ready
-    And I capture "split-restored"
-
-  Scenario: An activated pane never replaces the only session of the split
-    Given the viewport is 1440x900
-    And a Haiku session in Plan mode with a plan waiting for approval
-    When I toggle the terminal from the titlebar
-    And I move the Plan pane to the main area from its tab menu
-    And I move the "Terminal" pane to the main area from its tab menu
-    And I hide the side panel
-    And I open the menu of the plan tab
-    And I choose "Split right" in the plan tab menu
-    And I click the first session tab
+    When I hold the "Terminal" tab over the session split
+    Then the drop overlay says "A split needs a session"
+    And I capture "drop-needs-session"
+    When I release the mouse
+    Then the "Plan" tab is shown in a split
+    And the session split is shown
+    And the "Terminal" tab is not shown in a split
+    When I click the first session tab
     Then the session split is active
     When I click the "Terminal" tab
     Then the session area is split
@@ -41,6 +29,11 @@ Feature: Split view with a session and one of its panes
     And the "Terminal" tab is shown in a split
     And the "Plan" tab is not shown in a split
     And I capture "pane-keeps-session"
+    When I reload the page
+    Then the session area is split
+    And the "Terminal" tab is shown in a split
+    And the terminal of the split is ready
+    And I capture "split-restored"
 
   Scenario: Split items refuse Git graph
     Given the viewport is 1440x900
@@ -61,24 +54,6 @@ Feature: Split view with a session and one of its panes
     When I release the mouse
     Then the session area is not split
 
-  Scenario: A drop that leaves no session is refused
-    Given the viewport is 1440x900
-    And a Haiku session in Plan mode with a plan waiting for approval
-    When I toggle the terminal from the titlebar
-    And I move the Plan pane to the main area from its tab menu
-    And I move the "Terminal" pane to the main area from its tab menu
-    And I hide the side panel
-    And I open the menu of the plan tab
-    And I choose "Split right" in the plan tab menu
-    Then the "Plan" tab is shown in a split
-    When I hold the "Terminal" tab over the session split
-    Then the drop overlay says "A split needs a session"
-    And I capture "drop-needs-session"
-    When I release the mouse
-    Then the "Plan" tab is shown in a split
-    And the session split is shown
-    And the "Terminal" tab is not shown in a split
-
   Scenario: Files beside a second session; the docks and the palette follow the owner
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
@@ -95,14 +70,22 @@ Feature: Split view with a session and one of its panes
     And the sidebar highlights the session of the session split
     And I capture "files-other-session-split"
 
-  Scenario: The hidden-split rules stay the same
-    Given the viewport is 1440x900
+  Scenario: A cramped split shows the pane alone; the hidden-split rules stay the same
+    Given the viewport is 1700x900
     And a Haiku session in Plan mode with a plan waiting for approval
     When I move the Plan pane to the main area from its tab menu
-    And I hide the side panel
     And I open the menu of the plan tab
     And I choose "Split right" in the plan tab menu
-    Then the "Plan" tab is shown in a split
+    Then the active split shows the "Plan" tab
+    Given the viewport is 1024x800
+    Then the session area is not split
+    And the split hint is shown
+    And the plan tab is the selected tab
+    And I capture "split-cramped-pane-1100"
+    Given the viewport is 1700x900
+    Then the session area is split
+    And the active split shows the "Plan" tab
+    When I hide the side panel
     Given the viewport is 1000x800
     Then the session area is not split
     And I capture "split-narrow-1000"
@@ -134,7 +117,7 @@ Feature: Split view with a session and one of its panes
     Then the Terminal tab selects "Terminal 2"
     And I capture "split-terminal-selected-per-folder"
 
-  Scenario: Typing works right after splitting a Terminal tab
+  Scenario: Typing works right after splitting a Terminal tab and the terminal fits its split
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open Settings and choose the terminal position "Main area"
@@ -147,34 +130,9 @@ Feature: Split view with a session and one of its panes
     When I type "echo split-focus-ok" on the keyboard and press Enter
     Then the terminal shows "split-focus-ok" on a line of its own
     And I capture "split-terminal-focus"
-
-  Scenario: The terminal fits its split
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    And I click the first session tab
-    And I hide the side panel
-    And I choose "Split right" in the menu of the "Terminal" tab
-    Then the terminal of the split is ready
+    And the terminal of the split is ready
     And the terminal columns fit its split
     When I reload the page
     Then the terminal of the split is ready
     And the terminal columns fit its split
     And I capture "split-terminal-cols"
-
-  Scenario: A cramped split with a pane active shows the pane alone
-    Given the viewport is 1700x900
-    And a Haiku session in Plan mode with a plan waiting for approval
-    When I move the Plan pane to the main area from its tab menu
-    And I open the menu of the plan tab
-    And I choose "Split right" in the plan tab menu
-    Then the active split shows the "Plan" tab
-    Given the viewport is 1024x800
-    Then the session area is not split
-    And the split hint is shown
-    And the plan tab is the selected tab
-    And I capture "split-cramped-pane-1100"
-    Given the viewport is 1700x900
-    Then the session area is split
-    And the active split shows the "Plan" tab

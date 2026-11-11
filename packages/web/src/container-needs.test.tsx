@@ -6,7 +6,6 @@ import type { SideCheck, SideInfo } from "@claude-ui/protocol";
 import { ContainerNeeds, needsOf } from "./container-needs.tsx";
 import { SidePanel } from "./side-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => (root?.unmount(), (document.body.innerHTML = "")));
 const mount = async (el: React.ReactElement) => {

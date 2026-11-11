@@ -6,8 +6,6 @@ import type { FsGrepResult } from "@claude-ui/protocol";
 import { FindInFiles, type FindQuery } from "./find-in-files.tsx";
 import { FIND_HISTORY_KEY } from "./find-in-files.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 beforeEach(() => (localStorage.clear(), vi.useFakeTimers()));
 afterEach(() => {

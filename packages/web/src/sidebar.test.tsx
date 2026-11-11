@@ -8,7 +8,6 @@ import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { setLocalePref } from "./i18n.ts";
 import { SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One actions menu per rendered row: counts the rows' renders by title.
 const rowRenders = vi.hoisted(() => [] as string[]);
 vi.mock("./session-actions.tsx", async (orig) => {
@@ -201,12 +200,14 @@ it("project actions and Open project are visible and 44px on touch screens of an
     expect(el.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.className).toContain("pointer-coarse:size-11");
 });
 
-it("archived sessions are hidden; the archived filter shows only them and offers Unarchive", async () => {
+it("archived sessions are hidden; the archived filter shows only them under an \"Archived sessions\" caption and offers Unarchive", async () => {
   const { el, rows, onAction } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
   expect(rows().map((r) => r.textContent)).not.toContainEqual(expect.stringContaining("Shelved"));
+  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
   const filter = el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!;
   await act(async () => filter.click());
   expect(filter.getAttribute("aria-pressed")).toBe("true");
+  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
   expect(rows().map((r) => r.getAttribute("aria-label"))).toEqual(["Shelved"]);
   await act(async () => el.querySelector<HTMLElement>('[data-testid="session-menu"]')!.click());
   const archive = document.querySelector<HTMLElement>('[data-testid="action-archive"]')!;
@@ -273,13 +274,6 @@ it("rows, the … trigger, the archived filter and the menu items show the point
   }
   // Delete is disabled: Fix login is running.
   expect(document.querySelector('[data-testid="action-delete"]')!.className).toMatch(/\bdata-disabled:cursor-not-allowed\b/);
-});
-
-it("the archived filter shows an \"Archived sessions\" caption above the list, so the mode is visible", async () => {
-  const { el } = await render({ list: [...LIST, { ...LIST[2]!, id: "z", title: "Shelved", archived: true }] });
-  expect(el.querySelector('[data-testid="archived-caption"]')).toBeNull();
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
-  expect(el.querySelector('[data-testid="archived-caption"]')!.textContent).toBe("Archived sessions");
 });
 
 it("each project splits its sessions under OpenCode's day headers", async () => {
@@ -728,7 +722,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     expect(trigger.getAttribute("aria-label")).toBe("Actions for web");
     expect(trigger.className).toContain("max-md:size-11");
     await act(async () => trigger.click());
-    expect(document.querySelector('[data-testid="project-menu-new-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="project-menu-create-worktree"]')).not.toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="project-menu-create-worktree"]')!.click());
     expect(onNewWorktree).toHaveBeenLastCalledWith("/home/u/web", false);
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
@@ -742,7 +736,7 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     const g = group(el);
     expect(g.querySelector<HTMLElement>('[data-testid="group-toggle"]')!.className).toContain("max-md:pr-26");
     await act(async () => g.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
-    expect(document.querySelector('[data-testid="project-menu-new-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="project-menu-create-worktree"]')).toBeNull();
     expect(document.querySelector('[data-testid="project-menu-remove"]')).not.toBeNull();
   });
 

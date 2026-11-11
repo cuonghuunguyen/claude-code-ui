@@ -8,8 +8,6 @@ import { t } from "./i18n.ts";
 
 const OAUTH_UNAVAILABLE = t("app.plan.oauthUnavailable");
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const now = Date.now();
 const usage: PlanUsage = {
   plan: "team",
@@ -126,9 +124,10 @@ it("Usage ring shows a missing window: falls back to the highest", async () => {
   expect(meter(el).textContent).toBe("44%");
 });
 
-it("env token without windows: muted ring and '–', titled 'Plan usage is not available with CLAUDE_CODE_OAUTH_TOKEN'; the popover says to run claude login", async () => {
+it("env token without windows: muted ring and '–' with a 44px touch width below md, titled 'Plan usage is not available with CLAUDE_CODE_OAUTH_TOKEN'; the popover says to run claude login", async () => {
   const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
   expect(meter(el).textContent).toBe("–");
+  expect(meter(el).className).toContain("max-md:min-w-11");
   expect(meter(el).title).toBe(OAUTH_UNAVAILABLE);
   expect(meter(el).getAttribute("aria-label")).toBe(`${OAUTH_UNAVAILABLE}, show details`);
   expect(meter(el).dataset.unavailable).toBe("true");
@@ -155,11 +154,6 @@ it("env token, no windows, limit reached: the name says the limit, not unavailab
   expect(meter(el).title).not.toBe(OAUTH_UNAVAILABLE);
 });
 
-it("env token, no windows: the grey ring keeps the 44px touch width below md", async () => {
-  const el = await render({ plan: null, status: "allowed", windows: [], auth: "oauth_token" });
-  expect(meter(el).className).toContain("max-md:min-w-11");
-});
-
 // GH-615: the account switcher of the usage ring.
 const accounts = { accounts: [{ id: "a1", name: "bad" }], active: "a1", envToken: false, onSwitch: vi.fn() };
 const open = async (el: HTMLElement) => {
@@ -167,15 +161,12 @@ const open = async (el: HTMLElement) => {
   return document.querySelector<HTMLElement>('[data-testid="plan-usage"]')!;
 };
 
-it("the popover names the active account, the ring label too", async () => {
+it("the ring label and the popover name the active account; the switcher lists CLI login and token accounts (Default only with an env token); the active row is checked", async () => {
   const el = await render({ ...usage, account: "bad" }, accounts);
   expect(meter(el).getAttribute("aria-label")).toMatch(/^bad: Plan usage/);
-  expect((await open(el)).querySelector('[data-testid="plan-account"]')!.textContent).toBe("Account: bad");
-});
-
-it("the switcher lists CLI login and token accounts (Default only with an env token); the active row is checked", async () => {
-  const el = await render({ ...usage, account: "bad" }, accounts);
-  const rows = [...(await open(el)).querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
+  const pop = await open(el);
+  expect(pop.querySelector('[data-testid="plan-account"]')!.textContent).toBe("Account: bad");
+  const rows = [...pop.querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
   expect(rows.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([["CLI login", "false"], ["bad", "true"]]);
   expect(rows.every((r) => r.className.includes("max-md:h-11") && r.className.includes("pointer-coarse:h-11"))).toBe(true);
   unmount();

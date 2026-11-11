@@ -11,13 +11,6 @@ import { PlanTabContext, planOfPart } from "./viewer.ts";
 import { ToolCard } from "./tool-card.tsx";
 import { ViewerContext } from "./viewer.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const planCall = (id: string, plan: string): Part => ({ type: "tool_call", id, toolUseId: id, tool: "ExitPlanMode", input: { plan }, status: "done" });
 const perm = (settled = false): Part => ({ type: "permission_request", id: "perm", requestId: "r", toolUseId: "p1", tool: "ExitPlanMode", input: { plan: "x" }, suggestions: [], settled }) as Part;
 const view = (parts: Part[]) => parts.reduce((s, part, i) => applyEvent(s, { type: "event", sessionId: "s1", seq: i + 1, part }), emptySession());

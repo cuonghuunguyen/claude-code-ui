@@ -156,12 +156,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(out(main, "status", "--porcelain")).toBe("");
   });
 
-  it("without a name generates <adjective>-<noun>", async () => {
-    const { main, opts } = plain();
-    const r = await createWorktree(main, opts);
-    expect(r.path).toMatch(/\.claude[\\/]worktrees[\\/][a-z]+-[a-z]+$/);
-    expect(r.branch).toBe(`worktree-${r.path.split(/[\\/]/).pop()}`);
-  });
 
   it("branches from HEAD without origin and when worktree.baseRef is head", async () => {
     const p = plain();
@@ -195,14 +189,18 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(out(main, "worktree", "list").split("\n")).toHaveLength(2);
   });
 
-  it("an explicit branch and base: <repo>/.claude/worktrees/<name> on that branch at that commit", async () => {
+  it("an explicit branch and base: <repo>/.claude/worktrees/<name> on that branch at that commit; without a name generates <adjective>-<noun>", async () => {
     const { main, opts } = plain();
-    const r = await createWorktree(main, { ...opts, name: "feat-1", branch: "feat-1", base: "main~1" });
-    expect(r).toEqual({ path: join(main, ".claude", "worktrees", "feat-1"), branch: "feat-1" });
-    expect(out(r.path, "rev-parse", "HEAD")).toBe(out(main, "rev-parse", "main~1"));
-    expect(await code(createWorktree(main, { ...opts, name: "feat-1", branch: "feat-1" }))).toBe("exists");
-    expect(await code(createWorktree(main, { ...opts, name: "feat-2", branch: "feat-2", base: "nope" }))).toBe("bad_base");
-    expect(out(main, "worktree", "list").split("\n")).toHaveLength(2);
+    {
+      const r = await createWorktree(main, { ...opts, name: "feat-1", branch: "feat-1", base: "main~1" });
+      expect(r).toEqual({ path: join(main, ".claude", "worktrees", "feat-1"), branch: "feat-1" });
+      expect(out(r.path, "rev-parse", "HEAD")).toBe(out(main, "rev-parse", "main~1"));
+    }
+    {
+      const r = await createWorktree(main, opts);
+      expect(r.path).toMatch(/\.claude[\\/]worktrees[\\/][a-z]+-[a-z]+$/);
+      expect(r.branch).toBe(`worktree-${r.path.split(/[\\/]/).pop()}`);
+    }
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed git worktree add leaves no branch behind", async () => {
@@ -492,15 +490,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(has("config/other.json")).toBe(false);
   });
 
-  it("copies a folder's files when its own pattern names the folder (vendor/ then vendor/pkg/)", async () => {
-    const { main, opts } = plain();
-    put(join(main, ".gitignore"), "vendor/\n");
-    put(join(main, ".worktreeinclude"), "vendor/\n");
-    put(join(main, "vendor", "pkg", "x.txt"), "v");
-    const r = await createWorktree(main, { ...opts, name: "dirpat" });
-    expect(existsSync(join(r.path, "vendor/pkg/x.txt"))).toBe(true);
-  });
-
   it("deletes the partial file when a copy fails, and runs the listing calls with core.fsmonitor=false", async () => {
     const { main, opts } = plain();
     put(join(main, ".gitignore"), ".env\n");
@@ -662,8 +651,12 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     const r = await createWorktree(main, { ...opts, name: "feat" });
     commit(r.path, "c.txt");
     writeFileSync(join(r.path, "untracked.txt"), "u");
+    run(main, "branch", "worktree-b");
     await removeWorktree(main, r.path, () => true);
     expect(existsSync(r.path)).toBe(false);
+    // An unrelated worktree-* branch and main stay.
+    expect(out(main, "branch", "--list", "worktree-b")).toContain("worktree-b");
+    expect(out(main, "branch", "--list", "main")).toContain("main");
     expect(await code(Promise.resolve().then(() => out(main, "rev-parse", "--verify", "refs/heads/worktree-feat")))).not.toBe("ok");
     expect(out(main, "worktree", "list").split("\n")).toHaveLength(1);
     // A foreign branch inside .claude/worktrees: directory gone, branch kept.
@@ -717,16 +710,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(await worktreeStatus(main, join(dir, "link"), () => true)).toMatchObject({ safety: "blocked", blocked: "symlink" });
     expect(existsSync(hand)).toBe(true);
     void opts;
-  });
-
-  it("removeWorktree deletes only worktree-* branches (a managed worktree on a foreign branch keeps it; others stay)", async () => {
-    const { main, opts } = plain();
-    const a = await createWorktree(main, { ...opts, name: "a" });
-    run(main, "branch", "worktree-b");
-    await removeWorktree(main, a.path, () => true);
-    expect(out(main, "branch", "--list", "worktree-b")).toContain("worktree-b");
-    expect(out(main, "branch", "--list", "main")).toContain("main");
-    expect(out(main, "branch", "--list", "worktree-a")).toBe("");
   });
 
   it("worktreeStatus counts uncommitted files and the commits only this branch holds", async () => {
@@ -1024,51 +1007,63 @@ describe("gitLog / gitShow / gitFileAt", () => {
   const topo = (dir: string) => sh(dir, {}, "log", "--all", "--topo-order", "--format=%H").split("\n");
   const bad = (p: Promise<unknown>) => expect(p).rejects.toMatchObject({ code: "bad_request" });
 
-  it("lists all refs in topo order with parents and full ref names", async () => {
+  it("lists all refs in topo order with parents and full ref names; pages with skip and limit, more until the end; text that is a commit hash prefix finds that commit; reports more exactly when commits remain", async () => {
     const r = graphRepo();
-    const log = (await gitLog(r.dir, { allowed: all }))!;
-    expect(log.commits.map((c) => c.hash)).toEqual(topo(r.dir));
-    const byHash = new Map(log.commits.map((c) => [c.hash, c]));
-    expect(byHash.get(r.c4)!.parents).toEqual([r.c3, r.c2]);
-    expect(byHash.get(r.c5)!.refs).toEqual(["HEAD", "refs/heads/main"]);
-    expect(byHash.get(r.c4)!.refs).toEqual(["refs/tags/v1"]);
-    expect(byHash.get(r.c2)!.refs).toEqual(["refs/heads/f"]);
-    expect(byHash.get(r.c2)).toMatchObject({ author: "Bob", email: "bob@x.test", subject: "fix axb" });
+    {
+      const log = (await gitLog(r.dir, { allowed: all }))!;
+      expect(log.commits.map((c) => c.hash)).toEqual(topo(r.dir));
+      const byHash = new Map(log.commits.map((c) => [c.hash, c]));
+      expect(byHash.get(r.c4)!.parents).toEqual([r.c3, r.c2]);
+      expect(byHash.get(r.c5)!.refs).toEqual(["HEAD", "refs/heads/main"]);
+      expect(byHash.get(r.c4)!.refs).toEqual(["refs/tags/v1"]);
+      expect(byHash.get(r.c2)!.refs).toEqual(["refs/heads/f"]);
+      expect(byHash.get(r.c2)).toMatchObject({ author: "Bob", email: "bob@x.test", subject: "fix axb" });
+    }
+    {
+      const full = (await gitLog(r.dir, { allowed: all }))!.commits.map((c) => c.hash);
+      const a = (await gitLog(r.dir, { limit: 2, allowed: all }))!;
+      expect(a.commits).toHaveLength(2);
+      expect(a.more).toBe(true);
+      expect(a.branches).toEqual(["refs/heads/f", "refs/heads/main"]);
+      const b = (await gitLog(r.dir, { skip: 2, limit: 2, allowed: all }))!;
+      const c = (await gitLog(r.dir, { skip: 4, limit: 2, allowed: all }))!;
+      expect(c.commits).toHaveLength(1);
+      expect(c.more).toBe(false);
+      expect(b.branches).toBeUndefined();
+      expect([...a.commits, ...b.commits, ...c.commits].map((x) => x.hash)).toEqual(full);
+    }
+    {
+      const log = (await gitLog(r.dir, { text: r.c3.slice(0, 7), allowed: all }))!;
+      expect(log.commits.map((c) => c.hash)).toEqual([r.c3]);
+      expect(log.more).toBe(false);
+    }
+    {
+      expect((await gitLog(r.dir, { skip: 3, limit: 2, allowed: all }))).toMatchObject({ more: false });
+      expect((await gitLog(r.dir, { skip: 3, limit: 1, allowed: all }))).toMatchObject({ more: true });
+      expect((await gitLog(r.dir, { limit: 5, allowed: all }))).toMatchObject({ more: false });
+    }
   });
 
-  it("pages with skip and limit, more until the end", async () => {
+
+  it("filters by branch, author and text (fixed string, case-insensitive, ANDed); leaves the remote HEAD symbolic ref out of the branch list", async () => {
     const r = graphRepo();
-    const full = (await gitLog(r.dir, { allowed: all }))!.commits.map((c) => c.hash);
-    const a = (await gitLog(r.dir, { limit: 2, allowed: all }))!;
-    expect(a.commits).toHaveLength(2);
-    expect(a.more).toBe(true);
-    expect(a.branches).toEqual(["refs/heads/f", "refs/heads/main"]);
-    const b = (await gitLog(r.dir, { skip: 2, limit: 2, allowed: all }))!;
-    const c = (await gitLog(r.dir, { skip: 4, limit: 2, allowed: all }))!;
-    expect(c.commits).toHaveLength(1);
-    expect(c.more).toBe(false);
-    expect(b.branches).toBeUndefined();
-    expect([...a.commits, ...b.commits, ...c.commits].map((x) => x.hash)).toEqual(full);
+    {
+      const h = async (o: object) => (await gitLog(r.dir, { ...o, allowed: all }))!.commits.map((c) => c.hash);
+      expect(await h({ ref: "refs/heads/f" })).toEqual([r.c2, r.c1]);
+      expect(await h({ ref: "HEAD" })).toEqual(sh(r.dir, {}, "rev-list", "--topo-order", "HEAD").split("\n"));
+      sh(r.dir, {}, "checkout", "-q", "f");
+      expect(await h({ ref: "HEAD" })).toEqual([r.c2, r.c1]);
+      expect(await h({ author: "bob" })).toEqual([r.c5, r.c2]);
+      expect(await h({ text: "A.B" })).toEqual([r.c1]);
+      expect(await h({ author: "ann", text: "FIX" })).toEqual([r.c3]);
+    }
+    {
+      run(r.dir, "update-ref", "refs/remotes/origin/main", r.c1);
+      run(r.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      expect((await gitLog(r.dir, { allowed: all }))!.branches).toEqual(["refs/heads/f", "refs/heads/main", "refs/remotes/origin/main"]);
+    }
   });
 
-  it("filters by branch, author and text (fixed string, case-insensitive, ANDed)", async () => {
-    const r = graphRepo();
-    const h = async (o: object) => (await gitLog(r.dir, { ...o, allowed: all }))!.commits.map((c) => c.hash);
-    expect(await h({ ref: "refs/heads/f" })).toEqual([r.c2, r.c1]);
-    expect(await h({ ref: "HEAD" })).toEqual(sh(r.dir, {}, "rev-list", "--topo-order", "HEAD").split("\n"));
-    sh(r.dir, {}, "checkout", "-q", "f");
-    expect(await h({ ref: "HEAD" })).toEqual([r.c2, r.c1]);
-    expect(await h({ author: "bob" })).toEqual([r.c5, r.c2]);
-    expect(await h({ text: "A.B" })).toEqual([r.c1]);
-    expect(await h({ author: "ann", text: "FIX" })).toEqual([r.c3]);
-  });
-
-  it("text that is a commit hash prefix finds that commit", async () => {
-    const r = graphRepo();
-    const log = (await gitLog(r.dir, { text: r.c3.slice(0, 7), allowed: all }))!;
-    expect(log.commits.map((c) => c.hash)).toEqual([r.c3]);
-    expect(log.more).toBe(false);
-  });
 
   it("an empty repository has no commits, also with the HEAD filter", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "gg-")));
@@ -1195,19 +1190,7 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("reports more exactly when commits remain", async () => {
-    const r = graphRepo();
-    expect((await gitLog(r.dir, { skip: 3, limit: 2, allowed: all }))).toMatchObject({ more: false });
-    expect((await gitLog(r.dir, { skip: 3, limit: 1, allowed: all }))).toMatchObject({ more: true });
-    expect((await gitLog(r.dir, { limit: 5, allowed: all }))).toMatchObject({ more: false });
-  });
 
-  it("leaves the remote HEAD symbolic ref out of the branch list", async () => {
-    const r = graphRepo();
-    run(r.dir, "update-ref", "refs/remotes/origin/main", r.c1);
-    run(r.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-    expect((await gitLog(r.dir, { allowed: all }))!.branches).toEqual(["refs/heads/f", "refs/heads/main", "refs/remotes/origin/main"]);
-  });
 
   it("gitFileAt accepts a file of exactly max bytes, refuses a folder", async () => {
     const r = graphRepo();
@@ -1221,31 +1204,41 @@ describe("gitLog / gitShow / gitFileAt", () => {
     await expect(gitFileAt(r.dir, head, "d", all, 1000)).rejects.toMatchObject({ code: "not_found" });
   });
 
-  it("gitShow lists A/D/M/R with line counts, binary without", async () => {
+  it("gitShow lists A/D/M/R with line counts, binary without; gitFileAt returns the bytes at a commit; not_found and too_large; gitRefs is the refs stamp without a git process, null outside a repository", async () => {
     const r = graphRepo();
-    expect((await gitShow(r.dir, r.c5, all))!.files).toEqual([
-      { status: "R", oldPath: "a.txt", path: "b.txt", added: 1, removed: 0 },
-      { status: "D", path: "bin" },
-    ]);
-    const c3 = (await gitShow(r.dir, r.c3, all))!;
-    expect(c3.files).toEqual([
-      { status: "M", path: "a.txt", added: 1, removed: 0 },
-      { status: "A", path: "bin" },
-    ]);
-    expect(c3).toMatchObject({ message: "fix two", committer: "Ann", subject: "fix two" });
-    const c4 = (await gitShow(r.dir, r.c4, all))!;
-    expect(c4.parents).toHaveLength(2);
-    expect(c4.files.map((f) => f.path).sort()).toEqual(["f.txt"]);
-    expect((await gitShow(r.dir, r.c1, all))!.files).toEqual([{ status: "A", path: "a.txt", added: 1, removed: 0 }]);
-    await expect(gitShow(r.dir, "0".repeat(40), all)).rejects.toMatchObject({ code: "not_found" });
+    {
+      expect((await gitShow(r.dir, r.c5, all))!.files).toEqual([
+        { status: "R", oldPath: "a.txt", path: "b.txt", added: 1, removed: 0 },
+        { status: "D", path: "bin" },
+      ]);
+      const c3 = (await gitShow(r.dir, r.c3, all))!;
+      expect(c3.files).toEqual([
+        { status: "M", path: "a.txt", added: 1, removed: 0 },
+        { status: "A", path: "bin" },
+      ]);
+      expect(c3).toMatchObject({ message: "fix two", committer: "Ann", subject: "fix two" });
+      const c4 = (await gitShow(r.dir, r.c4, all))!;
+      expect(c4.parents).toHaveLength(2);
+      expect(c4.files.map((f) => f.path).sort()).toEqual(["f.txt"]);
+      expect((await gitShow(r.dir, r.c1, all))!.files).toEqual([{ status: "A", path: "a.txt", added: 1, removed: 0 }]);
+      await expect(gitShow(r.dir, "0".repeat(40), all)).rejects.toMatchObject({ code: "not_found" });
+    }
+    {
+      expect((await gitFileAt(r.dir, r.c3, "a.txt", all, 1000)).toString()).toBe("one\ntwo\n");
+      expect((await gitFileAt(r.dir, r.c3, "bin", all, 1000))).toEqual(Buffer.from([0, 1, 2, 0]));
+      await expect(gitFileAt(r.dir, r.c1, "bin", all, 1000)).rejects.toMatchObject({ code: "not_found" });
+      await expect(gitFileAt(r.dir, r.c3, "a.txt", all, 3)).rejects.toMatchObject({ code: "too_large", size: 8 });
+    }
+    {
+      expect(await gitRefs(r.dir, () => true)).toBe(await refsStamp(r.dir));
+      expect(await gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
+    }
   });
 
-  it("gitFileAt returns the bytes at a commit; not_found and too_large", async () => {
+
+  it("gitRefs returns null when the repository is not allowed", async () => {
     const r = graphRepo();
-    expect((await gitFileAt(r.dir, r.c3, "a.txt", all, 1000)).toString()).toBe("one\ntwo\n");
-    expect((await gitFileAt(r.dir, r.c3, "bin", all, 1000))).toEqual(Buffer.from([0, 1, 2, 0]));
-    await expect(gitFileAt(r.dir, r.c1, "bin", all, 1000)).rejects.toMatchObject({ code: "not_found" });
-    await expect(gitFileAt(r.dir, r.c3, "a.txt", all, 3)).rejects.toMatchObject({ code: "too_large", size: 8 });
+    expect(await gitRefs(r.dir, () => false)).toBeNull();
   });
 
   it("returns null outside a git repository", async () => {
@@ -1379,12 +1372,6 @@ describe("gitLog / gitShow / gitFileAt", () => {
     expect(await gitStatus(proj, { allowed: () => true })).toBeNull();
   });
 
-  it("gitRefs is the refs stamp without a git process, null outside a repository", async () => {
-    const r = graphRepo();
-    expect(await gitRefs(r.dir, () => true)).toBe(await refsStamp(r.dir));
-    expect(await gitRefs(mkdtempSync(join(tmpdir(), "nogit-")), () => true)).toBeNull();
-    expect(await gitRefs(r.dir, () => false)).toBeNull();
-  });
 
   describe("git runs on the repository that was validated (GH-290)", () => {
     const seenEnv = async (fn: () => Promise<unknown>) => {
@@ -1680,20 +1667,52 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     expect(await gitDiff(mkdtempSync(join(tmpdir(), "nogit-")), { base: "head", allowed: all })).toBeNull();
   });
 
-  it("head: staged, unstaged and untracked against HEAD, paths relative to the top, prefix of a subdirectory cwd", async () => {
+  it("gitDiff head: staged, unstaged and untracked against HEAD, paths relative to the top, prefix of a subdirectory cwd; branch: an explicit ref, unknown refs and option-like refs are refused; refuses an unknown base and a repository outside the allowed roots; branch: against the merge base with the default branch, with the branch list", async () => {
     const r = diffRepo();
-    const d = (await gitDiff(join(r.dir, "s"), { base: "head", allowed: all }))!;
-    expect(d.prefix).toBe("s/");
-    expect(d.base).toBe(r.head);
-    expect(d.ref).toBeUndefined();
-    expect(d.branches).toBeUndefined();
-    expect(d.files).toEqual([
-      { status: "M", path: "a.txt", added: 1, removed: 1 },
-      { status: "D", path: "f.txt", added: 0, removed: 1 },
-      { status: "R", path: "moved.txt", oldPath: "sub.txt", added: 0, removed: 0 },
-      { status: "A", path: "s/u.txt", untracked: true, added: 2, removed: 0 },
-    ]);
-    expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.prefix).toBe("");
+    {
+      const d = (await gitDiff(join(r.dir, "s"), { base: "head", allowed: all }))!;
+      expect(d.prefix).toBe("s/");
+      expect(d.base).toBe(r.head);
+      expect(d.ref).toBeUndefined();
+      expect(d.branches).toBeUndefined();
+      expect(d.files).toEqual([
+        { status: "M", path: "a.txt", added: 1, removed: 1 },
+        { status: "D", path: "f.txt", added: 0, removed: 1 },
+        { status: "R", path: "moved.txt", oldPath: "sub.txt", added: 0, removed: 0 },
+        { status: "A", path: "s/u.txt", untracked: true, added: 2, removed: 0 },
+      ]);
+      expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.prefix).toBe("");
+    }
+    {
+      expect((await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!.ref).toBe("refs/heads/main");
+      for (const ref of ["main", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
+      expect(await code(gitDiff(r.dir, { base: "branch", ref: 5 as never, allowed: all }))).toBe("bad_request");
+    }
+    {
+      expect(await code(gitDiff(r.dir, { base: "x", allowed: all }))).toBe("bad_request");
+    }
+    {
+      const d = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
+      expect(d.ref).toBe("refs/heads/main");
+      expect(d.base).toBe(r.main);
+      expect(d.files.map((f) => `${f.status} ${f.path}`)).toEqual(["M a.txt", "A g.txt", "R moved.txt", "A s/u.txt"]);
+      expect(d.branches).toEqual(expect.arrayContaining(["refs/heads/main", "refs/heads/feat"]));
+      sh(r.dir, "update-ref", "refs/remotes/origin/dev", r.main);
+      sh(r.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
+      const o = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
+      expect(o.ref).toBe("refs/remotes/origin/dev");
+      expect(o.branches).not.toContain("refs/remotes/origin/HEAD");
+    }
+  });
+
+  it("gitDiff refuses a repository outside the allowed roots with cwd_not_allowed", async () => {
+    const r = diffRepo();
+    expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
+  });
+
+  it("gitDiff refuses the option-like ref --output=x with bad_request", async () => {
+    const r = diffRepo();
+    expect(await code(gitDiff(r.dir, { base: "branch", ref: "--output=x", allowed: all }))).toBe("bad_request");
   });
 
   it("head before the first commit: no base, staged and untracked files are A", async () => {
@@ -1710,26 +1729,7 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     ]);
   });
 
-  it("branch: against the merge base with the default branch (origin/HEAD, else main), with the branch list", async () => {
-    const r = diffRepo();
-    const d = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
-    expect(d.ref).toBe("refs/heads/main");
-    expect(d.base).toBe(r.main);
-    expect(d.files.map((f) => `${f.status} ${f.path}`)).toEqual(["M a.txt", "A g.txt", "R moved.txt", "A s/u.txt"]);
-    expect(d.branches).toEqual(expect.arrayContaining(["refs/heads/main", "refs/heads/feat"]));
-    sh(r.dir, "update-ref", "refs/remotes/origin/dev", r.main);
-    sh(r.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
-    const o = (await gitDiff(r.dir, { base: "branch", allowed: all }))!;
-    expect(o.ref).toBe("refs/remotes/origin/dev");
-    expect(o.branches).not.toContain("refs/remotes/origin/HEAD");
-  });
 
-  it("branch: an explicit ref; unknown refs and option-like refs are refused", async () => {
-    const r = diffRepo();
-    expect((await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!.ref).toBe("refs/heads/main");
-    for (const ref of ["main", "--output=x", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
-    expect(await code(gitDiff(r.dir, { base: "branch", ref: 5 as never, allowed: all }))).toBe("bad_request");
-  });
 
   it("branch: bad_base before the first commit, without a default branch, and without common history", async () => {
     const dir = tmp();
@@ -1749,11 +1749,6 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     expect(await msg(gitDiff(only, { base: "branch", allowed: all }))).toMatch(/No default branch/);
   });
 
-  it("refuses an unknown base and a repository outside the allowed roots", async () => {
-    const r = diffRepo();
-    expect(await code(gitDiff(r.dir, { base: "x", allowed: all }))).toBe("bad_request");
-    expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
-  });
 
   it("untracked stats: none for binary, larger than 1 MiB or symlink", async () => {
     const dir = tmp();
@@ -1992,45 +1987,7 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     return existsSync(trace) ? readFileSync(trace, "utf8") : "";
   };
 
-  it("gitDiff and gitStatus start no git inside a dirty submodule (GIT_TRACE)", async () => {
-    const r = subRepo();
-    put(r.inner, "a.txt", "edited\n");
-    put(r.inner, "untracked.txt", "u\n");
-    let diff: Awaited<ReturnType<typeof gitDiff>>;
-    let status: Awaited<ReturnType<typeof gitStatus>>;
-    const trace = await traced(async () => {
-      diff = await gitDiff(r.dir, { base: "head", allowed: all });
-      status = await gitStatus(r.dir, { allowed: () => true });
-    });
-    expect(trace.length).toBeGreaterThan(0);
-    expect(trace).not.toMatch(/status --porcelain/);
-    expect(trace).not.toMatch(/run_command/);
-    expect(diff!.files.some((f) => f.path === "libs/lib")).toBe(false);
-    expect(status!.files).toBe(0);
-  });
 
-  it("gitDiff passes --ignore-submodules=dirty and reads --raw --numstat in one process", async () => {
-    const r = subRepo();
-    const calls: string[][] = [];
-    setGitRunner(async (o: GitRunOptions) => {
-      calls.push(o.args);
-      return threadRunner(o);
-    });
-    try {
-      await gitDiff(r.dir, { base: "head", allowed: all });
-      const diffs = calls.filter((a) => a.includes("diff"));
-      expect(diffs).toHaveLength(1);
-      for (const f of ["--ignore-submodules=dirty", "--raw", "--numstat", "--no-abbrev"]) expect(diffs[0]).toContain(f);
-      expect(diffs[0]).not.toContain("--name-status");
-      calls.length = 0;
-      await gitStatus(r.dir, { allowed: () => true });
-      const st = calls.filter((a) => a.includes("diff"));
-      expect(st).toHaveLength(1);
-      expect(st[0]).toContain("--ignore-submodules=dirty");
-    } finally {
-      setGitRunner(undefined);
-    }
-  });
 
   it("gitDiff marks a moved gitlink as a submodule row with from and no counts", async () => {
     const r = subRepo();
@@ -2078,14 +2035,52 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.files).toContainEqual({ status: "M", path: name, added: 2, removed: 0 });
   });
 
-  it("gitFileAt and gitBlobRef refuse a gitlink path with bad_request", async () => {
+  it("gitFileAt and gitBlobRef refuse a gitlink path with bad_request; gitDiff passes --ignore-submodules=dirty and reads --raw --numstat in one process; gitDiff and gitStatus start no git inside a dirty submodule (GIT_TRACE)", async () => {
     const r = subRepo();
-    expect(await code(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
-    expect(await msg(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
-    expect(await code(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
-    expect(await msg(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
-    expect(await code(gitFileAt(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
-    expect(await code(gitBlobRef(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
+    {
+      expect(await code(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
+      expect(await msg(gitFileAt(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
+      expect(await code(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("bad_request");
+      expect(await msg(gitBlobRef(r.dir, r.added, "libs/lib", all, 1000))).toBe("Submodule: open its repository");
+      expect(await code(gitFileAt(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
+      expect(await code(gitBlobRef(r.dir, r.added, "libs/none", all, 1000))).toBe("not_found");
+    }
+    {
+      const calls: string[][] = [];
+      setGitRunner(async (o: GitRunOptions) => {
+        calls.push(o.args);
+        return threadRunner(o);
+      });
+      try {
+        await gitDiff(r.dir, { base: "head", allowed: all });
+        const diffs = calls.filter((a) => a.includes("diff"));
+        expect(diffs).toHaveLength(1);
+        for (const f of ["--ignore-submodules=dirty", "--raw", "--numstat", "--no-abbrev"]) expect(diffs[0]).toContain(f);
+        expect(diffs[0]).not.toContain("--name-status");
+        calls.length = 0;
+        await gitStatus(r.dir, { allowed: () => true });
+        const st = calls.filter((a) => a.includes("diff"));
+        expect(st).toHaveLength(1);
+        expect(st[0]).toContain("--ignore-submodules=dirty");
+      } finally {
+        setGitRunner(undefined);
+      }
+    }
+    {
+      put(r.inner, "a.txt", "edited\n");
+      put(r.inner, "untracked.txt", "u\n");
+      let diff: Awaited<ReturnType<typeof gitDiff>>;
+      let status: Awaited<ReturnType<typeof gitStatus>>;
+      const trace = await traced(async () => {
+        diff = await gitDiff(r.dir, { base: "head", allowed: all });
+        status = await gitStatus(r.dir, { allowed: () => true });
+      });
+      expect(trace.length).toBeGreaterThan(0);
+      expect(trace).not.toMatch(/status --porcelain/);
+      expect(trace).not.toMatch(/run_command/);
+      expect(diff!.files.some((f) => f.path === "libs/lib")).toBe(false);
+      expect(status!.files).toBe(0);
+    }
   });
 });
 

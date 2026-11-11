@@ -61,12 +61,6 @@ it("a clean missing file is dropped, a dirty one becomes a gone tab with its dra
   expect(store.get().tabs["/p/dirty"]).toMatchObject({ gone: true, draft: "mine", error: "Deleted on disk. Save creates it again." });
 });
 
-it("a draft on a file that changed on disk is restored with a conflict", async () => {
-  const { store } = setup({ tabs: [{ path: "/p/a" }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, { "/p/a": { content: "new", mtime: 2 } });
-  await store.restore();
-  expect(store.get().tabs["/p/a"]).toMatchObject({ draft: "mine", disk: "new", conflict: { content: "new", mtime: 2 } });
-});
-
 it("open() of a pending path before restore takes its draft; restore keeps that tab", async () => {
   const { store } = setup({ tabs: [{ path: "/p/a", item: true }, { path: "/p/b" }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, { "/p/a": { content: "A", mtime: 1 }, "/p/b": { content: "B", mtime: 1 } });
   await store.open("/p/a", { cwd: "/p", item: true });
@@ -175,6 +169,7 @@ it("two reloads keep a conflict; save never writes while in conflict (a plain sa
   let written: Saved | undefined;
   const first = setup({ tabs: [{ path: "/p/a" }], drafts: { "/p/a": { draft: "mine", mtime: 1 } } }, disk);
   await first.store.restore();
+  expect(first.store.get().tabs["/p/a"]).toMatchObject({ draft: "mine", disk: "theirs", conflict: { content: "theirs", mtime: 2 } });
   first.store.update("/p/a", (t) => ({ ...t }));
   await vi.advanceTimersByTimeAsync(400);
   written = lastWrite(first.write);

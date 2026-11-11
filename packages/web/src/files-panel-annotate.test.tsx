@@ -9,12 +9,6 @@ import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { FilesPanel } from "./files-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 window.matchMedia ??= ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as never;
 
 const A = "a".repeat(40);

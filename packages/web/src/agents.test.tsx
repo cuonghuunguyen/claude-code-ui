@@ -7,12 +7,6 @@ import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { duration, runOf, runsOf } from "./agents.tsx";
 import { emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 window.matchMedia = ((query: string) => ({
   matches: /min-width: (\d+)px/.test(query) ? 1440 >= +/min-width: (\d+)px/.exec(query)![1]! : false,
@@ -376,7 +370,7 @@ it("worker state changes update the map without reload", async () => {
   expect($("agent-closed")!.textContent).toContain("Closed (2)");
 });
 
-it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse it; closed workers are muted", async () => {
+it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse it; closed workers are muted; rows are 44px targets on touch", async () => {
   await mountWorkers();
   await click($("agents-button")!);
   expect($$("agent-worker")).toHaveLength(2);
@@ -399,6 +393,7 @@ it("Closed (n) is collapsed; click, Enter and the arrow keys expand and collapse
   expect($("agent-closed")!.getAttribute("aria-expanded")).toBe("false");
   await key(document.activeElement!, "Enter");
   expect($("agent-closed")!.getAttribute("aria-expanded")).toBe("true");
+  for (const row of [...$$("agent-worker"), $("agent-closed")!, $("agent-workers")!]) expect(row.className).toContain("pointer-coarse:min-h-11");
 });
 
 it("clicking a worker row opens its session tab and closes the map; Enter on a focused worker row does the same; an open tab is reused", async () => {
@@ -458,13 +453,6 @@ it("a removed worker leaves the map", async () => {
   replies["session.list"] = listOf(coordinatorItem, worker(W1, "alpha", { state: "running" }), worker(W3, "gamma", { live: false }));
   await act(async () => changed({ type: "sessions.changed", deleted: W2 }));
   expect(workerRows()).toEqual(["alpha, worker, Running"]);
-});
-
-it("worker rows are 44px targets on touch", async () => {
-  await mountWorkers();
-  await click($("agents-button")!);
-  await click($("agent-closed")!);
-  for (const row of [...$$("agent-worker"), $("agent-closed")!, $("agent-workers")!]) expect(row.className).toContain("pointer-coarse:min-h-11");
 });
 
 it("keyboard focus: a focused worker that moves into the collapsed Closed group leaves focus on the Closed header, arrow keys keep working", async () => {

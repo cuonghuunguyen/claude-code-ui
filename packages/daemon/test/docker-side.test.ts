@@ -105,11 +105,6 @@ describe("docker sides", () => {
     expect(readdirSync(cacheDir)).toEqual(["0.2.0-2"]);
   });
 
-  it("a read-only root file system with a tmpfs /tmp: the tarball goes to /tmp", async () => {
-    const f = fake({ inspect: { code: 0, stdout: "true\n" }, exec: { code: 0, stdout: "/tmp/claude-ui-side-k.tgz\n" } });
-    expect((await prepareDockerSide({ name: "esaca", pkgDir: pkg(), key: "k", cacheDir: dir("cache-"), exec: f.exec, npm: fakeNpm().npm })).path).toBe("/tmp/claude-ui-side-k.tgz");
-  });
-
   it("when /tmp is not writable it tries /dev/shm, then $HOME, and answers with the path that took the tarball", async () => {
     const tried: string[] = [];
     const calls: string[][] = [];

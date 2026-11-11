@@ -11,13 +11,15 @@ const info = (o: Record<string, unknown> = {}) => ({ port: 1, pid: 2, version: "
 const line = (v: unknown) => `motd\nCLAUDE_UI_CHECK hub=${Buffer.from(typeof v === "string" ? v : JSON.stringify(v)).toString("base64")}\nbye\r\n`;
 
 describe("parseHub", () => {
-  it("returns exec and version of a live compatible Hub, past login noise", () => {
-    expect(parseHub(line(info()))).toEqual({ exec: ["/usr/bin/node", "/a b/cli.js"], version: "1.2.1" });
-  });
-  it("refuses a Hub it cannot bridge through", () => {
-    for (const v of [info({ schema: [0, 0] }), info({ schema: [1] }), info({ attach: undefined }), info({ exec: undefined }), info({ exec: [] }), info({ exec: ["node", "/c.js"] }), info({ exec: ["/n", 1] }), info({ exec: ["/n", ""] }), info({ version: undefined }), "not json"]) expect(parseHub(line(v))).toBeUndefined();
-    expect(parseHub("CLAUDE_UI_CHECK hub=%%%")).toBeUndefined();
-    expect(parseHub("no hub line")).toBeUndefined();
+  it("parseHub returns exec and version of a live compatible Hub, past login noise; refuses a Hub it cannot bridge through", () => {
+    {
+      expect(parseHub(line(info()))).toEqual({ exec: ["/usr/bin/node", "/a b/cli.js"], version: "1.2.1" });
+    }
+    {
+      for (const v of [info({ schema: [0, 0] }), info({ schema: [1] }), info({ attach: undefined }), info({ exec: undefined }), info({ exec: [] }), info({ exec: ["node", "/c.js"] }), info({ exec: ["/n", 1] }), info({ exec: ["/n", ""] }), info({ version: undefined }), "not json"]) expect(parseHub(line(v))).toBeUndefined();
+      expect(parseHub("CLAUDE_UI_CHECK hub=%%%")).toBeUndefined();
+      expect(parseHub("no hub line")).toBeUndefined();
+    }
   });
 });
 

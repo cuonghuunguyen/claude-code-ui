@@ -6,7 +6,6 @@ import type { BackMark } from "@claude-ui/protocol";
 import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
 import { resetBack, setBack, useBack } from "./back-marks.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let unmount = () => {};
 beforeEach(resetBack);
 afterEach(() => unmount());

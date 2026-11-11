@@ -45,12 +45,14 @@ Feature: The terminal can live in the main area
     And the Terminal tab has one shell
     And I capture "terminal-main-same-folder"
 
-  Scenario: A click on the Terminal tab focuses the shell and an arrow key does not
+  Scenario: The Terminal tab: slow load focus, click vs arrow, restart empty, dock change with Undo, last shell closed
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open Settings and choose the terminal position "Main area"
+    And the terminal code loads slowly
     And I open the terminal with the shortcut
-    Then the shell has the focus
+    Then the shell has the focus within 20 seconds
+    And I capture "terminal-shortcut-focus-after-load"
     When I click the session tab of the terminal
     And I click the Terminal strip tab with the mouse
     Then the Terminal tab is the selected tab
@@ -60,23 +62,6 @@ Feature: The terminal can live in the main area
     Then the Terminal tab is the selected tab
     And the shell does not have the focus
     And I capture "terminal-click-vs-arrow"
-
-  Scenario: Closing the last shell closes the tab
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    Then the Terminal tab has one shell
-    When I close the last shell of the Terminal tab
-    Then there is no "Terminal" tab
-    And I capture "terminal-last-shell-closed"
-
-  Scenario: After a daemon restart the Terminal tab opens empty and starts no shell until New terminal
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    Then the Terminal tab has one shell
     When I restart the daemon
     Then the app is connected
     When I remember to count terminal requests
@@ -89,13 +74,6 @@ Feature: The terminal can live in the main area
     Then the Terminal tab has one shell
     And the page started one new shell
     And I capture "terminal-restart-plus"
-
-  Scenario: Choosing a dock in Settings closes the Terminal tab with Undo
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    Then there is one "Terminal" tab
     When I open Settings and choose the terminal position "Bottom"
     Then a toast says "Closed 1 Terminal tab"
     And there is no "Terminal" tab
@@ -103,13 +81,28 @@ Feature: The terminal can live in the main area
     When I click Undo in the toast
     Then there is one "Terminal" tab
     And I capture "terminal-dock-undo"
+    And the Terminal tab has one shell
+    When I close the last shell of the Terminal tab
+    Then there is no "Terminal" tab
+    And I capture "terminal-last-shell-closed"
 
-  Scenario: Phone lists the Terminal tab in the switcher, a tap on its row is passive, no horizontal scroll
+  Scenario: Phone: Settings hint, the Terminal row in the switcher is passive and keeps the keyboard closed
     Given the viewport is 390x844
     And a Haiku session with one finished reply
     When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
+    Then the terminal position hint mentions "with Main area, as the session's Terminal tab"
+    And the page has no horizontal scroll
+    And I capture "terminal-position-hint-narrow"
+    When I open the terminal with the shortcut
     Then the Terminal tab has one shell
+    And the shell has the focus
+    When I dismiss the open toasts
+    And I open the tab switcher
+    And I pick the "Terminal" row in the tab switcher
+    Then the Terminal tab has one shell
+    And the shell does not have the focus
+    And the page has no horizontal scroll
+    And I capture "terminal-phone-row-after-focus"
     When I reload the page
     Then there is one "Terminal" tab
     And the Terminal tab has one shell
@@ -125,26 +118,8 @@ Feature: The terminal can live in the main area
     And the shell does not have the focus
     And the page has no horizontal scroll
     And I capture "terminal-phone-terminal"
-
-  Scenario: Phone: tapping the Terminal row after the shell had the focus keeps the keyboard closed
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    Then the Terminal tab has one shell
-    And the shell has the focus
-    When I dismiss the open toasts
-    And I open the tab switcher
-    And I pick the "Terminal" row in the tab switcher
-    Then the Terminal tab has one shell
-    And the shell does not have the focus
-    And the page has no horizontal scroll
-    And I capture "terminal-phone-row-after-focus"
-
-  Scenario: Phone: tapping the Terminal row right after Ctrl+Backquote keeps the keyboard closed
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
+    When I open the tab switcher
+    And I pick the first session row in the tab switcher
     And I open the terminal with the shortcut
     And I dismiss the open toasts
     And I open the tab switcher
@@ -153,38 +128,21 @@ Feature: The terminal can live in the main area
     And the shell does not have the focus
     And I capture "terminal-phone-row-fast"
 
-  Scenario: A session in a second project folder opens a second Terminal tab
+  Scenario: Each project folder has its own Terminal tab that selects its own terminal after a reload
     Given the viewport is 1440x900
     And a Haiku session with one finished reply
     When I open Settings and choose the terminal position "Main area"
     And I open the terminal with the shortcut
     Then there is one "Terminal" tab
-    When I open a session in a second project folder with a finished reply
+    When I click the Terminal tab New terminal button
+    And I select "Terminal 1" in the Terminal tab
+    And I open a session in a second project folder with a finished reply
     And I open the terminal with the shortcut
     Then there are 2 "Terminal" tabs
     And the Terminal tabs are labeled with the two project names
     And the Terminal tab of the second project is the selected tab
     And I capture "terminal-two-projects"
-
-  Scenario: Ctrl+Backquote with the terminal in the main area focuses the shell once it loads when the user does nothing else
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And the terminal code loads slowly
-    And I open the terminal with the shortcut
-    Then the shell has the focus within 20 seconds
-    And I capture "terminal-shortcut-focus-after-load"
-
-  Scenario: After a reload each project folder's Terminal tab selects its own terminal
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    And I open the terminal with the shortcut
-    And I click the Terminal tab New terminal button
-    And I select "Terminal 1" in the Terminal tab
-    When I open a session in a second project folder with a finished reply
-    And I open the terminal with the shortcut
-    And I click the Terminal tab New terminal button
+    When I click the Terminal tab New terminal button
     Then the Terminal tab selects "Terminal 2"
     When I reload the page
     And I click the Terminal tab of the first project
@@ -192,11 +150,3 @@ Feature: The terminal can live in the main area
     When I click the Terminal tab of the second project
     Then the Terminal tab selects "Terminal 2"
     And I capture "terminal-selected-per-folder"
-
-  Scenario: Narrow screens: Settings explains where the terminal shows with Main area
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I open Settings and choose the terminal position "Main area"
-    Then the terminal position hint mentions "with Main area, as the session's Terminal tab"
-    And the page has no horizontal scroll
-    And I capture "terminal-position-hint-narrow"

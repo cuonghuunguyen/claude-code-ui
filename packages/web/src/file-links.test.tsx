@@ -6,8 +6,6 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { FILE_LINK_PROPS, FileBaseContext, FileLinkContext } from "./file-links.tsx";
 import { CwdContext } from "./tool-card.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const MD = "Edit `src/a.ts:12` and `process.env`, see [the doc](docs/x.md#L3), [up](./y.md), [web](https://example.com/a) and [none](README).";
 
 async function render(open: ((p: string, l?: number) => void) | undefined, base?: { base: string; root: string }) {

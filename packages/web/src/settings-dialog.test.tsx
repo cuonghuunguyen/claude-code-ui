@@ -12,8 +12,6 @@ import type { TabGrouping } from "./tab-grouping.ts";
 import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { WEB_VERSION } from "./version.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   act(() => root?.unmount());
@@ -174,13 +172,6 @@ it("Appearance: App name and icon row shows the built-in icon and name, Change s
   await act(async () => q("label-reset")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { app: { icon: "", name: "" } } });
   expect(q("settings-app-name")!.textContent).toBe("Claude UI");
-});
-
-it("Appearance: an older daemon without the app setting shows no App icon row", async () => {
-  const { q, pick } = await render({ legacy: true });
-  await pick("appearance");
-  expect(q("settings-appearance")).not.toBeNull();
-  expect(q("settings-app-icon")).toBeNull();
 });
 
 it("a switch sends a patch of its field only", async () => {
@@ -385,13 +376,8 @@ it("Default diff view is a per-browser choice: picking Session changes saves it 
   localStorage.removeItem("claude-ui.diffMode");
 });
 
-it("Terminal position hint names the narrow Terminal tab of the Main area", async () => {
-  const { q, pick } = await render();
-  await pick("layout");
-  expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
-});
 
-it("Terminal position: Bottom by default, Side panel saved per browser", async () => {
+it("Terminal position: Bottom by default, Side panel saved per browser; offers Main area (GH-397)", async () => {
   localStorage.removeItem("claude-ui.layout");
   const { q, pick } = await render();
   await pick("layout");
@@ -400,21 +386,20 @@ it("Terminal position: Bottom by default, Side panel saved per browser", async (
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.side).toContain("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Side panel");
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
   localStorage.removeItem("claude-ui.layout");
-});
-
-it("Terminal position offers Main area (GH-397)", async () => {
-  localStorage.removeItem("claude-ui.layout");
-  const { q, pick } = await render();
-  await pick("layout");
-  await act(async () => q("settings-terminal-position")!.click());
+  const again = await render();
+  await again.pick("layout");
+  expect(again.q("settings-terminal-position")?.textContent).toContain("Bottom");
+  await act(async () => again.q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
-  expect(q("settings-terminal-position")?.textContent).toContain("Main area");
+  expect(again.q("settings-terminal-position")?.textContent).toContain("Main area");
   localStorage.removeItem("claude-ui.layout");
 });
 
-it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159)", async () => {
+it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159); Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
   localStorage.clear();
   const { q, pick } = await render();
   await pick("layout");
@@ -426,12 +411,6 @@ it("Sidebar section: Show only active sessions is the sidebar's own per-browser 
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(true);
   await act(async () => sw.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).onlyActive).toBe(false);
-});
-
-it("Sidebar section: Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
-  localStorage.clear();
-  const { q, pick } = await render();
-  await pick("layout");
   expect(document.getElementById("settings-sidebar-layout-label")!.textContent).toBe("Group by");
   expect(q("settings-sidebar-layout")!.textContent).toContain("Worktree");
   await act(async () => q("settings-sidebar-layout")!.click());
@@ -469,15 +448,18 @@ it("lists the groups under category headings: App, Sessions, Integrations, Syste
   expect(q("settings-category-sessions")!.nextElementSibling).toBe(q("settings-group-orchestration"));
 });
 
-it("General holds Timeline, Sending, Screen and Recommendations; Layout holds Sidebar, Tabs, Changes and Terminal; Help & about holds Guide and About", async () => {
+it("General holds Timeline, Sending, Screen and Recommendations; Layout holds Sidebar, Tabs, Changes and Terminal (hint names the Terminal tab); Help & about holds Guide and About (no daemon version from an older daemon)", async () => {
   const { q, pick } = await render();
   const order = () => [...q("settings-panel")!.querySelectorAll(":scope > section")].map((s) => s.getAttribute("data-testid"));
   await pick("general");
   expect(order()).toEqual(["settings-timeline", "settings-sending", "settings-screen", "settings-recs"]);
   await pick("layout");
   expect(order()).toEqual(["settings-sidebar", "settings-tabs", "settings-changes", "settings-terminal"]);
+  expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
   await pick("about");
   expect(order()).toEqual(["settings-guide", "settings-about"]);
+  expect(q("settings-about-web")).not.toBeNull();
+  expect(q("settings-about-daemon")).toBeNull();
 });
 
 it("a remembered group id from before the merge opens the group that holds its section now", async () => {
@@ -510,9 +492,10 @@ it("lists Performance after Usage limits and before About: a switch sends its pa
   expect(calls.find((c) => c.type === "settings.set")).toMatchObject({ patch: { performance: { monitor: false } } });
 });
 
-it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only with Token set, Replace and Clear; Test connection names the user", async () => {
+it("Jira (GH-447): URL, email for Cloud only, template; the token is write-only with Token set, Replace and Clear; Test connection names the user; no token-cleared notice (GH-487)", async () => {
   const { q, pick, calls } = await render();
   await pick("jira");
+  expect(q("settings-jira-token-reset")).toBeNull();
   const set = async (id: string, v: string) => {
     const input = (q(id) as HTMLInputElement);
     await act(async () => {
@@ -566,12 +549,6 @@ it("Jira: a token cleared by the security update says so under the token field u
     q("settings-jira-token")!.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => q("settings-jira-token-save")!.click());
-  expect(q("settings-jira-token-reset")).toBeNull();
-});
-
-it("Jira: no notice when no token was cleared (GH-487)", async () => {
-  const { q, pick } = await render();
-  await pick("jira");
   expect(q("settings-jira-token-reset")).toBeNull();
 });
 
@@ -801,13 +778,6 @@ it("Help & about, the last group, shows the web version and the daemon's as sele
   expect(calls.length).toBe(before);
 });
 
-it("About omits the daemon version when an older daemon does not send it", async () => {
-  const { q, pick } = await render();
-  await pick("about");
-  expect(q("settings-about-web")).not.toBeNull();
-  expect(q("settings-about-daemon")).toBeNull();
-});
-
 it("the Sending section follows Timeline in General and holds the per-browser send mode, steer by default, sending no settings.set", async () => {
   localStorage.removeItem("claude-ui.sendMode");
   const { q, calls, pick } = await render();
@@ -947,10 +917,14 @@ it("Keep screen awake sends no power patch when the daemon cannot keep its compu
   }
 });
 
-it("an older daemon without power shows no Keep computer awake row (GH-523)", async () => {
+it("an older daemon shows no Keep computer awake row (GH-523), no Launcher group (GH-553) and no App icon row", async () => {
   const { q, pick } = await render({ legacy: true });
+  expect(q("settings-group-launcher")).toBeNull();
   await pick("general");
   expect(q("settings-computer-awake")).toBeNull();
+  await pick("appearance");
+  expect(q("settings-appearance")).not.toBeNull();
+  expect(q("settings-app-icon")).toBeNull();
 });
 
 it("Settings › Git shows the nine settings with VS Code's labels and defaults; the parent-folders hint names the difference", async () => {
@@ -1280,11 +1254,6 @@ it("a port change shows the new URL (GH-553)", async () => {
   });
   await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(q("settings-launcher-url")?.textContent).toBe("From the next start: http://127.0.0.1:4999/");
-});
-
-it("no Launcher group from an older daemon (GH-553)", async () => {
-  const { q } = await render({ legacy: true });
-  expect(q("settings-group-launcher")).toBeNull();
 });
 
 const typeText = async (el: HTMLTextAreaElement, v: string) => {

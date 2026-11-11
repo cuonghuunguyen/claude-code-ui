@@ -6,8 +6,6 @@ import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { EditorSync, FilesPanel } from "./files-panel.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 it("watches the extra paths (the changes tab's files) with its editor tabs, on its one fs.watch list", async () => {
   const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {}));
   const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
@@ -170,11 +168,9 @@ it("touch (pointer: coarse, the repo's pointer-coarse rule): autocomplete rows, 
 });
 
 it("the tree follows showTree; the Files button asks to toggle it", async () => {
-  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
+  const { el, root, show: render } = treePanel();
   const onToggleTree = vi.fn();
-  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={onToggleTree} />));
+  const show = (showTree: boolean) => render({ showTree, onToggleTree });
   await show(false);
   const btn = () => el.querySelector('[data-testid="toggle-tree"]')!;
   expect(el.querySelector('[data-testid="file-tree"]')).toBeNull();
@@ -194,10 +190,8 @@ it("the tree follows showTree; the Files button asks to toggle it", async () => 
 });
 
 it("the header shows Collapse all and Reveal buttons only while the tree shows; Reveal needs an open file", async () => {
-  const client = { request: vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : {})), onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  const show = (showTree: boolean) => act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree={showTree} onToggleTree={() => {}} />));
+  const { el, root, show: render } = treePanel();
+  const show = (showTree: boolean) => render({ showTree });
   await show(false);
   expect(el.querySelector("[aria-label='Collapse all folders']")).toBeNull();
   expect(el.querySelector("[aria-label='Reveal active file in tree']")).toBeNull();
@@ -230,7 +224,7 @@ function mediaPanel(opts: { media?: (path: string) => unknown; read?: string } =
   return { request, el, root, show, q, button, change: (path: string) => act(async () => changed({ path })) };
 }
 
-it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, size line with pixel size", async () => {
+it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, size line with pixel size; Fit / 100% toggle switches the image classes and aria-pressed", async () => {
   const p = mediaPanel();
   await p.show("/p/a.png");
   const img = p.q<HTMLImageElement>("media-image")!;
@@ -242,13 +236,6 @@ it("a .png opens an <img> with the fs.media URL, no fs.read, no Save button, siz
   Object.defineProperty(img, "naturalHeight", { value: 480 });
   await act(async () => void img.dispatchEvent(new Event("load")));
   expect(p.q("media-info")!.textContent).toBe("640×480 · 2 KB");
-  act(() => p.root.render(null));
-});
-
-it("Fit / 100% toggle switches the image classes and aria-pressed", async () => {
-  const p = mediaPanel();
-  await p.show("/p/a.png");
-  const img = p.q("media-image")!;
   const fit = p.q("media-fit")!;
   expect(img.className).toContain("max-w-full");
   expect(fit.getAttribute("aria-pressed")).toBe("false");
@@ -258,7 +245,7 @@ it("Fit / 100% toggle switches the image classes and aria-pressed", async () => 
   act(() => p.root.render(null));
 });
 
-it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>", async () => {
+it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>; a decode error shows \"Unable to load image.\" (video: \"Unable to load video.\")", async () => {
   const p = mediaPanel();
   await p.show("/p/v.mp4");
   const v = p.q<HTMLVideoElement>("media-video")!;
@@ -268,11 +255,6 @@ it("a .mp4 opens <video controls> with the URL; a .mp3 opens <audio controls>", 
   const a = p.q<HTMLAudioElement>("media-audio")!;
   expect(a.hasAttribute("controls")).toBe(true);
   expect(a.getAttribute("src")).toBe("/media/abc/a.mp3?v=1");
-  act(() => p.root.render(null));
-});
-
-it("a decode error shows \"Unable to load image.\" (video: \"Unable to load video.\")", async () => {
-  const p = mediaPanel();
   await p.show("/p/a.png");
   await act(async () => void p.q("media-image")!.dispatchEvent(new Event("error")));
   expect(p.q("file-notice")!.textContent).toBe("Unable to load image.");

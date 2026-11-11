@@ -6,8 +6,6 @@ import type { DockerState, FsEntry, RecentProject, SideCheck, SideInfo } from "@
 import { OpenProjectDialog } from "./open-project.tsx";
 import { setLabels } from "./labels.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const tree: Record<string, string[]> = { "/home/u": ["claude-ui", "api", ".git", "notes.txt"], "/home/u/claude-ui": ["packages", "docs"] };
 const list = vi.fn(async (path?: string): Promise<FsEntry[]> => {
   if (!path) return [{ name: "/home/u", path: "/home/u", isDir: true }];
@@ -294,7 +292,7 @@ describe("side chooser", () => {
     expect(input()!.value).toBe("/home/u/");
   });
 
-  it("a very long error with unbreakable paths stays inside the dialog: wraps anywhere, scrolls on its own, Retry stays outside the scrolled text and below the controls", async () => {
+  it("a very long error with unbreakable paths stays inside the dialog: wraps anywhere, scrolls on its own, Retry stays outside the scrolled text and below the controls; the error sits outside the live region", async () => {
     const msg = `npm pack failed: ${"C:/Users/someone/AppData/Local/Temp/claude-ui-pack/node_modules/daemon/".repeat(10)}`;
     expect(msg.length).toBeGreaterThan(600);
     const onStartSide = vi.fn(async (_id: string) => {}).mockRejectedValueOnce(new Error(msg));
@@ -304,6 +302,8 @@ describe("side chooser", () => {
     expect(status()).toContain(msg);
     const box = document.querySelector<HTMLElement>('[data-testid="side-status"]')!;
     const text = box.querySelector<HTMLElement>('[data-testid="side-error"]')!;
+    expect(text.closest('[role="status"]')).toBeNull();
+    expect(text.closest("[aria-live]")).toBeNull();
     const retry = document.querySelector<HTMLElement>('[data-testid="side-retry"]')!;
     // The text breaks inside words, is height-capped with its own scroll, and stays selectable.
     expect(text.className).toContain("[overflow-wrap:anywhere]");
@@ -456,11 +456,13 @@ describe("side chooser", () => {
     expect(input()!.value).toBe("C:\\Users\\me\\proj");
   });
 
-  it("two WSL distros: the dropdown picks the distro and shows which are not set up", async () => {
+  it("two WSL distros: a ready one opens the browser with no request; the dropdown picks the distro and shows which are not set up", async () => {
     const { kind, click, target, items, input, byId, onStartSide, onCheckSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu"), S("wsl:Debian", "WSL: Debian", "off")]);
     await click(kind("WSL"));
     expect(target()!.textContent).toBe("Ubuntu");
     expect(input()!.value).toBe("/home/u/");
+    expect(onStartSide).not.toHaveBeenCalled();
+    expect(onCheckSide).not.toHaveBeenCalled();
     await click(target()!);
     expect(items().map((i) => i.textContent)).toEqual(["Ubuntu", "DebianNot set up"]);
     let done!: () => void;
@@ -588,14 +590,6 @@ describe("side chooser", () => {
       expect(document.activeElement).toBe(input());
     });
 
-    it("an update shows Update", async () => {
-      const { kind, click, byId, onStartSide } = await withCheck(chk("update"));
-      await click(kind("WSL"));
-      expect(byId("side-install")!.textContent).toBe("Update");
-      await click(byId("side-install")!);
-      expect(onStartSide).toHaveBeenCalledWith("wsl:Ubuntu", "needed");
-    });
-
     it("a blocked side shows its reason and fix and Check again, and no Install; Check again checks again", async () => {
       const blocked = chk("blocked", { reason: "node_missing", message: "Install Node.js 22 in WSL: Ubuntu (for example nvm install 22), then check again." }, { node: undefined, nodeOk: false });
       const { kind, click, byId, status, onCheckSide } = await withCheck(blocked);
@@ -614,14 +608,6 @@ describe("side chooser", () => {
       await click(kind("WSL"));
       expect(input()!.value).toBe("/home/u/");
       expect(onStartSide).not.toHaveBeenCalled();
-    });
-
-    it("a side the sides list says is ready opens the browser with no request at all", async () => {
-      const { kind, click, input, onStartSide, onCheckSide } = await renderSides([S("local", "Windows"), S("wsl:Ubuntu", "WSL: Ubuntu", "ready")]);
-      await click(kind("WSL"));
-      expect(input()!.value).toBe("/home/u/");
-      expect(onStartSide).not.toHaveBeenCalled();
-      expect(onCheckSide).not.toHaveBeenCalled();
     });
 
     it("an installed side picked by hand starts by itself with setup never (it installs nothing), then the browser opens; there is no Start button", async () => {
@@ -690,10 +676,11 @@ describe("side chooser", () => {
       expect(start).toHaveBeenLastCalledWith("wsl:Ubuntu", "force");
     });
 
-    it("a failed update shows one primary Retry update (needed), never Reinstall or a second primary", async () => {
+    it("an update shows Update; a failed update shows one primary Retry update (needed), never Reinstall or a second primary", async () => {
       const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
       const { kind, click, byId } = await withCheck(chk("update"), start);
       await click(kind("WSL"));
+      expect(byId("side-install")!.textContent).toBe("Update");
       await click(byId("side-install")!);
       expect(byId("side-install")).toBeNull();
       expect(byId("side-retry")!.textContent).toBe("Retry update");
@@ -763,16 +750,6 @@ describe("side chooser", () => {
       expect(status()).toContain("Update this Claude UI");
       expect(byId("side-update-remote")).toBeNull();
       expect(byId("side-install")).toBeNull();
-    });
-
-    it("the error alert sits outside the live region", async () => {
-      const start = vi.fn(async (_id: string, _setup?: string) => {}).mockRejectedValueOnce(new Error("npm failed"));
-      const { kind, click, byId } = await withCheck(chk("install"), start);
-      await click(kind("WSL"));
-      await click(byId("side-install")!);
-      const alert = byId("side-error")!;
-      expect(alert.closest('[role="status"]')).toBeNull();
-      expect(alert.closest("[aria-live]")).toBeNull();
     });
 
     describe("keyboard focus", () => {

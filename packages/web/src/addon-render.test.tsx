@@ -8,8 +8,6 @@ import { AddonsContext } from "./addons.ts";
 import type { ToolCall } from "./store.ts";
 import { ToolBody } from "./tool-card.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type ToolResult = Extract<Part, { type: "tool_result" }>;
 const addon = {
   name: "example",

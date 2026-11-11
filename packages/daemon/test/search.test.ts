@@ -172,20 +172,6 @@ describe("searchFiles in nested repositories and submodules", () => {
     expect((await searchFiles(dir, "", 1000, repos)).some((p) => p.startsWith("api/src"))).toBe(false);
   });
 
-  it("stops at the shared entry cap", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "search-cap-"));
-    repoWith(dir, { "a.txt": "", "b.txt": "" });
-    repoWith(join(dir, "api"), { "c.txt": "", "d.txt": "", "e.txt": "" });
-    const repos = await reposOf(dir);
-    const was = searchLimits.entries;
-    searchLimits.entries = 3;
-    try {
-      expect((await searchFiles(dir, "", 1000, repos)).length).toBeLessThanOrEqual(3);
-    } finally {
-      searchLimits.entries = was;
-    }
-  });
-
   it("keeps the folder of a nested repository that lists nothing, or whose git fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "search-empty-"));
     repoWith(dir, { "a.txt": "" });

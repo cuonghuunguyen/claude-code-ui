@@ -18,9 +18,6 @@ const ringed = (page: Page) => page.locator("[data-locate]");
 const activeTab = (page: Page) => page.locator('[data-testid="tab-strip"] [data-testid="tab"][data-active]');
 
 When("I shake the mouse", async ({ page }) => strokes(page, SHAKE));
-When("I move the mouse in strokes of {int} px", async ({ page }, px: number) => strokes(page, [600 + px, 600, 600 + px, 600, 600 + px, 600]));
-When("I move the mouse with only {int} direction changes", async ({ page }, n: number) => strokes(page, SHAKE.slice(0, n + 1)));
-When("I shake the mouse slowly", async ({ page }) => strokes(page, SHAKE, 250));
 When("I wait {int} seconds", async ({ page }, s: number) => page.waitForTimeout(s * 1000));
 
 When("I shake the mouse with the button held", async ({ page }) => {
@@ -29,8 +26,6 @@ When("I shake the mouse with the button held", async ({ page }) => {
   for (const x of SHAKE) await page.mouse.move(x, 450, { steps: 2 });
   await page.mouse.up();
 });
-
-Given("reduced motion is on", async ({ page }) => page.emulateMedia({ reducedMotion: "reduce" }));
 
 Given("the scratch project has {int} files in the folder {string}", async ({ project }, n: number, dir: string) => {
   mkdirSync(join(project.path, dir), { recursive: true });
@@ -67,26 +62,11 @@ When("I open Settings › Layout", async ({ page }) => {
   await page.getByTestId("settings-group-layout").click();
 });
 
-When("I turn the shake to locate switch off", async ({ page }) => {
-  const sw = page.getByTestId("settings-tabs-shake");
-  await expect(sw).toHaveAttribute("aria-checked", "true");
-  await sw.click();
-  await expect(sw).toHaveAttribute("aria-checked", "false");
-});
-
 When("I open the command palette", async ({ page }) => {
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByTestId("palette")).toBeVisible();
 });
 
-When("I collapse the project group in the sidebar", async ({ page, project }) => {
-  await page.locator(`[data-testid="group-toggle"][title$="${project.name}"]`).click();
-  await expect(groupOf(page, project.name).getByTestId("session-item")).toHaveCount(0);
-});
-
-Then("the shake to locate switch is on", async ({ page }) => {
-  await expect(page.getByTestId("settings-tabs-shake")).toHaveAttribute("aria-checked", "true");
-});
 Then("the shake to locate switch is absent", async ({ page }) => {
   await expect(page.getByTestId("settings-tabs-compact")).toBeVisible();
   await expect(page.getByTestId("settings-tabs-shake")).toHaveCount(0);
@@ -102,14 +82,6 @@ Then("the active sidebar row is in view and has the locate ring", async ({ page 
   await expect(row).toHaveAttribute("data-locate", "");
   await expect(row).toBeInViewport();
 });
-Then("the group chip has the locate ring and the active tab has not", async ({ page }) => {
-  await expect(page.locator('[data-testid="tab-group-chip"][data-locate]')).toHaveCount(1);
-  await expect(page.locator('[data-testid="tab"][data-locate]')).toHaveCount(0);
-  const chip = page.locator('[data-testid="tab-group-chip"][data-locate]');
-  // The ring must be drawn: an outline of 2px, solid, not removed by a utility class.
-  const o = await chip.evaluate((e) => ({ s: getComputedStyle(e).outlineStyle, w: getComputedStyle(e).outlineWidth }));
-  expect(o).toEqual({ s: "solid", w: "2px" });
-});
 Then("the outline of the ringed element is drawn", async ({ page }) => {
   const o = await ringed(page).first().evaluate((e) => ({ s: getComputedStyle(e).outlineStyle, w: getComputedStyle(e).outlineWidth }));
   expect(o).toEqual({ s: "solid", w: "2px" });
@@ -123,14 +95,8 @@ Then("only the tab has the locate ring", async ({ page }) => {
   await expect(page.locator('[data-testid="tab"][data-locate], [data-testid="focus-tab"][data-locate]')).toHaveCount(1);
   await expect(page.locator('[data-testid="session-item"][data-locate]')).toHaveCount(0);
 });
-Then("the locate ring is static", async ({ page }) => {
-  const s = await ringed(page).first().evaluate((e) => ({ a: getComputedStyle(e).animationName, o: getComputedStyle(e).outlineStyle }));
-  expect(s).toEqual({ a: "none", o: "solid" });
-});
 Then("the locate ring pulses", async ({ page }) => {
   expect(await ringed(page).first().evaluate((e) => getComputedStyle(e).animationName)).toBe("locate-pulse");
 });
 Then("the sidebar is still hidden", async ({ page }) => expect(page.locator("aside").first()).toBeHidden());
-Then("the sidebar still lists no session row of the project", async ({ page, project }) => expect(groupOf(page, project.name).getByTestId("session-item")).toHaveCount(0));
 Then("the active tab is a file tab", async ({ page }) => expect(activeTab(page).locator("visible=true")).toHaveAttribute("data-tab-id", /^file:/));
-Then("the active tab is the New session tab", async ({ page }) => expect(page.getByTestId("new-session-tab")).toBeVisible());

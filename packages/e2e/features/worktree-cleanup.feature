@@ -11,7 +11,15 @@ Feature: Clean up scan and status cache
     And the scratch project has a worktree "wt-cancel" whose commits cancel out
 
   Scenario: Clean up fetches first, a squash-merged worktree is Safe and can be removed with its branch
-    Given I open the scratch project
+    Given the viewport is 390x844
+    And I open the scratch project
+    When I open Clean up from the menu of the scratch project
+    Then Clean up has finished fetching
+    And the Clean up row "wt-squash" is "Safe"
+    And the Clean up dialog fits the viewport
+    And I capture "phone clean up"
+    When I close the Clean up dialog
+    Given the viewport is 1440x900
     When I open Clean up from the menu of the scratch project
     Then Clean up has finished fetching
     And the Clean up row "wt-squash" is "Safe"
@@ -20,6 +28,7 @@ Feature: Clean up scan and status cache
     And the Clean up row "wt-clean" is "Safe"
     And the Clean up row "wt-work" is "Has work"
     And the Clean up row "wt-cancel" is "has unmerged commits"
+    And the Clean up row "wt-cancel" mentions "ignored files: checked at removal"
     And Clean up showed Fetching… and then Fetched
     And the status bar of the app answers while Clean up scans
     And I capture "clean up scan"
@@ -33,14 +42,6 @@ Feature: Clean up scan and status cache
     And the worktree folder "wt-work" is on branch "wt-work"
     And I capture "after clean up"
 
-  Scenario: A worktree whose commits cancel out stays and its branch is kept
-    Given I open the scratch project
-    When I open Clean up from the menu of the scratch project
-    Then Clean up has finished fetching
-    And the Clean up row "wt-cancel" is "unmerged commits"
-    And the Clean up row "wt-cancel" mentions "ignored files: checked at removal"
-    And I capture "net zero branch"
-
   Scenario: Clean up still resolves rows when origin is unreachable
     Given the origin of the scratch project is unreachable
     And I open the scratch project
@@ -48,15 +49,6 @@ Feature: Clean up scan and status cache
     Then Clean up says the fetch failed and rows still resolve
     And the Clean up row "wt-clean" is "Safe"
     And I capture "fetch failed"
-
-  Scenario: Clean up on a phone fits the screen and shows the scan
-    Given the viewport is 390x844
-    And I open the scratch project
-    When I open Clean up from the menu of the scratch project
-    Then Clean up has finished fetching
-    And the Clean up row "wt-squash" is "Safe"
-    And the Clean up dialog fits the viewport
-    And I capture "phone clean up"
 
   Scenario: Reopening Clean up shows the cached rows at once and a changed row is rechecked
     Given I open the scratch project

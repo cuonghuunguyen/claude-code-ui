@@ -4,7 +4,7 @@
 # tmp folder outside the daemon's roots. The bundle path (parts download) is covered by unit tests and the manual steps, not here.
 Feature: Sides come back with the hub without manual steps
 
-  Scenario: A killed bridge reattaches to the same Hub of the container without user action
+  Scenario: A killed bridge reattaches to the same Hub of the container without user action, and the Sides group fits a desktop and a phone
     Given a fake Docker container "back-dev" that runs a claude-ui side with the project "back-proj"
     When I open the app
     Then the side "back-dev" is ready within 90 seconds
@@ -13,6 +13,12 @@ Feature: Sides come back with the hub without manual steps
     And the side "back-dev" is ready within 60 seconds
     And the Hub of "back-dev" is the one that ran before
     And I capture "bridge-reattached"
+    When I open Settings › Sides
+    Then the page has no horizontal scroll
+    And I capture "settings-sides"
+    Given the viewport is 390x844
+    Then the page has no horizontal scroll
+    And I capture "settings-sides-phone"
 
   Scenario: A stopped container is not restarted in a loop and starts when it runs again
     Given a fake Docker container "stop-dev" that runs a claude-ui side with the project "stop-proj"
@@ -39,20 +45,6 @@ Feature: Sides come back with the hub without manual steps
     And I turn "off" Update automatically for "pref-dev" in Settings
     And I restart the daemon with the fake Docker
     Then the side "pref-dev" is ready within 90 seconds
-
-  Scenario Outline: The Sides group fits the screen
-    Given the viewport is <width>x<height>
-    And a fake Docker container "view-dev" that runs a claude-ui side with the project "view-proj"
-    When I open the app
-    Then the side "view-dev" is ready within 90 seconds
-    When I open Settings › Sides
-    Then the page has no horizontal scroll
-    And I capture "settings-sides"
-
-    Examples:
-      | width | height |
-      | 1440  | 900    |
-      | 390   | 844    |
 
   Scenario: A saved side's projects stay in the sidebar while it fails
     Given a fake Docker container "fail-dev" that runs a claude-ui side with the project "fail-proj"

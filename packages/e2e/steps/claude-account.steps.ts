@@ -54,11 +54,6 @@ When("I close the Claude login terminal", async ({ page }) => {
   await expect(page.getByTestId("terminal-tab").filter({ hasText: "Claude login" })).toHaveCount(0);
 });
 
-Then("the page does not scroll sideways", async ({ page }) => {
-  const m = await page.evaluate(() => ({ inner: window.innerWidth, root: document.documentElement.scrollWidth }));
-  expect(m.root).toBe(m.inner);
-});
-
 When("I open the usage ring", async ({ page }) => {
   await page.getByTestId("plan-meter").click();
   await expect(page.getByTestId("plan-usage")).toBeVisible();

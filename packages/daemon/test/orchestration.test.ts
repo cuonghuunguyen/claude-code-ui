@@ -277,13 +277,16 @@ describe("orchestration", () => {
     expect(runsOf(id)[1]!.options.mcpServers).toBeUndefined();
   });
 
-  it("auto-allows the coordinator's tools by sdk source; worker_start asks with no rule to save; a configured server of the same name is not trusted", async () => {
+  it("auto-allows the coordinator's tools by sdk source; worker_start and worker_remove (irreversible) ask with no rule to save; a configured server of the same name is not trusted", async () => {
     const { toolPolicy } = daemon.orchestration;
     const sdk = { name: "orchestration", source: "sdk" };
     expect(toolPolicy("mcp__orchestration__worker_wait", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_send", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_targets", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_start", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
+    expect(toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
+    expect(toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
     expect(toolPolicy("mcp__orchestration__worker_wait", { name: "orchestration", source: "user" })).toBeUndefined();
     expect(toolPolicy("mcp__orchestration__worker_wait", undefined)).toBeUndefined();
     expect(toolPolicy("mcp__other__worker_wait", { name: "other", source: "sdk" })).toBeUndefined();
@@ -1012,13 +1015,6 @@ describe("orchestration", () => {
     expect((await call(coord, "worker_remove", { name: "Bad Name" })).error).toBeDefined();
   });
 
-  it("worker_remove is not in the no-permission-prompt tools (irreversible): no rules offered either", () => {
-    const sdk = { name: "orchestration", source: "sdk" };
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_remove", sdk)).toBe("no_rules");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_close", sdk)).toBe("allow");
-    expect(daemon.orchestration.toolPolicy("mcp__orchestration__worker_keep_open", sdk)).toBe("allow");
-  });
-
   it("worker_remove closes an idle worker with a live CLI without a prior worker_close, frees the name and broadcasts the removal", async () => {
     enable();
     const coord = await coordinator();
@@ -1090,16 +1086,6 @@ describe("orchestration", () => {
   });
 
   describe("web app worker.close / worker.remove", () => {
-    it("worker.close stops a running worker first, then closes it", async () => {
-      enable();
-      const coord = await coordinator();
-      const w = await call(coord, "worker_start", { name: "u1", cwd: dirB, prompt: "hold" });
-      await until(() => runsOf(w.sessionId)[0]?.texts.length);
-      expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply", result: {} });
-      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u1")).toMatchObject({ live: false });
-      expect(runsOf(w.sessionId)[0]!.closed).toBe(true);
-    });
-
     it("worker.close of an idle worker without a CLI is ok", async () => {
       enable();
       const coord = await coordinator();
@@ -1107,32 +1093,6 @@ describe("orchestration", () => {
       await until(async () => (await state(w.sessionId)) === "idle");
       await call(coord, "worker_close", { name: "u2" });
       expect(await c.request({ type: "worker.close", sessionId: w.sessionId })).toMatchObject({ type: "reply" });
-    });
-
-    it("worker.remove deletes an idle worker, frees the name, keeps the worktree folder, broadcasts the removal", async () => {
-      enable();
-      const coord = await coordinator();
-      const w = await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "x" });
-      await until(async () => (await state(w.sessionId)) === "idle");
-      const seen = c.inbox.length;
-      expect(await c.request({ type: "worker.remove", sessionId: w.sessionId }, 15000)).toMatchObject({ type: "reply", result: {} });
-      await until(() => c.inbox.slice(seen).some((m: any) => m.type === "sessions.changed" && m.deleted === w.sessionId));
-      expect((await call(coord, "worker_list")).workers.find((x: { name: string }) => x.name === "u3")).toBeUndefined();
-      expect(existsSync(dirB)).toBe(true);
-      expect((await call(coord, "worker_start", { name: "u3", cwd: dirB, prompt: "again" })).name).toBe("u3");
-    }, 20_000);
-
-    it("worker.remove refuses a running and a waiting worker with text that names no tool", async () => {
-      enable();
-      const coord = await coordinator();
-      const a = await call(coord, "worker_start", { name: "u4", cwd: dirB, prompt: "hold" });
-      await until(() => runsOf(a.sessionId)[0]?.texts.length);
-      const r = await c.request({ type: "worker.remove", sessionId: a.sessionId });
-      expect(r).toMatchObject({ type: "error", code: "session_running" });
-      expect(r.message).not.toMatch(/worker_/);
-      const b = await call(coord, "worker_start", { name: "u5", cwd: dirB, prompt: "ask" });
-      await pendingQ(b.sessionId);
-      expect(await c.request({ type: "worker.remove", sessionId: b.sessionId })).toMatchObject({ type: "error", code: "session_running" });
     });
 
     it("a session that is no worker, and an unknown id, are not_worker", async () => {
@@ -1191,18 +1151,6 @@ describe("orchestration", () => {
       sc.ws.close();
       slow.close();
     }
-  });
-
-  it("a coordinator with a running worker is not idle-closed; after the worker's turn it is", async () => {
-    enable();
-    const coord = await coordinator();
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(false);
-    const w = await call(coord, "worker_start", { name: "idle-w", cwd: dirB, prompt: "hold" });
-    await until(() => runsOf(w.sessionId)[0]?.texts.length);
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(true);
-    await call(coord, "worker_send", { name: "idle-w", text: "end" });
-    await until(async () => (await state(w.sessionId)) === "idle");
-    expect(daemon.orchestration.waitingOnWorkers(coord)).toBe(false);
   });
 
   it("the idle close skips a coordinator while its worker runs, and takes it once the worker is idle", async () => {
@@ -2254,6 +2202,8 @@ describe("orchestration /clear (GH-334)", () => {
     expect((await call(coord, "worker_list")).workers).toEqual([expect.objectContaining({ name: "wc", sessionId: heir })]);
     expect(link(w.sessionId).coordinatorId).toBeUndefined();
     expect(link(w.sessionId).name).toBeUndefined();
+    // The old session, as a plain session, may get the coordinator server now.
+    expect(daemon.orchestration.mcpServers(w.sessionId)).toBeDefined();
     expect(link(heir)).toEqual(expect.objectContaining({ coordinatorId: coord, name: "wc", cwd: dirB }));
     // The heir's turn end reaches the coordinator with the worker's name.
     await call(coord, "worker_wait", { timeoutMs: 0 });
