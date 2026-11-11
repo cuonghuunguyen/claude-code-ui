@@ -144,6 +144,8 @@ export default {
   "app.toolbar.modelsConnect": "Connect a provider…",
   "app.toolbar.modelsFailed": "Models could not be loaded: {message}",
   "app.toolbar.modelsRetry": "Retry",
+  "app.toolbar.modelSearch": "Search models",
+  "app.toolbar.modelSearchEmpty": "No models match",
   "app.toolbar.thinkingEffort": "Thinking effort",
   "app.toolbar.sessionSettings": "Session settings",
   "app.toolbar.sessionSettingsLabel": "{visible}, session settings: {mode}, {model}",

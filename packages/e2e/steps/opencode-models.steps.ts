@@ -24,9 +24,9 @@ When("I click {string} in the model chooser footer", async ({ page }, label: str
 });
 
 Then("the model chooser footer button {string} is at least 44px high", async ({ page }, label: string) => {
-  const box = await page.getByTestId("models-connect").filter({ hasText: label }).boundingBox();
-  expect(box, "footer button has a box").not.toBeNull();
-  expect(box!.height).toBeGreaterThanOrEqual(44);
+  // The popup zooms in (100ms): a box measured mid-animation is scaled below its layout size. Wait until it settles.
+  const button = page.getByTestId("models-connect").filter({ hasText: label });
+  await expect.poll(async () => (await button.boundingBox())?.height ?? 0, { timeout: 3000 }).toBeGreaterThanOrEqual(44);
 });
 
 Then("every model chooser option is at least 44px high", async ({ page }) => {

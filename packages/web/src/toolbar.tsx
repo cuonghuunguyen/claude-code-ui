@@ -1,7 +1,8 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpIcon, BotIcon, BrainIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlugIcon, PlusIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, BrainIcon, CheckIcon, ChevronDownIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlugIcon, PlusIcon, SearchIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
+import { Combobox } from "@base-ui/react/combobox";
 import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
 import type { SendMode } from "./send-mode.ts";
@@ -180,6 +181,83 @@ export function ModelFooter({ error, onRetry, onConnect, close }: ModelFooterPro
   );
 }
 
+/** The model chooser shows a search field from this many models on (provider lists are long, GH-680). */
+export const SEARCH_FROM = 8;
+
+/** Model chooser (GH-680): the Chooser's trigger and rows, plus a search field in the popup over the model name, id and provider. Below SEARCH_FROM items it is a plain Chooser (no field to find a model among a few). */
+export function ModelChooser(props: { label: string; value: string; items: ChooserItem<string>[]; onChange: (v: string) => void; testId: string; className?: string; /** GH-679: below the list, pinned outside the scroll area, also while the search finds nothing; gets a function that closes the popup. */ footer?: (close: () => void) => ReactNode }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  if (props.items.length < SEARCH_FROM) return <Chooser {...props} />;
+  const { label, value, items, onChange, testId, className = "", footer } = props;
+  const current = items.find((i) => i.value === value);
+  const visible = typeof current?.trigger === "string" ? current.trigger : (current?.label ?? value);
+  const groups = runs(items).map(([group, run]) => ({ value: `${group ?? ""}:${run[0]!.value}`, name: group, items: run }));
+  const matches = (i: ChooserItem<string>, q: string) => {
+    const n = q.trim().toLowerCase();
+    return !n || [i.label, i.value, i.group ?? ""].some((x) => x.toLowerCase().includes(n));
+  };
+  return (
+    <Combobox.Root
+      open={open}
+      onOpenChange={setOpen}
+      items={groups}
+      value={current ?? null}
+      onValueChange={(v: ChooserItem<string> | null) => v && v.value !== value && onChange(v.value)}
+      itemToStringLabel={(i: ChooserItem<string>) => i.label}
+      isItemEqualToValue={(a: ChooserItem<string>, b: ChooserItem<string>) => a.value === b.value}
+      filter={matches}
+      autoHighlight
+    >
+      <Combobox.Trigger aria-label={`${visible}, ${label}`} title={`${label}: ${current?.label ?? value}`} data-testid={testId} className={`${GHOST} flex min-w-0 items-center justify-between ${className}`}>
+        <span className="truncate">{current?.trigger ?? current?.label ?? value}</span>
+        <ChevronDownIcon aria-hidden className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+      </Combobox.Trigger>
+      <Combobox.Portal>
+        <Combobox.Positioner side="top" align="start" sideOffset={4} collisionPadding={16} className="isolate z-50">
+          <Combobox.Popup className="flex max-h-[min(24rem,var(--available-height))] w-72 max-w-[calc(100vw-16px)] origin-(--transform-origin) flex-col overflow-hidden rounded-2xl border bg-popover p-0.5 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+            <div className="flex shrink-0 items-center gap-2 border-b px-3">
+              <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <Combobox.Input
+                type="search"
+                autoComplete="off"
+                aria-label={t("app.toolbar.modelSearch")}
+                placeholder={t("app.toolbar.modelSearch")}
+                data-testid="model-search"
+                className="h-9 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:h-8 md:text-sm pointer-coarse:h-11"
+              />
+            </div>
+            <Combobox.Empty className="px-3 py-3 text-muted-foreground empty:hidden">{t("app.toolbar.modelSearchEmpty")}</Combobox.Empty>
+            <Combobox.List className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+              {(g: (typeof groups)[number]) => (
+                <Combobox.Group key={g.value} items={g.items} className="p-0">
+                  {g.name !== undefined && <Combobox.GroupLabel data-slot="select-label" className="px-3 py-1 text-xs text-muted-foreground">{g.name}</Combobox.GroupLabel>}
+                  <Combobox.Collection>
+                    {(i: ChooserItem<string>) => (
+                      <Combobox.Item
+                        key={i.value}
+                        value={i}
+                        title={i.description}
+                        className="relative flex h-7 w-full cursor-pointer items-center gap-2 rounded-sm py-0 pr-8 pl-3 font-normal outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-[selected]:font-medium data-[selected]:text-info pointer-coarse:h-11"
+                      >
+                        <span className="truncate">{i.label}</span>
+                        <Combobox.ItemIndicator className="pointer-events-none absolute right-2 flex size-4 items-center justify-center">
+                          <CheckIcon aria-hidden className="size-4" />
+                        </Combobox.ItemIndicator>
+                      </Combobox.Item>
+                    )}
+                  </Combobox.Collection>
+                </Combobox.Group>
+              )}
+            </Combobox.List>
+            {footer && <div data-slot="select-footer" className="shrink-0 border-t bg-popover pt-0.5">{footer(() => setOpen(false))}</div>}
+          </Combobox.Popup>
+        </Combobox.Positioner>
+      </Combobox.Portal>
+    </Combobox.Root>
+  );
+}
+
 /** Permission mode chooser: in the prompt toolbar and in the tray of the permission and question panels (GH-145). */
 export function ModePicker({ mode, modes, onMode, className = "shrink-0", shortcut = true, cycles = true }: { mode: PermissionMode; modes: PermissionMode[]; onMode: (mode: PermissionMode) => void; className?: string; /** Shift+Tab cycles the mode only in the prompt textarea: the panels pass false. */ shortcut?: boolean; /** False when Shift+Tab cycles agents instead (the Engine has agents): the name drops "(Shift+Tab)". */ cycles?: boolean }) {
   const t = useT();
@@ -314,7 +392,7 @@ export function PromptToolbar(props: {
           <>
             {showAgents && <AgentPicker agent={props.agent ?? "build"} agents={props.agentList ?? []} onAgent={props.onAgent!} onRetry={props.agentsFailed ? props.onRetryAgents : undefined} />}
             <ModePicker mode={props.mode} modes={props.modes} onMode={props.onMode} cycles={!showAgents} />
-            <Chooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" footer={props.modelFooter && ((close) => <ModelFooter {...props.modelFooter!} close={close} />)} />
+            <ModelChooser label={t("app.toolbar.model")} testId="session-model" value={props.model} onChange={props.onModel} items={modelItems} className="max-w-55" footer={props.modelFooter && ((close) => <ModelFooter {...props.modelFooter!} close={close} />)} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={props.onEffort} />}
           </>
         )}
@@ -361,7 +439,7 @@ function SettingsChip({ models, model, mode, modes, onMode, onModel, onEffort, e
           >
             {showAgents && <AgentPicker agent={agent} agents={agentList} onAgent={onAgent!} onRetry={agentsFailed ? onRetryAgents : undefined} shortcut={false} className={wide} />}
             <ModePicker mode={mode} modes={modes} onMode={onMode} shortcut={false} className={wide} />
-            <Chooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} footer={modelFooter && ((close) => <ModelFooter {...modelFooter} close={close} />)} />
+            <ModelChooser label={t("app.toolbar.model")} testId="session-model" value={model} onChange={onModel} items={modelItems} className={wide} footer={modelFooter && ((close) => <ModelFooter {...modelFooter} close={close} />)} />
             {efforts.length > 0 && <EffortPicker efforts={efforts} effort={effort} onEffort={onEffort} className={wide} />}
           </Popover.Popup>
         </Popover.Positioner>
