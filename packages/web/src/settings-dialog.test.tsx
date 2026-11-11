@@ -386,10 +386,16 @@ it("Terminal position: Bottom by default, Side panel saved per browser; offers M
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-side]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.side).toContain("terminal");
   expect(q("settings-terminal-position")?.textContent).toContain("Side panel");
-  await act(async () => q("settings-terminal-position")!.click());
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  localStorage.removeItem("claude-ui.layout");
+  const again = await render();
+  await again.pick("layout");
+  expect(again.q("settings-terminal-position")?.textContent).toContain("Bottom");
+  await act(async () => again.q("settings-terminal-position")!.click());
   await act(async () => document.querySelector<HTMLElement>("[data-testid=settings-terminal-position-main]")!.click());
   expect(JSON.parse(localStorage.getItem("claude-ui.layout")!).areas.main).toContain("terminal");
-  expect(q("settings-terminal-position")?.textContent).toContain("Main area");
+  expect(again.q("settings-terminal-position")?.textContent).toContain("Main area");
   localStorage.removeItem("claude-ui.layout");
 });
 

@@ -634,13 +634,13 @@ it("GH-392 with a repository list: one git.diff per readable repository with cwd
   await wait();
   expect(diffCalls(t).map((m) => m.cwd).sort()).toEqual(["/q", "/q/libs/lib", "/q/tools/inner"]);
   expect(t.request).toHaveBeenCalledWith({ type: "git.diff", cwd: "/q/tools/inner", base: "head", exact: true });
+  expect(mark(t, "/q/libs")!.className, "submodule parent dot").toContain("rounded-full");
   await openAll(t);
   expect(mark(t, "/q/tools/inner/x.ts")!.textContent).toBe("U");
   expect(mark(t, "/q/tools/inner/y.ts")!.textContent).toBe("M");
   expect(mark(t, "/q/s.ts")!.textContent).toBe("M");
   expect(mark(t, "/q/tools/inner")!.className).toContain("rounded-full");
   expect(mark(t, "/q/far")).toBeNull();
-  expect(mark(t, "/q/libs")!.className, "submodule parent dot").toContain("rounded-full");
   const lib = mark(t, "/q/libs/lib")!;
   expect(lib.textContent).toBe("M");
   expect(lib.className).not.toContain("rounded-full");

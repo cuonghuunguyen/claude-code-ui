@@ -47,10 +47,11 @@ it("renders a non-modal dialog with the title, Read-only badge and a body that s
   expect(chip.textContent).toContain("Aside: why?");
   await act(async () => void chip.click());
   expect(el.querySelector("[role=dialog]")).not.toBeNull();
+  h.calls = [];
   await act(async () => void [...el.querySelectorAll("button")].find((b) => b.textContent === "Keep as session")!.click());
   await act(async () => void (el.querySelector("[aria-label='Close aside']") as HTMLElement).click());
   ptr(el.querySelector("[role=dialog]")!, "pointerdown", 1, 1);
-  expect(h.calls).toEqual(expect.arrayContaining(["keep", "close", "focus"]));
+  expect(h.calls).toEqual(["keep", "close", "focus"]);
 });
 
 it("on a phone the title has a row of its own, so the question is truncated only at its end; it fills the viewport and cannot be dragged", async () => {
