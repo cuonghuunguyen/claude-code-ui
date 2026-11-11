@@ -81,13 +81,21 @@ export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule
   // Orchestration MCP servers are attached per folder: hide every session's tools but the own ones; worker_start asks (the user's gate on new workers).
   const orchestration = [star("orchestration-*", "deny"), ...(mcp ? [star(`${mcp}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [star(`${mcp}_worker_start`, "ask")])] : [])];
   // A read-only Aside: the last matching rule hides edit, write and apply_patch, whatever the mode allows.
-  return [marker(`mode:${mode}`), ...(agent ? [marker(`agent:${agent}`)] : []), ...rules, ...agentRules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always];
+  return [marker(`mode:${mode}`), ...(agent ? [marker(`agent:${agent}`)] : []), ...rules, ...agentRules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always, ...denialTail(always, agentRules, readOnly)];
 }
+/** The agent's and the Aside's denials again after the always rules (last match wins), so an always-allow rule never beats them (GH-705). */
+export const denialTail = (always: readonly Rule[], agentRules: Rule[], readOnly: boolean): Rule[] => {
+  const denials = [...agentRules, ...(readOnly ? [star("edit", "deny")] : [])];
+  return always.length && denials.length ? [marker("denials"), ...denials] : [];
+};
 const lastMarker = (rules: readonly Rule[], test: (pattern: string) => boolean) => rules.map((r) => r.permission === MARK && test(r.pattern)).lastIndexOf(true);
-/** The "always allow" rules of a session: the ones after the last `always` marker. */
+/** The "always allow" rules of a session: the ones after the last `always` marker, up to the next marker (`denials`). */
 export const alwaysOf = (rules: readonly Rule[]): Rule[] => {
   const i = lastMarker(rules, (p) => p === "always");
-  return i < 0 ? [] : rules.slice(i + 1).filter((r) => r.permission !== MARK);
+  if (i < 0) return [];
+  const rest = rules.slice(i + 1);
+  const end = rest.findIndex((r) => r.permission === MARK);
+  return end < 0 ? rest : rest.slice(0, end);
 };
 /** The rules of the last block (all rules when there is none). */
 const lastBlock = (rules: readonly Rule[]) => rules.slice(Math.max(lastMarker(rules, (p) => p.startsWith("mode:")), 0));
@@ -427,17 +435,20 @@ class OpenCodeSession implements EngineSession {
     this.changed("agent", "permissionMode"); // a saved legacy `plan` mode must not win over the agent at the next restore
   }
 
+  private async agentPermission(agent: string) {
+    return (await this.engine.agents(this.cwd)).find((a) => a.name === agent)?.permission ?? [];
+  }
+  private readOnly = () => !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t));
+
   /** The agent prompts run as. `opts.agent` (the worker link) is read lazily: orchestration writes it after the session is created. */
   private agentName = () => this.chosen ?? this.opts.agent?.(this.id) ?? "build";
 
   /** Writes a block for `mode` and `agent` (the agent's denials come from `GET /agent`). */
   private async writeBlock(mode: PermissionMode, agent = this.agentName()) {
     const mcp = this.mcpOn;
-    const known = await this.engine.agents(this.cwd);
-    const own = known.find((a) => a.name === agent)?.permission ?? [];
-    const agentRules = denialsOf(own);
+    const own = await this.agentPermission(agent);
     // shortcut: a config block copies the agent's rules as GET /agent gave them (cached 60 s), so later opencode.json edits reach this session after the next block write; upgrade: track whether the session ruleset has anything to undo.
-    const permission = modeBlock(mode, this.always, agentRules, { agent, readOnly: !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)), ...(mcp && { mcp: mcpName(this.id) }), ...(mode === "config" && { config: own }) });
+    const permission = modeBlock(mode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(mcp && { mcp: mcpName(this.id) }), ...(mode === "config" && { config: own }) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
     this.writtenAgent = agent;
@@ -956,7 +967,7 @@ class OpenCodeSession implements EngineSession {
           this.post(path, { reply: "always" });
           return this.persist(req.permission!, req.always);
         }
-        // Edit: "always" would only live in the server's memory; "all edits" is the acceptEdits mode, saved with the session.
+        // Edit outside config: "always" would only live in the server's memory; "all edits" is the acceptEdits mode, saved with the session.
         this.post(path, { reply: "once" });
         return void this.setPermissionMode("acceptEdits").catch((err) => this.occurrence("mode_failed", `Could not switch the mode: ${(err as Error).message}`));
       case "deny":
@@ -988,7 +999,13 @@ class OpenCodeSession implements EngineSession {
   private persist(permission: string, patterns: string[]) {
     const rules = patterns.map((pattern): Rule => ({ permission, pattern, action: "allow" }));
     this.always.push(...rules);
-    void this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission: rules } }).catch((err) => this.occurrence("persist_failed", `Could not save the rule: ${(err as Error).message}`));
+    // A fresh always section with every rule, then the denials again: the new rule must not beat them (GH-705).
+    const write = async () => {
+      const always = [...this.always];
+      const permission = [marker("always"), ...always, ...denialTail(always, denialsOf(await this.agentPermission(this.agentName())), this.readOnly())];
+      await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
+    };
+    void write().catch((err) => this.occurrence("persist_failed", `Could not save the rule: ${(err as Error).message}`));
   }
 
   /**

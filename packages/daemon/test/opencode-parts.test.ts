@@ -117,6 +117,19 @@ describe("OpenCodeMapper (live)", () => {
 
 describe("permission blocks", () => {
   const rule = (permission: string, pattern: string, action = "allow") => ({ permission, pattern, action }) as never;
+  it("denials come again after the always rules, behind a denials marker; alwaysOf stops at it (GH-705)", () => {
+    const deny = rule("edit", "*", "deny");
+    const block = modeBlock("config", [rule("edit", "*")], [deny], { readOnly: true });
+    expect(block.slice(-5)).toEqual([rule("claude-ui", "always"), rule("edit", "*"), rule("claude-ui", "denials"), deny, deny]);
+    // A block without always rules has nothing to repeat.
+    expect(modeBlock("config", [], [deny]).at(-1)).toEqual(rule("claude-ui", "always"));
+    // A persisted always rule is written as a fresh always section, followed by the denials again.
+    const rules = [...block, rule("claude-ui", "always"), rule("edit", "*"), rule("bash", "ls *"), rule("claude-ui", "denials"), deny];
+    expect(alwaysOf(block)).toEqual([rule("edit", "*")]);
+    expect(alwaysOf(rules)).toEqual([rule("edit", "*"), rule("bash", "ls *")]);
+    expect(rules.filter((r: { permission: string }) => r.permission === "edit").at(-1)).toEqual(deny);
+  });
+
   it("a block carries its mode and always marker; alwaysOf and modeOf read the last ones back", () => {
     const block = modeBlock("acceptEdits", [rule("bash", "ls *")], []);
     expect(block[0]).toEqual(rule("claude-ui", "mode:acceptEdits"));

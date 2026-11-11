@@ -172,7 +172,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", /\/permission\/.*\/reply/)[0]!.body).toEqual({ reply: "always" });
     const patch = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body;
-    expect(patch.permission).toEqual([{ permission: "bash", pattern: "ls *", action: "allow" }]);
+    expect(patch.permission).toEqual([{ permission: "claude-ui", pattern: "always", action: "allow" }, { permission: "bash", pattern: "ls *", action: "allow" }]);
 
     await s.prompt("edit a.txt");
     await until(() => s.parts().filter((p) => p.type === "permission_request").some((p: any) => p.tool === "Edit"));
@@ -198,8 +198,33 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await d.ok({ type: "permission.respond", requestId: edit.requestId, decision: "allow_always" });
     await until(() => d.requests("PATCH", `/session/${s.id}`).length > 0);
     expect(d.requests("POST", `/permission/${edit.requestId}/reply`)[0]!.body).toEqual({ reply: "always" });
-    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).toEqual([{ permission: "edit", pattern: "*", action: "allow" }]);
+    expect(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).toEqual([{ permission: "claude-ui", pattern: "always", action: "allow" }, { permission: "edit", pattern: "*", action: "allow" }]);
     expect(s.find("session_permission_mode")).toBeUndefined();
+  });
+
+  it("Always allow on an edit in config does not beat the agent's edit denials: plan after it, and a persist under an agent that denies (GH-705)", async () => {
+    const lastEdit = (d: Awaited<ReturnType<typeof boot>>, id: string) => (d.requests("PATCH", `/session/${id}`).at(-1)!.body.permission as { permission: string; pattern: string; action: string }[]).filter((r) => r.permission === "edit" && r.pattern === "*").at(-1);
+    const allowAlways = async (d: Awaited<ReturnType<typeof boot>>, s: Awaited<ReturnType<Awaited<ReturnType<typeof boot>>["open"]>>) => {
+      const n = d.requests("PATCH", `/session/${s.id}`).length;
+      await s.prompt("edit a.txt");
+      await until(() => !!s.find("permission_request"));
+      await d.ok({ type: "permission.respond", requestId: s.find("permission_request")!.requestId, decision: "allow_always" });
+      await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result") && d.requests("PATCH", `/session/${s.id}`).length > n);
+    };
+    const d = await boot({ script: ["edit"] });
+    const s = await d.open();
+    await allowAlways(d, s);
+    expect(lastEdit(d, s.id)).toMatchObject({ action: "allow" });
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
+    expect(lastEdit(d, s.id)).toMatchObject({ action: "deny" });
+    // docs denies edits: the saved rule is followed by that denial again.
+    const d2 = await boot({ script: ["edit"] });
+    const s2 = await d2.open();
+    await d2.ok({ type: "session.setAgent", sessionId: s2.id, agent: "docs" });
+    await allowAlways(d2, s2);
+    // The fixture's turn runs as build, so a later block may follow: check the persist PATCH itself.
+    const saved = d2.requests("PATCH", `/session/${s2.id}`).map((r) => r.body.permission as { permission: string; pattern: string; action: string }[]).find((p) => p[0]!.pattern === "always")!;
+    expect(saved).toEqual([{ permission: "claude-ui", pattern: "always", action: "allow" }, { permission: "edit", pattern: "*", action: "allow" }, { permission: "claude-ui", pattern: "denials", action: "allow" }, { permission: "edit", pattern: "*", action: "deny" }]);
   });
 
   it("Deny with a message rejects with it, the card stays denied and the turn goes on; Deny without a message rejects and the turn ends", async () => {
