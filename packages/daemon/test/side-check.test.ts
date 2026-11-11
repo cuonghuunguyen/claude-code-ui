@@ -63,22 +63,24 @@ describe("checkScript", () => {
 
 describe("parseCheck", () => {
   const out = (lines: string[]) => lines.map((l) => `CLAUDE_UI_CHECK ${l}`).join("\n");
-  it("reads every fact and skips shell noise", () => {
-    const r = parseCheck(`Welcome to Ubuntu\n${out(["node=22.4.0", "make=1", "python3=0", "cxx=1", "writable=/tmp,/dev/shm", "installed=other", "installedKey=0.4.0-1"])}\nmotd\r\n`);
-    expect(r).toEqual({ node: "22.4.0", make: true, python3: false, cxx: true, writable: ["/tmp", "/dev/shm"], installed: "other", installedKey: "0.4.0-1" });
-  });
-  it("no node, an empty writable list and the WSL package flag", () => {
-    expect(parseCheck(out(["node=none", "make=0", "python3=0", "cxx=0", "package=0", "installed=none"]))).toEqual({ make: false, python3: false, cxx: false, packageVisible: false, installed: "none" });
-    expect(parseCheck(out(["node=22.1.0", "writable=", "installed=current"]))!.writable).toEqual([]);
-  });
-  it("docker: target, tools and the own-Node flag", () => {
-    const r = parseCheck(out(["node=none", "foundnode=0", "arch=aarch64", "libc=glibc", "glibc=2.36", "cxxrt=1", "tar=1", "gzip=0", "git=1", "npm=0", "bundled=1", "installed=current"]))!;
-    expect(r).toMatchObject({ target: { arch: "aarch64", libc: "glibc", glibc: "2.36", cxxRuntime: true }, tools: { tar: true, gzip: false, git: true, npm: false, cxxRuntime: true }, bundled: true });
-  });
-  it("is undefined without the last line (the script did not finish) or without any line", () => {
-    expect(parseCheck(out(["node=22.4.0", "make=1"]))).toBeUndefined();
-    expect(parseCheck("bash: wsl: command not found")).toBeUndefined();
-    expect(parseCheck(out(["installed=maybe"]))).toBeUndefined();
+  it("parseCheck: reads every fact and skips shell noise; no node, an empty writable list and the WSL package flag; docker target, tools and own-Node flag; undefined without the last line or without any line", () => {
+    {
+      const r = parseCheck(`Welcome to Ubuntu\n${out(["node=22.4.0", "make=1", "python3=0", "cxx=1", "writable=/tmp,/dev/shm", "installed=other", "installedKey=0.4.0-1"])}\nmotd\r\n`);
+      expect(r).toEqual({ node: "22.4.0", make: true, python3: false, cxx: true, writable: ["/tmp", "/dev/shm"], installed: "other", installedKey: "0.4.0-1" });
+    }
+    {
+      expect(parseCheck(out(["node=none", "make=0", "python3=0", "cxx=0", "package=0", "installed=none"]))).toEqual({ make: false, python3: false, cxx: false, packageVisible: false, installed: "none" });
+      expect(parseCheck(out(["node=22.1.0", "writable=", "installed=current"]))!.writable).toEqual([]);
+    }
+    {
+      const r = parseCheck(out(["node=none", "foundnode=0", "arch=aarch64", "libc=glibc", "glibc=2.36", "cxxrt=1", "tar=1", "gzip=0", "git=1", "npm=0", "bundled=1", "installed=current"]))!;
+      expect(r).toMatchObject({ target: { arch: "aarch64", libc: "glibc", glibc: "2.36", cxxRuntime: true }, tools: { tar: true, gzip: false, git: true, npm: false, cxxRuntime: true }, bundled: true });
+    }
+    {
+      expect(parseCheck(out(["node=22.4.0", "make=1"]))).toBeUndefined();
+      expect(parseCheck("bash: wsl: command not found")).toBeUndefined();
+      expect(parseCheck(out(["installed=maybe"]))).toBeUndefined();
+    }
   });
 });
 
@@ -135,51 +137,53 @@ describe("verdictOf", () => {
       for (const docker of [true, false]) expect(checkMessage(reason, "X", { docker, detail: "d", name: "n" }), reason).not.toMatch(/docker cp|docker exec|\bcp\b|stream|exec/i);
   });
 
-  it("docker bundle path: no Node.js or build tools needed; tar and gzip are; an own-Node install runs without Node.js", () => {
-    const B = { kind: "docker" as const, install: { method: "bundle" as const } };
-    const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
-    expect(verdict({ node: undefined, make: false, python3: false, cxx: false, tools }, B).verdict).toBe("install");
-    expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
-    const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
-    expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringContaining("tar and gzip")]);
-    // Installed with its own Node.js: starts without the container's; installed by npm: needs it.
-    expect(verdict({ node: undefined, installed: "current", bundled: true }, { kind: "docker", install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
-    // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
-    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
+  it("verdictOf: docker bundle path needs no Node.js or build tools; wsl bundle path; docker npm path says why the bundle is not used", () => {
+    {
+      const B = { kind: "docker" as const, install: { method: "bundle" as const } };
+      const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
+      expect(verdict({ node: undefined, make: false, python3: false, cxx: false, tools }, B).verdict).toBe("install");
+      expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
+      const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
+      expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringContaining("tar and gzip")]);
+      // Installed with its own Node.js: starts without the container's; installed by npm: needs it.
+      expect(verdict({ node: undefined, installed: "current", bundled: true }, { kind: "docker", install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
+      // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
+      expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
+    }
+    {
+      const B = { install: { method: "bundle" as const } };
+      const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
+      const target = { arch: "x86_64", libc: "glibc" as const, glibc: "2.36", cxxRuntime: true };
+      const v = verdict({ node: undefined, make: false, python3: false, cxx: false, tools, target }, B);
+      expect(v.verdict).toBe("install");
+      expect(v.facts).toMatchObject({ install: { method: "bundle" }, target: { arch: "x86_64", libc: "glibc", glibc: "2.36" } });
+      expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
+      const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
+      expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringMatching(/tar and gzip.*in the distro/)]);
+      expect(verdict({ node: undefined, installed: "current", bundled: true }, { install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
+      // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
+      expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
+      // npm (musl, other CPU, no dist/side): Node.js and build tools as before, with the reason.
+      const npm = verdict({ node: undefined }, { install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" } });
+      expect(npm.reason).toBe("node_missing");
+      expect(npm.message).toContain("claude-ui installs with npm here:");
+      expect(verdict({ make: false }, { install: { method: "npm", reason: "r" } }).reason).toBe("build_tools_missing");
+      expect(verdict({ make: false }).reason).toBe("build_tools_missing");
+    }
+    {
+      const r = verdict({ node: undefined, target: { arch: "x86_64", libc: "musl", cxxRuntime: true }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: true } }, { kind: "docker", install: { method: "npm", reason: "the container uses musl" }, network: false });
+      expect(r.reason).toBe("node_missing");
+      expect(r.message).toContain("claude-ui installs with npm here: the container uses musl.");
+      expect(r.facts).toMatchObject({ target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl" }, tools: { git: true, npm: false }, network: false });
+    }
   });
 
-  it("wsl bundle path: no Node.js or build tools needed; tar and gzip are; an own-Node install runs without Node.js; npm path as before", () => {
-    const B = { install: { method: "bundle" as const } };
-    const tools = { tar: true, gzip: true, npm: false, git: false, cxxRuntime: true };
-    const target = { arch: "x86_64", libc: "glibc" as const, glibc: "2.36", cxxRuntime: true };
-    const v = verdict({ node: undefined, make: false, python3: false, cxx: false, tools, target }, B);
-    expect(v.verdict).toBe("install");
-    expect(v.facts).toMatchObject({ install: { method: "bundle" }, target: { arch: "x86_64", libc: "glibc", glibc: "2.36" } });
-    expect(verdict({ node: "18.0.0", tools }, B).verdict).toBe("install");
-    const noTar = verdict({ node: undefined, tools: { ...tools, tar: false, gzip: false } }, B);
-    expect([noTar.reason, noTar.message]).toEqual(["unpack_tools_missing", expect.stringMatching(/tar and gzip.*in the distro/)]);
-    expect(verdict({ node: undefined, installed: "current", bundled: true }, { install: { method: "npm", reason: "r" } }).verdict).toBe("installed");
-    // An installed found-Node.js install whose Node.js is gone is not blocked: the start installs the pinned one.
-    expect(verdict({ node: undefined, installed: "current", bundled: false }, B).verdict).toBe("installed");
-    // npm (musl, other CPU, no dist/side): Node.js and build tools as before, with the reason.
-    const npm = verdict({ node: undefined }, { install: { method: "npm", reason: "the container uses musl (for example Alpine); the bundle needs glibc" } });
-    expect(npm.reason).toBe("node_missing");
-    expect(npm.message).toContain("claude-ui installs with npm here:");
-    expect(verdict({ make: false }, { install: { method: "npm", reason: "r" } }).reason).toBe("build_tools_missing");
-    expect(verdict({ make: false }).reason).toBe("build_tools_missing");
-  });
 
   it("wsl check script: reads the target, tar and gzip and whether the install carries its own Node.js", () => {
     const w = checkScript(KEY, "wsl", "C:\\pkg");
     for (const part of ["emit arch", "emit cxxrt", "for t in tar gzip git npm", "emit bundled"]) expect(w).toContain(part);
   });
 
-  it("docker npm path: the Node.js block says why the bundle is not used; facts carry target, tools, network and method", () => {
-    const r = verdict({ node: undefined, target: { arch: "x86_64", libc: "musl", cxxRuntime: true }, tools: { tar: true, gzip: true, npm: false, git: true, cxxRuntime: true } }, { kind: "docker", install: { method: "npm", reason: "the container uses musl" }, network: false });
-    expect(r.reason).toBe("node_missing");
-    expect(r.message).toContain("claude-ui installs with npm here: the container uses musl.");
-    expect(r.facts).toMatchObject({ target: { arch: "x86_64", libc: "musl" }, install: { method: "npm", reason: "the container uses musl" }, tools: { git: true, npm: false }, network: false });
-  });
 
   it("every reason has a short plain message", () => {
     expect(checkMessage("node_old", "WSL: Ubuntu", { detail: "20.1.0" })).toContain("20.1.0");
@@ -254,33 +258,35 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     return { ...b, out: r.stdout, parsed: parseCheck(r.stdout), unchanged: snapshot(b.home).join("\n") === before.join("\n"), err: r.stderr };
   };
 
-  it("nothing installed: install", () => {
-    const c = check({});
-    expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, installed: "none" });
-    expect(c.out).not.toContain("credentials");
-    // Home is reported as the text $HOME, never as its value.
-    expect(c.parsed!.writable).toContain("$HOME");
-    expect(c.out).not.toContain(c.home);
-    expect(c.unchanged).toBe(true);
-    expect(c.calls().filter((l) => l.startsWith("npm"))).toEqual([]);
-    // Node only answered version and detection questions, never ran the claude-ui entry.
-    expect(c.calls().filter((l) => /cli\.js|--side/.test(l))).toEqual([]);
-    expect(c.parsed).toMatchObject({ foundNode: true });
-  });
-  it("another build installed: update, named; this build without the SDK binary counts as not current", () => {
-    expect(check({ install: "other" }).parsed).toMatchObject({ installed: "other", installedKey: "0.4.0-1" });
-    expect(check({ install: "no-binary" }).parsed).toMatchObject({ installed: "other", installedKey: KEY });
-  });
-  it("this build installed: current", () => {
-    const c = check({ install: "current" });
-    expect(c.parsed).toMatchObject({ installed: "current" });
-    expect(c.parsed!.installedKey).toBeUndefined();
-    expect(c.unchanged).toBe(true);
-  });
-  it("no node, old node, no tools", () => {
-    expect(check({ node: false }).parsed!.node).toBeUndefined();
-    expect(check({ node: "20.11.0" }).parsed!.node).toBe("20.11.0");
-    expect(check({ tools: false }).parsed).toMatchObject({ make: false, python3: false, cxx: false });
+  it("check script, nothing installed: install; another build installed: update, named; this build installed: current; no node, old node, no tools", () => {
+    {
+      const c = check({});
+      expect(c.parsed).toMatchObject({ node: "22.4.0", make: true, python3: true, cxx: true, installed: "none" });
+      expect(c.out).not.toContain("credentials");
+      // Home is reported as the text $HOME, never as its value.
+      expect(c.parsed!.writable).toContain("$HOME");
+      expect(c.out).not.toContain(c.home);
+      expect(c.unchanged).toBe(true);
+      expect(c.calls().filter((l) => l.startsWith("npm"))).toEqual([]);
+      // Node only answered version and detection questions, never ran the claude-ui entry.
+      expect(c.calls().filter((l) => /cli\.js|--side/.test(l))).toEqual([]);
+      expect(c.parsed).toMatchObject({ foundNode: true });
+    }
+    {
+      expect(check({ install: "other" }).parsed).toMatchObject({ installed: "other", installedKey: "0.4.0-1" });
+      expect(check({ install: "no-binary" }).parsed).toMatchObject({ installed: "other", installedKey: KEY });
+    }
+    {
+      const c = check({ install: "current" });
+      expect(c.parsed).toMatchObject({ installed: "current" });
+      expect(c.parsed!.installedKey).toBeUndefined();
+      expect(c.unchanged).toBe(true);
+    }
+    {
+      expect(check({ node: false }).parsed!.node).toBeUndefined();
+      expect(check({ node: "20.11.0" }).parsed!.node).toBe("20.11.0");
+      expect(check({ tools: false }).parsed).toMatchObject({ make: false, python3: false, cxx: false });
+    }
   });
   it("leaves the whole HOME tree (paths, sizes, mtimes) as it was, and never prints the credentials", () => {
     for (const o of [{}, { install: "other" as const }, { install: "current" as const }, { credentials: false }, { node: false as const }]) {
@@ -295,23 +301,25 @@ describe.skipIf(!hasSh || process.platform === "win32")("the check and setup scr
     expect(parseCheck(b.run(checkScript(KEY, "wsl", "/nope")).stdout)).toMatchObject({ packageVisible: false, installed: "none" });
   });
 
-  it("setup never: prints not_installed and installs nothing; with this build installed it only starts it", () => {
-    const b = box({});
-    const r = b.run(setupScript("/tmp/x.tgz", KEY, "docker", "never"));
-    expect(r.status).toBe(3);
-    expect(r.stdout).toContain("CLAUDE_UI_SETUP not_installed");
-    expect(b.calls().some((l) => l.startsWith("npm"))).toBe(false);
-    expect(existsSync(b.root)).toBe(false);
-    const ok = box({ install: "current" });
-    const s = ok.run(setupScript("/tmp/x.tgz", KEY, "docker", "never"));
-    expect(s.stdout).toContain("CLAUDE_UI_PHASE starting");
-    expect(s.stdout).toContain("side started");
-    expect(ok.calls().some((l) => l.startsWith("npm"))).toBe(false);
-  });
-  it("setup never does not run a build that is another version", () => {
-    const b = box({ install: "other" });
-    expect(b.run(setupScript("/tmp/x.tgz", KEY, "docker", "never")).stdout).toContain("CLAUDE_UI_SETUP not_installed");
-    expect(readdirSync(b.root)).toEqual(["0.4.0-1"]);
+  it("setup never: prints not_installed and installs nothing, with this build installed it only starts it; does not run a build that is another version", () => {
+    {
+      const b = box({});
+      const r = b.run(setupScript("/tmp/x.tgz", KEY, "docker", "never"));
+      expect(r.status).toBe(3);
+      expect(r.stdout).toContain("CLAUDE_UI_SETUP not_installed");
+      expect(b.calls().some((l) => l.startsWith("npm"))).toBe(false);
+      expect(existsSync(b.root)).toBe(false);
+      const ok = box({ install: "current" });
+      const s = ok.run(setupScript("/tmp/x.tgz", KEY, "docker", "never"));
+      expect(s.stdout).toContain("CLAUDE_UI_PHASE starting");
+      expect(s.stdout).toContain("side started");
+      expect(ok.calls().some((l) => l.startsWith("npm"))).toBe(false);
+    }
+    {
+      const b = box({ install: "other" });
+      expect(b.run(setupScript("/tmp/x.tgz", KEY, "docker", "never")).stdout).toContain("CLAUDE_UI_SETUP not_installed");
+      expect(readdirSync(b.root)).toEqual(["0.4.0-1"]);
+    }
   });
   it("setup force installs again over a complete install; needed leaves it", () => {
     const f = box({ install: "current" });
