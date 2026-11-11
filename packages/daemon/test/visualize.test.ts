@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,4 +81,11 @@ it("the written prefix paints the page with the host colours and color-scheme be
   const shrink = new Function("parent", "addEventListener", "document", "ResizeObserver", inner);
   shrink({ postMessage: (m: unknown) => (sent = m) }, (t: string, h: () => void) => t === "load" && h(), { documentElement: { scrollHeight: 432, getBoundingClientRect: () => content, style: {} } }, class { observe() {} });
   expect(sent).toEqual({ v: 1, type: "height", height: 50 });
+});
+
+it("the plugin's SessionStart hook hands the model the same text as OpenCode's system, except on resume and fork", () => {
+  const hook = (source: string) => execFileSync(process.execPath, [join(visualizePluginDir()!, "hooks/session-start.mjs")], { input: JSON.stringify({ source }), encoding: "utf8" });
+  for (const source of ["startup", "clear", "compact"])
+    expect(JSON.parse(hook(source))).toEqual({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: visualizeSystem(visualizePluginDir()) } });
+  for (const source of ["resume", "fork"]) expect(hook(source)).toBe("");
 });

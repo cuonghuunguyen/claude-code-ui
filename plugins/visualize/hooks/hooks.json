@@ -1,0 +1,6 @@
+{
+  "description": "Puts the visualize skill into the session's context at start: a listed skill alone is rarely invoked for an explanation.",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\"" }] }]
+  }
+}
