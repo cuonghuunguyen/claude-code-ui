@@ -12,7 +12,7 @@
     "url": "git+https://github.com/cuonghuunguyen/claude-code-ui.git",
     "directory": "packages/claude-ui"
   },
-  "homepage": "https://cuonghuunguyen.github.io/claude-code-ui/",
+  "homepage": "https://claudecodeui.cuonghuunguyen.app/",
   "bugs": {
     "url": "https://github.com/cuonghuunguyen/claude-code-ui/issues"
   },

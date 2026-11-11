@@ -40,12 +40,23 @@ jobs:
       - run: npm ci
       # Pull requests only check that the site builds (dead links fail it).
       - run: npm run docs:build
+      # The docs live on Cloudflare (claudecodeui.cuonghuunguyen.app); GitHub Pages only redirects old
+      # cuonghuunguyen.github.io/claude-code-ui/<path> links there, same path, so indexed URLs keep working.
+      - if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p redirect
+          cat > redirect/404.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>Moved</title><meta name="robots" content="noindex">
+          <script>location.replace("https://claudecodeui.cuonghuunguyen.app" + location.pathname.replace(/^\/claude-code-ui/, "") + location.search + location.hash)</script>
+          <p>Moved to <a href="https://claudecodeui.cuonghuunguyen.app/">claudecodeui.cuonghuunguyen.app</a>.</p>
+          HTML
+          cp redirect/404.html redirect/index.html
       - if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/site/.vitepress/dist
+          path: redirect
 
   deploy:
     if: github.event_name != 'pull_request'

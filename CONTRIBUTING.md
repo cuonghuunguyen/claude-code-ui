@@ -44,7 +44,7 @@ Adapter fixtures are recorded from a real SDK session: `npm run record-fixture -
 The docs site (VitePress) lives in `docs/site/` and is published to GitHub Pages by `.github/workflows/docs.yml` on every push to `main` that touches it.
 
 ```sh
-npm run docs:dev        # live preview on http://localhost:5173/claude-code-ui/
+npm run docs:dev        # live preview on http://localhost:5173/
 npm run docs:build      # production build into docs/site/.vitepress/dist; fails on dead links
 npm run docs:preview    # serve that build
 ```

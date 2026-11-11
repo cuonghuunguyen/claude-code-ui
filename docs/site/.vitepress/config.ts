@@ -5,7 +5,7 @@ import { defineConfig, type DefaultTheme, type HeadConfig } from "vitepress";
 import llmstxt from "vitepress-plugin-llms";
 
 const repo = "https://github.com/cuonghuunguyen/claude-code-ui";
-const site = "https://cuonghuunguyen.github.io/claude-code-ui/";
+const site = "https://claudecodeui.cuonghuunguyen.app/";
 const ogImage = `${site}og.png`;
 const srcDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -132,7 +132,7 @@ function llmsToc(): string {
 export default defineConfig({
   title: "claude-code-ui",
   description: "Run, watch and steer Claude Code sessions from your browser or phone.",
-  base: "/claude-code-ui/",
+  base: "/",
   // English at /, Vietnamese at /vi/ (same relative paths); the navbar language menu links to the same page in the other one.
   locales: {
     root: { label: "English", lang: "en-US", themeConfig: { nav: nav("", {}), sidebar: sidebar("", {}) } },
@@ -164,7 +164,7 @@ export default defineConfig({
   vite: {
     plugins: [
       llmstxt({
-        domain: "https://cuonghuunguyen.github.io",
+        domain: "https://claudecodeui.cuonghuunguyen.app",
         ignoreFiles: ["shots/**", "vi/**"],
         customTemplateVariables: {
           description:
@@ -179,10 +179,14 @@ export default defineConfig({
       }),
     ],
   },
-  sitemap: { hostname: "https://cuonghuunguyen.github.io/claude-code-ui/" },
+  sitemap: { hostname: site },
   // Dead links fail the build (VitePress default); keep it that way.
   head: [
-    ["link", { rel: "icon", type: "image/svg+xml", href: "/claude-code-ui/icon.svg" }],
+    ["link", { rel: "icon", href: "/favicon.ico", sizes: "48x48" }],
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/icon.svg" }],
+    ["link", { rel: "apple-touch-icon", href: "/apple-touch-icon.png" }],
+    ["meta", { name: "theme-color", content: "#d97757" }],
+    ["meta", { property: "og:image:alt", content: "claude-code-ui: run, watch and steer Claude Code sessions from your browser or phone" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "claude-code-ui" }],
     ["meta", { property: "og:image", content: ogImage }],

@@ -2,11 +2,11 @@
 
 [![npm](https://img.shields.io/npm/v/claude-code-ui)](https://www.npmjs.com/package/claude-code-ui)
 [![license](https://img.shields.io/npm/l/claude-code-ui)](https://github.com/cuonghuunguyen/claude-code-ui/blob/main/LICENSE)
-[![docs](https://img.shields.io/badge/docs-cuonghuunguyen.github.io-blue)](https://cuonghuunguyen.github.io/claude-code-ui/)
+[![docs](https://img.shields.io/badge/docs-claudecodeui.cuonghuunguyen.app-blue)](https://claudecodeui.cuonghuunguyen.app/)
 
 A web UI for Claude Code. Run, watch and steer many sessions from your browser or phone. A small local daemon runs everything on your own machine: no cloud, no relay, no telemetry. Unofficial; not affiliated with Anthropic.
 
-**Docs: https://cuonghuunguyen.github.io/claude-code-ui/**
+**Docs: https://claudecodeui.cuonghuunguyen.app/**
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cuonghuunguyen/claude-code-ui/main/docs/site/public/screenshots/workspace-dark.png">
@@ -34,21 +34,21 @@ With the daemon running, other terminals can ask it: `claude-ui status`, `claude
 - A Focus page and notifications for everything that waits for you.
 - File tree and editor, diffs, a git graph and a terminal next to the chat.
 - Works on a phone and installs as an app (over HTTPS).
-- [Addons](https://cuonghuunguyen.github.io/claude-code-ui/features/addons): themes, panes, a band, slash commands and drawings for code blocks, installed from git.
-- [Inline visualizations](https://cuonghuunguyen.github.io/claude-code-ui/features/visualize): Claude draws charts, diagrams and small widgets in its replies, in a sandboxed frame.
+- [Addons](https://claudecodeui.cuonghuunguyen.app/features/addons): themes, panes, a band, slash commands and drawings for code blocks, installed from git.
+- [Inline visualizations](https://claudecodeui.cuonghuunguyen.app/features/visualize): Claude draws charts, diagrams and small widgets in its replies, in a sandboxed frame.
 - Windows with WSL, and Docker containers, from one install.
 
 Read more:
-[Install & first run](https://cuonghuunguyen.github.io/claude-code-ui/guide/install) ·
-[Quick tour](https://cuonghuunguyen.github.io/claude-code-ui/guide/tour) ·
-[Keyboard shortcuts](https://cuonghuunguyen.github.io/claude-code-ui/reference/shortcuts) ·
-[CLI flags](https://cuonghuunguyen.github.io/claude-code-ui/reference/cli) ·
-[Troubleshooting](https://cuonghuunguyen.github.io/claude-code-ui/reference/troubleshooting) ·
-[Privacy](https://cuonghuunguyen.github.io/claude-code-ui/reference/privacy) ·
-[FAQ](https://cuonghuunguyen.github.io/claude-code-ui/guide/faq) ·
-[How it compares](https://cuonghuunguyen.github.io/claude-code-ui/guide/compare)
+[Install & first run](https://claudecodeui.cuonghuunguyen.app/guide/install) ·
+[Quick tour](https://claudecodeui.cuonghuunguyen.app/guide/tour) ·
+[Keyboard shortcuts](https://claudecodeui.cuonghuunguyen.app/reference/shortcuts) ·
+[CLI flags](https://claudecodeui.cuonghuunguyen.app/reference/cli) ·
+[Troubleshooting](https://claudecodeui.cuonghuunguyen.app/reference/troubleshooting) ·
+[Privacy](https://claudecodeui.cuonghuunguyen.app/reference/privacy) ·
+[FAQ](https://claudecodeui.cuonghuunguyen.app/guide/faq) ·
+[How it compares](https://claudecodeui.cuonghuunguyen.app/guide/compare)
 
-For AI assistants: [llms.txt](https://cuonghuunguyen.github.io/claude-code-ui/llms.txt) (index) and [llms-full.txt](https://cuonghuunguyen.github.io/claude-code-ui/llms-full.txt) (all docs in one file).
+For AI assistants: [llms.txt](https://claudecodeui.cuonghuunguyen.app/llms.txt) (index) and [llms-full.txt](https://claudecodeui.cuonghuunguyen.app/llms-full.txt) (all docs in one file).
 
 ## FAQ
 
@@ -60,11 +60,11 @@ For AI assistants: [llms.txt](https://cuonghuunguyen.github.io/claude-code-ui/ll
 
 **Does it need an API key?** No. It uses your Claude subscription (`claude login`).
 
-**Is it the same as CloudCLI / "Claude Code UI" (claudecodeui)?** No, that is a separate project with a similar name. This one is `cuonghuunguyen/claude-code-ui`, npm package `claude-code-ui`, command `claude-ui`. See [How it compares](https://cuonghuunguyen.github.io/claude-code-ui/guide/compare).
+**Is it the same as CloudCLI / "Claude Code UI" (claudecodeui)?** No, that is a separate project with a similar name. This one is `cuonghuunguyen/claude-code-ui`, npm package `claude-code-ui`, command `claude-ui`. See [How it compares](https://claudecodeui.cuonghuunguyen.app/guide/compare).
 
 ## Security in one paragraph
 
-The daemon can run any command on your machine, so treat access to it like shell access. It listens on `127.0.0.1` only (unless `--lan`), every connection needs the pairing token, sessions stay inside `--roots`, and permission prompts are on by default. Keep the pairing link private. Details: [Privacy](https://cuonghuunguyen.github.io/claude-code-ui/reference/privacy).
+The daemon can run any command on your machine, so treat access to it like shell access. It listens on `127.0.0.1` only (unless `--lan`), every connection needs the pairing token, sessions stay inside `--roots`, and permission prompts are on by default. Keep the pairing link private. Details: [Privacy](https://claudecodeui.cuonghuunguyen.app/reference/privacy).
 
 ## Contributing
 
