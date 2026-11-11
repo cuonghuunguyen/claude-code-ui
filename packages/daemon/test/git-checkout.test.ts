@@ -53,25 +53,19 @@ const cur = (dir: string) => run(dir, "symbolic-ref", "HEAD");
 const code = (p: Promise<unknown>) => p.then(() => "ok", (e: { code?: string }) => e.code);
 
 describe("gitBranchCreate", () => {
-  it("creates at HEAD without checkout", async () => {
+  it("creates at HEAD without checkout; refuses a bad name, a bad commit and an existing name; creates at an older commit with checkout", async () => {
     const r = repo();
     const w = await gitBranchCreate(r.dir, { ...r.o, name: "x" });
     expect(w?.refs).toBeTruthy();
     expect(run(r.dir, "rev-parse", "x")).toBe(head(r.dir));
     expect(cur(r.dir)).toBe("refs/heads/main");
-  });
-  it("creates at an older commit with checkout", async () => {
-    const r = repo();
-    await gitBranchCreate(r.dir, { ...r.o, name: "x", at: r.first, checkout: true });
-    expect(cur(r.dir)).toBe("refs/heads/x");
-    expect(head(r.dir)).toBe(r.first);
-  });
-  it("refuses a bad name, a bad commit and an existing name", async () => {
-    const r = repo();
     for (const name of ["-x", "a..b", "", "a b", "x\0y", 5]) expect(await code(gitBranchCreate(r.dir, { ...r.o, name: name as string }))).toBe("bad_request");
     expect(await code(gitBranchCreate(r.dir, { ...r.o, name: "x", at: "main" }))).toBe("bad_request");
     expect(await code(gitBranchCreate(r.dir, { ...r.o, name: "x", smart: "yes" as unknown as boolean }))).toBe("bad_request");
     expect(await code(gitBranchCreate(r.dir, { ...r.o, name: "other" }))).toBe("git_failed");
+    await gitBranchCreate(r.dir, { ...r.o, name: "y", at: r.first, checkout: true });
+    expect(cur(r.dir)).toBe("refs/heads/y");
+    expect(head(r.dir)).toBe(r.first);
   });
   it("with checkout and a conflicting local change: local_changes, no branch", async () => {
     const r = repo();
@@ -91,14 +85,11 @@ const tryRevParse = (dir: string, ref: string) => {
 };
 
 describe("gitCheckout", () => {
-  it("checks out a remote branch as a new tracking local branch", async () => {
+  it("checks out a remote branch as a new tracking local branch; refuses origin/HEAD, a missing ref, a tag, a bad ref", async () => {
     const r = repo();
     await gitCheckout(r.dir, { ...r.o, ref: "refs/remotes/origin/feat" });
     expect(cur(r.dir)).toBe("refs/heads/feat");
     expect(run(r.dir, "rev-parse", "--abbrev-ref", "feat@{upstream}")).toBe("origin/feat");
-  });
-  it("refuses origin/HEAD, a missing ref, a tag, a bad ref", async () => {
-    const r = repo();
     run(r.dir, "remote", "set-head", "origin", "feat");
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/remotes/origin/HEAD" }))).toBe("bad_request");
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/remotes/origin/nope" }))).toBe("bad_request");
@@ -106,13 +97,21 @@ describe("gitCheckout", () => {
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "-x" }))).toBe("bad_request");
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: 1 as unknown as boolean }))).toBe("bad_request");
   });
-  it("a conflicting tracked change: local_changes, nothing moves", async () => {
+  it("a conflicting tracked change: local_changes, nothing moves; an untracked file too: smart switch fails and the stash is popped back; an untracked file alone: git_failed, not local_changes", async () => {
     const r = repo();
     put(r.dir, "a.txt", "mine\n");
     const before = head(r.dir);
     expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" }))).toBe("local_changes");
     expect(head(r.dir)).toBe(before);
     expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toBe("mine\n");
+    put(r.dir, "b.txt", "untracked\n");
+    expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true })), "tracked and untracked").toBe("git_failed");
+    expect(head(r.dir)).toBe(before);
+    expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toBe("mine\n");
+    expect(run(r.dir, "stash", "list"), "after tracked and untracked").toBe("");
+    run(r.dir, "checkout", "--", "a.txt");
+    expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true })), "untracked only").toBe("git_failed");
+    expect(run(r.dir, "stash", "list"), "after untracked only").toBe("");
   });
   it("smart: stashes, switches, applies; stash list empty", async () => {
     const r = repo();
@@ -126,39 +125,18 @@ describe("gitCheckout", () => {
     expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toContain("mine");
     expect(run(r.dir, "stash", "list")).toBe("");
   });
-  it("smart snapshots the dirty tracked files before the stash with reason checkout; a plain checkout switches and snapshots nothing", async () => {
+  it("smart snapshots the dirty tracked files before the stash with reason checkout; a plain checkout switches and snapshots nothing; a pop conflict: operation conflict, stash kept", async () => {
     const r = repo();
     await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other" });
     expect(cur(r.dir)).toBe("refs/heads/other");
     await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/main" });
     expect(r.seen).toEqual([]);
     put(r.dir, "a.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n");
-    await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true });
-    expect(r.seen).toEqual([{ path: join(r.dir, "a.txt"), reason: "checkout", text: "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n" }]);
-  });
-  it("smart with a pop conflict: operation conflict, stash kept", async () => {
-    const r = repo();
-    put(r.dir, "a.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n");
     const w = await gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true });
+    expect(r.seen).toEqual([{ path: join(r.dir, "a.txt"), reason: "checkout", text: "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nmine\n" }]);
     expect(cur(r.dir)).toBe("refs/heads/other");
     expect(w?.operation).toEqual({ kind: "conflict", conflicted: ["a.txt"] });
     expect(run(r.dir, "stash", "list").split("\n")).toHaveLength(1);
-  });
-  it("an untracked file in the way: git_failed, not local_changes", async () => {
-    const r = repo();
-    put(r.dir, "b.txt", "mine\n");
-    expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true }))).toBe("git_failed");
-    expect(run(r.dir, "stash", "list")).toBe("");
-  });
-  it("smart whose switch then fails (untracked file in the way too): the stash is popped back, nothing is lost", async () => {
-    const r = repo();
-    put(r.dir, "a.txt", "mine\n");
-    put(r.dir, "b.txt", "untracked\n");
-    const before = head(r.dir);
-    expect(await code(gitCheckout(r.dir, { ...r.o, ref: "refs/heads/other", smart: true }))).toBe("git_failed");
-    expect(head(r.dir)).toBe(before);
-    expect(readFileSync(join(r.dir, "a.txt"), "utf8")).toBe("mine\n");
-    expect(run(r.dir, "stash", "list")).toBe("");
   });
   it("a branch checked out in another work tree: git_failed naming it", async () => {
     const r = repo();
