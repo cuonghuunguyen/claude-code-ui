@@ -387,7 +387,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       if (r.timeoutMs === 0) return work;
       // The timeout only stops this caller from waiting: the request keeps running. OpenCode loads a folder's state (MCP servers, providers, agents,
       // commands) on the first request that needs it and caches the result of that load, an interruption included (1.19.5): a request the client
-      // cut off during the load would leave the folder broken until its instance is disposed. See `brokenMcp` (opencode-engine.ts).
+      // cut off during the load would leave the folder broken until its instance is disposed. See `brokenState` (opencode-engine.ts).
       work.catch(() => {});
       late.catch(() => {});
       return Promise.race([work, late]).finally(() => clearTimeout(timer));

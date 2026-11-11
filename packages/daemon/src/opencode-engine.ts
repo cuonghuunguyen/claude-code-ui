@@ -41,12 +41,19 @@ const marker = (pattern: string): Rule => ({ permission: MARK, pattern, action: 
 const star = (permission: string, action: Rule["action"]): Rule => ({ permission, pattern: "*", action });
 const ANSWERED = "Answered in OpenCode";
 /**
- * OpenCode answers 499 to every MCP read of a folder whose MCP load was cut off (1.19.5: its state keeps the interruption until the folder's instance
- * is disposed; every turn there then aborts before the model call, with no `session.error`). So the rule of the daemon: a request that waits for the
- * MCP load of a folder (`GET /mcp`, `POST /mcp`, `GET /command`, the disconnect) is never aborted (`timeoutMs: 0`). A caller that must not wait long
- * races it against a timer and leaves the request running; it never passes a signal that fires.
+ * OpenCode answers 499 to every read of lazy state whose first load a client cut off: MCP (GH-682) and providers (GH-679). 1.19.5 keeps the interruption
+ * until the folder's instance is disposed (providers: for the whole server, until a restart); every turn in a broken MCP folder then aborts before the
+ * model call, with no `session.error`. So the rule of the daemon: a request that waits for such a load (`GET /mcp`, `POST /mcp`, `GET /command`, the
+ * disconnect, `GET /config/providers`) is never aborted (`timeoutMs: 0`). A caller that must not wait long races it against a timer and leaves the
+ * request running; it never passes a signal that fires.
  */
-const brokenMcp = (err: unknown) => err instanceof OpenCodeHttpError && err.status === 499;
+export const brokenState = (err: unknown) => err instanceof OpenCodeHttpError && err.status === 499;
+/** A provider read still answered 499 after the folder's instance was disposed: OpenCode's provider state is broken server-wide (only a restart clears it). */
+export class ProviderStateBroken extends Error {
+  constructor() {
+    super("OpenCode's provider state is broken for the whole server");
+  }
+}
 const SELF_ABORT = "OpenCode ended this turn on its own before the model answered (MessageAbortedError); claude-ui did not stop it.";
 const MCP_RELOADED = "OpenCode's MCP servers for this folder had failed to load, so claude-ui reloaded the folder in OpenCode. Send the prompt again.";
 const MCP_HEALTHY = "OpenCode's MCP servers for this folder work again. Send the prompt again.";
@@ -146,8 +153,8 @@ export function modelsFrom(r: ProviderList): ModelInfo[] {
   const name = def ? `Default (${def.p.name} ${def.m?.name ?? def.id})` : "Default";
   return [{ value: "default", displayName: name, description: "", ...effort(def?.m) }, ...r.providers.flatMap((x) => Object.entries(x.models).map(([id, m]) => ({ value: `${x.id}/${id}`, displayName: m.name, description: "", group: x.name, ...effort(m) })))];
 }
-/** The models of the connected providers (`GET /config/providers`). */
-export const openCodeModels = (server: OpenCodeServer): Promise<ModelInfo[]> => server.request<ProviderList>("/config/providers").then(modelsFrom);
+/** The models of the connected providers of `cwd`'s OpenCode instance (`GET /config/providers`; none: the server's own folder). Never cut off; rejects when it fails. */
+export const openCodeModels = (engine: OpenCodeEngine, cwd?: string): Promise<ModelInfo[]> => engine.providerList(cwd, { strict: true }).then(modelsFrom);
 
 /**
  * A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text.
@@ -332,7 +339,7 @@ class OpenCodeSession implements EngineSession {
   /** The `context_usage` part from the last completed assistant message; none while the window of its model is unknown. */
   private async emitUsage() {
     const u = this.usage;
-    const max = u && (await this.engine.contextLimit(u.providerID, u.modelID));
+    const max = u && (await this.engine.contextLimit(u.providerID, u.modelID, this.cwd));
     if (!u || !max) return;
     const used = u.tokens.input + u.tokens.output + u.tokens.reasoning + u.tokens.cache.read + u.tokens.cache.write;
     this.session.emit({ type: "context_usage", id: "context_usage", usage: { totalTokens: used, maxTokens: max, percentage: Math.round((used / max) * 100), categories: [{ name: "Used", tokens: used, kind: "used" }, { name: "Free", tokens: Math.max(max - used, 0), kind: "free" }] } });
@@ -445,9 +452,9 @@ class OpenCodeSession implements EngineSession {
       this.mcpOn = !!url && !this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t)) && this.opts.mcpServers?.(this.id) !== undefined;
       if (!this.mcpOn) return;
       const name = mcpName(this.id);
-      // These wait for OpenCode's MCP load of the folder: never cut off (see brokenMcp); a folder whose load was cut off earlier is reloaded.
+      // These wait for OpenCode's MCP load of the folder: never cut off (see brokenState); a folder whose load was cut off earlier is reloaded.
       const read = () => this.server.request<Record<string, { status: string }>>("/mcp", { directory: this.cwd, timeoutMs: 0 });
-      const status = await read().catch(async (err) => (brokenMcp(err) && (await this.engine.repairMcp(this.cwd)) ? read() : Promise.reject(err)));
+      const status = await read().catch(async (err) => (brokenState(err) && (await this.engine.repairFolder(this.cwd)) ? read() : Promise.reject(err)));
       if (status[name]?.status === "connected") return;
       const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false, timeout: MAX_WAIT_MS + 60_000 };
       await this.server.request("/mcp", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { name, config } });
@@ -505,7 +512,7 @@ class OpenCodeSession implements EngineSession {
   /** `/compact`: OpenCode summarizes the conversation (a turn: the compaction marker, the summary as an assistant message). */
   private async compact(say: (text: string) => void) {
     const [providerID, ...rest] = this.model.split("/");
-    const picked = this.model !== "default" && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : (this.usage ?? (await this.engine.defaultModel()));
+    const picked = this.model !== "default" && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : (this.usage ?? (await this.engine.defaultModel(this.cwd)));
     if (!picked) return say("Choose a model first");
     this.revertAt = undefined; // the summary removes the cut messages
     this.stopped = false;
@@ -561,7 +568,7 @@ class OpenCodeSession implements EngineSession {
     // Whatever the outcome (POST failure, Stop, command), the turn-end check of a resync may run 3 s later.
     try {
       // Preparing: OpenCode does not know the prompt; a Stop ends each of these waits at once and the prompt is never sent (interrupt() ends the turn).
-      // Events of the turn must find the stream open; the attach waits for OpenCode's MCP load (30-300 s) and is never cancelled (see brokenMcp);
+      // Events of the turn must find the stream open; the attach waits for OpenCode's MCP load (30-300 s) and is never cancelled (see brokenState);
       // prompts an earlier Stop left on their way must not start a turn this prompt would join.
       if (!(await run.prepare(Promise.all([this.server.streamReady(), this.attach(), this.stale])))) return;
       // A block of a mode or agent the session was restored with (or the first one) goes in before the turn.
@@ -574,7 +581,7 @@ class OpenCodeSession implements EngineSession {
         this.notice("agent_missing", `OpenCode has no agent ${agent} here any more; this prompt runs as build`);
         agent = "build";
       }
-      const levels = this.effort !== "default" ? this.engine.effortLevels(this.model) : Promise.resolve([] as EffortLevel[]);
+      const levels = this.effort !== "default" ? this.engine.effortLevels(this.model, this.cwd) : Promise.resolve([] as EffortLevel[]);
       if (!(await run.prepare(levels))) return;
       // A model switch can leave an effort the new model lacks: then no variant (the web offers only listed levels).
       const variant = this.effort !== "default" && (await levels).includes(this.effort as EffortLevel) ? { variant: this.effort } : {};
@@ -673,9 +680,9 @@ class OpenCodeSession implements EngineSession {
 
   /** After a turn OpenCode aborted on its own: a broken MCP state of the folder (499) is repaired and the notice says so. */
   private async explainAbort(messageID: string) {
-    const broken = await this.server.request("/mcp", { directory: this.cwd, timeoutMs: 0 }).then(() => false, brokenMcp);
+    const broken = await this.server.request("/mcp", { directory: this.cwd, timeoutMs: 0 }).then(() => false, brokenState);
     if (!broken) return;
-    const fixed = await this.engine.repairMcp(this.cwd);
+    const fixed = await this.engine.repairFolder(this.cwd);
     this.notice(`aborted:${messageID}`, `${SELF_ABORT} ${fixed ? MCP_RELOADED : MCP_BROKEN_BUSY}`);
     // A turn still runs in the folder: the folder is reloaded when a turn of ours there ends (finish()), and the notice then says so.
     if (!fixed) this.engine.reloadWhenIdle(this.cwd, (how) => this.notice(`aborted:${messageID}`, `${SELF_ABORT} ${how === "reloaded" ? MCP_RELOADED : MCP_HEALTHY}`));
@@ -1076,7 +1083,7 @@ class OpenCodeEngineImpl implements Engine {
   readonly capabilities = OPENCODE_CAPABILITIES;
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
-  private providers: Promise<ProviderList> | undefined;
+  private readonly providerLists = new Map<string, Promise<ProviderList>>();
 
   constructor(
     readonly server: OpenCodeServer,
@@ -1119,22 +1126,36 @@ class OpenCodeEngineImpl implements Engine {
     return list;
   }
 
-  /** `GET /config/providers`, read once per provider set (`dropLimits` after a login or logout); empty when it fails (read again next time). */
-  private providerList(): Promise<ProviderList> {
-    return (this.providers ??= this.server.request<ProviderList>("/config/providers").catch(() => ((this.providers = undefined), { providers: [] })));
+  /**
+   * `GET /config/providers` of `cwd`'s instance (none: the server's own folder), read once per provider set (`dropLimits` after a login or logout).
+   * Never cut off (see brokenState). A 499 disposes the folder's instance when no turn runs there and reads again.
+   * `strict`: a failure rejects (models.list); else it gives an empty list and is read again next time.
+   */
+  providerList(cwd?: string, { strict = false } = {}): Promise<ProviderList> {
+    const key = cwd ?? "";
+    let hit = this.providerLists.get(key);
+    if (!hit) {
+      const read = () => this.server.request<ProviderList>("/config/providers", { ...(cwd && { directory: cwd }), timeoutMs: 0 });
+      // Repaired and still 499: the break is not the folder's (ProviderStateBroken). A refused repair (busy, status read failed) says nothing about the server: the 499 stays as it is.
+      const again = () => read().catch((e) => Promise.reject(brokenState(e) ? new ProviderStateBroken() : e));
+      const mine: Promise<ProviderList> = (hit = read().catch(async (err) => (brokenState(err) && (await this.repairFolder(cwd)) ? again() : Promise.reject(err))));
+      this.providerLists.set(key, mine);
+      mine.catch(() => this.providerLists.get(key) === mine && this.providerLists.delete(key));
+    }
+    return strict ? hit : hit.catch(() => ({ providers: [] }));
   }
   /** Context window of `provider/model`; undefined when unknown. */
-  async contextLimit(providerID: string, modelID: string): Promise<number | undefined> {
-    return (await this.providerList()).providers.find((p) => p.id === providerID)?.models[modelID]?.limit?.context;
+  async contextLimit(providerID: string, modelID: string, cwd?: string): Promise<number | undefined> {
+    return (await this.providerList(cwd)).providers.find((p) => p.id === providerID)?.models[modelID]?.limit?.context;
   }
   /** The model OpenCode runs by default (`default` of `GET /config/providers`). */
-  async defaultModel(): Promise<{ providerID: string; modelID: string } | undefined> {
-    const d = defaultOf(await this.providerList());
+  async defaultModel(cwd?: string): Promise<{ providerID: string; modelID: string } | undefined> {
+    const d = defaultOf(await this.providerList(cwd));
     return d && { providerID: d.p.id, modelID: d.id };
   }
   /** The effort levels of a session model (`default` = the default model of OpenCode); none when it has no reasoning variants. */
-  async effortLevels(model: string): Promise<EffortLevel[]> {
-    const r = await this.providerList();
+  async effortLevels(model: string, cwd?: string): Promise<EffortLevel[]> {
+    const r = await this.providerList(cwd);
     const [provider, ...rest] = model.split("/");
     return levelsOf(model === "default" ? defaultOf(r)?.m : r.providers.find((p) => p.id === provider)?.models[rest.join("/")]);
   }
@@ -1152,27 +1173,30 @@ class OpenCodeEngineImpl implements Engine {
   /** A turn of a session of the folder ended: a folder marked broken is reloaded now when it is still broken and nothing runs in it any more. */
   async folderIdle(cwd: string) {
     if (!this.pendingReload.has(cwd)) return;
-    const broken = await this.server.request("/mcp", { directory: cwd, timeoutMs: 0 }).then(() => false, brokenMcp);
+    const broken = await this.server.request("/mcp", { directory: cwd, timeoutMs: 0 }).then(() => false, brokenState);
     // Healthy again (another path reloaded it, or OpenCode did): the notices say that. Else dispose now; busy: the next turn end tries again.
     if (!broken) this.flushReload(cwd, "healthy");
-    else await this.repairMcp(cwd); // a successful repair flushes the notices
+    else await this.repairFolder(cwd); // a successful repair flushes the notices
   }
-  /** Disposes the folder's OpenCode instance so its MCP state loads again (see brokenMcp); not while a session of the folder runs a turn in OpenCode (dispose cancels it). True when disposed. One at a time per folder. */
-  repairMcp(cwd: string): Promise<boolean> {
-    const running = this.repairs.get(cwd);
+  /** Disposes the folder's OpenCode instance (none: the server's own) so its MCP and provider state loads again (see brokenState); not while a session of the folder runs a turn in OpenCode (dispose cancels it). True when disposed. One at a time per folder. */
+  repairFolder(cwd?: string): Promise<boolean> {
+    const key = cwd ?? "";
+    const running = this.repairs.get(key);
     if (running) return running;
+    const directory = cwd && { directory: cwd };
     const run = (async () => {
-      const status = await this.server.request<Record<string, { type: string }>>("/session/status", { directory: cwd });
+      const status = await this.server.request<Record<string, { type: string }>>("/session/status", { ...directory });
       if (Object.values(status).some((s) => s.type !== "idle")) return false;
-      await this.server.request("/instance/dispose", { method: "POST", directory: cwd, timeoutMs: 0 });
-      this.commandLists.delete(cwd);
+      await this.server.request("/instance/dispose", { method: "POST", ...directory, timeoutMs: 0 });
+      this.commandLists.delete(key);
+      this.providerLists.delete(key);
       // Whoever disposed it (another session's open or attach included): the sessions that wait for the reload hear of it.
-      this.flushReload(cwd, "reloaded");
+      this.flushReload(key, "reloaded");
       return true;
     })()
       .catch(() => false)
-      .finally(() => this.repairs.delete(cwd));
-    this.repairs.set(cwd, run);
+      .finally(() => this.repairs.delete(key));
+    this.repairs.set(key, run);
     return run;
   }
   private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
@@ -1180,16 +1204,16 @@ class OpenCodeEngineImpl implements Engine {
   commands(cwd: string): Promise<SlashCommand[]> {
     const hit = this.commandLists.get(cwd);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    // Waits for OpenCode's MCP load of the folder: never cut off (see brokenMcp); a broken folder is reloaded and read once more.
+    // Waits for OpenCode's MCP load of the folder: never cut off (see brokenState); a broken folder is reloaded and read once more.
     const read = () => this.server.request<{ name: string; description?: string; hints?: string[] }[]>("/command", { directory: cwd, timeoutMs: 0 });
     const list = read()
-      .catch(async (err) => (brokenMcp(err) && (await this.repairMcp(cwd)) ? read() : Promise.reject(err)))
+      .catch(async (err) => (brokenState(err) && (await this.repairFolder(cwd)) ? read() : Promise.reject(err)))
       .then((l) => [...LOCAL_COMMANDS, ...l.filter((c) => !LOCAL_NAMES.includes(c.name)).map((c) => ({ name: c.name, description: c.description ?? "", argumentHint: (c.hints ?? []).join(" ") }))]);
     this.commandLists.set(cwd, { at: Date.now(), list });
     list.catch(() => this.commandLists.delete(cwd));
     return list;
   }
-  dropLimits = () => (this.providers = undefined);
+  dropLimits = () => this.providerLists.clear();
 
   /** The rules `POST /session` gets for a new session in `mode` (`plan` = agent plan, mode default), else as agent `agent`. */
   block = async (mode: PermissionMode, cwd: string, agent = "build"): Promise<Rule[]> => {

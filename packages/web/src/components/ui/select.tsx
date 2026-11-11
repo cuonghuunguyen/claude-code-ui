@@ -63,8 +63,12 @@ function SelectContent({
   align = "center",
   alignOffset = 0,
   alignItemWithTrigger = true,
+  footer,
   ...props
-}: SelectPrimitive.Popup.Props &
+}: SelectPrimitive.Popup.Props & {
+    /** Pinned to the bottom edge of the popup: stays visible while the items scroll; not an option. */
+    footer?: React.ReactNode
+  } &
   Pick<
     SelectPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
@@ -89,6 +93,7 @@ function SelectContent({
           <SelectScrollUpButton />
           <SelectPrimitive.List>{children}</SelectPrimitive.List>
           <SelectScrollDownButton />
+          {footer && <div data-slot="select-footer" className="sticky -bottom-0.5 z-10 -mx-0.5 -mb-0.5 border-t bg-popover px-0.5 pt-0.5 pb-0.5">{footer}</div>}
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
     </SelectPrimitive.Portal>

@@ -84,6 +84,10 @@ const mcp = {}; // directory -> MCP server name -> {status}
 const broken = new Set((process.env.FAKE_OPENCODE_BROKEN ?? "").split(",").filter(Boolean)); // directories in OpenCode's broken MCP state
 const MCP_LOAD_MS = Number(process.env.FAKE_OPENCODE_MCP_LOAD_MS ?? 0);
 const loads = new Map(); // directory -> its MCP load (a wait)
+// Provider load and the broken provider state (GH-679): with FAKE_OPENCODE_PROVIDERS_MS GET /config/providers and GET /provider answer that late; a request whose connection closes first
+// puts its directory (or "*", the whole server, with FAKE_OPENCODE_PROVIDERS_GLOBAL=1) into the broken state: 499 with an empty body. POST /instance/dispose?directory= repairs a directory, only a restart repairs "*".
+const PROVIDERS_MS = Number(process.env.FAKE_OPENCODE_PROVIDERS_MS ?? 0);
+const provBroken = new Set();
 let aborts = 0;
 const warm = new Set();
 let pendingOauth = {}; // provider -> method index of the last authorize
@@ -138,6 +142,17 @@ async function mcpGate(dir, res) {
   return (res.writeHead(499), res.end(), false);
 }
 
+/** A request that waits for the provider load. False when it was answered 499 (broken) or its client left (that breaks the state). */
+async function providerGate(dir, res) {
+  const key = dir ?? "";
+  if (!provBroken.has("*") && !provBroken.has(key) && PROVIDERS_MS) {
+    const left = new Promise((r) => res.on("close", () => r(!res.writableEnded)));
+    if (await Promise.race([sleep(PROVIDERS_MS).then(() => false), left])) return (provBroken.add(process.env.FAKE_OPENCODE_PROVIDERS_GLOBAL === "1" ? "*" : key), false);
+  }
+  if (!provBroken.has("*") && !provBroken.has(key)) return true;
+  return (res.writeHead(499), res.end(), false);
+}
+
 const server = createServer(async (req, res) => {
   if (zombie) return req.socket.resetAndDestroy();
   const url = new URL(req.url ?? "/", "http://x");
@@ -163,6 +178,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/__status") body.status ? statuses.set(body.sessionId, body.status) : statuses.delete(body.sessionId);
     if (url.pathname === "/__break") broken.add(body.directory);
     if (url.pathname === "/__heal") broken.delete(body.directory);
+    if (url.pathname === "/__break_providers") provBroken.add(body.global ? "*" : (body.directory ?? ""));
     if (url.pathname === "/__fail") failNext.add(body.path);
     if (url.pathname === "/__agents") agents = body.agents;
     if (url.pathname === "/__delay") delays.set(body.path, body.ms);
@@ -199,8 +215,10 @@ const server = createServer(async (req, res) => {
     return res.on("close", () => clients.delete(res));
   }
   if (url.pathname === "/config/providers") await sleep(Number(process.env.FAKE_OPENCODE_PROVIDERS_DELAY_MS ?? 0));
+  if (url.pathname === "/config/providers" && !(await providerGate(dir, res))) return;
+  if (url.pathname === "/provider" && !(await providerGate(dir, res))) return;
   if (url.pathname === "/config/providers")
-    return json(200, { providers: [{ id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" }, thinker: { name: "Thinker", variants: { none: {}, low: {}, high: {} } } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
+    return json(200, { providers: [...(dir?.endsWith("with-local-provider") ? [{ id: "local", name: "Local", models: { m: { name: "Local M" } } }] : []), { id: "opencode", name: "OpenCode", models: { "big-pickle": { name: "Big Pickle", limit: { context: 200000, output: 8000 } }, alpha: { name: "Alpha" }, thinker: { name: "Thinker", variants: { none: {}, low: {}, high: {} } } } }, { id: "acme", name: "Acme", models: { "x/y": { name: "Model X" } } }], default: { opencode: "big-pickle" } });
   if (url.pathname === "/provider")
     return json(200, { all: PROVIDERS.map((p) => ({ ...p, source: auth[p.id] ? (auth[p.id].type === "api" ? "api" : "custom") : p.source })), connected: [...new Set([...PROVIDERS.filter((p) => ["env", "config"].includes(p.source) && p.id !== "groq").map((p) => p.id), ...Object.keys(auth)])], default: {} });
   if (url.pathname === "/provider/auth") return json(200, AUTH_METHODS);
@@ -229,7 +247,7 @@ const server = createServer(async (req, res) => {
     const result = await new Promise((r) => (waiting.set(id, r), res.on("close", () => waiting.get(id) === r && waiting.delete(id))));
     return result === "success" ? ok("oauth") : json(400, { name: "ProviderAuthOauthCallbackFailed", data: { message: "failed" } });
   }
-  if (url.pathname === "/instance/dispose" && req.method === "POST") return (broken.delete(dir ?? ""), loads.delete(dir ?? ""), delete mcp[dir ?? ""], json(200, true));
+  if (url.pathname === "/instance/dispose" && req.method === "POST") return (broken.delete(dir ?? ""), provBroken.delete(dir ?? ""), loads.delete(dir ?? ""), delete mcp[dir ?? ""], json(200, true));
   if (url.pathname === "/mcp") {
     if (!(await mcpGate(dir, res))) return;
     const map = (mcp[dir ?? ""] ??= {});
