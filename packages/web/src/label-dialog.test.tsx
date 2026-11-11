@@ -5,13 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Label } from "@claude-ui/protocol";
 import { LabelDialog } from "./label-dialog.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount());

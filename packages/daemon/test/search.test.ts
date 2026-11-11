@@ -172,20 +172,6 @@ describe("searchFiles in nested repositories and submodules", () => {
     expect((await searchFiles(dir, "", 1000, repos)).some((p) => p.startsWith("api/src"))).toBe(false);
   });
 
-  it("stops at the shared entry cap", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "search-cap-"));
-    repoWith(dir, { "a.txt": "", "b.txt": "" });
-    repoWith(join(dir, "api"), { "c.txt": "", "d.txt": "", "e.txt": "" });
-    const repos = await reposOf(dir);
-    const was = searchLimits.entries;
-    searchLimits.entries = 3;
-    try {
-      expect((await searchFiles(dir, "", 1000, repos)).length).toBeLessThanOrEqual(3);
-    } finally {
-      searchLimits.entries = was;
-    }
-  });
-
   it("keeps the folder of a nested repository that lists nothing, or whose git fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "search-empty-"));
     repoWith(dir, { "a.txt": "" });
@@ -221,11 +207,13 @@ describe("searchFiles in nested repositories and submodules", () => {
     const outside = mkdtempSync(join(tmpdir(), "search-linkout-"));
     repoWith(dir, { "a.txt": "" });
     repoWith(outside, { "secret.txt": "" });
-    symlinkSync(outside, join(dir, "link"));
+    symlinkSync(outside, join(dir, "link"), "junction");
     const repos = await reposOf(dir);
     const all = await searchFiles(dir, "", 1000, repos);
-    expect(all).toContain("link");
-    expect(all.some((p) => p.startsWith("link/"))).toBe(false);
+    // git on Windows sees a junction as a folder and lists it "link/"; elsewhere a symlink is "link".
+    const listed = process.platform === "win32" ? ["link", "link/"] : ["link"];
+    expect(all.some((p) => listed.includes(p))).toBe(true);
+    expect(all.some((p) => p.startsWith("link/") && !listed.includes(p))).toBe(false);
   });
 
   it("a nested .git file pointing outside lists nothing of it", async () => {

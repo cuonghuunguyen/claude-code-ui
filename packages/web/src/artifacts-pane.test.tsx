@@ -7,7 +7,6 @@ import { ArtifactsPane, forgetArtifactSelection, resetArtifactSelection, selectA
 import type { ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let width = 0; // 0: the observer never reports (jsdom, wide)
 globalThis.ResizeObserver = class {
   constructor(private cb: (e: { contentRect: { width: number } }[]) => void) {}

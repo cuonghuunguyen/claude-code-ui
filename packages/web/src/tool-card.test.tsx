@@ -59,17 +59,13 @@ const result = (output: unknown, isError = false) => ({
 });
 
 describe("Bash card", () => {
-  it("shows the command and ANSI-colored monospace output", () => {
+  it("shows the command and ANSI-colored monospace output in one box, no inner box", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "ls --color" })} result={result("\x1b[34mdir\x1b[0m\nfile")} />);
     expect(html).toContain('data-testid="bash-command"');
     expect(html).toContain("ls --color");
     expect(html).toMatch(/<span style="color:#2472c8">dir<\/span>/);
     expect(html).toContain("file");
     expect(html).not.toContain("Parameters");
-  });
-
-  it("is one bordered box: command and output as plain text, no inner box", () => {
-    const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "ls" })} result={result("file")} />);
     expect(html).not.toContain("bg-muted");
   });
 
@@ -90,18 +86,13 @@ describe("Bash card", () => {
     expect(html).toContain("Show all 25 lines");
   });
 
-  it("shows no expand button for short output, and errors in the error style", () => {
+  it("shows no expand button for short output, and errors in the error style, wrapped", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "false" })} result={result("boom", true)} />);
     expect(html).not.toContain("Show all");
     expect(html).toContain("boom");
     expect(html).toContain("text-destructive");
-  });
-
-  it("error output wraps at narrow viewport (whitespace-pre-wrap class)", () => {
-    const longError = "Very long error message that should wrap at narrow widths like 390px instead of overflowing horizontally";
-    const html = renderToStaticMarkup(<ToolBody call={done("Bash", { command: "long-failing-cmd" })} result={result(longError, true)} />);
     expect(html).toContain("whitespace-pre-wrap");
-    expect(html).not.toContain('whitespace-pre"'); // Should not have plain whitespace-pre
+    expect(html).not.toContain('whitespace-pre"');
   });
 });
 
@@ -359,7 +350,7 @@ describe("Artifact cards", () => {
     expect(html).not.toContain("scratchpad");
     expect(html).not.toContain("Parameters");
   });
-  it("a publish body shows description, file path and the claude.ai link", () => {
+  it("a publish body shows description, file path, the claude.ai link and the result text under it", () => {
     const html = open(done("Artifact", publish), result(`Published /tmp/scratchpad/page.html at ${URL} (Version 1, version id 1791409111-93a8) Icon: "test".
 
 Live subscription: arming in the background.`));
@@ -370,6 +361,7 @@ Live subscription: arming in the background.`));
     expect(html).not.toContain("text-primary");
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).not.toContain("Parameters");
+    expect(html).toContain("Live subscription: arming in the background.");
   });
   it("only claude.ai URLs become links; an error shows the text and no link", () => {
     expect(open(done("Artifact", { action: "read", url: "javascript:alert(1)" }), result("ok"))).not.toContain("<a ");
@@ -450,11 +442,6 @@ Live subscription: arming in the background.`));
     expect(html).toContain("line19");
     expect(html).not.toContain("line20");
     expect(html).toContain("Show all 50 lines");
-  });
-  it("a publish keeps its result text under the link", () => {
-    const html = open(done("Artifact", publish), result(`Published /tmp/p.html at ${URL} (Version 1)\n\nNewer version published elsewhere.`));
-    expect(html).toContain("Newer version published elsewhere.");
-    expect(html).toContain('href="' + URL);
   });
 });
 

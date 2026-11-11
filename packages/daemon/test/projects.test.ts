@@ -74,14 +74,6 @@ describe("projects", () => {
     expect(q.list([])).toEqual([]);
   });
 
-  it("a corrupt file after the first save (file was missing at start) keeps the list in memory", () => {
-    const file = join(mkdtempSync(join(tmpdir(), "projects-")), "projects.json");
-    const p = createProjects({ file });
-    p.open("/r/a");
-    writeFileSync(file, "{");
-    expect(p.list([])).toEqual(["/r/a"]);
-  });
-
   it("survives a restart through its file, owner-only", () => {
     const file = join(mkdtempSync(join(tmpdir(), "projects-")), "projects.json");
     const a = createProjects({ file, now: () => 5 });

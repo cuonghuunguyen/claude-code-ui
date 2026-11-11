@@ -5,7 +5,6 @@ import { expect, it } from "vitest";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolStatusMark } from "@/components/ai-elements/tool";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // prefers-reduced-motion: reduce, set before motion reads it.
 window.matchMedia = ((query: string) => ({
   matches: query.includes("reduce"),

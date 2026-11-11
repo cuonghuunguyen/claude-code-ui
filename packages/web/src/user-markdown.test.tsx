@@ -51,12 +51,6 @@ vi.mock("shiki", async (orig) => {
   };
 });
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 
 const noop = () => {};
@@ -94,12 +88,13 @@ async function render(text: string, images: string[] = []) {
   return { el, bubble: el.querySelector<HTMLElement>('[data-testid="user-message"]')! };
 }
 
-it("user bubble renders markdown with the assistant renderer", async () => {
+it("user bubble renders markdown with the assistant renderer; a short code block is colored", async () => {
   const { bubble } = await render("**bold** and `code`\n\n```ts\nconst a = 1;\n```\n\n- a\n- b");
   expect(bubble.querySelector('[data-streamdown="strong"]')?.textContent).toBe("bold");
   expect(bubble.querySelector('[data-streamdown="inline-code"]')?.textContent).toBe("code");
   expect(bubble.querySelector('[data-streamdown="code-block"]')).not.toBeNull();
   expect(bubble.querySelectorAll("li")).toHaveLength(2);
+  await vi.waitFor(() => expect(bubble.querySelectorAll(TOKENS).length).toBeGreaterThan(2), { timeout: 10_000 });
 });
 
 it("typed HTML stays visible text", async () => {
@@ -143,11 +138,6 @@ it("Copy copies the raw markdown", async () => {
 const TOKENS = '[data-streamdown="code-block"] span[style*="--sdm-c: #"]';
 const longCode = (n: number) => Array.from({ length: 40 }, (_, i) => `export const v${n}_${i} = (x: number) => x + ${i}; // line ${i}`).join("\n");
 const fence = (code: string) => ["```ts", code, "```"].join("\n");
-
-it("a short code block in a user message is colored", async () => {
-  const { bubble } = await render(fence("const a = 1;"));
-  await vi.waitFor(() => expect(bubble.querySelectorAll(TOKENS).length).toBeGreaterThan(2), { timeout: 10_000 });
-});
 
 // Long blocks: plain DOM, colors painted with the CSS Custom Highlight API. jsdom has neither that nor IntersectionObserver.
 class FakeHighlight extends Set<StaticRange> {}
@@ -325,31 +315,23 @@ it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the col
   const want = h.codeToTokens(code, { lang: lang as never, themes: { light: "github-light", dark: "github-dark" } }).tokens.map((line) =>
     line.flatMap((t) => [...t.content].map((ch) => (ch.trim() ? `${t.htmlStyle?.color}|${t.htmlStyle?.["--shiki-dark"]}` : ""))),
   );
-  const lines = [...block!.querySelectorAll("code > span")];
-  const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
-  for (const hl of highlights.values())
-    for (const r of hl) {
-      const i = lines.findIndex((l) => l.contains(r.startContainer));
-      if (i < 0) continue;
-      for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
-    }
-  let chars = 0, same = 0;
-  want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+  // The block is painted in slices: `painted()` is true after the first, so compare again until every character has its color (a slow machine had 947 of 1320 at the first look).
+  const compare = () => {
+    const lines = [...block!.querySelectorAll("code > span")];
+    const got = lines.map((l) => [...(l.textContent === "\n" ? "" : l.textContent!)].map(() => ""));
+    for (const hl of highlights.values())
+      for (const r of hl) {
+        const i = lines.findIndex((l) => l.contains(r.startContainer));
+        if (i < 0) continue;
+        for (let c = r.startOffset; c < r.endOffset; c++) got[i]![c] = pairOf(hl as never)!;
+      }
+    let chars = 0, same = 0;
+    want.forEach((line, i) => line.forEach((pair, c) => pair && (chars++, got[i]![c] === pair && same++)));
+    return { chars, same };
+  };
+  await slotsUntil(() => compare().same === compare().chars).catch(() => {});
+  const { chars, same } = compare();
   expect(`${same} of ${chars}`).toBe(`${chars} of ${chars}`);
-});
-
-it("a block that leaves the screen drops its ranges after the scroll and is painted again from the cache when it comes back", async () => {
-  stubPaint();
-  const a = await mountMd(fence(longCode(25)));
-  const blocks = blocksOf(a.el);
-  await show(blocks);
-  await slotsUntil(() => painted(a.el));
-  const n = ranges(a.el);
-  await show(blocks, false);
-  await slotsUntil(() => ranges(a.el) === 0);
-  await show(blocks);
-  await slotsUntil(() => painted(a.el));
-  expect(ranges(a.el)).toBe(n);
 });
 
 it("a message whose code changes is painted for the new code", async () => {

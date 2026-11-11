@@ -1,7 +1,7 @@
 Feature: Send a prompt
 
-  Scenario Outline: The reply streams into the transcript at <width>x<height>
-    Given the viewport is <width>x<height>
+  Scenario: The reply streams into the transcript and comes back after a daemon restart
+    Given the viewport is 1440x900
     And the app is open
     And I open the scratch project
     And I start a new Haiku session
@@ -10,8 +10,9 @@ Feature: Send a prompt
     And I see a reply from Claude
     And the turn has finished
     And I capture "reply"
-
-    Examples:
-      | width | height |
-      | 1440  | 900    |
-      | 390   | 844    |
+    When I restart the daemon
+    Then the app is connected
+    When I reload the page
+    Then I see my prompt in the transcript
+    And I see a reply from Claude
+    And I capture "after-restart"

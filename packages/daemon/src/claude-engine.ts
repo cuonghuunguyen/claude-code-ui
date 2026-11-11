@@ -454,6 +454,7 @@ export class ClaudeSession implements EngineSession {
     const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
     const rules = sessionRules(this.grants);
     const disallowed = this.opts.disallowedTools?.(this.id);
+    const visualize = this.opts.visualizePlugin?.();
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
@@ -476,6 +477,7 @@ export class ClaudeSession implements EngineSession {
         // hook_started/hook_response: the stale-turn check waits for a running hook (GH-239); the adapter ignores them.
         includeHookEvents: true,
         promptSuggestions: this.opts.promptSuggestions?.(),
+        ...(visualize && { plugins: [{ type: "local" as const, path: visualize }] }),
         settingSources: SETTING_SOURCES,
         // Thinking text is omitted by default; summaries feed the thinking parts.
         extraArgs: { "thinking-display": "summarized", "replay-user-messages": null, ...(this.opts.chrome?.() && !this.bashPinned && { chrome: null }) },

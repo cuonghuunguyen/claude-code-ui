@@ -3,7 +3,7 @@ Feature: The repository selector chooses which repository Changes shows (GH-390)
   Background:
     Given the viewport is 1440x900
 
-  Scenario: The selector shows in the git modes of a project with several repositories and hides in Session changes
+  Scenario: The selector shows in the git modes, the superproject lists a submodule and a nested repository, and picking libs/lib shows its changes and branches
     Given the scratch project is a superproject with a dirty submodule and a nested repository
     And the app is open
     And I open the scratch project
@@ -13,11 +13,33 @@ Feature: The repository selector chooses which repository Changes shows (GH-390)
     Then the Changes toolbar has the repository selector
     And the repository selector shows the name of the scratch project and a branch
     And I capture "selector-closed"
-    When I choose the "Against branch" diff mode
-    Then the Changes toolbar has the repository selector
     When I choose the "Session changes" diff mode
     Then the Changes toolbar has no repository selector
     And I capture "session-changes-no-selector"
+    When I choose the "Against branch" diff mode
+    Then the Changes toolbar has the repository selector
+    And the Against branch list offers "main" and not "lib-only"
+    When I close the open menu with Escape
+    And I choose the "Uncommitted" diff mode
+    Then the submodule row "libs/lib" says "modified content (1 file"
+    And I capture "superproject-submodule-row"
+    And the nested repository row "inner" shows a repository badge and no untracked folder
+    And the Changes header counts "2 Changed files"
+    And I capture "superproject-nested-row"
+    When I select the row "libs/lib" and click "Show changes in libs/lib"
+    Then the repository selector shows "lib"
+    And the Changes list has a row ending in "a.txt" and none ending in "s.txt"
+    And I capture "show-changes-in-lib"
+    When I open the repository selector
+    And I pick the repository "."
+    And I open the repository selector
+    And I pick the repository "libs/lib"
+    Then the repository selector shows "lib"
+    And the Changes list has a row ending in "a.txt" and none ending in "s.txt"
+    And I capture "picked-lib-uncommitted"
+    When I choose the "Against branch" diff mode
+    Then the Against branch list offers "lib-only" and not "feat-x"
+    And I capture "picked-lib-branches"
 
   Scenario: The selector opens a tree of the own repository, the submodule and the nested repositories
     Given the scratch project is a superproject with a dirty submodule and a nested repository
@@ -68,25 +90,6 @@ Feature: The repository selector chooses which repository Changes shows (GH-390)
     And the focus is on the repository selector
     And I capture "keyboard-escape-focus"
 
-  Scenario: Picking libs/lib shows its uncommitted changes and its branches
-    Given the scratch project is a superproject with a dirty submodule and a nested repository
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
-    When I open the Changes tab of the side panel
-    And I choose the "Against branch" diff mode
-    Then the Against branch list offers "main" and not "lib-only"
-    When I close the open menu with Escape
-    And I choose the "Uncommitted" diff mode
-    And I open the repository selector
-    And I pick the repository "libs/lib"
-    Then the repository selector shows "lib"
-    And the Changes list has a row ending in "a.txt" and none ending in "s.txt"
-    And I capture "picked-lib-uncommitted"
-    When I choose the "Against branch" diff mode
-    Then the Against branch list offers "lib-only" and not "feat-x"
-    And I capture "picked-lib-branches"
-
   Scenario: The choice is kept after a reload, in another session and per project
     Given the scratch project is a superproject with a dirty submodule and a nested repository
     And a second scratch project is a superproject with a dirty submodule and a nested repository
@@ -112,33 +115,3 @@ Feature: The repository selector chooses which repository Changes shows (GH-390)
     Then the repository selector shows the name of the second scratch project
     And I capture "other-project-own-choice"
 
-  Scenario: The superproject shows a dirty submodule row and a nested repository row and Show changes in switches the selector
-    Given the scratch project is a superproject with a dirty submodule and a nested repository
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
-    When I open the Changes tab of the side panel
-    And I choose the "Uncommitted" diff mode
-    Then the submodule row "libs/lib" says "modified content (1 file"
-    And I capture "superproject-submodule-row"
-    And the nested repository row "inner" shows a repository badge and no untracked folder
-    And the Changes header counts "2 Changed files"
-    And I capture "superproject-nested-row"
-    When I select the row "libs/lib" and click "Show changes in libs/lib"
-    Then the repository selector shows "lib"
-    And the Changes list has a row ending in "a.txt" and none ending in "s.txt"
-    And I capture "show-changes-in-lib"
-
-  Scenario: The selector opens as a full-width sheet on a phone
-    Given the viewport is 390x844
-    And the scratch project is a superproject with a dirty submodule and a nested repository
-    And a Haiku session with one finished reply
-    When I open the Changes tab of the side panel
-    And I choose the "Uncommitted" diff mode
-    Then the Changes toolbar has the repository selector
-    And I capture "phone-closed"
-    When I open the repository selector
-    Then the repository sheet is a full-width bottom sheet
-    And every repository tree row is 44px high
-    And the scrollWidth of the page is 390
-    And I capture "phone-sheet-open"

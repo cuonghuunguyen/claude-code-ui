@@ -133,18 +133,36 @@ Then("the theme select is at least 44px high", async ({ page }) => {
   expect(box!.height).toBeGreaterThanOrEqual(44);
 });
 
-Then("the Settings dialog has a 1px border and the floating shadow", async ({ page }) => {
+async function expectDialogSurface(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog").first();
   const s = await dialog.evaluate((e) => { const c = getComputedStyle(e); return { width: c.borderTopWidth, shadow: c.boxShadow }; });
   expect(s.width).toBe("1px");
   expect(s.shadow).toContain("40px");
-});
+}
 
-Then("the session pane has a 1px border", async ({ page }) => {
+async function expectPaneBorder(page: Page): Promise<void> {
   await page.keyboard.press("Escape");
   // The pane of a draft session (pane-session is a phone tab button).
   const w = await page.getByTestId("new-session-tab").evaluate((e) => getComputedStyle(e).borderTopWidth);
   expect(w).toBe("1px");
+}
+
+// Dracula has no light colors, so it is listed for dark only.
+const SURFACE_STYLES: [string, string][] = ["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula", "One"].flatMap((theme) =>
+  (theme === "Dracula" ? ["dark"] : ["light", "dark"]).map((mode): [string, string] => [theme, mode]),
+);
+
+Then("the Settings dialog and the session pane keep their surface style in every theme and mode", async ({ page }) => {
+  await page.keyboard.press("Escape"); // the scenario opened Settings; chooseTheme opens it itself
+  await expect(page.getByRole("dialog")).toBeHidden();
+  for (const [theme, mode] of SURFACE_STYLES) {
+    await chooseTheme(page, theme);
+    await setMode(page, mode);
+    await openSettings(page);
+    await expectDialogSurface(page);
+    await expectPaneBorder(page);
+    await expect(page.getByRole("dialog")).toBeHidden(); // a closing dialog still looks open to chooseTheme
+  }
 });
 
 When("I open Settings", async ({ page }) => openSettings(page));

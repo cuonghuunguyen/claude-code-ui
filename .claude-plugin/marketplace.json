@@ -16,6 +16,13 @@
       "description": "Write claude-ui addons (themes, panes, a band, slash commands, renderers) with the typed addon SDK: the write-addon skill.",
       "version": "0.1.0",
       "category": "development"
+    },
+    {
+      "name": "visualize",
+      "source": "./plugins/visualize",
+      "description": "Draw charts, diagrams and small interactive widgets inline in claude-ui replies: the visualize skill.",
+      "version": "0.1.0",
+      "category": "development"
     }
   ]
 }

@@ -15,14 +15,10 @@ describe("editor tab", () => {
     expect(diskChanged(tab, { content: "claude", mtime: 2 })).toMatchObject({ disk: "claude", draft: "claude", mtime: 2 });
   });
 
-  it("keeps unsaved edits and shows a conflict when the file changes on disk; reload takes the disk version", () => {
-    const t = diskChanged({ ...tab, draft: "mine" }, { content: "claude", mtime: 2 });
+  it("keeps unsaved edits and shows a conflict when the file changes on disk; reload takes the disk version and clears the save error", () => {
+    const t = diskChanged({ ...tab, draft: "mine", error: "changed on disk" }, { content: "claude", mtime: 2 });
     expect(t).toMatchObject({ draft: "mine", disk: "one", mtime: 1, conflict: { content: "claude", mtime: 2 } });
     expect(reload(t)).toMatchObject({ draft: "claude", disk: "claude", mtime: 2, conflict: undefined });
-  });
-
-  it("reload clears the error of the save that hit the conflict", () => {
-    const t = diskChanged({ ...tab, draft: "mine", error: "changed on disk" }, { content: "claude", mtime: 2 });
     expect(reload(t).error).toBeUndefined();
   });
 

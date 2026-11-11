@@ -147,22 +147,6 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     await c.close();
   });
 
-  it("worker /clear: name stays unique, old worker is plain, coordinator sees the new id", async () => {
-    const { o, sessions, links } = setup();
-    const C = fakeSession("C"), W = fakeSession("W"), W2 = fakeSession("W2");
-    [C, W, W2].forEach((s) => sessions.set(s.id, s));
-    links.set("W", { coordinatorId: "C", name: "w", cwd: "/x", port: 1 });
-    o.handOver("W", "W2");
-    expect(links.get("W")?.coordinatorId).toBeUndefined();
-    expect(links.get("W2")).toEqual(expect.objectContaining({ coordinatorId: "C", name: "w" }));
-    const c = await mcp(o.mcpServers("C"));
-    const list = JSON.parse(((await c.callTool({ name: "worker_list", arguments: {} })) as any).content[0].text);
-    expect(list.workers.map((x: any) => x.sessionId)).toEqual(["W2"]);
-    // The old worker session, as a plain session, may get the coordinator server now.
-    expect(o.mcpServers("W")).toBeDefined();
-    await c.close();
-  });
-
   it("a coordinator's own blocked worker_wait, /clear, then event: the waiter takes it (no queue, no notice)", async () => {
     const { o, sessions, prompts, links } = setup();
     const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W");

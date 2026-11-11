@@ -28,10 +28,6 @@ Given("the branch {string} tracks origin and is checked out in another worktree"
   git(project.path, "worktree", "add", `${project.path}-wt`, b);
 });
 
-When("the project's main gets a commit outside the app", async ({ project }) => {
-  git(project.path, "commit", "--allow-empty", "-m", "outside");
-});
-
 When("I choose {string} in the Graph branch filter", async ({ page }, name: string) => {
   await graph(page).getByTestId("graph-filter-branch").click();
   await page.getByRole("option", { name, exact: true }).click();

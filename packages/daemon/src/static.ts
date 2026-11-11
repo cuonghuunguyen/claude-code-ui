@@ -20,7 +20,7 @@ export const APP_CSP = [
   "connect-src 'self'", // fetch + WebSocket to the own origin (ws/wss on the same host are covered by 'self')
   "worker-src 'self'", // service worker (/sw.js); the app starts no Worker
   "manifest-src 'self'", // /manifest.webmanifest
-  "frame-src 'self'", // the Artifact preview iframe (/artifact, own sandbox CSP) and addon frames (/addon, own sandbox CSP); also confines that frame's navigations to the own origin (GH-175)
+  "frame-src 'self'", // the Artifact preview iframe (/artifact, own sandbox CSP), the inline visualization frame (/visualize, own sandbox CSP) and addon frames (/addon, own sandbox CSP); also confines that frame's navigations to the own origin (GH-175)
   "object-src 'none'", // no plugins
   "base-uri 'none'", // no <base> rewriting
   "form-action 'none'", // no form posts

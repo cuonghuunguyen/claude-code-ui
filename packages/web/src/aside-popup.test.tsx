@@ -5,13 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AsidePopup } from "./aside-popup.tsx";
 import type { Rect } from "./aside.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
-
 const el = document.createElement("div");
 document.body.append(el);
 const root = createRoot(el);
@@ -31,8 +24,9 @@ function Host({ initialMin = false }: { initialMin?: boolean }) {
 }
 const ptr = (target: Element, type: string, x: number, y: number) => act(() => void target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y })));
 
-it("renders a non-modal dialog with the title, Read-only badge and body", async () => {
+it("renders a non-modal dialog with the title, Read-only badge and a body that scrolls instead of clipping; dragging the header moves it; Minimize shows a chip and the chip restores it; Keep as session and Close call their handlers, pointer down raises", async () => {
   phoneQuery(false);
+  h.calls = [];
   await act(async () => root.render(<Host />));
   const d = el.querySelector("[role=dialog]")!;
   expect(d.getAttribute("aria-modal")).toBe("false");
@@ -40,57 +34,32 @@ it("renders a non-modal dialog with the title, Read-only badge and body", async 
   expect(d.textContent).toContain("Read-only");
   expect(d.textContent).toContain("body");
   expect((d as HTMLElement).style.left).toBe("100px");
-});
-
-it("dragging the header moves the popup", async () => {
-  phoneQuery(false);
-  await act(async () => root.render(<Host />));
+  expect(el.querySelector("[role=dialog] > div")!.className).toContain("overflow-y-auto");
   const handle = el.querySelector("[data-aside-handle]")!;
   ptr(handle, "pointerdown", 300, 120);
   ptr(handle, "pointermove", 100, 220);
   ptr(handle, "pointerup", 100, 220);
-  expect(h.rect).toMatchObject({ x: -100, y: 200 });
+  expect(h.rect, "after drag").toMatchObject({ x: -100, y: 200 });
   expect((el.querySelector("[role=dialog]") as HTMLElement).style.left).toBe("-100px");
-});
-
-it("Minimize shows a chip and the chip restores the popup", async () => {
-  phoneQuery(false);
-  await act(async () => root.render(<Host />));
   await act(async () => void (el.querySelector("[aria-label='Minimize aside']") as HTMLElement).click());
   expect(el.querySelector("[role=dialog]")).toBeNull();
   const chip = el.querySelector("[data-aside-chip]") as HTMLElement;
   expect(chip.textContent).toContain("Aside: why?");
   await act(async () => void chip.click());
   expect(el.querySelector("[role=dialog]")).not.toBeNull();
-});
-
-it("Keep as session and Close call their handlers; pointer down raises", async () => {
-  phoneQuery(false);
   h.calls = [];
-  await act(async () => root.render(<Host />));
   await act(async () => void [...el.querySelectorAll("button")].find((b) => b.textContent === "Keep as session")!.click());
   await act(async () => void (el.querySelector("[aria-label='Close aside']") as HTMLElement).click());
   ptr(el.querySelector("[role=dialog]")!, "pointerdown", 1, 1);
-  expect(h.calls).toEqual(expect.arrayContaining(["keep", "close", "focus"]));
+  expect(h.calls).toEqual(["keep", "close", "focus"]);
 });
 
-it("on a phone the title has a row of its own, so the question is truncated only at its end", async () => {
+it("on a phone the title has a row of its own, so the question is truncated only at its end; it fills the viewport and cannot be dragged", async () => {
   phoneQuery(true);
   await act(async () => root.render(<Host />));
   const title = [...el.querySelectorAll("header span")].find((s) => s.textContent === "Aside: why?")!;
   expect(title.className).toContain("max-md:basis-full");
   expect(el.querySelector("header")!.className).toContain("max-md:flex-wrap");
-});
-
-it("the body scrolls instead of clipping what does not fit (a permission panel)", async () => {
-  phoneQuery(false);
-  await act(async () => root.render(<Host />));
-  expect(el.querySelector("[role=dialog] > div")!.className).toContain("overflow-y-auto");
-});
-
-it("on a phone it fills the viewport and cannot be dragged", async () => {
-  phoneQuery(true);
-  await act(async () => root.render(<Host />));
   const d = el.querySelector("[role=dialog]") as HTMLElement;
   expect(d.className).toContain("inset-0");
   expect(d.style.left).toBe("");

@@ -6,12 +6,6 @@ import type { ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as never;
 Element.prototype.scrollIntoView ??= () => {};
 
 const models: ModelInfo[] = [{ value: "default", displayName: "Default (recommended)", description: "" }];

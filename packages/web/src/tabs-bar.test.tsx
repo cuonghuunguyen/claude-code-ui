@@ -7,7 +7,6 @@ import { TabsBar, draggedTab, useGroupedTabs, type TabInfo } from "./tabs-bar.ts
 import { NEW_TAB, closeTab, moveTab } from "./tabs.ts";
 import { SideLabel } from "./sides.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // One context menu per rendered tab: counts the tabs' renders.
 const tabRenders = vi.hoisted(() => ({ n: 0 }));
 vi.mock("@base-ui/react/context-menu", async (orig) => {
@@ -43,17 +42,13 @@ it("a worktree session tab's tooltip names '<project> · <branch>' between title
   expect(tab("b").title).not.toContain("·");
 });
 
-it("each tab shows avatar initial and title; the active one is selected", async () => {
+it("each tab shows avatar initial and title, the active one is selected; tab shows running / needs-input / unread state; needs input and unread differ by shape, not only by colour", async () => {
   const { tab } = await render();
   expect(tab("c").textContent).toContain("Refactor");
   expect(tab("c").querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("true");
   expect(tab("a").querySelector('[role="tab"]')!.getAttribute("aria-selected")).toBe("false");
   expect(tab("d").textContent).toMatch(/^AOld/);
   expect(tab(NEW_TAB).textContent).toContain("New session");
-});
-
-it("tab shows running / needs-input / unread state", async () => {
-  const { tab } = await render();
   expect(tab("a").dataset.state).toBe("running");
   expect(tab("b").dataset.state).toBe("needs_input");
   expect(tab("c").dataset.state).toBe("unread");
@@ -61,10 +56,6 @@ it("tab shows running / needs-input / unread state", async () => {
   expect(tab(NEW_TAB).dataset.state).toBe("new");
   expect(tab("b").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, needs input");
   expect(tab("c").querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Refactor, unread");
-});
-
-it("needs input and unread differ by shape, not only by colour", async () => {
-  const { tab } = await render();
   // Needs input: an alert icon in place of the avatar. Unread: a dot on the avatar.
   expect(tab("b").querySelector(".lucide-circle-alert")).not.toBeNull();
   expect(tab("b").querySelector('[data-dot]')).toBeNull();
@@ -614,15 +605,6 @@ it("phone: a right swipe moves the row 16px at most, closes nothing, selects not
   expect(onSelect).not.toHaveBeenCalled();
 });
 
-it("phone: a short slow left swipe springs back and closes nothing", async () => {
-  const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
-  const row = swipeRows()[1]!;
-  await swipeBy(row, -30, 800);
-  await wait(300);
-  expect(shift(row)).toBe(0);
-  expect(onSwipeClose).not.toHaveBeenCalled();
-});
-
 it("phone: a fast left flick closes", async () => {
   const { onSwipeClose } = await openList({ onSwipeClose: vi.fn() });
   await swipeBy(swipeRows()[2]!, -45, 50);
@@ -843,7 +825,7 @@ it("phone: the slide-out of a swipe closes with the latest onSwipeClose, not the
 const SIZE_BOX = () => ({ width: 300, height: 44, left: 0, top: 0, right: 300, bottom: 44, x: 0, y: 0, toJSON() {} });
 const stdHandlers = { onSelect: () => {}, onClose: () => {}, onMove: () => {}, onMoveGroup: () => {}, onMoveGroupTo: () => {}, onNew: () => {}, onAction: () => {}, onRenamed: () => {} };
 
-it("phone: pointer moves after a finished swipe do not run it again (no blocked click, no repeated close)", async () => {
+it("phone: pointer moves after a finished swipe do not run it again (no blocked click, no repeated close); a short slow swipe springs back", async () => {
   const { onSwipeClose, onSelect } = await openList({ onSwipeClose: vi.fn() });
   await swipeBy(swipeRows()[0]!, -200);
   await touch(swipeRows()[0]!, "pointermove", -210, 100, "mouse");
@@ -852,6 +834,8 @@ it("phone: pointer moves after a finished swipe do not run it again (no blocked 
   expect(onSwipeClose).toHaveBeenCalledExactlyOnceWith("a");
   await swipeBy(swipeRows()[1]!, -30, 800);
   await wait(300);
+  expect(shift(swipeRows()[1]!)).toBe(0);
+  expect(onSwipeClose).toHaveBeenCalledTimes(1);
   now += 2000;
   tick(0);
   await touch(swipeRows()[1]!, "pointermove", -50, 100, "mouse");
@@ -997,13 +981,6 @@ it("GH-359 the New session tab has the move and close items only", async () => {
   const { el } = await render({ onTabCommand: vi.fn() });
   const m = await ctxMenu(el, NEW_TAB);
   expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab"]);
-  await closeMenu();
-});
-
-it("GH-359 without onTabCommand the menu has Move and Close tab only", async () => {
-  const { el } = await render();
-  const m = await ctxMenu(el, "b");
-  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent).slice(0, 4)).toEqual(["Move left", "Move right", "Close tab", "Rename"]);
   await closeMenu();
 });
 

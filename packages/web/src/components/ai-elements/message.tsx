@@ -26,11 +26,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  use,
   useMemo,
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
 import { useAddonFenceRenderers } from "../../addon-render.tsx";
+import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
 import { useT } from "../../i18n.ts";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -332,7 +334,10 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => {
     // Fences an addon draws (GH-516): its renderer is checked before mermaid and the code plugin. The constant stays while there are none.
-    const renderers = useAddonFenceRenderers();
+    const addonRenderers = useAddonFenceRenderers();
+    // The built-in `visualize` renderer (GH-690) goes first: it wins over an addon claiming the same fence.
+    const on = use(VisualizeContext);
+    const renderers = useMemo(() => (on ? [{ language: ["visualize"], component: VisualizeFence as never }, ...addonRenderers] : addonRenderers), [on, addonRenderers]);
     return (
       <Streamdown
         className={cn(

@@ -201,8 +201,8 @@ Then("the aside popup fills the viewport", async ({ page }) => {
 });
 
 When("I close the aside", async ({ page, memo }) => {
-  memo.branch = (await popup(page).getAttribute("data-aside-id")) ?? undefined;
-  await popup(page).getByRole("button", { name: "Close aside" }).click();
+  memo.branch = (await popup(page).last().getAttribute("data-aside-id")) ?? undefined;
+  await popup(page).last().getByRole("button", { name: "Close aside" }).click();
 });
 
 When("I keep the aside as a session", async ({ page, memo }) => {

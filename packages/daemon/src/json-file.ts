@@ -1,8 +1,8 @@
 // A small JSON file in the config dir that daemons of one user (other ports) share: projects.json, sessions.json.
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 /**
- * Re-reads the file before every read and change, so each change applies to the latest content and never overwrites
+ * Re-reads the file before every read and change when it changed (inode, size, mtime: a save renames a new file in), so each change applies to the latest content and never overwrites
  * another daemon's change. `parse` turns the parsed JSON (undefined: missing file; `corrupt`: the file could not be parsed and there is no data in memory yet) into the data; a hand-edited
  * file of another shape should come out empty. Without `file` the data lives in memory only (tests).
  * ponytail: no lock; two daemons writing in the same millisecond can still lose one change. Add a lock file if that shows up.
@@ -14,10 +14,20 @@ export function createJsonFile<T>(file: string | undefined, parse: (raw: unknown
   let unsaved = false;
   let readFailed = false;
   let loaded = false; // data came from the file once (or the file was corrupt at start)
+  // The file version `data` was read from or saved as: settings.get() runs on every tick and list, a stat is cheaper than a read and parse.
+  let version: string | undefined;
+  const versionOf = (f: string) => {
+    const st = statSync(f);
+    return `${st.ino}:${st.size}:${st.mtimeMs}`;
+  };
   const load = () => {
     if (!file || unsaved) return;
     try {
+      const v = versionOf(file);
+      if (v === version) return;
+      version = undefined;
       data = parse(JSON.parse(readFileSync(file, "utf8")));
+      version = v;
       readFailed = false;
       loaded = true;
     } catch (e) {
@@ -47,6 +57,11 @@ export function createJsonFile<T>(file: string | undefined, parse: (raw: unknown
     try {
       writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
       renameSync(tmp, file);
+      try {
+        version = versionOf(file);
+      } catch {
+        version = undefined; // read again next time
+      }
     } catch (e) {
       try {
         rmSync(tmp, { force: true });

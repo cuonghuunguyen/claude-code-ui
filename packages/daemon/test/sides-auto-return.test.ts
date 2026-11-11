@@ -70,17 +70,13 @@ describe("auto start of a saved side", () => {
     return seen;
   };
 
-  it("a legacy entry without a key starts once with the bundle only", async () => {
-    expect(await modes(parseSaved(["wsl:A"]))).toEqual([{ setup: "needed", bundleOnly: true }]);
-  });
-  it("the current key starts with setup never", async () => {
-    expect(await modes([{ id: "wsl:A", key: "k2" }])).toEqual([{ setup: "never", bundleOnly: undefined }]);
-  });
-  it("another key and update on: needed + bundleOnly", async () => {
-    expect(await modes([{ id: "wsl:A", key: "old" }])).toEqual([{ setup: "needed", bundleOnly: true }]);
-  });
-  it("another key and update off: never", async () => {
-    expect(await modes([{ id: "wsl:A", key: "old", update: false }])).toEqual([{ setup: "never", bundleOnly: undefined }]);
+  it.each([
+    ["a legacy entry without a key starts once with the bundle only", parseSaved(["wsl:A"]), { setup: "needed", bundleOnly: true }],
+    ["the current key starts with setup never", [{ id: "wsl:A", key: "k2" }], { setup: "never", bundleOnly: undefined }],
+    ["another key and update on: needed + bundleOnly", [{ id: "wsl:A", key: "old" }], { setup: "needed", bundleOnly: true }],
+    ["another key and update off: never", [{ id: "wsl:A", key: "old", update: false }], { setup: "never", bundleOnly: undefined }],
+  ] as [string, SavedSide[], object][])("%s", async (_n, saved, mode) => {
+    expect(await modes(saved)).toEqual([mode]);
   });
 
   it("a start that ends not_installed: off, update true, no retry", async () => {
@@ -157,17 +153,20 @@ describe("restart after an exit", () => {
     return { s, procs, modes };
   };
 
-  it("a dropped pipe: reconnecting, then attach again with setup never after 2 s", async () => {
+  it.each([
+    ["wsl:A", [wslSide("A")]],
+    ["docker:dev", [dockerSide("dev")]],
+  ])("%s: a dropped pipe: reconnecting, then attach again with setup never after 2 s", async (id, targets) => {
     vi.useFakeTimers();
-    const { s, procs, modes } = mk();
-    await s.start("wsl:A");
+    const { s, procs, modes } = mk({ targets });
+    await s.start(id);
     procs[0]!.die();
-    expect(state(s, "wsl:A")).toMatchObject({ state: "reconnecting" });
+    expect(state(s, id)).toMatchObject({ state: "reconnecting" });
     await tick(1_999);
     expect(procs).toHaveLength(1);
     await tick(2);
     expect(procs).toHaveLength(2);
-    expect(state(s, "wsl:A")?.state).toBe("ready");
+    expect(state(s, id)?.state).toBe("ready");
     expect(modes).toEqual(["needed", "never"]);
     s.close();
   });
@@ -414,9 +413,10 @@ describe("attach handshake (ADR 0009)", () => {
   });
 
   it.each([
-    ["a schema range without overlap", { ready: true, schema: [2, 3], version: "9.0.0" }, [2, 3]],
-    ["no schema at all (an older Hub)", { ready: true, version: "1.1.0" }, undefined],
-  ])("ready with %s: error with both versions, pipe killed, no reconnect", async (_n, ready, remoteSchema) => {
+    ["a schema range above ours", { ready: true, schema: [2, 3], version: "9.0.0" }, [2, 3], false],
+    ["a schema range below ours", { ready: true, schema: [0, 0], version: "0.9.0" }, [0, 0], true],
+    ["no schema at all (an older Hub)", { ready: true, version: "1.1.0" }, undefined, true],
+  ])("ready with %s: error with both versions, pipe killed, no reconnect", async (_n, ready, remoteSchema, remoteOlder) => {
     vi.useFakeTimers();
     const p = pipe();
     p.out(ready);
@@ -429,7 +429,7 @@ describe("attach handshake (ADR 0009)", () => {
     expect(row.state).toBe("error");
     expect(row.mismatch).toMatchObject({ remote: (ready as any).version, localSchema: [1, 1], ...(remoteSchema && { remoteSchema }) });
     expect(typeof row.mismatch!.local).toBe("string");
-    expect(row.mismatch!.remoteOlder).toBe(remoteSchema ? false : true);
+    expect(row.mismatch!.remoteOlder).toBe(remoteOlder);
     if (!remoteSchema) expect(row.mismatch!.remoteSchema).toBeUndefined();
     expect(spawn).toHaveBeenCalledTimes(1);
     s.close();
@@ -453,24 +453,6 @@ describe("attach handshake (ADR 0009)", () => {
     expect(rejected!.message).not.toContain("hub_no_attach");
     expect(state(s, "wsl:A")!.mismatch!.remoteSchema).toBeUndefined();
     expect(spawn).toHaveBeenCalledTimes(1);
-    s.close();
-  });
-});
-
-describe("pipe drop of every kind", () => {
-  it.each([
-    ["wsl:A", [wslSide("A")]],
-    ["docker:dev", [dockerSide("dev")]],
-  ])("%s: reconnecting, then attaches again with the bridge", async (id, targets) => {
-    vi.useFakeTimers();
-    const pipes: ReturnType<typeof pipe>[] = [];
-    const s = createSides({ targets, key: () => "k", spawn: async () => (pipes.push(pipe()), pipes.at(-1)!.out(READY), pipes.at(-1)!.proc) });
-    await s.start(id);
-    pipes[0]!.exit(1);
-    expect(state(s, id)?.state).toBe("reconnecting");
-    await tick(2_100);
-    expect(pipes).toHaveLength(2);
-    expect(state(s, id)?.state).toBe("ready");
     s.close();
   });
 });
@@ -545,16 +527,6 @@ describe("updateRemote", () => {
     expect(state(s, "wsl:A")).toMatchObject({ state: "error", message: expect.stringContaining("no update available") });
     s.close();
   });
-
-  it("rejects 'nothing to update' without a mismatch of an older Hub", async () => {
-    vi.useFakeTimers();
-    const p = pipe();
-    p.out(READY);
-    const s = createSides({ targets: [wslSide("A")], spawn: async () => p.proc });
-    await s.start("wsl:A");
-    await expect(s.updateRemote("wsl:A")).rejects.toThrow("nothing to update");
-    s.close();
-  });
 });
 
 describe("side.updateRemote message", () => {
@@ -573,6 +545,7 @@ describe("side.updateRemote message", () => {
     expect(await h.ask({ type: "side.updateRemote", side: "nope" })).toMatchObject({ type: "error", code: "unknown_side" });
     expect(await h.ask({ type: "side.updateRemote" })).toMatchObject({ type: "error", code: "unknown_side" });
     expect(await h.ask({ type: "side.updateRemote", side: "wsl:A" })).toMatchObject({ type: "error", code: "bad_request" });
+    await expect(s.updateRemote("wsl:A")).rejects.toThrow("nothing to update");
     s.close();
   });
 

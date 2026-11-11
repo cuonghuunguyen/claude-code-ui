@@ -6,8 +6,6 @@ import type { AddonInfo } from "@claude-ui/protocol";
 import { AddonFrame } from "./addon-frame.tsx";
 import { AddonApiContext, LOG_KEY, useAddonLog, type AddonApi, type AddonLog, type LogOp } from "./addons.ts";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 beforeEach(() => localStorage.clear());
 afterEach(() => {

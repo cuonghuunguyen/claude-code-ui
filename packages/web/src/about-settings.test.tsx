@@ -6,7 +6,6 @@ import type { UpdateCheckResult } from "@claude-ui/protocol";
 import { AboutSection } from "./about-settings.tsx";
 import type { UpdateInfo } from "./update.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const el = document.createElement("div");
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {

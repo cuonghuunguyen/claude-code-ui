@@ -5,8 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ContinueDock } from "./continue-dock.tsx";
 import { clockText } from "./plan-meter.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   act(() => root?.unmount());
@@ -22,14 +20,10 @@ function render(onCancel = vi.fn()) {
   return { at, onCancel };
 }
 
-it("shows Continuing at <time> with a Cancel button that calls onCancel", () => {
+it("shows Continuing at <time> with a Cancel button (a 44px target below md) that calls onCancel", () => {
   const { at, onCancel } = render();
   expect(document.querySelector("[data-testid=auto-continue]")?.textContent).toContain(`Continuing at ${clockText(at)} after the usage limit resets`);
+  expect(document.querySelector("[data-testid=auto-continue-cancel]")?.className).toContain("max-md:min-h-11");
   act(() => document.querySelector<HTMLElement>("[data-testid=auto-continue-cancel]")!.click());
   expect(onCancel).toHaveBeenCalledTimes(1);
-});
-
-it("Cancel is a 44px target below md", () => {
-  render();
-  expect(document.querySelector("[data-testid=auto-continue-cancel]")?.className).toContain("max-md:min-h-11");
 });

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StaleToast } from "./stale-toast.tsx";
 import { Toast, ToastRegion } from "./toast.tsx";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const reduced = (on: boolean) => (window.matchMedia = ((q: string) => ({ matches: on && q.includes("reduce"), media: q })) as never);
 const el = document.createElement("div");
 const onClose = vi.fn();
