@@ -4,6 +4,7 @@
 // schemas (all marked required; no validation). We have no zod in a zero-install file, so we use
 // the JSON Schema form, give every arg a neutral "use the default" value, and parse defensively.
 import { replay as replayClassifier } from "./classifier.ts";
+import { effectiveDecision } from "./verdict.ts";
 import { DEFAULT_EVAL_LIMIT, formatEvalReport, inScope, MAX_EVAL_LIMIT, runEval, selectCases, type EvalCase, type Got, type Scope } from "./eval.ts";
 import { buildImproveReport, collectOverrides, DEFAULT_IMPROVE_LIMIT, findConfigSources } from "./improve.ts";
 import { readLog } from "./log-store.ts";
@@ -83,7 +84,7 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
             classifierSessions: deps.classifierSessions,
           });
           const v = out.verdict;
-          return v?.decision ? { got: v.decision === "yes" ? "block" : "allow", reason: v.reason } : { got: "none", reason: "no verdict (error, timeout or unparseable reply)" };
+          return v?.decision ? { got: ({ yes: "block", no: "allow", ask: "ask" } as const)[effectiveDecision(v.decision, deps.opts.unsure)], reason: v.reason } : { got: "none", reason: "no verdict (error, timeout or unparseable reply)" };
         });
         return formatEvalReport(results, { only, scope, policyHash: deps.policyHash, model });
       },
@@ -109,7 +110,7 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
           scope,
           project,
           totals: { decisions: inScopeDecisions.length, labeled },
-          options: { allow: deps.opts.allow, softDeny: deps.opts.softDeny, environment: deps.opts.environment, replaceDefaults: deps.opts.replaceDefaults },
+          options: { allow: deps.opts.allow, softDeny: deps.opts.softDeny, environment: deps.opts.environment, replaceDefaults: deps.opts.replaceDefaults, unsure: deps.opts.unsure },
           policyPrompt: deps.policyPrompt,
           configSources: findConfigSources(deps.directory, deps.worktree),
         });

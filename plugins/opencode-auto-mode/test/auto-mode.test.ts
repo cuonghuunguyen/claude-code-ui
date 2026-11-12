@@ -189,6 +189,51 @@ describe("AutoModePlugin event handler", () => {
     expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith({ path: { id: "ses1", permissionID: "per1" }, body: { response: "once" } });
   });
 
+  it("ask (default unsure): no reply, deferred, and it does not count toward the block limits", async () => {
+    const logDir = newLogDir();
+    const { client, log, replies, toasts } = fakeClient({ promptText: "<block>ask</block><reason>target unclear</reason>" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { logDir, maxConsecutiveBlocks: 1, maxTotalBlocks: 1 });
+    await hooks.event!(askedEvent({ id: "q1" }));
+    await hooks.event!(askedEvent({ id: "q2" }));
+
+    expect(replies).toEqual([]);
+    expect(toasts).toEqual([]);
+    expect(extras(log).map((e) => e.verdict)).toEqual(["ask", "ask"]); // still deciding: the limit was not hit
+    expect(readRecords(logDir).map((r) => [r.requestID, r.verdict, r.outcome, r.reason])).toEqual([
+      ["q1", "ask", "deferred", "target unclear"],
+      ["q2", "ask", "deferred", "target unclear"],
+    ]);
+    expect(vi.mocked(client.session.prompt)).toHaveBeenCalledTimes(2);
+  });
+
+  it("the human's answer to a deferred ask is captured as a label", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "<block>ask</block><reason>unsure</reason>" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    await hooks.event!(askedEvent({ id: "q1" }));
+    await hooks.event!(repliedEvent("q1", "once"));
+    expect(readRecords(logDir).filter((r) => r.kind === "label")).toEqual([expect.objectContaining({ requestID: "q1", reply: "once" })]);
+  });
+
+  it("unsure: \"block\" turns an ask reply into a reject carrying its reason, counted as a block", async () => {
+    const logDir = newLogDir();
+    const { client, replies } = fakeClient({ promptText: "<block>ask</block><reason>target unclear</reason>" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { logDir, unsure: "block" });
+    await hooks.event!(askedEvent());
+    expect(replies).toEqual([{ id: "per1", reply: "reject", message: "target unclear" }]);
+    expect(readRecords(logDir).map((r) => [r.verdict, r.outcome])).toEqual([["block", "replied"]]);
+  });
+
+  it("unsure: \"block\" puts the block-when-unsure rule in the classifier's prompt", async () => {
+    const { client } = fakeClient();
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { unsure: "block" });
+    const config: { agent?: Record<string, { prompt?: string }> } = {};
+    await hooks.config!(config);
+    const prompt = config.agent!["auto-mode-classifier"].prompt!;
+    expect(prompt).toContain("block when unsure");
+    expect(prompt).not.toContain("<block>ask</block>");
+  });
+
   it("unparseable reply: does nothing (no reply, logged as 'none')", async () => {
     const { client, log, replies } = fakeClient({ promptText: "I cannot decide." });
     const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
@@ -699,6 +744,20 @@ describe("commands and tools", () => {
     expect(max).toBeLessThanOrEqual(EVAL_CONCURRENCY);
     expect(max).toBeGreaterThan(1);
     expect(run.deleted.length).toBe(6); // every replay session cleaned up
+  });
+
+  it("eval matrix: an ask reply is its own column and a disagreement; with unsure block it counts as block", async () => {
+    const asked = await seeded({}, "<block>ask</block><reason>unsure</reason>");
+    const ctx = { worktree: "/proj", directory: "/proj" };
+    const report = await asked.hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, ctx);
+    expect(report).toContain("agreement: 0% (0/6)");
+    expect(report).toMatch(/expected allow\s*\|\s*0\s*\|\s*0\s*\|\s*3\s*\|\s*0/);
+    expect(report).toContain("asked the human: 6");
+
+    const blocking = await seeded({ unsure: "block" }, "<block>ask</block><reason>unsure</reason>");
+    const report2 = await blocking.hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, ctx);
+    expect(report2).toContain("agreement: 50% (3/6)");
+    expect(report2).toMatch(/expected block\s*\|\s*0\s*\|\s*3\s*\|\s*0\s*\|\s*0/);
   });
 
   it("eval honours scope: another project's decisions are excluded unless scope is all", async () => {

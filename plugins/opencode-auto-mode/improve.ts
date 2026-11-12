@@ -9,7 +9,7 @@ import { truncate } from "./text.ts";
 
 export const DEFAULT_IMPROVE_LIMIT = 30;
 
-export type OverrideKind = "human-allowed-block" | "human-rejected-allow" | "human-allowed-no-verdict";
+export type OverrideKind = "human-allowed-block" | "human-rejected-allow" | "human-allowed-no-verdict" | "human-decided-ask";
 
 export interface Override {
   record: DecisionRecord;
@@ -36,6 +36,7 @@ export function collectOverrides(log: LogContents, opts: OverrideOptions): Overr
     if (record.verdict === "block" && allowed) kind = "human-allowed-block";
     else if (record.verdict === "allow" && !allowed) kind = "human-rejected-allow";
     else if (record.verdict === "none" && allowed) kind = "human-allowed-no-verdict";
+    else if (record.verdict === "ask") kind = "human-decided-ask";
     if (kind) out.push({ record, kind, reply: label.reply });
   }
   return out;
@@ -45,6 +46,7 @@ const KIND_TEXT: Record<OverrideKind, string> = {
   "human-allowed-block": "classifier said block (or deferred a block), human allowed",
   "human-rejected-allow": "classifier said allow, human rejected",
   "human-allowed-no-verdict": "classifier gave no verdict, human allowed",
+  "human-decided-ask": "classifier was unsure and asked the human, who decided",
 };
 
 export interface ImproveReportInput {
@@ -52,7 +54,7 @@ export interface ImproveReportInput {
   scope: Scope;
   project: string;
   totals: { decisions: number; labeled: number };
-  options: { allow: string[]; softDeny: string[]; environment: string[]; replaceDefaults: boolean };
+  options: { allow: string[]; softDeny: string[]; environment: string[]; replaceDefaults: boolean; unsure?: "ask" | "block" };
   policyPrompt: string;
   configSources: string[];
 }
@@ -66,6 +68,7 @@ export function formatImproveReport(r: ImproveReportInput): string {
     "",
     "## Effective rules (configured additions; the shipped defaults are inside the policy prompt below)",
     `replaceDefaults: ${r.options.replaceDefaults}`,
+    `unsure: ${r.options.unsure ?? "ask"}`,
     `allow:${list(r.options.allow)}`,
     `softDeny:${list(r.options.softDeny)}`,
     `environment:${list(r.options.environment)}`,

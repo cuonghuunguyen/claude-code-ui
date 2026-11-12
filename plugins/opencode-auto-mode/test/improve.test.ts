@@ -18,14 +18,18 @@ describe("collectOverrides", () => {
       decision({ requestID: "noneAllowed", at: at(5), verdict: "none", outcome: "timeout", input: undefined }),
       decision({ requestID: "noneRejected", at: at(6), verdict: "none", outcome: "timeout" }),
       decision({ requestID: "otherProject", at: at(7), verdict: "block", project: "/other" }),
+      decision({ requestID: "askAllowed", at: at(9), verdict: "ask", outcome: "deferred" }),
+      decision({ requestID: "askRejected", at: at(10), verdict: "ask", outcome: "deferred" }),
       decision({ requestID: "unlabeled", at: at(8), verdict: "block" }),
     ],
-    [["agree", "once"], ["allowedButRejected", "reject"], ["blockedButAllowed", "once"], ["deferredAllowed", "always"], ["noneAllowed", "once"], ["noneRejected", "reject"], ["otherProject", "once"]],
+    [["agree", "once"], ["allowedButRejected", "reject"], ["blockedButAllowed", "once"], ["deferredAllowed", "always"], ["noneAllowed", "once"], ["noneRejected", "reject"], ["otherProject", "once"], ["askAllowed", "once"], ["askRejected", "reject"]],
   );
 
   it("keeps human labels that differ from the verdict, newest first, within the project scope", () => {
     const out = collectOverrides(log, { limit: 30, scope: "project", project: "/proj" });
     expect(out.map((o) => [o.record.requestID, o.kind])).toEqual([
+      ["askRejected", "human-decided-ask"],
+      ["askAllowed", "human-decided-ask"],
       ["noneAllowed", "human-allowed-no-verdict"],
       ["deferredAllowed", "human-allowed-block"],
       ["blockedButAllowed", "human-allowed-block"],

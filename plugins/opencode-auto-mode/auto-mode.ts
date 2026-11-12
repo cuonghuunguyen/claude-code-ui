@@ -7,6 +7,7 @@ import { createLimits } from "./limits.ts";
 import { createLogStore, hashPolicy, resolveDataDir, type ClassifierInput, type DecisionOutcome, type LabelRecord } from "./log-store.ts";
 import { logDecision, toast } from "./logging.ts";
 import { buildPolicyPrompt } from "./prompt.ts";
+import { effectiveDecision } from "./verdict.ts";
 import { allowOnce, otherPendingAsks, pendingAsks, rejectWithMessage, type ReplyOutcome } from "./reply.ts";
 import { createTools, projectKey } from "./tools.ts";
 import type { CachedToolCall } from "./transcript.ts";
@@ -18,6 +19,7 @@ const MAX_SEEN_ASKS = 1000;
 /** Whole-job budget beyond the classifier timeout, for the calls around it (list, reply, cleanup). */
 export const JOB_SLACK_MS = 10_000;
 const DEFAULT_BLOCK_MESSAGE = "Blocked by auto mode.";
+const UNSURE_BLOCK_MESSAGE = "Blocked by auto mode: could not tell whether this is authorised.";
 
 export const AutoModePlugin: Plugin = async (input, options) => {
   const opts = resolveOptions(options);
@@ -58,7 +60,7 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     : undefined;
 
   interface Decided {
-    verdict: "allow" | "block" | "none" | "deferred";
+    verdict: "allow" | "block" | "ask" | "none" | "deferred";
     outcome?: DecisionOutcome;
     reason: string;
     ms: number;
@@ -139,7 +141,14 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       return; // leave it to the human
     }
 
-    if (verdict.decision === "no") {
+    const decision = effectiveDecision(verdict.decision, opts.unsure);
+    if (decision === "ask") {
+      // Unsure: the human decides. Not a block, so it never counts toward the limits; their answer becomes the label.
+      await done({ verdict: "ask", outcome: "deferred", reason: verdict.reason });
+      return;
+    }
+
+    if (decision === "no") {
       const outcome = await ourReply(info.id, () => allowOnce(client, target));
       if (outcome === "replied") limits.recordAllow(info.sessionID);
       await done({ verdict: "allow", outcome, reason: verdict.reason });
@@ -153,7 +162,7 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       await done({ verdict: "deferred", reason: `${why}; left to the human (classifier said block: ${verdict.reason})` });
       return;
     }
-    const message = verdict.reason || DEFAULT_BLOCK_MESSAGE;
+    const message = verdict.reason || (verdict.decision === "ask" ? UNSURE_BLOCK_MESSAGE : DEFAULT_BLOCK_MESSAGE);
     const outcome = await ourReply(info.id, () => rejectWithMessage(client, target, message));
     await done({ verdict: "block", outcome, reason: verdict.reason });
     if (outcome !== "replied") return;

@@ -6,7 +6,7 @@ export interface DecisionLog {
   sessionID: string;
   permission: string;
   /** What the classifier said, or why nothing was decided. */
-  verdict: "allow" | "block" | "none" | "deferred";
+  verdict: "allow" | "block" | "ask" | "none" | "deferred";
   /** What happened to the ask: replied, already answered by someone else, or the reply failed. */
   outcome?: "replied" | "already-answered" | "failed";
   reason: string;
@@ -14,7 +14,7 @@ export interface DecisionLog {
 }
 
 export async function logDecision(client: OpencodeClient, log: DecisionLog): Promise<void> {
-  const warn = log.verdict === "none" || log.verdict === "deferred" || log.outcome === "failed";
+  const warn = log.verdict === "none" || log.verdict === "deferred" || log.verdict === "ask" || log.outcome === "failed";
   try {
     await client.app.log({
       body: {

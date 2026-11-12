@@ -29,10 +29,11 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
 | `timeoutMs` | `60000` | classifier call timeout; on timeout, do nothing |
 | `maxConsecutiveBlocks` | `3` | consecutive blocks before auto mode stops deciding for a session |
 | `maxTotalBlocks` | `20` | total blocks before auto mode stops deciding for a session |
+| `unsure` | `"ask"` | what happens when the classifier is unsure: `"ask"` leaves the prompt to the human (see below); `"block"` blocks it. Use `"block"` for unattended or headless runs: nobody answers an ask there, so it hangs |
 | `allow` | `[]` | extra bullet points appended to the default "allow" section of the policy prompt |
 | `softDeny` | `[]` | extra bullet points appended to the default "block" section |
-| `environment` | `[]` | project-specific context bullets (no defaults) |
-| `replaceDefaults` | `false` | when `true`, `allow`/`softDeny`/`environment` replace the defaults instead of extending them |
+| `environment` | `[]` | bullets appended to the default environment section (trusted = only the session repo and its git remotes; names containing `prod`/`production` are production; everything else untrusted): list your trusted hosts, buckets, registries and deploy targets here |
+| `replaceDefaults` | `false` | when `true`, `allow`/`softDeny`/`environment` replace the defaults (allow, block and environment) instead of extending them |
 | `maxOutputTokens` | `1024` | output cap for the classifier reply (reasoning models may need more; if a model rejects temperature 0 or runs out of tokens, the reply is unparseable and auto mode defers to the human) |
 | `transcriptChars` | `60000` | char budget for the transcript sent to the classifier |
 | `skipPermissions` | `[]` | permission names never auto-decided (left for the human) |
@@ -58,8 +59,9 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
    `parentID`, prompts the classifier agent with `## Transcript` / `## Action` sections as the user
    message, reads the reply, and always deletes the session afterwards (aborting it first on a
    timeout). Asks of one session are classified one at a time.
-4. The classifier replies with `<block>yes|no</block><reason>...</reason>` (optionally preceded by
-   `<thinking>...</thinking>`). `yes` means block; `no` means allow. Anything unparseable (no block
+4. The classifier replies with `<block>yes|no|ask</block><reason>...</reason>` (optionally preceded by
+   `<thinking>...</thinking>`). `yes` means block; `no` means allow; `ask` means unsure (see
+   "Unsure" below). Anything unparseable (no block
    tag, an unclosed `<thinking>`, conflicting block tags), or any error or timeout along the way,
    means **do nothing**: the prompt is left for the human.
 5. Replies use OpenCode's V2 route, `POST /permission/{id}/reply`, via the V1 SDK client's raw
@@ -76,6 +78,27 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
    (`replied`, `already-answered`, `failed`, or `deferred`/`none`); only replied blocks count toward
    the limits and toast.
 
+## The policy
+
+The prompt has these sections: role, five decision principles (only the user authorises; authorisation
+is specific; compound commands are judged by their most dangerous part; retrying a blocked action another
+way is blocked; low risk is allowed, high risk needs explicit authorisation), default allow, default block
+(destruction, default branch, code execution, secrets, exfiltration, exposure, persistence and
+self-modification, shared and production systems, collaboration, real world; with Windows equivalents),
+the environment and the output format. Sending secrets or private code out is blocked by default but an
+explicit, specific user request authorises it. When a block is about a credential's value showing up in the
+transcript, the block reason points to a way to use it unread (env var, file reference, the tool's own login
+helper). `allow`, `softDeny` and `environment` add to the defaults; `replaceDefaults` replaces all three.
+
+## Unsure
+
+The classifier may answer `ask` when it is genuinely unsure. With `unsure: "ask"` (default) the plugin sends
+no reply, so the normal prompt stays for the human; the decision is logged with verdict `ask` and outcome
+`deferred`, never counts toward the block limits, and your answer is recorded as a label like any other
+(the eval then shows it as a disagreement, in its own "got ask" column; improve lists it as a case you decided).
+With `unsure: "block"` the prompt tells the classifier to block when unsure, and an `ask` reply anyway is
+rejected with its reason. **Recommended for unattended or headless runs**, where an ask would hang.
+
 ## Decision log
 
 On by default. Every decision is appended, one JSON object per line, to
@@ -86,8 +109,8 @@ created with mode `0600` (best effort on Windows) and rotated once to `decisions
 `logMaxBytes`.
 
 - `{"v":1,"kind":"decision", at, requestID, sessionID, project, permission, patterns, model,
-  policyHash, verdict, reason, outcome, ms, input}`. `verdict` is `allow`, `block` or `none` (what
-  the classifier said; a block deferred to the human keeps `block`). `outcome` is `replied`,
+  policyHash, verdict, reason, outcome, ms, input}`. `verdict` is `allow`, `block`, `ask` or `none` (what
+  the classifier said; a block deferred to the human keeps `block`; `ask` is always `deferred`). `outcome` is `replied`,
   `already-answered`, `failed`, `deferred`, `skipped` (session limit, or already answered),
   `timeout` or `none`. `project` is the git worktree (the directory when there is none).
   `input` is the exact `{transcript, action}` sent to the classifier, so the decision can be replayed.
@@ -114,7 +137,7 @@ worktree) or `all` (every project), e.g. `/auto-mode-eval 100 all-projects`.
 - `/auto-mode-eval [limit] [all] [all-projects] [model=provider/model]` replays the most recent
   decisions that have a logged input through the classifier **with the current policy**, at most 3
   at a time, and reports counts, agreement, a confusion matrix (expected allow/block against got
-  allow/block/none) and the disagreements. By default (`labeled`) the truth is your answer
+  allow/block/ask/none) and the disagreements. By default (`labeled`) the truth is your answer
   (`once`/`always` = allow, `reject` = block); with `all` the previous verdict is the reference (a
   regression check). Default 50 cases, max 500. **It calls the model once per case**, so it costs
   tokens. Replays are not written to the log.
@@ -150,3 +173,13 @@ worktree) or `all` (every project), e.g. `/auto-mode-eval 100 all-projects`.
 - A reasoning model, or one that rejects `temperature: 0`, may fail or run out of output tokens;
   that just makes auto mode defer to the human.
 - Denial limits are per-session and in-memory: they reset when the server restarts.
+
+## Sources
+
+The design was inspired by Claude Code's public auto mode documentation. The default rule categories and
+command examples in `prompt.ts` are adapted and reworded from two Apache-2.0 projects:
+
+- google-gemini/gemini-cli @ `aeb6c04b093eb00c33585ba587c4889ae4c5e957`
+- openai/codex @ `c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee`
+
+Categories and command examples adapted, reworded; Apache-2.0.

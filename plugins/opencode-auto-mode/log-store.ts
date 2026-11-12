@@ -29,7 +29,8 @@ export interface DecisionRecord {
   /** "provider/model" the classifier ran on, when known. */
   model?: string;
   policyHash: string;
-  verdict: "allow" | "block" | "none";
+  /** "ask": the classifier was unsure and the human was asked (outcome "deferred"). */
+  verdict: "allow" | "block" | "ask" | "none";
   reason: string;
   outcome: DecisionOutcome;
   ms: number;

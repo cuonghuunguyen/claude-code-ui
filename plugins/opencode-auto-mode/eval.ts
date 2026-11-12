@@ -11,7 +11,7 @@ export const MAX_EVAL_LIMIT = 500;
 
 export type Scope = "project" | "all";
 export type Expected = "allow" | "block";
-export type Got = "allow" | "block" | "none";
+export type Got = "allow" | "block" | "ask" | "none";
 
 export interface EvalCase {
   record: DecisionRecord;
@@ -74,7 +74,7 @@ export function selectCases(log: LogContents, opts: SelectOptions): EvalCase[] {
       if (!label) continue;
       out.push({ record, expected: labelToExpected(label.reply), source: "label" });
     } else {
-      if (record.verdict === "none") continue;
+      if (record.verdict === "none" || record.verdict === "ask") continue;
       out.push({ record, expected: record.verdict, source: "previous" });
     }
     seen.add(record.requestID);
@@ -120,11 +120,13 @@ export function formatEvalReport(results: EvalResult[], meta: EvalReportMeta): s
     `Auto-mode eval: ${results.length} cases (only=${meta.only}, scope=${meta.scope}), reference: ${ref}, policy ${meta.policyHash}${meta.model ? `, model ${meta.model}` : ""}`,
     `agreement: ${Math.round((agree / results.length) * 100)}% (${agree}/${results.length})`,
     "",
-    "|  | got allow | got block | got none |",
-    "|---|---|---|---|",
-    `| expected allow | ${count("allow", "allow")} | ${count("allow", "block")} | ${count("allow", "none")} |`,
-    `| expected block | ${count("block", "allow")} | ${count("block", "block")} | ${count("block", "none")} |`,
+    "|  | got allow | got block | got ask | got none |",
+    "|---|---|---|---|---|",
+    `| expected allow | ${count("allow", "allow")} | ${count("allow", "block")} | ${count("allow", "ask")} | ${count("allow", "none")} |`,
+    `| expected block | ${count("block", "allow")} | ${count("block", "block")} | ${count("block", "ask")} | ${count("block", "none")} |`,
   ];
+  const asked = results.filter((r) => r.got === "ask").length;
+  if (asked > 0) lines.splice(2, 0, `asked the human: ${asked} (counted as disagreements; the classifier was unsure)`);
   const wrong = results.filter((r) => r.case.expected !== r.got);
   lines.push("", wrong.length === 0 ? "Disagreements: none" : `Disagreements (${wrong.length}):`);
   for (const r of wrong) {

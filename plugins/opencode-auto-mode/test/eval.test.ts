@@ -80,7 +80,7 @@ describe("runEval", () => {
 
 describe("formatEvalReport", () => {
   it("counts, agreement, confusion matrix and the disagreement list", () => {
-    const mk = (id: string, expected: "allow" | "block", got: "allow" | "block" | "none", reason = "r") => ({
+    const mk = (id: string, expected: "allow" | "block", got: "allow" | "block" | "ask" | "none", reason = "r") => ({
       case: { record: decision({ requestID: id, input: { transcript: "t", action: `{"action":{"permission":"bash","input":"${"x".repeat(400)}"}}` } }), expected, source: "label" as const },
       got,
       reason,
@@ -89,11 +89,31 @@ describe("formatEvalReport", () => {
     expect(report).toContain("4 cases");
     expect(report).toContain("agreement: 50% (2/4)");
     expect(report).toMatch(/expected allow\s*\|\s*1\s*\|\s*1\s*\|\s*0/);
-    expect(report).toMatch(/expected block\s*\|\s*0\s*\|\s*1\s*\|\s*1/);
+    expect(report).toMatch(/expected blocks*|s*0s*|s*1s*|s*0s*|s*1/);
     expect(report).toContain("too risky");
     expect(report).toContain("policy h1");
     expect(report).not.toContain("x".repeat(300)); // action summary truncated
     expect(report.match(/^- /gm)).toHaveLength(2); // two disagreements listed
+  });
+
+  it("shows ask separately: a got-ask column and count, and it counts as a disagreement", () => {
+    const mk = (id: string, expected: "allow" | "block", got: "allow" | "block" | "ask" | "none") => ({
+      case: { record: decision({ requestID: id }), expected, source: "label" as const },
+      got,
+      reason: "unsure",
+    });
+    const report = formatEvalReport([mk("1", "allow", "allow"), mk("2", "allow", "ask"), mk("3", "block", "ask"), mk("4", "block", "block")], { only: "labeled", scope: "project", policyHash: "h1" });
+    expect(report).toContain("agreement: 50% (2/4)");
+    expect(report).toContain("got ask");
+    expect(report).toMatch(/expected allow\s*\|\s*1\s*\|\s*0\s*\|\s*1\s*\|\s*0/);
+    expect(report).toMatch(/expected block\s*\|\s*0\s*\|\s*1\s*\|\s*1\s*\|\s*0/);
+    expect(report).toContain("asked the human: 2");
+    expect(report).toContain("got ask");
+  });
+
+  it("previous-verdict mode skips records whose verdict was ask", () => {
+    const log = logOf([decision({ requestID: "q", verdict: "ask", outcome: "deferred" }), decision({ requestID: "r", at: at(2), verdict: "allow" })]);
+    expect(selectCases(log, { limit: 50, only: "all", scope: "all", project: "/proj" }).map((c) => c.record.requestID)).toEqual(["r"]);
   });
 
   it("says so when there is nothing to evaluate", () => {

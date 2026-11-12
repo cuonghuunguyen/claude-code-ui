@@ -48,4 +48,12 @@ describe("parseVerdict", () => {
   it("is unparseable when a <thinking> block is never closed", () => {
     expect(parseVerdict("<thinking>hmm <block>no</block><reason>fine</reason>")).toEqual({ decision: null, reason: "" });
   });
+
+  it("parses a block=ask reply with its reason", () => {
+    expect(parseVerdict("<block>ask</block><reason>unclear target</reason>")).toEqual({ decision: "ask", reason: "unclear target" });
+  });
+
+  it("is unparseable when ask conflicts with another answer", () => {
+    expect(parseVerdict("<block>ask</block><block>no</block>")).toEqual({ decision: null, reason: "" });
+  });
 });

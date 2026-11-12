@@ -168,6 +168,8 @@ export interface AutoModeOptions {
   softDeny?: string[];
   environment?: string[];
   replaceDefaults?: boolean;
+  /** What the classifier does when unsure: "ask" defers to the human (default), "block" blocks. */
+  unsure?: "ask" | "block";
   maxOutputTokens?: number;
   transcriptChars?: number;
   /** Permissions never auto-decided; left for the human. */
@@ -192,6 +194,7 @@ export interface ResolvedAutoModeOptions {
   softDeny: string[];
   environment: string[];
   replaceDefaults: boolean;
+  unsure: "ask" | "block";
   maxOutputTokens: number;
   transcriptChars: number;
   skipPermissions: string[];
@@ -210,6 +213,7 @@ export const DEFAULT_OPTIONS: ResolvedAutoModeOptions = {
   softDeny: [],
   environment: [],
   replaceDefaults: false,
+  unsure: "ask",
   maxOutputTokens: 1024,
   transcriptChars: 60_000,
   skipPermissions: [],
@@ -238,6 +242,7 @@ export function resolveOptions(options: PluginOptions | undefined): ResolvedAuto
     softDeny: strings(o.softDeny) ?? DEFAULT_OPTIONS.softDeny,
     environment: strings(o.environment) ?? DEFAULT_OPTIONS.environment,
     replaceDefaults: o.replaceDefaults === true,
+    unsure: o.unsure === "block" ? "block" : "ask",
     maxOutputTokens: positive(o.maxOutputTokens, DEFAULT_OPTIONS.maxOutputTokens),
     transcriptChars: positive(o.transcriptChars, DEFAULT_OPTIONS.transcriptChars),
     skipPermissions: strings(o.skipPermissions) ?? DEFAULT_OPTIONS.skipPermissions,
