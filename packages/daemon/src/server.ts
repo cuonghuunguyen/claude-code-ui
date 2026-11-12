@@ -107,9 +107,10 @@ const OPENCODE_LIST_WAIT_MS = 3000;
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
-/** Larger files are not opened in the editor. */
 /** Transcript restores running at once. */
 const MAX_RESTORES = 2;
+
+/** Larger files are not opened in the editor. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 /** UTF-8 text of a file's bytes; a UTF-16 BOM or NUL means binary-ish, invalid UTF-8 is refused (a lossy decode would be written back by a save). */
 function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_utf8" } {

@@ -1528,8 +1528,13 @@ export function createRouter(opts: {
    * contested; local and foreign IDs are left out. A side that fails its list leaves it out; its state shows in `sides`.
    */
   async function claimListed(answers: (readonly [string, ServerMessage])[], localIds: Set<string>): Promise<Map<string, ListLike>> {
-    const scan = opts.localSessionIds && (await opts.localSessionIds().catch(() => undefined));
-    const isLocal = (sid: string) => (scan ? Promise.resolve(scan.has(sid)) : opts.isLocalSession(sid));
+    // The scan starts on the first ID that needs a check, once: a list whose side IDs are all claimed already does not scan.
+    let scan: Promise<Set<string> | undefined> | undefined;
+    const isLocal = async (sid: string) => {
+      if (!opts.localSessionIds) return opts.isLocalSession(sid);
+      const ids = await (scan ??= opts.localSessionIds().catch(() => undefined));
+      return ids ? ids.has(sid) : opts.isLocalSession(sid);
+    };
     const valid = answers.filter((x): x is readonly [string, Extract<ServerMessage, { type: "reply" }>] => x[1].type === "reply" && Array.isArray((x[1].result as ListLike | null)?.sessions));
     const listedBy = new Map<string, string[]>();
     for (const [id, a] of valid) for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);

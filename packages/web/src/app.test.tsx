@@ -2222,7 +2222,7 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("a closed tab of an error session drops its view; the next list refresh follows it in the background again (GH-305)", async () => {
-    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error", lastActivity: Date.now() }], projects: ["/p/demo"] } });
+    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error", live: false, lastActivity: Date.now() }], projects: ["/p/demo"] } });
     try {
       await closeActive();
       expect(sent).toContainEqual({ type: "session.unsubscribe", sessionId: ID });
@@ -2236,7 +2236,7 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("an error session without a tab is followed in the background after a load, so its unread state and Focus row are known (GH-305)", async () => {
-    const errored = { ...other, state: "error" as const, lastActivity: Date.now() };
+    const errored = { ...other, state: "error" as const, live: false as const, lastActivity: Date.now() };
     const restore = await remount({ "session.list": { sessions: [session, errored], projects: ["/p/demo", "/p/other"] } });
     try {
       expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: errored.id, background: true }));
@@ -2342,6 +2342,27 @@ describe("idle close: holds and background follows", () => {
       expect(done()).toBe(21);
     } finally {
       restoreSubscribe();
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("a background view of a session that is no longer live is dropped at a reconnect; the list follows it again once it runs", async () => {
+    const restore = await remount({ "session.list": { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+      replies["session.list"] = { sessions: [session, { ...other, state: "idle" as const, live: false as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      sent.length = 0;
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toEqual([]);
+      replies["session.list"] = { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+    } finally {
       sent.length = 0;
       restore();
     }

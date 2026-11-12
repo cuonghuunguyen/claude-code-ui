@@ -840,7 +840,7 @@ export function App() {
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.live !== false || s.state === "running" || s.state === "needs_input") && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (s.state !== "closed" && (s.live !== false || s.state === "running" || s.state === "needs_input" || s.state === "error") && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
@@ -904,7 +904,7 @@ export function App() {
         failedBatch.current.push(sessionId);
         failedMessage.current = (e as Error).message;
         if (failedBatch.current.length === 1)
-          queueMicrotask(() => {
+          setTimeout(() => {
             const ids = failedBatch.current.splice(0);
             setError(failedMessage.current);
             setFailedTabs((f) => (ids.every((x) => f.has(x)) ? f : new Set([...f, ...ids])));
@@ -1570,12 +1570,13 @@ export function App() {
         // A background view of a session that is no longer live (idle, not live) is dropped: the list does not follow it either.
         const live = (id: string) => {
           const s = listRef.current.find((x) => x.id === id);
-          return !s || s.live !== false || s.state === "running" || s.state === "needs_input";
+          return !s || s.live !== false || s.state === "running" || s.state === "needs_input" || s.state === "error";
         };
         const background: string[] = [];
         for (const id of Object.keys(viewsRef.current)) {
           if (isShown(id)) void subscribe(id);
           else if (live(id)) background.push(id);
+          else drop(id, false);
         }
         const gen = connGen.current;
         const worker = async () => {
