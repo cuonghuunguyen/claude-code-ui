@@ -1407,7 +1407,8 @@ export function App() {
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
       const busyList = item?.state === "running" || item?.state === "needs_input";
       // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
-      const closed = !v && item?.state === "closed";
+      // A restored session that is idle and not live is not followed either: no view, same facts as a closed one.
+      const closed = !v && (item?.state === "closed" || (item?.live === false && item.state === "idle"));
       // A failed subscribe: no view, or one that may be of an earlier daemon run.
       const failed = failedTabsRef.current.has(id);
       // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.

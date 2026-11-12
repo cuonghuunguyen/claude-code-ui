@@ -1653,6 +1653,7 @@ export function createDaemon(opts: {
   /** session.delete, also the web app's Remove and worker_remove: the error to report, or undefined once the session is gone. */
   async function deleteSessionById(id: string, force = false): Promise<{ code: string; message: string } | undefined> {
     // A restore already in flight would put the session back after the delete; let it finish, then close it below.
+    for (const q of restoreQueue) if (q.id === id) q.background = false;
     await restoring.get(id);
     const at = await locate(id);
     if (!at) return { code: "unknown_session", message: `no session ${id}` };
@@ -3717,7 +3718,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
-        localSessionIds: async () => new Set(await sessionIds()),
+        localSessionIds: async () => new Set((await sessionIds()).filter((id) => UUID.test(id))),
         sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,

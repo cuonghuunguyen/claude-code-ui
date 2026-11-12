@@ -3421,6 +3421,15 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([ID, S2, S3, S4]);
   });
 
+  it("auto-close 1 hour closes a stale tab of a restored session (idle, not live) that is not followed, so it has no view", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { live: false })], [ID, S2, S3], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2]);
+  });
+
   it("the Clean up tabs counts, kept line and closed set are the same whichever tab opens the menu (not the active one, not a stale render)", async () => {
     await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" }), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
     // A draft appears without any prop of a tab changing: a memoized tab does not render again.
