@@ -3,7 +3,7 @@ import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
-import { NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
+import { draftStartMode, NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
 
 Element.prototype.scrollIntoView ??= () => {};
 
@@ -535,4 +535,10 @@ it("another create error keeps the old path: no engine error block", async () =>
   await type(box, "hi");
   await key(box, { key: "Enter" });
   expect(el.querySelector('[data-testid="engine-error"]')).toBeNull();
+});
+
+it("draftStartMode: config when offered, else the default setting when offered, else Ask", () => {
+  expect(draftStartMode(["config", "default", "acceptEdits"], "acceptEdits")).toBe("config");
+  expect(draftStartMode(["default", "acceptEdits", "plan"], "acceptEdits")).toBe("acceptEdits");
+  expect(draftStartMode(["default", "acceptEdits"], "auto")).toBe("default");
 });

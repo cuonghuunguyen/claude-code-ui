@@ -117,6 +117,19 @@ describe("OpenCodeMapper (live)", () => {
 
 describe("permission blocks", () => {
   const rule = (permission: string, pattern: string, action = "allow") => ({ permission, pattern, action }) as never;
+  it("denials come again after the always rules, behind a denials marker; alwaysOf stops at it (GH-705)", () => {
+    const deny = rule("edit", "*", "deny");
+    const block = modeBlock("config", [rule("edit", "*")], [deny], { readOnly: true });
+    expect(block.slice(-5)).toEqual([rule("claude-ui", "always"), rule("edit", "*"), rule("claude-ui", "denials"), deny, deny]);
+    // A block without always rules has nothing to repeat.
+    expect(modeBlock("config", [], [deny]).at(-1)).toEqual(rule("claude-ui", "always"));
+    // A persisted always rule is written as a fresh always section, followed by the denials again.
+    const rules = [...block, rule("claude-ui", "always"), rule("edit", "*"), rule("bash", "ls *"), rule("claude-ui", "denials"), deny];
+    expect(alwaysOf(block)).toEqual([rule("edit", "*")]);
+    expect(alwaysOf(rules)).toEqual([rule("edit", "*"), rule("bash", "ls *")]);
+    expect(rules.filter((r: { permission: string }) => r.permission === "edit").at(-1)).toEqual(deny);
+  });
+
   it("a block carries its mode and always marker; alwaysOf and modeOf read the last ones back", () => {
     const block = modeBlock("acceptEdits", [rule("bash", "ls *")], []);
     expect(block[0]).toEqual(rule("claude-ui", "mode:acceptEdits"));
@@ -132,6 +145,22 @@ describe("permission blocks", () => {
     // readOnly: the edit deny comes after the mode's edit rule and before the always marker.
     const ro = modeBlock("bypassPermissions", [], [], { readOnly: true });
     expect(ro.slice(-2)).toEqual([rule("edit", "*", "deny"), rule("claude-ui", "always")]);
+  });
+
+  it("config: a new-session block has no tool rules; a later one re-applies the agent's rules after every earlier block", () => {
+    expect(modeBlock("config", [], [], { agent: "build" }).map((r) => `${r.permission}:${r.pattern}`)).toEqual(["claude-ui:mode:config", "claude-ui:agent:build", "orchestration-*:*", "claude-ui:always"]);
+    const last = (rules: { permission: string; pattern: string; action: string }[], perm: string, pat: string) => [...rules].reverse().find((r) => (r.permission === "*" || r.permission === perm) && (r.pattern === "*" || r.pattern === pat))?.action ?? "ask";
+    const A = [rule("*", "*"), rule("external_directory", "*", "ask")];
+    const after = (earlier: ReturnType<typeof modeBlock>, cfg = A) => [...cfg, ...earlier, ...modeBlock("config", [], [], { agent: "build", config: cfg })];
+    for (const earlier of [modeBlock("default", [], []), modeBlock("bypassPermissions", [], [])]) {
+      const rules = after(earlier);
+      expect(["bash", "edit"].map((p) => last(rules, p, "x"))).toEqual(["allow", "allow"]);
+      expect(last(rules, "external_directory", "/x")).toBe("ask");
+    }
+    expect(last(after(modeBlock("default", [], []), [rule("*", "*"), rule("bash", "*", "ask")]), "bash", "ls")).toBe("ask");
+    const denied = [rule("*", "*"), rule("edit", "*", "deny")];
+    expect(last([...denied, ...modeBlock("config", [], denied.slice(1), { config: denied })], "edit", "x")).toBe("deny");
+    expect(modeBlock("config", [], [], { mcp: "orchestration-abcdefghij" })).toContainEqual(rule("orchestration-abcdefghij_worker_start", "*", "ask"));
   });
 
   it("orchestration rules: every block hides all orchestration servers; an attached one allows its own tools and asks for worker_start except in bypass", () => {

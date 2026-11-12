@@ -176,7 +176,7 @@ export default {
   "settings.section.chat": "Chat",
   "settings.section.sessions": "New sessions",
   "settings.row.sessions.defaultMode.label": "Default permission mode",
-  "settings.row.sessions.defaultMode.hint": "Permission mode of a new session when the Claude settings (permissions.defaultMode) set none. Auto runs as Default on a model without auto mode.",
+  "settings.row.sessions.defaultMode.hint": "Permission mode of a new Claude session when the Claude settings (permissions.defaultMode) set none. Auto runs as Default on a model without auto mode. OpenCode sessions start in Use OpenCode config.",
   "settings.section.usageLimit": "Usage limits",
   "settings.section.performance": "Performance",
   "settings.section.history": "Local history",

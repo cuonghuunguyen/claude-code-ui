@@ -3,7 +3,8 @@
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 
 /** How a session asks before a tool runs; the modes an Engine offers are in `EngineCapabilities.permissionModes`. */
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+/** `config` (OpenCode only): no rules of claude-ui's own; OpenCode's permission config and the agent decide. */
+export type PermissionMode = "config" | "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 /** Thinking effort levels a model can offer. */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 /** Claude's rule shape (inside `permission_request.suggestions`); stays the SDK type until another Engine maps its rules. */

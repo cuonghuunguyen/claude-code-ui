@@ -35,11 +35,11 @@ const STOP_WAIT_MS = 10_000;
 const MODES = ["default", "acceptEdits", "plan", "auto"] as const;
 
 /** Authority order of the modes a worker may get (bypassPermissions counts as auto). */
-const RANK: Partial<Record<PermissionMode, number>> = { dontAsk: 0, plan: 1, default: 1, acceptEdits: 2, auto: 3, bypassPermissions: 3 };
+const RANK: Partial<Record<PermissionMode, number>> = { dontAsk: 0, plan: 1, default: 1, acceptEdits: 2, config: 2, auto: 3, bypassPermissions: 3 };
 
-/** The worker's mode: `requested`, else the coordinator's (bypassPermissions -> auto) as `wanted`; `mode` is `wanted`, but default when auto lacks model support. */
-export function workerMode(coordinator: PermissionMode, requested: PermissionMode | undefined, supportsAuto: boolean, listLoaded = true, fromSetting = false): { mode: PermissionMode; wanted: PermissionMode; note?: string } {
-  const wanted = requested ?? (coordinator === "bypassPermissions" ? "auto" : coordinator);
+/** The worker's mode: `requested`, else the coordinator's (bypassPermissions -> auto; config -> default for a Claude worker) as `wanted`; `mode` is `wanted`, but default when auto lacks model support. */
+export function workerMode(coordinator: PermissionMode, requested: PermissionMode | undefined, supportsAuto: boolean, listLoaded = true, fromSetting = false, openCode = false): { mode: PermissionMode; wanted: PermissionMode; note?: string } {
+  const wanted = requested ?? (coordinator === "bypassPermissions" ? "auto" : coordinator === "config" && !openCode ? "default" : coordinator);
   if (wanted !== "auto" || supportsAuto) return { mode: wanted, wanted };
   if (!listLoaded) return { mode: "default", wanted, note: "the model list is not loaded yet, so auto is not available: the worker runs in default" };
   return { mode: "default", wanted, note: fromSetting ? "Settings > Orchestration > Worker mode is auto, but auto is not available for this model: the worker runs in default" : "auto is not available for this model: the worker runs in default" };
@@ -678,7 +678,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           const cm = coordMode(coordinator);
           const req = requestedMode(a.mode);
           // OpenCode has no auto mode.
-          const { mode, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, known.length > 0, req.fromSetting);
+          const { mode, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, known.length > 0, req.fromSetting, openCode);
           if (openCode && !OPENCODE_MODES.includes(mode)) throw new ToolError(`OpenCode workers run in ${OPENCODE_MODES.join(", ")}: pass mode.`);
           // A rule for worker_start skips the card: a mode above the coordinator's passes only with the user's card.
           const approved = carded.delete(`${key}\0${mode}`);
@@ -1098,7 +1098,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       const model = openCode ? undefined : normModel(typeof input.model === "string" ? input.model : undefined);
       const name = typeof input.name === "string" ? input.name : "?";
       if (unknownModel(model)) return Promise.resolve({ input, title: `Start worker ${name}: unknown model ${model}, the call will fail` });
-      const { mode, wanted, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, openCode || deps.models().length > 0, req.fromSetting);
+      const { mode, wanted, note } = workerMode(cm, req.mode, !openCode && !!modelRow(model)?.supportsAutoMode, openCode || deps.models().length > 0, req.fromSetting, openCode);
       // Async: the target lookup reads the worktree list (git, stamped cache). A lookup error says the call will fail; a shape error leaves the title bare (the handler refuses it).
       return (async () => {
         let where = "";

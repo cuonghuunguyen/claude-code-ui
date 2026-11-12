@@ -168,7 +168,7 @@ A transcript entry on a session's main chain that the daemon's own `query()` did
 _Avoid_: CLI turn, foreign message
 
 **Permission mode**:
-The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code.
+The session setting that decides what happens before a tool runs: ask (default), accept edits, plan, auto (a classifier decides), don't ask (deny anything not pre-approved by a permission rule), bypass (allow everything). Same modes as Claude Code. OpenCode sessions also have Use OpenCode config (`config`): claude-ui adds no rules, OpenCode's own permission config and the agent decide; it is the default for new OpenCode sessions.
 _Avoid_: approval mode, auto-approve
 
 **Agent** (OpenCode only):

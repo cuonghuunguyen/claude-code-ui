@@ -1,6 +1,6 @@
 // Prompt box toolbar (OpenCode prompt input v2): attach, model, effort, permission mode; context meter, send / stop on the right.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpIcon, BotIcon, BrainIcon, CheckIcon, ChevronDownIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlugIcon, PlusIcon, SearchIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SquareIcon, WifiOffIcon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, BrainIcon, CheckIcon, ChevronDownIcon, FilePenIcon, ListPlusIcon, ListTodoIcon, LoaderCircleIcon, MessageCircleQuestionIcon, PlugIcon, PlusIcon, SearchIcon, ShieldAlertIcon, ShieldBanIcon, ShieldCheckIcon, ShieldIcon, SlidersHorizontalIcon, SquareIcon, WifiOffIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { Combobox } from "@base-ui/react/combobox";
 import { t, useT, type Key } from "./i18n.ts";
@@ -14,8 +14,9 @@ import type { Totals } from "./status-bar.tsx";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-/** Claude Code's names for the modes; `short` fits the toolbar on a phone. */
+/** Claude Code's names for the modes (config is OpenCode's); `short` fits the toolbar on a phone. */
 export const MODE_LABEL: Record<PermissionMode, { label: Key; short: Key; Icon: typeof ShieldIcon }> = {
+  config: { label: "app.toolbar.mode.config", short: "app.toolbar.modeShort.config", Icon: SlidersHorizontalIcon },
   default: { label: "app.toolbar.mode.default", short: "app.toolbar.modeShort.default", Icon: ShieldIcon },
   acceptEdits: { label: "app.toolbar.mode.acceptEdits", short: "app.toolbar.modeShort.acceptEdits", Icon: FilePenIcon },
   plan: { label: "app.toolbar.mode.plan", short: "app.toolbar.modeShort.plan", Icon: ListTodoIcon },

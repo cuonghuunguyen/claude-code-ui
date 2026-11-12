@@ -1,7 +1,7 @@
 Feature: OpenCode parity features (GH-658)
 
   # Needs a real OpenCode binary (E2E_OPENCODE_BIN). Sessions are seeded through the OpenCode API with noReply user messages: no model call.
-  # Scenarios tagged @model make one short turn each and need the free model quota. Only structure is asserted.
+  # @model: DeepSeek V4.1 Flash with the owner's login (E2E_OPENCODE_AUTH names a copy of its auth file); one short turn each. Only structure is asserted.
   Scenario Outline: Rewind to an earlier message cuts the conversation at <width>x<height>
     Given the viewport is <width>x<height>
     And OpenCode is set up in a scratch project
@@ -98,9 +98,11 @@ Feature: OpenCode parity features (GH-658)
   @model
   Scenario: With a slow MCP server, a new OpenCode session attaches the orchestration tools without a warning and the first prompt gets a reply
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode has an MCP server that takes 8 seconds to load
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     And the OpenCode server of the daemon is running
     When I enable orchestration in Settings
     And I send the first prompt "Reply with exactly: OK"
@@ -113,12 +115,14 @@ Feature: OpenCode parity features (GH-658)
   @model
   Scenario: Ask aside forks the session, answers, and Close removes the fork
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
     And the OpenCode server of the daemon is running
     And an OpenCode session "Aside owner" with the messages "The project is called Falcon | The build uses Gradle" is created outside the app
     When I reload the page
     And I open the OpenCode session "Aside owner"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     Then the conversation shows the user message "The build uses Gradle"
     When I ask the aside "Reply with exactly: OK" from the palette
     Then an aside popup shows
@@ -138,8 +142,10 @@ Feature: OpenCode parity features (GH-658)
   @model
   Scenario: Steering while OpenCode runs shows the steered message, one turn ends, and the context meter shows
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     And I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     When I send the first prompt "Count from 1 to 40, one number per line, then stop"
     And I steer the running turn with "Also say DONE at the end"
     Then the conversation shows the user message "Also say DONE at the end"
@@ -292,21 +298,26 @@ Feature: OpenCode parity features (GH-658)
     And I capture "compacted"
 
   # From the engine feature (GH-655).
+  @model
   Scenario: The engine selector is labelled, keyboard operable and remembers the last engine
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     Then the engine selector is labelled "Engine: Claude"
     When I open the engine selector and pick "OpenCode" with the keyboard
     Then the engine selector is labelled "Engine: OpenCode"
     And I capture "selector OpenCode"
-    When I send the first prompt "Hello OpenCode"
+    When I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
+    And I send the first prompt "Hello OpenCode"
     And I reload the page
     And I open the New session tab
     Then the engine selector is labelled "Engine: OpenCode"
     And I capture "selector after reload"
 
+  @model
   Scenario Outline: An OpenCode session is tagged in the sidebar and the header at <width>x<height>
     Given the viewport is <width>x<height>
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     When I open the engine selector
     Then I capture "selector open light"
@@ -315,6 +326,7 @@ Feature: OpenCode parity features (GH-658)
     And I open the engine selector
     Then I capture "selector open dark"
     When I pick the engine "OpenCode" in the open selector
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     And I send the first prompt "Hello OpenCode"
     Then I see my prompt in the transcript
     And the OpenCode session is tagged in its sidebar row
@@ -334,10 +346,13 @@ Feature: OpenCode parity features (GH-658)
       | 1440  | 900    |
       | 390   | 844    |
 
+  @model
   Scenario: A session created through the OpenCode API is listed under its project
     Given the viewport is 1440x900
+    And OpenCode has the owner's login
     And OpenCode is set up in a scratch project
     When I choose the engine "OpenCode"
+    And I pick the OpenCode model "DeepSeek V4.1 Flash 1017" in the model chooser
     And I send the first prompt "Start the server"
     And an OpenCode session "Made through the API" with the message "Hello from the API" is created outside the app
     And I reload the page

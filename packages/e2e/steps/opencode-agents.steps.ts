@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { idleSend, TURN_MS, waitConnected } from "../support/ui.ts";
@@ -18,6 +18,13 @@ Given("the OpenCode project has a primary agent {string} that cannot edit", asyn
   // Written before the project is opened (OpenCode keeps a folder's config once it has loaded it). No $schema: OpenCode would fetch it and stall offline.
   const cfg = { agent: { [name]: { description: "Reviews code, never edits", mode: "primary", permission: { edit: "deny", bash: "ask" } } } };
   writeFileSync(join(project.path, "opencode.json"), JSON.stringify(cfg));
+});
+
+// Merged into an existing opencode.json; written before the project opens, like the agent above.
+Given("the OpenCode project config sets the permission {string} to {string}", async ({ project }, key: string, action: string) => {
+  const file = join(project.path, "opencode.json");
+  const cfg = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  writeFileSync(file, JSON.stringify({ ...cfg, permission: { ...cfg.permission, [key]: action } }));
 });
 
 When("I open the agent chooser", async ({ page }) => {
@@ -47,7 +54,8 @@ When("I open the permission chooser", async ({ page }) => {
 });
 
 Then("the permission chooser offers exactly {string}", async ({ page }, list: string) => {
-  expect(await optionNames(page)).toEqual(list.split(", "));
+  // The engine chooser may still fade out with its own options.
+  await expect.poll(() => optionNames(page)).toEqual(list.split(", "));
 });
 
 When("I pick the agent {string}", async ({ page }, name: string) => {
@@ -90,7 +98,8 @@ Then("both choosers are visible", async ({ page }) => {
 
 Then("each chooser is at least 44px tall on a phone", async ({ page, $testInfo }) => {
   if (!(await page.getByTestId("session-settings").isVisible())) return void $testInfo.annotations.push({ type: "desktop", description: "no phone settings button at this width" });
-  for (const c of [agent(page), mode(page)]) expect((await c.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // The settings popup scales in from 95%: measure once it has settled.
+  for (const c of [agent(page), mode(page)]) await expect.poll(async () => (await c.boundingBox())?.height ?? 0, { timeout: 3000 }).toBeGreaterThanOrEqual(44);
 });
 
 Then("there is no agent chooser", async ({ page }) => {
@@ -116,7 +125,8 @@ When("I deny every permission request until the turn has finished", async ({ pag
   while (!(await idle.isVisible())) {
     if (Date.now() > end) throw new Error("the turn did not finish");
     await Promise.race([idle.waitFor({ timeout: 10_000 }), deny.waitFor({ timeout: 10_000 })]).catch(() => undefined);
-    if (await deny.isVisible()) await deny.click();
+    // The panel may be replaced by the next request or removed while it animates in: the loop retries.
+    if (await deny.isVisible()) await deny.click({ timeout: 5000 }).catch(() => undefined);
   }
 });
 

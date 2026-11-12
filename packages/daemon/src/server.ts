@@ -2232,10 +2232,11 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
           if (msg.engine === "opencode") {
+            // OpenCode's own permission config decides (GH-705); sessions.defaultMode is Claude's.
             // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
             let s: Session | undefined;
             try {
-              s = await createOpenCodeSession(cwd, { model: msg.model, permissionMode: OPENCODE_MODES.find((m) => m === appSettings.get().sessions.defaultMode) ?? "default" });
+              s = await createOpenCodeSession(cwd, { model: msg.model, permissionMode: "config" });
             } catch (err) {
               const e = openCodeFail(err);
               return fail(e.code, e.message);
@@ -2517,7 +2518,7 @@ export function createDaemon(opts: {
         case "session.setEffort": {
           const s = await find(msg.sessionId);
           if (!s) return;
-          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode)) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
+          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode) && !OPENCODE_MODES.includes(msg.mode)) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
           if (msg.type === "session.setEffort" && !EFFORTS.includes(msg.effort)) return fail("bad_effort", `unknown effort ${msg.effort}`);
           try {
             await (msg.type === "session.setPermissionMode" ? s.setPermissionMode(msg.mode) : s.setEffort(msg.effort));

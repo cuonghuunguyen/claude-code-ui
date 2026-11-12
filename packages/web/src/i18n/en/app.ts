@@ -115,6 +115,8 @@ export default {
   "app.quickOpen.insertKey": "Insert @{path} in the prompt ({key})",
   "app.quickOpen.searchKey": "Search files ({key})",
   // toolbar.tsx
+  "app.toolbar.mode.config": "Use OpenCode config",
+  "app.toolbar.modeShort.config": "Config",
   "app.toolbar.mode.default": "Ask before edits",
   "app.toolbar.modeShort.default": "Ask",
   "app.toolbar.mode.acceptEdits": "Edit automatically",
