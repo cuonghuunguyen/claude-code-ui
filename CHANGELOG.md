@@ -2,12 +2,6 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
-
-### Added
-
-- Settings › Orchestration › **Keep coordinator cache warm (minutes)**: while a coordinator waits on running workers, subagents or background commands, claude-ui wakes it with a one-line message after this many minutes (default 55, 0 = off) so its prompt cache is read instead of rewritten at the next worker event.
-
 ## 1.3.0 - 2026-11-06
 
 ### Added
