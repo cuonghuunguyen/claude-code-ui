@@ -230,10 +230,22 @@ async function serveOverHttp(root: string): Promise<number> {
         ...(req.headers["content-encoding"] && { HTTP_CONTENT_ENCODING: req.headers["content-encoding"] }),
       },
     });
+    let answered = false;
+    // A spawn failure or an EPIPE on stdin answers 500 instead of crashing the Playwright worker.
+    const fail = () => {
+      if (answered) return;
+      answered = true;
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    };
+    cgi.on("error", fail);
+    cgi.stdin.on("error", fail);
     req.pipe(cgi.stdin);
     const out: Buffer[] = [];
     cgi.stdout.on("data", (c: Buffer) => out.push(c));
     cgi.on("close", () => {
+      if (answered) return;
+      answered = true;
       // CGI output: headers, a blank line, the body; `Status:` carries the code.
       const all = Buffer.concat(out);
       const end = all.indexOf("\r\n\r\n");

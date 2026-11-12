@@ -957,7 +957,7 @@ export function ChangesPanel({
                   >
                     {rowIcon(r)}
                     <span className="min-w-0 flex-1 truncate">
-                      {dir && <span className="text-muted-foreground">{dir.replace(/\/$/, "")}/</span>}
+                      {dir && <span className="text-muted-foreground">{slashed(dir.replace(/[\\/]$/, ""))}/</span>}
                       {name}
                     </span>
                     {r.submodule && <SubmoduleBadge />}

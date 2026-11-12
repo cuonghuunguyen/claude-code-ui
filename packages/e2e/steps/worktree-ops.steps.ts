@@ -262,12 +262,10 @@ Then("the Clean up row {string} mentions {string}", async ({ page }, branch: str
 });
 
 When("I tick the Clean up row {string}", async ({ page }, branch: string) => {
-  // A row flips to "checking" again while its status resolves (slow on Windows) and then drops the click: retry until the tick stays.
+  // The checkbox is disabled while the row's status resolves (slow on Windows); a click before it is enabled is dropped.
   const box = cleanupRow(page, branch).getByTestId("cleanup-check");
-  await expect(async () => {
-    await expect(box).toBeEnabled({ timeout: 2_000 });
-    await box.check({ timeout: 5_000 });
-  }).toPass({ timeout: 60_000 });
+  await expect(box).toBeEnabled({ timeout: 60_000 });
+  await box.check();
 });
 
 When("I also delete the branch of the Clean up row {string}", async ({ page }, branch: string) => {

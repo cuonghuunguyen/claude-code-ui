@@ -260,6 +260,15 @@ it("wide: the list view of a Windows project joins every directory with / (no mi
   expect(rows).toEqual(["a/b/c/d/y.ts", "a/b/c/x.ts", "z.md"]);
 });
 
+it("below md: the accordion of a Windows project joins every directory with / (no mixed separators)", async () => {
+  narrow = true;
+  const client = fakeClient({ "C:\\p\\a\\b\\c\\x.ts": "x = 2\n" });
+  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "C:\\p\\a\\b\\c\\x.ts", "x = 1", "x = 2")])} cwd={"C:\\p"} onOpen={() => {}} />));
+  await flush();
+  const rows = [...el.querySelectorAll("[data-testid=changed-file]")].map((b) => b.textContent);
+  expect(rows).toEqual(["a/b/c/x.ts+1-1"]);
+});
+
 it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const panel = () => <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")])} cwd="/p" onOpen={() => {}} />;
