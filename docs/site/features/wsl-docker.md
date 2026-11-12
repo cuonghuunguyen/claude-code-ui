@@ -38,6 +38,14 @@ In Open project, **What this container needs** lists these items for the contain
 
 The bundle needs your computer to reach nodejs.org and the npm registry once per claude-code-ui version (`CLAUDE_UI_UPDATE_REGISTRY` sets a registry mirror). Without them and without a cached copy, the container installs with npm instead.
 
+## When an install fails
+
+A failed install or start does not bury the reason in a wall of text.
+
+- **In the sidebar,** under the projects of that side, one summary line says what failed ("Could not start" when there is nothing more). **Details** unfolds the output behind it, for example the npm output, which you can select and copy. **Retry** runs it again. The **Details** stay open across **Retry**, so a second failure shows its output where you were reading.
+- **In Open project,** the same summary and **Details** show in the side's panel. The main button reads **Retry install** (**Retry update** after a failed update) and runs the install again. **Check again** looks at the machine again without installing, for example after you fixed a missing tool by hand. The panel names what to fix first: Node.js, build tools, `tar` and `gzip`, or a writable folder.
+- An error of the setup itself (a tool is missing, Node.js is too old) is not retried by itself. Fix it, then click **Retry install**. Another start failure when Claude UI starts is tried once more by itself after 30 seconds.
+
 ## Coming back after a restart
 
 A side that has run once starts again with Claude UI, and again by itself if it stops (after 2 s, 10 s and 60 s; the fourth stop within ten minutes shows an error with **Retry**). A container that runs again starts within about 30 seconds. After a new Claude UI build, the side updates from the downloaded bundle; if its distro or container needs npm, it stays off and the sidebar shows **Needs an update** with **Update**. While a side starts, its projects stay in the sidebar. In **Settings › Sides**, **Start with Claude UI** turns this off for a side (its projects leave the sidebar) and **Update automatically** stops the automatic update.
@@ -59,7 +67,7 @@ ssh runs without prompts (`BatchMode`): no password, no passphrase question. Use
 
 ### One Hub per machine
 
-A side is the Hub of that machine. If the host already runs a Claude UI, yours attaches to it and does not start a second one. If none runs, yours starts one there (on `127.0.0.1` only) and attaches. A Hub you started yourself on the host is never stopped, restarted or reconfigured. Its settings (allowed roots, bypass, default mode) limit the attached sessions.
+A side is the Hub of that machine. If the host already runs a Claude UI, yours attaches to it and does not start a second one. This works without an install when that Claude UI is of a build that speaks a compatible protocol (it need not be the same version): yours uses the bridge of the Hub there and copies nothing. It installs its own build only when no Claude UI runs there or the protocols do not overlap (see [Versions](#versions)). If none runs, yours starts one there (on `127.0.0.1` only) and attaches. A Hub you started yourself on the host is never stopped, restarted or reconfigured. Its settings (allowed roots, bypass, default mode) limit the attached sessions.
 
 Several Claude UIs can attach to one host at once, like several browsers to one Hub.
 
@@ -68,7 +76,7 @@ Several Claude UIs can attach to one host at once, like several browsers to one 
 - A dropped ssh connection does not stop the host's turns, terminals or prompts. The side shows **Reconnecting…** and attaches again by itself.
 - After you restart your Claude UI, it attaches again to the hosts it had attached. Turns and terminals are as they were.
 - A Hub that your Claude UI started on the host ends when no Claude UI is attached, no browser is connected and no turn runs for the **Grace period**. Set it per side in **Settings › Sides** (**Keep running without Claude UI (minutes)**, default 30).
-- If attaching fails for good, the row shows the reason and **Retry**.
+- If attaching fails for good, the row shows the reason and **Retry**, with the output behind **Details** (see [When an install fails](#when-an-install-fails)).
 
 ### Versions
 

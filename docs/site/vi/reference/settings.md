@@ -9,11 +9,11 @@ Các nhóm nằm dưới bốn đề mục:
 | Đề mục | Nhóm |
 | --- | --- |
 | Ứng dụng | Giao diện, Chung, Bố cục, Thông báo, Bàn phím |
-| Phiên | Điều phối, Focus, Giới hạn mức dùng |
-| Tích hợp | Git, Jira |
+| Phiên | Điều phối, Focus, Phiên mới, Giới hạn mức dùng, Lịch sử cục bộ |
+| Tích hợp | Git, Jira, Tài khoản Claude, Mở bằng ứng dụng |
 | Hệ thống | Môi trường, Hiệu năng, Trợ giúp & giới thiệu ||
 
-Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Giới hạn mức dùng (trừ vòng mức dùng), Git, Jira, Môi trường, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
+Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Phiên mới, Giới hạn mức dùng (trừ vòng mức dùng), Lịch sử cục bộ, Git, Jira, Tài khoản Claude, Môi trường, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
 
 ## Giao diện {#appearance}
 
@@ -105,12 +105,25 @@ Cho phép một phiên bắt đầu và điều khiển các phiên worker. Tắ
 | --- | --- |
 | Hình minh họa trong trò chuyện | Claude có thể vẽ biểu đồ, sơ đồ và widget tương tác nhỏ trong câu trả lời ([chi tiết](../features/visualize)). Bật mặc định. Áp dụng cho phiên bắt đầu hoặc tiếp tục sau khi đổi; tắt: hình hiện dưới dạng mã. |
 
+## Phiên mới {#new-sessions}
+
+| Cài đặt | Chức năng |
+| --- | --- |
+| Chế độ quyền mặc định | [Chế độ quyền](../features/permissions) của phiên Claude mới khi Claude settings (`permissions.defaultMode`) không đặt. Mặc định: **Tự động**, chạy như Mặc định trên model không hỗ trợ chế độ tự động. Phiên OpenCode bắt đầu ở **Theo cấu hình OpenCode**. Lưu trong daemon. |
+
 ## Giới hạn mức dùng {#usage-limits}
 
 | Cài đặt | Chức năng |
 | --- | --- |
 | Tự động tiếp tục sau khi giới hạn mức dùng được đặt lại || Gửi "continue" tới phiên đã bị giới hạn gói chặn, khi giới hạn được đặt lại. |
 | Vòng mức dùng hiển thị | Mức dùng cao nhất, Phiên (5 giờ) hoặc Hằng tuần. Được lưu trong trình duyệt này. |
+
+## Lịch sử cục bộ {#local-history}
+
+| Cài đặt | Chức năng |
+| --- | --- |
+| Lưu lịch sử cục bộ | Bật theo mặc định. Giữ nội dung trước đó của tệp mỗi khi bạn lưu, Claude sửa hoặc một thao tác git thay thế nó, để so sánh và khôi phục từ Dòng thời gian trong [Tệp](../features/timeline#local-history-file-timeline). Tối đa 50 bản và 256 KB mỗi tệp, trong thư mục cấu hình của daemon. |
+| Đường dẫn bị loại trừ | Mẫu glob của các tệp không bao giờ có lịch sử, so khớp trên đường dẫn tuyệt đối với dấu `/`. Ví dụ: `**/dist/**`. |
 
 ## Git {#git}
 
@@ -126,6 +139,8 @@ Các cài đặt giống tiện ích mở rộng Git của VS Code, cùng tên v
 | Phát hiện submodule / Giới hạn phát hiện submodule || Tìm submodule, tối đa số này (mặc định `10`). |
 | Bỏ qua submodule || Bỏ qua thay đổi của submodule trong cây tệp. |
 | Mở kho mã trong thư mục cha || `always` (mặc định), `never` hoặc `prompt` (ở đây hoạt động như `always`). |
+| Chỉ dẫn viết nội dung commit | Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn ([Thao tác Git](../features/git#commit-message-instruction)). Để trống: dùng chỉ dẫn có sẵn. |
+| Chỉ dẫn viết nội dung commit cho *dự án* | Chỉ áp dụng cho dự án đó; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên. |
 
 ## Jira {#jira}
 
@@ -139,6 +154,24 @@ Một kết nối Jira cho tab **Ticket** của [Tạo worktree](../features/pro
 | Mẫu tên nhánh || Cách một ticket đặt tên nhánh. Mặc định `{type}/{key}-{summary}`: `{type}` là `bugfix` cho Bug, `feature` cho Story, Task hoặc New Feature, còn lại để trống; `{key}` là mã ticket; `{summary}` là tiêu đề, đã rút gọn. |
 | Bộ lọc ticket (JQL) || Các ticket mà tab Ticket liệt kê, ví dụ `project = ABC AND statusCategory != Done`. Văn bản nhập vào tìm bên trong bộ lọc; mã ticket hoặc URL ticket bỏ qua bộ lọc. Để trống: các ticket đang mở của bạn. |
 | Kiểm tra kết nối | Hiện “Đã kết nối với tư cách *tên của bạn*” hoặc lỗi. |
+
+## Tài khoản Claude {#claude-account}
+
+Chọn tài khoản mà các tiến trình Claude CLI của daemon dùng. Danh sách gồm **Đăng nhập CLI** (đăng nhập của Claude CLI chính thức), các **tài khoản token** của bạn, và **Mặc định (môi trường daemon)** khi daemon khởi động với token Claude trong môi trường. Hàng được chọn là tài khoản đang dùng.
+
+| Mục | Làm gì |
+| --- | --- |
+| Hàng tài khoản | Bấm để đổi tài khoản đang dùng. |
+| **Đăng nhập…** | Chạy lệnh đăng nhập Claude CLI chính thức trong terminal của dự án đang mở. |
+| **Kiểm tra** | Với tài khoản token: kiểm tra token có hoạt động không. Hiển thị "Token hoạt động" hoặc "Token bị từ chối: *lý do*". Kết quả không được lưu. |
+| **Xóa** | Xóa một tài khoản token. |
+| **Thêm tài khoản token** | **Tên** và **Token**, rồi **Thêm**. Tạo token bằng `claude setup-token`. Token lưu trên máy của daemon và không hiển thị lại (hàng ghi **Đã có token**). |
+
+Với hai tài khoản trở lên bạn cũng có thể đổi từ đồng hồ gói (vòng mức dùng) hoặc bằng **Đổi tài khoản Claude…** trong [bảng lệnh](../features/palette). Khi môi trường daemon đặt nhà cung cấp đám mây (Bedrock, Vertex, Foundry), CLI dùng nhà cung cấp đó và tài khoản không có tác dụng.
+
+## Mở bằng ứng dụng {#open-in-app}
+
+**Lệnh trình soạn thảo** và **Tên trong menu** thêm chương trình của riêng bạn vào menu tệp (**Mở bằng** *tên*). Dùng `{path}` cho tệp hoặc thư mục và `{root}` cho thư mục phiên. Chỉ trình duyệt trên máy của daemon mới đổi được. Xem [Tệp](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
 
 ## Môi trường {#sides}
 

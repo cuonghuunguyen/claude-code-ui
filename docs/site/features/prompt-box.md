@@ -42,7 +42,9 @@ While Claude works, a `!` command waits in the queue like a message and runs whe
 - Type `@` and part of a file name to mention a file.
 - Paste or drop images into the box, or click **+** (**Add images and files**). PNG, JPEG, GIF and WebP go to Claude as images.
 - Other files are uploaded and added to the prompt as a path.
+- A file you copied in Explorer or Finder works too: paste it (<kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>⌘</kbd> <kbd>V</kbd> on a Mac) or drag it into the box. A folder is skipped with "Folders cannot be attached; mention them with @." and the other files still attach.
 - A large text paste (more than 800 characters or more than 2 line breaks) shows as a block `[Pasted text #1 +120 lines]` in the box and in the sent message. Click the block to read the text. Delete it like one character (<kbd>Backspace</kbd>). Claude gets the whole text. Several pastes get numbers #1, #2…
+- **Expand** (the unfold button on the pasted-text chip under the box, "Expand pasted text #1 into the prompt") replaces the block with its plain text, which you can edit. <kbd>Ctrl</kbd>+<kbd>Z</kbd> (**Undo**) brings the block and its chip back. If you copy the block's token and paste it again, the copy is inserted as plain text; the first one stays the block.
 
 ## Pickers under the box
 

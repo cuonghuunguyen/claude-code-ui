@@ -37,9 +37,26 @@ Bấm chuột phải (nhấn giữ, hoặc <kbd>Shift</kbd>+<kbd>F10</kbd>) vào
 | **Tệp mới…**, **Thư mục mới…** | Tạo trong thư mục đó. Các mục tương tự có trong menu của khoảng trống trong cây. |
 | **Đổi tên** (<kbd>F2</kbd>), **Nhân bản** | Đổi tên hoặc sao chép tệp. |
 | **Xóa** (<kbd>Delete</kbd>) | Xóa sau khi bạn xác nhận. |
+| **Cắt**, **Sao chép**, **Dán** | Di chuyển hoặc sao chép tệp và thư mục. Xem [Sao chép, cắt, dán và kéo thả](#copy-cut-paste-and-drag). |
 | **Sao chép đường dẫn**, **Sao chép đường dẫn tương đối** | Sao chép đường dẫn. |
+| **Hiện trong Finder** (**Hiện trong File Explorer** trên Windows, **Mở thư mục chứa tệp** trên Linux) | Hiện tệp hoặc thư mục trong trình quản lý tệp của máy chạy claude-code-ui. |
+| **Mở bằng** *trình soạn thảo* | Mở tệp hoặc thư mục trong VS Code, Cursor hoặc IntelliJ IDEA, khi máy đó đã cài. |
+| **Mở bằng ứng dụng mặc định** | Mở tệp bằng ứng dụng mà hệ thống chọn cho loại tệp đó. Không dùng cho thư mục. |
 | **Mở trong tab** | Chuyển tệp thành tab riêng cạnh phiên của nó (cũng có thể bấm chuột giữa vào dòng). Xem [Khung & bố cục](/vi/features/panes#one-file-or-one-artifact-as-a-tab). |
 | **Thêm vào prompt** | Chèn tệp vào hộp prompt dưới dạng @mention. |
+
+### Mở trong trình quản lý tệp, trình soạn thảo hoặc ứng dụng mặc định {#open-in-the-file-manager-an-editor-or-the-default-app}
+
+Ba mục **Hiện trong…**, **Mở bằng** và **Mở bằng ứng dụng mặc định** khởi động một chương trình trên máy chạy daemon, nên chỉ hiển thị khi trình duyệt chạy trên chính máy đó (`localhost`) hoặc tệp nằm trong một [môi trường](wsl-docker) WSL. Điện thoại, trình duyệt qua Tailscale, môi trường Docker hay SSH không có chúng. Trên Linux, **Mở thư mục chứa tệp** mở thư mục mà không chọn tệp. Các mục này cũng có trong menu của các hàng ở Thay đổi. Bảng lệnh có **Mở trong trình quản lý tệp** (không có phím mặc định) cho tệp đang mở, hàng đang chọn ở Thay đổi hoặc thư mục của phiên. **Cài đặt › Mở bằng ứng dụng** có thể thêm lệnh trình soạn thảo của riêng bạn.
+
+## Sao chép, cắt, dán và kéo thả {#copy-cut-paste-and-drag}
+
+- **Sao chép** hoặc **Cắt** một hàng (menu, <kbd>Ctrl</kbd>+<kbd>C</kbd> hoặc <kbd>Ctrl</kbd>+<kbd>X</kbd>; <kbd>⌘</kbd> trên Mac), rồi **Dán** vào một thư mục (menu trên thư mục hoặc trên vùng trống của cây, <kbd>Ctrl</kbd>+<kbd>V</kbd>). Hàng đã cắt bị làm mờ cho đến khi bạn dán.
+- Kéo một hàng vào một thư mục để di chuyển. Luôn có câu hỏi trước ("Di chuyển … vào …?"). Giữ <kbd>Alt</kbd> (<kbd>Option</kbd> trên Mac) để sao chép.
+- Hoạt động giữa các [môi trường](wsl-docker): sao chép tệp trên máy của bạn rồi dán vào một distro WSL, container hoặc máy SSH. Dữ liệu đi qua trình duyệt, mỗi lần 1 MiB. Hộp thoại khi đó hỏi "Sao chép … vào … trên *môi trường*?".
+- Tệp và thư mục kéo từ hệ thống vào cây được tải lên. Tệp dán từ clipboard của hệ thống cũng được tải lên. Thư mục dán từ clipboard của hệ thống bị từ chối; hãy kéo thả nó.
+- Tên đã có ở đích sẽ hỏi: **Thay thế**, **Bỏ qua** hoặc **Giữ cả hai** ("tên copy.đuôi"), kèm **Áp dụng cho tất cả** khi còn xung đột. **Thay thế** lưu tệp bị thay vào [Lịch sử cục bộ](timeline#local-history-file-timeline).
+- Dòng tiến trình "Đang sao chép 12/340 tệp" kèm **Hủy** hiển thị khi sao chép lâu. Hủy không để lại gì. Giới hạn: 10.000 mục và 512 MiB mỗi lần dán. Liên kết không được sao chép giữa các máy.
 
 ## Tìm trong tệp
 
