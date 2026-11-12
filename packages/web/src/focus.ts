@@ -1,5 +1,6 @@
 // Focus page model (docs/spec.md "Focus"): every unanswered permission request and question across the listed sessions.
 import type { BackMark, Part, SessionListItem, TodoItem } from "@claude-ui/protocol";
+import { followed } from "./follow.ts";
 import { aboutOf } from "./back-marks.ts";
 import { t } from "./i18n.ts";
 import { lastLine } from "./notify.ts";
@@ -235,7 +236,7 @@ export function attentionRows(i: FocusInput): AttentionRow[] {
     const row = (kind: AttentionKind, since: number, reason: string, action: AttentionRow["action"], detail?: string): AttentionRow => ({ id: `${kind}:${s.id}`, kind, sessionId: s.id, since, reason, detail, action });
     // After a daemon restart the sessions are closed and mostly without a view: `unread` (the browser's seen mark or shown record) alone says it finished unseen.
     if (!view) {
-      if (s.state === "closed" && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, t("app.focus.reviewResult"), "open"));
+      if (!followed(s) && i.unread.has(s.id) && i.now - s.lastActivity <= FINISHED_MAX_AGE_MS) rows.push(row("finished", s.lastActivity, t("app.focus.reviewResult"), "open"));
       continue;
     }
     if (view.state === "error" && i.unread.has(s.id)) rows.push(row("error", s.lastActivity, t("app.focus.checkError", { error: errorText(view) }), "open"));

@@ -65,6 +65,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
+import { followed } from "./follow.ts";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
@@ -840,7 +841,7 @@ export function App() {
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.live !== false || s.state === "running" || s.state === "needs_input" || s.state === "error") && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (followed(s) && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
@@ -1408,7 +1409,7 @@ export function App() {
       const busyList = item?.state === "running" || item?.state === "needs_input";
       // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
       // A restored session that is idle and not live is not followed either: no view, same facts as a closed one.
-      const closed = !v && (item?.state === "closed" || (item?.live === false && item.state === "idle"));
+      const closed = !v && !!item && !followed(item);
       // A failed subscribe: no view, or one that may be of an earlier daemon run.
       const failed = failedTabsRef.current.has(id);
       // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
@@ -1571,7 +1572,7 @@ export function App() {
         // A background view of a session that is no longer live (idle, not live) is dropped: the list does not follow it either.
         const live = (id: string) => {
           const s = listRef.current.find((x) => x.id === id);
-          return !s || s.live !== false || s.state === "running" || s.state === "needs_input" || s.state === "error";
+          return !s || followed(s) || unreadRef.current.has(id);
         };
         const background: string[] = [];
         for (const id of Object.keys(viewsRef.current)) {
@@ -1693,7 +1694,7 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   // GH-378: a view of another daemon run than the seen mark, and a tab of a session not loaded in this run (no view), also count output after the lastActivity this browser last showed.
-  const unread = new Set(list.filter((s) => (views[s.id] || (s.state === "closed" && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
+  const unread = new Set(list.filter((s) => (views[s.id] || (!followed(s) && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.

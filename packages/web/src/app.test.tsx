@@ -3527,6 +3527,15 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([S2, S3]);
   });
 
+  for (const variant of ["closed", "idle-not-live"] as const)
+    it(`a background tab of a ${variant} session with output this browser never showed shows its unread marker`, async () => {
+      localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100 }));
+      const st = variant === "closed" ? { state: "closed" as const } : { state: "idle" as const, live: false as const };
+      await remount([mk(ID, "First", { ...st, lastActivity: Date.now() - 60_000 }), mk(S2, "Second")], [ID, S2], S2);
+      await act(async () => {});
+      expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    });
+
   it("after a reload, tabs of closed sessions (not loaded in this daemon run) are counted and closed by rules without a subscribe; one with output after this browser last showed it stays unread", async () => {
     const S6 = S(6);
     const old = Date.now() - 3 * 3_600_000;
