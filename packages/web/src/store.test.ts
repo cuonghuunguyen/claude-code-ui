@@ -292,6 +292,19 @@ describe("applyEvent background work (session_state working)", () => {
   });
 });
 
+it("the end of a keep-warm tick turn does not mark the session unread; a real turn does", () => {
+  const st = (seq: number, state: "idle" | "running"): Event => ({ type: "event", sessionId: "s", seq, part: { type: "session_state", id: "session_state", state } });
+  const user = (seq: number, id: string, text: string): Event => ({ type: "event", sessionId: "s", seq, part: { type: "user_text", id, text, images: [] } });
+  let s = applyEvent(emptySession(), user(1, "k", "[claude-ui keep-warm] Nothing to do."));
+  s = applyEvent(s, st(2, "running"));
+  s = applyEvent(s, st(3, "idle"));
+  expect(s.attentionSeq).toBe(0);
+  s = applyEvent(s, user(4, "u", "hello"));
+  s = applyEvent(s, st(5, "running"));
+  s = applyEvent(s, st(6, "idle"));
+  expect(s.attentionSeq).toBe(6);
+});
+
 describe("paging", () => {
   const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };
   const user = (id: string): Part => ({ type: "user_text", id, text: id, images: [] });

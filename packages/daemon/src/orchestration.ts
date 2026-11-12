@@ -448,7 +448,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "assistant_text" && !p.parentId) return void lastText.set(s.id, { id: p.id, text: p.text });
     if (p.type === "user_text" && !p.parentId) {
       // Any turn but a keep-warm one starts the count again.
-      if (!p.text.startsWith(ORCHESTRATION_KEEPWARM)) ticks.delete(s.id);
+      // A notice or prompt folded into a tick's turn makes it a real turn: its end is handled as usual.
+      if (!p.text.startsWith(ORCHESTRATION_KEEPWARM)) (ticks.delete(s.id), warming.delete(s.id));
       return void lastText.delete(s.id);
     }
     // The CLI ended by itself (closed) or failed: the tree's running count dropped.

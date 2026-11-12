@@ -497,6 +497,18 @@ describe("notifier: worker notifications off (GH-387)", () => {
     vi.advanceTimersByTime(FINISH_DELAY_MS);
   };
 
+  it("a keep-warm tick's turn end pushes no finished notification; the next real turn does", () => {
+    n.observe(ev({ type: "user_text", id: "k", text: "[claude-ui keep-warm] Nothing to do." } as Part, "c"));
+    n.observe(state("running", "c"));
+    n.observe(ev({ type: "assistant_text", id: "a", text: "ok", streaming: false }, "c"));
+    n.observe(state("idle", "c"));
+    vi.advanceTimersByTime(FINISH_DELAY_MS);
+    expect(pushed).toEqual([]);
+    vi.advanceTimersByTime(6000);
+    finish("c", "really done");
+    expect(pushed.map((p) => p.body)).toEqual(["really done"]);
+  });
+
   it("a quiet worker: no push for needs input, finished or error", () => {
     n.observe(state("running", "w"));
     n.observe(ev(bash("r1"), "w"));

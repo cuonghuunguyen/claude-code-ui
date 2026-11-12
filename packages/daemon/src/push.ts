@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
-import type { Event, Part, PushPayload, SessionState, WebPushSubscription } from "@claude-ui/protocol";
+import { ORCHESTRATION_KEEPWARM, type Event, type Part, type PushPayload, type SessionState, type WebPushSubscription } from "@claude-ui/protocol";
 import { configDir } from "./token.ts";
 
 export const FINISH_DELAY_MS = 1500;
@@ -15,7 +15,7 @@ export const MAX_PAYLOAD_BYTES = 3800;
 const SUBJECT = process.env.CLAUDE_UI_VAPID_SUBJECT ?? "https://github.com/cuonghuunguyen/claude-code-ui";
 
 type PendingPart = Extract<Part, { type: "permission_request" | "question" }>;
-type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number; escalated: Set<string>; /** The group this session's last push counted it in (groups below). */ group?: string };
+type Tracked = { state: SessionState; text?: string; error?: string; request?: PendingPart; timer?: ReturnType<typeof setTimeout>; lastSent: number; escalated: Set<string>; /** The turn began with a keep-warm tick: it ends with no "finished" push. */ keepWarm?: boolean; /** The group this session's last push counted it in (groups below). */ group?: string };
 /** Workers of one coordinator blocked on the same request share one notification (tag) that counts them. */
 type Group = { tag: string; what: string; members: Set<string>; shown: boolean; title: string };
 /** What a push adds to the plain `(sessionId, body)`: the notification's tag, silence and replace-only flags, and whose title it carries. */
@@ -90,7 +90,7 @@ export function createNotifier(opts: {
     observe({ sessionId: id, part }: Event) {
       let t = sessions.get(id);
       if (!t) sessions.set(id, (t = { state: "idle", lastSent: -Infinity, escalated: new Set() }));
-      if (part.type === "user_text") t.text = t.error = undefined;
+      if (part.type === "user_text") (t.text = t.error = undefined, (t.keepWarm = part.text.startsWith(ORCHESTRATION_KEEPWARM)));
       else if (part.type === "assistant_text") t.text = part.text;
       else if (part.type === "raw" && (part.message as { error?: unknown })?.error) t.error = String((part.message as { error: unknown }).error);
       else if (part.type === "permission_request" || part.type === "question") {
@@ -110,7 +110,7 @@ export function createNotifier(opts: {
       clearTimeout(t.timer);
       if (part.state !== "needs_input") leave(id, t);
       if (part.state === "needs_input") fireGrouped(id, t, `Needs input · ${t.request ? describe(t.request) : "waiting for an answer"}`, false);
-      else if ((part.state === "error" || (part.state === "idle" && !part.working)) && busy) {
+      else if ((part.state === "error" || (part.state === "idle" && !part.working)) && busy && !(t.keepWarm && part.state === "idle")) {
         const body = t.error ? `Error · ${t.error}` : (lastLine(t.text) ?? "Finished");
         t.timer = setTimeout(() => fire(id, t, body), FINISH_DELAY_MS);
       }
