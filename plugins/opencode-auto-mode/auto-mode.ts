@@ -2,14 +2,19 @@
 // waiting on a human. See README.md for install, options, how it works, and its limits.
 import { buildClassifierAgentConfig, CLASSIFIER_AGENT } from "./agent-config.ts";
 import { classify } from "./classifier.ts";
+import { COMMANDS } from "./commands.ts";
 import { createLimits } from "./limits.ts";
+import { createLogStore, hashPolicy, resolveDataDir, type ClassifierInput, type DecisionOutcome, type LabelRecord } from "./log-store.ts";
 import { logDecision, toast } from "./logging.ts";
-import { allowOnce, otherPendingAsks, pendingAsks, rejectWithMessage } from "./reply.ts";
+import { buildPolicyPrompt } from "./prompt.ts";
+import { allowOnce, otherPendingAsks, pendingAsks, rejectWithMessage, type ReplyOutcome } from "./reply.ts";
+import { createTools, projectKey } from "./tools.ts";
 import type { CachedToolCall } from "./transcript.ts";
 import { resolveOptions, type Hooks, type PermissionAskedProperties, type Plugin, type PluginOptions } from "./types.ts";
 
 const MAX_CACHED_TOOL_CALLS = 500;
 const MAX_REPLIED_IDS = 1000;
+const MAX_SEEN_ASKS = 1000;
 /** Whole-job budget beyond the classifier timeout, for the calls around it (list, reply, cleanup). */
 export const JOB_SLACK_MS = 10_000;
 const DEFAULT_BLOCK_MESSAGE = "Blocked by auto mode.";
@@ -35,6 +40,65 @@ export const AutoModePlugin: Plugin = async (input, options) => {
   }
 
   const repliedIds = new Set<string>(); // asks already answered by anyone (permission.replied), bounded
+  const seenAsks = new Set<string>(); // asks this plugin considered (not filtered out), bounded: only these get human labels
+  const ownReplies = new Set<string>(); // asks this plugin is answering, or answered, itself: not human labels
+
+  const policyPrompt = buildPolicyPrompt(opts);
+  const policyHash = hashPolicy(policyPrompt);
+  const dataDir = resolveDataDir(opts.logDir);
+  const project = projectKey(input.worktree, input.directory);
+  const store = opts.log
+    ? createLogStore({
+        dir: dataDir,
+        maxBytes: opts.logMaxBytes,
+        onError: (err) => {
+          void Promise.resolve(client.app.log({ body: { service: "auto-mode", level: "warn", message: `decision log write failed (reported once): ${String(err)}` } })).catch(() => {});
+        },
+      })
+    : undefined;
+
+  interface Decided {
+    verdict: "allow" | "block" | "none" | "deferred";
+    outcome?: DecisionOutcome;
+    reason: string;
+    ms: number;
+    input?: ClassifierInput;
+    model?: string;
+    /** false: only the local decision log, not the server log. */
+    serverLog?: boolean;
+  }
+
+  /** One decision, to the server log and to the local decision log. Never throws. */
+  async function emit(info: { id: string; sessionID: string; permission: string; patterns?: string[] }, d: Decided): Promise<void> {
+    const serverOutcome = d.outcome === "replied" || d.outcome === "already-answered" || d.outcome === "failed" ? d.outcome : undefined;
+    if (d.serverLog !== false) await logDecision(client, { sessionID: info.sessionID, permission: info.permission, verdict: d.verdict, outcome: serverOutcome, reason: d.reason, ms: d.ms });
+    if (!store) return;
+    await store.append({
+      v: 1,
+      kind: "decision",
+      at: new Date().toISOString(),
+      requestID: info.id,
+      sessionID: info.sessionID,
+      project,
+      permission: info.permission,
+      patterns: info.patterns ?? [],
+      ...(d.model ? { model: d.model } : {}),
+      policyHash,
+      verdict: d.verdict === "deferred" ? "block" : d.verdict,
+      reason: d.reason,
+      outcome: d.verdict === "deferred" ? "deferred" : (d.outcome ?? "none"),
+      ms: d.ms,
+      ...(d.input ? { input: d.input } : {}),
+    });
+  }
+
+  /** Marks the ask as answered by us while the reply is sent, so its `permission.replied` isn't taken for a human label. */
+  async function ourReply(id: string, send: () => Promise<ReplyOutcome>): Promise<ReplyOutcome> {
+    ownReplies.add(id);
+    const outcome = await send();
+    if (outcome !== "replied") ownReplies.delete(id);
+    return outcome;
+  }
 
   /** The job under a hard deadline, so one hung call can't wedge the session's queue. */
   async function withDeadline(info: PermissionAskedProperties, job: () => Promise<void>): Promise<void> {
@@ -44,21 +108,21 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     });
     try {
       const won = await Promise.race([job().then(() => "done" as const), deadline]);
-      if (won === "timeout") await logDecision(client, { sessionID: info.sessionID, permission: info.permission, verdict: "none", reason: "timeout", ms: opts.timeoutMs + JOB_SLACK_MS });
+      if (won === "timeout") await emit(info, { verdict: "none", outcome: "timeout", reason: "timeout", ms: opts.timeoutMs + JOB_SLACK_MS });
     } finally {
       clearTimeout(timer);
     }
   }
 
   async function decide(info: PermissionAskedProperties): Promise<void> {
-    if (limits.isStopped(info.sessionID)) return;
-    if (repliedIds.has(info.id)) return; // settled while queued
+    const skipped = (reason: string) => emit(info, { verdict: "none", outcome: "skipped", reason, ms: 0, serverLog: false });
+    if (limits.isStopped(info.sessionID)) return skipped("session hit its block limit");
+    if (repliedIds.has(info.id)) return skipped("already answered while queued"); // settled while queued
     const target = { sessionID: info.sessionID, id: info.id };
-    const base = { sessionID: info.sessionID, permission: info.permission };
     const pending = await pendingAsks(client, input.directory);
-    if (pending && !pending.some((r) => r.id === info.id)) return; // no longer pending; a list failure proceeds
+    if (pending && !pending.some((r) => r.id === info.id)) return skipped("no longer pending"); // a list failure proceeds
     const started = Date.now();
-    const verdict = await classify(info, {
+    const { verdict, input: classifierInput, model } = await classify(info, {
       client,
       directory: input.directory,
       model: opts.model,
@@ -68,17 +132,17 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       toolInputCache,
     });
     if (info.tool) toolInputCache.delete(info.tool.callID);
-    const since = () => Date.now() - started;
+    const done = (d: Omit<Decided, "ms" | "input" | "model">) => emit(info, { ...d, ms: Date.now() - started, input: classifierInput, model });
 
     if (!verdict || verdict.decision == null) {
-      await logDecision(client, { ...base, verdict: "none", reason: "classifier error, timeout or unparseable reply", ms: since() });
+      await done({ verdict: "none", reason: "classifier error, timeout or unparseable reply" });
       return; // leave it to the human
     }
 
     if (verdict.decision === "no") {
-      const outcome = await allowOnce(client, target);
+      const outcome = await ourReply(info.id, () => allowOnce(client, target));
       if (outcome === "replied") limits.recordAllow(info.sessionID);
-      await logDecision(client, { ...base, verdict: "allow", outcome, reason: verdict.reason, ms: since() });
+      await done({ verdict: "allow", outcome, reason: verdict.reason });
       return;
     }
 
@@ -86,12 +150,12 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     const others = await otherPendingAsks(client, target, input.directory);
     if (others === null || others.length > 0) {
       const why = others === null ? "could not list pending asks" : "other pending asks";
-      await logDecision(client, { ...base, verdict: "deferred", reason: `${why}; left to the human (classifier said block: ${verdict.reason})`, ms: since() });
+      await done({ verdict: "deferred", reason: `${why}; left to the human (classifier said block: ${verdict.reason})` });
       return;
     }
     const message = verdict.reason || DEFAULT_BLOCK_MESSAGE;
-    const outcome = await rejectWithMessage(client, target, message);
-    await logDecision(client, { ...base, verdict: "block", outcome, reason: verdict.reason, ms: since() });
+    const outcome = await ourReply(info.id, () => rejectWithMessage(client, target, message));
+    await done({ verdict: "block", outcome, reason: verdict.reason });
     if (outcome !== "replied") return;
     await toast(client, `blocked ${info.permission}: ${message}`, "warning");
     if (limits.recordBlock(info.sessionID)) {
@@ -103,7 +167,11 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     config: async (config) => {
       config.agent = config.agent ?? {};
       config.agent[CLASSIFIER_AGENT] = buildClassifierAgentConfig(opts);
+      config.command = config.command ?? {};
+      for (const [name, command] of Object.entries(COMMANDS)) config.command[name] = { ...command };
     },
+
+    tool: createTools({ client, directory: input.directory, worktree: input.worktree, opts, dataDir, policyPrompt, policyHash, classifierSessions }),
 
     "chat.params": async (params, output) => {
       if (!classifierSessions.has(params.sessionID)) return;
@@ -125,10 +193,17 @@ export const AutoModePlugin: Plugin = async (input, options) => {
 
     event: async ({ event }) => {
       if (event.type === "permission.replied") {
-        const id = (event.properties as { requestID?: unknown } | undefined)?.requestID;
+        // Payload (1.19.5 permission/index.ts): { sessionID, requestID, reply: "once" | "always" | "reject" }
+        const props = event.properties as { requestID?: unknown; reply?: unknown } | undefined;
+        const id = props?.requestID;
         if (typeof id === "string") {
           repliedIds.add(id);
           if (repliedIds.size > MAX_REPLIED_IDS) repliedIds.delete(repliedIds.values().next().value as string);
+          const reply = props?.reply;
+          if (store && seenAsks.has(id) && !ownReplies.has(id) && (reply === "once" || reply === "always" || reply === "reject")) {
+            const label: LabelRecord = { v: 1, kind: "label", at: new Date().toISOString(), requestID: id, reply };
+            await store.append(label); // a human's decision: ground truth for eval and improve
+          }
         }
         return;
       }
@@ -137,10 +212,12 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       if (classifierSessions.has(info.sessionID)) return; // never act on our own classifier
       if (opts.skipPermissions.includes(info.permission)) return;
       if (opts.onlyPermissions && !opts.onlyPermissions.includes(info.permission)) return;
+      seenAsks.add(info.id);
+      if (seenAsks.size > MAX_SEEN_ASKS) seenAsks.delete(seenAsks.values().next().value as string);
       try {
         await inSession(info.sessionID, () => withDeadline(info, () => decide(info)));
       } catch (err) {
-        await logDecision(client, { sessionID: info.sessionID, permission: info.permission, verdict: "none", reason: `unexpected error: ${String(err)}`, ms: 0 });
+        await emit(info, { verdict: "none", reason: `unexpected error: ${String(err)}`, ms: 0 });
       }
     },
   };

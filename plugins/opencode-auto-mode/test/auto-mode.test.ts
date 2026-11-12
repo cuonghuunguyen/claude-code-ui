@@ -1,6 +1,13 @@
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoModePlugin, JOB_SLACK_MS } from "../auto-mode.ts";
+import { EVAL_CONCURRENCY } from "../eval.ts";
 import type { ChatParamsOutput, Hooks, OpencodeClient, PluginInput } from "../types.ts";
+
+// Keep every test's default decision log out of the real OpenCode data dir.
+process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), "auto-mode-xdg-"));
 
 interface FakeClientOptions {
   promptText?: string;
@@ -482,5 +489,237 @@ describe("AutoModePlugin other hooks", () => {
     for (let i = 0; i < 501; i++) await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "ses1", callID: `k${i}` }, { args: { command: `CMD${i}` } });
     await hooks.event!(askedEvent({ id: "p3", callID: "k0", metadata: { command: "EVICTED_FALLBACK" } }));
     expect(promptText(client, 2)).toContain("EVICTED_FALLBACK");
+  });
+});
+
+const newLogDir = () => mkdtempSync(join(tmpdir(), "auto-mode-logdir-"));
+const readRecords = (dir: string): Array<Record<string, any>> => {
+  const file = join(dir, "auto-mode", "decisions.jsonl");
+  return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+};
+const repliedEvent = (requestID: string, reply: string, sessionID = "ses1") => ({ event: { type: "permission.replied", properties: { sessionID, requestID, reply } } });
+
+describe("decision log", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("is on by default and writes a full decision record with the exact classifier input", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "<block>no</block><reason>reading</reason>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    await hooks.event!(askedEvent());
+
+    const [rec] = readRecords(logDir);
+    expect(rec).toMatchObject({ v: 1, kind: "decision", requestID: "per1", sessionID: "ses1", project: "/proj", permission: "bash", patterns: ["*"], model: "anthropic/claude", verdict: "allow", reason: "reading", outcome: "replied" });
+    expect(rec.policyHash).toMatch(/^[0-9a-f]{12}$/);
+    expect(typeof rec.ms).toBe("number");
+    expect(Date.parse(rec.at)).not.toBeNaN();
+    expect(`## Transcript\n${rec.input.transcript}\n\n## Action\n${rec.input.action}`).toBe(promptText(client, 0));
+  });
+
+  it("log:false writes nothing", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir, log: false });
+    await hooks.event!(askedEvent());
+    expect(readRecords(logDir)).toEqual([]);
+  });
+
+  it("records block, deferred and none outcomes", async () => {
+    const logDir = newLogDir();
+    const a = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>" });
+    const hooksA = await AutoModePlugin(pluginInput(a.client), { logDir });
+    await hooksA.event!(askedEvent({ id: "blk" }));
+
+    const b = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>", pending: [{ id: "d1", sessionID: "s2" }, { id: "d2", sessionID: "s2" }] });
+    const hooksB = await AutoModePlugin(pluginInput(b.client), { logDir });
+    await hooksB.event!(askedEvent({ id: "d1", sessionID: "s2" }));
+
+    const c = fakeClient({ promptText: "garbage" });
+    const hooksC = await AutoModePlugin(pluginInput(c.client), { logDir });
+    await hooksC.event!(askedEvent({ id: "nn" }));
+
+    expect(readRecords(logDir).map((r) => [r.requestID, r.verdict, r.outcome])).toEqual([
+      ["blk", "block", "replied"],
+      ["d1", "block", "deferred"],
+      ["nn", "none", "none"],
+    ]);
+    expect(readRecords(logDir)[2].input).toBeDefined(); // none keeps its input: it can be replayed
+  });
+
+  it("records a skipped ask when the session hit its block limit", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir, maxConsecutiveBlocks: 1 });
+    await hooks.event!(askedEvent({ id: "one" }));
+    await hooks.event!(askedEvent({ id: "two" }));
+    expect(readRecords(logDir).map((r) => [r.requestID, r.outcome])).toEqual([["one", "replied"], ["two", "skipped"]]);
+  });
+
+  it("a log write failure never throws out of the hook and is reported once", async () => {
+    const blocker = join(newLogDir(), "file");
+    writeFileSync(blocker, "x"); // a file where the directory must go
+    const { client, log, replies } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: blocker });
+    await expect(hooks.event!(askedEvent({ id: "a" }))).resolves.toBeUndefined();
+    await expect(hooks.event!(askedEvent({ id: "b" }))).resolves.toBeUndefined();
+    expect(replies).toHaveLength(2);
+    expect(log.filter((l) => String(l.message).includes("decision log write failed"))).toHaveLength(1);
+  });
+});
+
+describe("human labels from permission.replied", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("labels an ask the plugin left to the human, with the human's reply", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "garbage" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    await hooks.event!(askedEvent({ id: "h1" }));
+    await hooks.event!(repliedEvent("h1", "reject"));
+    const labels = readRecords(logDir).filter((r) => r.kind === "label");
+    expect(labels).toEqual([expect.objectContaining({ v: 1, kind: "label", requestID: "h1", reply: "reject" })]);
+  });
+
+  it("does not label asks the plugin answered itself (its own reply echoes back as permission.replied)", async () => {
+    const logDir = newLogDir();
+    let hooks!: Hooks;
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    // The real server publishes permission.replied while the reply call is still in flight.
+    vi.mocked(client._client!.post).mockImplementationOnce(async ({ path }: { path?: Record<string, unknown> }) => {
+      await hooks.event!(repliedEvent(path!.requestID as string, "once"));
+      return { data: true, response: { status: 200 } };
+    });
+    hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    await hooks.event!(askedEvent({ id: "own" }));
+    expect(readRecords(logDir).filter((r) => r.kind === "label")).toEqual([]);
+  });
+
+  it("labels a skipped (limit-stopped) ask, but not asks the plugin filtered out", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir, maxConsecutiveBlocks: 1, skipPermissions: ["edit"] });
+    await hooks.event!(askedEvent({ id: "one" }));
+    await hooks.event!(askedEvent({ id: "two" }));
+    await hooks.event!(askedEvent({ id: "filtered", permission: "edit" }));
+    await hooks.event!(repliedEvent("two", "once"));
+    await hooks.event!(repliedEvent("filtered", "once"));
+    expect(readRecords(logDir).filter((r) => r.kind === "label").map((r) => r.requestID)).toEqual(["two"]);
+  });
+
+  it("ignores a malformed reply value", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "garbage" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    await hooks.event!(askedEvent({ id: "h1" }));
+    await hooks.event!(repliedEvent("h1", "maybe"));
+    expect(readRecords(logDir).filter((r) => r.kind === "label")).toEqual([]);
+  });
+});
+
+describe("commands and tools", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("config hook registers both commands (template calls the tool with $ARGUMENTS) and the classifier agent still denies every tool", async () => {
+    const { client } = fakeClient();
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: newLogDir() });
+    const config: { agent?: Record<string, any>; command?: Record<string, any> } = {};
+    await hooks.config!(config);
+    expect(Object.keys(config.command!).sort()).toEqual(["auto-mode-eval", "auto-mode-improve"]);
+    expect(config.command!["auto-mode-eval"].template).toContain("auto_mode_eval");
+    expect(config.command!["auto-mode-eval"].template).toContain("$ARGUMENTS");
+    expect(config.command!["auto-mode-improve"].template).toContain("auto_mode_improve");
+    expect(config.command!["auto-mode-improve"].template).toMatch(/project-specific[\s\S]*personal[\s\S]*shipped defaults/);
+    expect(config.command!["auto-mode-improve"].template).toContain("Do not edit any files");
+    expect(config.command!["auto-mode-eval"].description).toBeTruthy();
+    expect(config.agent!["auto-mode-classifier"].permission).toEqual({ "*": "deny" });
+  });
+
+  it("registers both tools in the 1.19.5 plugin-tool shape (description, args as JSON-schema props, execute)", async () => {
+    const { client } = fakeClient();
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: newLogDir() });
+    expect(Object.keys(hooks.tool!).sort()).toEqual(["auto_mode_eval", "auto_mode_improve"]);
+    for (const t of Object.values(hooks.tool!)) {
+      expect(typeof t.description).toBe("string");
+      expect(typeof t.execute).toBe("function");
+      for (const prop of Object.values(t.args)) expect(prop).toMatchObject({ type: expect.any(String) }); // not a Zod type: 1.19.5 uses it as JSON Schema
+    }
+    expect(hooks.tool!.auto_mode_eval.description).toMatch(/cost/i);
+  });
+
+  /** Six asks the plugin left to the human (held-0..5): even ones allowed, odd ones rejected. */
+  async function seeded(extra: Record<string, unknown> = {}, promptText = "<block>no</block><reason>fine</reason>") {
+    const logDir = newLogDir();
+    const hold = fakeClient({ promptText: "garbage" });
+    const holdHooks = await AutoModePlugin(pluginInput(hold.client), { logDir });
+    for (let i = 0; i < 6; i++) {
+      await holdHooks.event!(askedEvent({ id: `h${i}`, metadata: { command: `held-${i}` } }));
+      await holdHooks.event!(repliedEvent(`h${i}`, i % 2 === 0 ? "once" : "reject"));
+    }
+    const run = fakeClient({ promptText });
+    const hooks = await AutoModePlugin(pluginInput(run.client), { logDir, ...extra });
+    return { logDir, run, hooks };
+  }
+
+  it("eval replays labeled cases with the current policy, never writes to the decision log, and caps concurrency", async () => {
+    const { logDir, run, hooks } = await seeded();
+    const before = readFileSync(join(logDir, "auto-mode", "decisions.jsonl"), "utf8");
+    let inFlight = 0;
+    let max = 0;
+    vi.mocked(run.client.session.prompt).mockImplementation(async () => {
+      inFlight++;
+      max = Math.max(max, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { data: { info: {}, parts: [{ type: "text" as const, text: "<block>no</block><reason>fine</reason>" }] } };
+    });
+
+    const report = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, { worktree: "/proj", directory: "/proj" });
+
+    expect(report).toContain("6 cases");
+    expect(report).toContain("agreement: 50% (3/6)");
+    expect(report).toMatch(/expected allow\s*\|\s*3\s*\|\s*0\s*\|\s*0/);
+    expect(report).toMatch(/expected block\s*\|\s*3\s*\|\s*0\s*\|\s*0/);
+    expect(report).toContain("held-1");
+    expect(readFileSync(join(logDir, "auto-mode", "decisions.jsonl"), "utf8")).toBe(before);
+    expect(max).toBeLessThanOrEqual(EVAL_CONCURRENCY);
+    expect(max).toBeGreaterThan(1);
+    expect(run.deleted.length).toBe(6); // every replay session cleaned up
+  });
+
+  it("eval honours scope: another project's decisions are excluded unless scope is all", async () => {
+    const { run, hooks } = await seeded();
+    const other = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    expect(other).toContain("No matching");
+    const all = await hooks.tool!.auto_mode_eval.execute({ limit: 3, only: "labeled", scope: "all", model: "" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    expect(all).toContain("3 cases");
+    expect(run.client.session.prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it("improve returns the effective rules, the overrides and makes no model call", async () => {
+    const { run, hooks } = await seeded({ allow: ["Deploys to staging.sh are fine"], environment: ["staging host is example.com"] });
+    const report = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, { worktree: "/proj", directory: "/proj" });
+    expect(report).toContain("Deploys to staging.sh are fine");
+    expect(report).toContain("staging host is example.com");
+    expect(report).toContain("human allowed");
+    expect(report).toContain("held-0");
+    expect(run.client.session.create).not.toHaveBeenCalled();
+    expect(run.client.session.prompt).not.toHaveBeenCalled();
+    const none = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    expect(none).toContain("No overrides");
   });
 });

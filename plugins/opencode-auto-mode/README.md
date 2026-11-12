@@ -37,6 +37,9 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
 | `transcriptChars` | `60000` | char budget for the transcript sent to the classifier |
 | `skipPermissions` | `[]` | permission names never auto-decided (left for the human) |
 | `onlyPermissions` | *(unset)* | when set, only these permission names are auto-decided |
+| `log` | `true` | write the local decision log (see below); `false` turns it off |
+| `logDir` | OpenCode's data dir | where the log lives: `<logDir>/auto-mode/decisions.jsonl` |
+| `logMaxBytes` | `20971520` (20 MB) | past this size the log is renamed to `decisions.1.jsonl`, replacing the previous one |
 
 ## How it works
 
@@ -68,9 +71,60 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
    the model continue with that feedback). So a block always sends a message (the reason, else
    "Blocked by auto mode."), never falls back to the message-less V1 route, and is **deferred to the
    human** when the session has other pending asks (or they cannot be listed).
-7. Every decision is logged via `client.app.log` (service `"auto-mode"`) with its outcome
+7. Every decision is also appended to the local decision log (below).
+8. Every decision is logged via `client.app.log` (service `"auto-mode"`) with its outcome
    (`replied`, `already-answered`, `failed`, or `deferred`/`none`); only replied blocks count toward
    the limits and toast.
+
+## Decision log
+
+On by default. Every decision is appended, one JSON object per line, to
+`<data dir>/auto-mode/decisions.jsonl`. The data dir is `logDir` if set, else what OpenCode itself
+uses (`$XDG_DATA_HOME/opencode`, falling back to `~/.local/share/opencode` on Linux, macOS and
+Windows alike: `opencode debug paths` shows it). It is never inside your project. The file is
+created with mode `0600` (best effort on Windows) and rotated once to `decisions.1.jsonl` past
+`logMaxBytes`.
+
+- `{"v":1,"kind":"decision", at, requestID, sessionID, project, permission, patterns, model,
+  policyHash, verdict, reason, outcome, ms, input}`. `verdict` is `allow`, `block` or `none` (what
+  the classifier said; a block deferred to the human keeps `block`). `outcome` is `replied`,
+  `already-answered`, `failed`, `deferred`, `skipped` (session limit, or already answered),
+  `timeout` or `none`. `project` is the git worktree (the directory when there is none).
+  `input` is the exact `{transcript, action}` sent to the classifier, so the decision can be replayed.
+- `{"v":1,"kind":"label", at, requestID, reply}`: written when the human answers an ask the plugin
+  did not answer itself (`permission.replied` carries `requestID` and `reply`: `once`, `always` or
+  `reject`). That answer is the ground truth the commands below use. Caveat: when you reject one
+  ask, OpenCode also rejects the session's other pending asks, and those are labeled `reject` too.
+
+**The log can contain secrets and source code** from your sessions (user messages and tool-call
+inputs). It stays on your machine. It is only ever sent to the classifier model (by
+`/auto-mode-eval`, as replays) and to your session model (by `/auto-mode-improve`, as a compact
+report of overrides); nowhere else. A write failure is reported once through the OpenCode log and
+never affects a decision.
+
+Turn it off with `"log": false`. Delete it by removing `<data dir>/auto-mode/` (both files).
+
+## Slash commands
+
+Both are registered by the plugin (config hook + two plugin tools, `auto_mode_eval` and
+`auto_mode_improve`; the classifier agent denies all tools, so it never sees them). Both read the
+one global log and take a scope: `project` (default: records whose `project` is the current
+worktree) or `all` (every project), e.g. `/auto-mode-eval 100 all-projects`.
+
+- `/auto-mode-eval [limit] [all] [all-projects] [model=provider/model]` replays the most recent
+  decisions that have a logged input through the classifier **with the current policy**, at most 3
+  at a time, and reports counts, agreement, a confusion matrix (expected allow/block against got
+  allow/block/none) and the disagreements. By default (`labeled`) the truth is your answer
+  (`once`/`always` = allow, `reject` = block); with `all` the previous verdict is the reference (a
+  regression check). Default 50 cases, max 500. **It calls the model once per case**, so it costs
+  tokens. Replays are not written to the log.
+- `/auto-mode-improve [limit] [all-projects]` makes no model call itself. It returns the effective
+  rules, the current policy prompt, which config file appears to supply the options (or "unknown"),
+  and the cases where you overrode the classifier or decided what it left to you. The session model
+  then proposes `allow`/`softDeny`/`environment` changes as an `opencode.json` snippet, split into
+  project-specific (this project's config), personal (`~/.config/opencode/opencode.json`) and
+  candidates for the plugin's shipped defaults (reported only), explains which examples each fixes,
+  warns about over-allowing rules, and edits no files. Run `/auto-mode-eval` after applying them.
 
 ## Limits and known caveats
 

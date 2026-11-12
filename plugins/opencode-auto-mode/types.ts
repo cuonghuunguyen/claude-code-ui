@@ -108,6 +108,7 @@ export type PluginOptions = Record<string, unknown>;
 /** The slice of opencode.json `Config` the `config` hook may mutate. */
 export interface ConfigHookInput {
   agent?: Record<string, unknown>;
+  command?: Record<string, { template: string; description?: string }>;
   [key: string]: unknown;
 }
 
@@ -145,6 +146,8 @@ export interface ToolExecuteAfterInput {
 }
 
 export interface Hooks {
+  /** Plugin tools: `{ description, args, execute }` (see tools.ts). */
+  tool?: Record<string, import("./tools.ts").PluginTool>;
   event?: (input: { event: OpencodeEvent }) => Promise<void>;
   config?: (input: ConfigHookInput) => Promise<void>;
   "chat.params"?: (input: ChatParamsInput, output: ChatParamsOutput) => Promise<void>;
@@ -171,6 +174,12 @@ export interface AutoModeOptions {
   skipPermissions?: string[];
   /** When set, only these permissions are auto-decided; all others are left for the human. */
   onlyPermissions?: string[];
+  /** Write the local decision log (default true). */
+  log?: boolean;
+  /** Data dir for the log (default OpenCode's own data dir); the log is `<dir>/auto-mode/decisions.jsonl`. */
+  logDir?: string;
+  /** Rotate the log past this size (default 20 MB). */
+  logMaxBytes?: number;
 }
 
 export interface ResolvedAutoModeOptions {
@@ -187,6 +196,9 @@ export interface ResolvedAutoModeOptions {
   transcriptChars: number;
   skipPermissions: string[];
   onlyPermissions?: string[];
+  log: boolean;
+  logDir?: string;
+  logMaxBytes: number;
 }
 
 export const DEFAULT_OPTIONS: ResolvedAutoModeOptions = {
@@ -201,6 +213,8 @@ export const DEFAULT_OPTIONS: ResolvedAutoModeOptions = {
   maxOutputTokens: 1024,
   transcriptChars: 60_000,
   skipPermissions: [],
+  log: true,
+  logMaxBytes: 20 * 1024 * 1024,
 };
 
 function strings(v: unknown): string[] | undefined {
@@ -228,5 +242,8 @@ export function resolveOptions(options: PluginOptions | undefined): ResolvedAuto
     transcriptChars: positive(o.transcriptChars, DEFAULT_OPTIONS.transcriptChars),
     skipPermissions: strings(o.skipPermissions) ?? DEFAULT_OPTIONS.skipPermissions,
     onlyPermissions: strings(o.onlyPermissions),
+    log: typeof o.log === "boolean" ? o.log : DEFAULT_OPTIONS.log,
+    logDir: typeof o.logDir === "string" && o.logDir ? o.logDir : undefined,
+    logMaxBytes: positive(o.logMaxBytes, DEFAULT_OPTIONS.logMaxBytes),
   };
 }
