@@ -35,6 +35,7 @@ import { blameBase, blameEffects } from "./blame-gutter.ts";
 import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
+import { usePanelAsk } from "./panel-ask.ts";
 import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
@@ -552,6 +553,11 @@ export function FileEditor({
   const [blame, setBlame] = useState<{ path: string; entries: BlameEntry[] }>();
   const [annotateNotice, setAnnotateNotice] = useState<string>();
   const repo = onOpenCommit && repos?.list ? repoOfPath(path, repos.list, cwd) : undefined;
+  // GH-722: the palette's Annotate (Blame) toggles it for the file the asking editor shows.
+  usePanelAsk("annotate", (a) => {
+    if (a.path !== path || !repo) return false;
+    setAnnotate((v) => !v);
+  });
   const top = repo ? repoDir(cwd, repo.rel) : undefined;
   const rel = top ? relPath(path, top).replaceAll("\\", "/") : undefined;
   const text = !!active && !active.media;

@@ -38,6 +38,12 @@ const rows = (lang: Lang, group: ShortcutGroup) => {
 const table = (lang: Lang, group: ShortcutGroup) =>
   `| ${lang === "vi" ? "Thao tác" : "Action"} | Windows / Linux | macOS |\n| --- | --- | --- |\n${rows(lang, group)}`;
 
+/** GH-722: the commands without a default key, one bullet each (they show as "Not set" in the app and the user may bind them). */
+const unbound = (lang: Lang) =>
+  SHORTCUTS.filter((s) => !s.key && !s.mac)
+    .map((s) => `- ${title(lang, `shortcut.${s.id}`, s.title)}`)
+    .join("\n");
+
 const prefix = (lang: Lang) =>
   PREFIX_KEYS.map((p) => {
     const does = p.key === "1-9" ? (lang === "vi" ? "Tab 1 đến 9 (9 = tab cuối)" : "Tab 1 to 9 (9 = last tab)") : title(lang, `shortcut.prefix.${p.id}`, p.title);
@@ -81,6 +87,12 @@ ${table("en", "Panels")}
 ## Session
 
 ${table("en", "Session")}
+
+## Commands without a default key
+
+These commands are in the [command palette](../features/palette) and show as **Not set** in the **Keyboard shortcuts** dialog. Click **Edit** next to one to give it a key.
+
+${unbound("en")}
 
 ## Prefix key
 
@@ -146,6 +158,12 @@ ${table("vi", "Panels")}
 ## Phiên {#session}
 
 ${table("vi", "Session")}
+
+## Lệnh không có phím mặc định {#commands-without-a-default-key}
+
+Các lệnh này nằm trong [bảng lệnh](../features/palette) và hiện **Chưa đặt** trong hộp thoại **Phím tắt**. Nhấn **Sửa** bên cạnh lệnh để gán phím.
+
+${unbound("vi")}
 
 ## Phím tiền tố {#prefix-key}
 

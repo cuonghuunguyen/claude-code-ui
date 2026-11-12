@@ -51,9 +51,10 @@ export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRu
   /** Checkout and create run at once; a `local_changes` refusal opens the Smart checkout dialog instead of a result line. */
   const send = (msg: Extract<RemoteRequest, { smart?: boolean }>, done: Done, running: string, target: string) =>
     onRun(msg, done, running, (e) => e.code === "local_changes" && (setSmart({ msg, done, running, target, message: e.message }), true));
-  const checkout = (ref: string) => {
+  /** `smart`: carry the local changes at once (the palette's Smart checkout), no refusal first. */
+  const checkout = (ref: string, smart?: boolean) => {
     const x = name(ref);
-    send({ type: "git.checkout", cwd, ...ex, ref }, (r) => of(t(stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.checkedOut", { target: x })), t("sidebar.git.checkingOut", { target: of(x) }), x);
+    send({ type: "git.checkout", cwd, ...ex, ref, ...(smart && { smart: true }) }, (r) => of(t(stopped(r) ? "sidebar.git.checkedOutStopped" : "sidebar.git.checkedOut", { target: x })), t("sidebar.git.checkingOut", { target: of(x) }), x);
   };
   const dialogs = (
     <>

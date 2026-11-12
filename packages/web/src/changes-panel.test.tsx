@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
+import { askPanel } from "./panel-ask.ts";
+import { changesFocus, resetChangesFocusForTests } from "./changes-focus.ts";
 import { getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { connect } from "./client.ts";
 import { loadDiffMode, saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
@@ -68,6 +70,7 @@ beforeEach(() => saveDiffMode("session"));
 afterEach(() => {
   act(() => root.render(null));
   narrow = false;
+  resetChangesFocusForTests();
   localStorage.clear();
   sessionDiffChoice.clear();
 });
@@ -1677,6 +1680,46 @@ it("a line selection sends the numbered diff lines", async () => {
   await act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!({ start: 2, side: "deletions", end: 2, endSide: "additions" }));
   await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=diff-send-selection]")!.click());
   expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
+});
+
+// ---- GH-722: palette commands ask the panel ----
+it("GH-722: a rollback ask opens the rollback dialog for the checked row, else the selected row", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  askPanel({ kind: "rollback" });
+  await act(async () => void vi.runAllTimers());
+  vi.useRealTimers();
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["c.ts"] }]);
+  expect([...document.querySelectorAll("[data-testid=rollback-file]")].map((x) => x.textContent)).toEqual(["Mc.ts"]);
+});
+
+it("GH-722: a sendSelection ask sends the selected diff lines; without a selection nothing is sent and the ask stays", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  askPanel({ kind: "sendSelection" });
+  await act(async () => void vi.runAllTimers());
+  expect(onSend).not.toHaveBeenCalled();
+  expect(changesFocus().hasDiffSelection).toBe(false);
+  await act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!({ start: 2, side: "deletions", end: 2, endSide: "additions" }));
+  expect(changesFocus().hasDiffSelection).toBe(true);
+  askPanel({ kind: "sendSelection" });
+  await act(async () => void vi.runAllTimers());
+  vi.useRealTimers();
+  expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
+});
+
+it("GH-722: the panel publishes its selected row for Add to prompt, none for a deleted file's mention", async () => {
+  await mountSend("M", "uncommitted", vi.fn());
+  expect(changesFocus().selected).toEqual({ path: "/p/a.ts", cwd: "/p", deleted: false });
+  await act(async () => root.render(null));
+  expect(changesFocus().selected).toBeUndefined();
 });
 
 // ---- Conflict banner (GH-560) ----

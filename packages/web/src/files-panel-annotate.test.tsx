@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { FilesPanel } from "./files-panel.tsx";
+import { askPanel } from "./panel-ask.ts";
 
 window.matchMedia ??= ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as never;
 
@@ -105,4 +106,14 @@ it("an untracked file marks every line not committed", async () => {
   await act(async () => q("editor-annotate")!.click());
   await flush();
   expect(marks().map((m) => m.textContent)).toEqual(["not committed"]);
+});
+
+it("GH-722: the palette's Annotate ask toggles Annotate for the file it names; another path leaves it", async () => {
+  const { q, blames } = await setup();
+  await act(async () => (askPanel({ kind: "annotate", path: "/p/other.ts" }), void (await new Promise((r) => setTimeout(r, 0)))));
+  expect(q("editor-annotate")!.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => (askPanel({ kind: "annotate", path: "/p/a.ts" }), void (await new Promise((r) => setTimeout(r, 0)))));
+  await flush();
+  expect(q("editor-annotate")!.getAttribute("aria-pressed")).toBe("true");
+  expect(blames()).toHaveLength(1);
 });

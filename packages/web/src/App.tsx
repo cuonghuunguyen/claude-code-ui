@@ -152,7 +152,7 @@ import { baseName, inDir, joinPath, relPath } from "./paths.ts";
 import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
-import { isDirty } from "./files.ts";
+import { fileMention, isDirty } from "./files.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { focusCommit } from "./graph-focus.ts";
@@ -202,6 +202,8 @@ import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actio
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
 import { askCommitBox } from "./commit-ask.ts";
+import { askPanel } from "./panel-ask.ts";
+import { useChangesFocus } from "./changes-focus.ts";
 import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
@@ -3259,6 +3261,14 @@ export function App() {
   const filesTab = editorTabs[editors.get().activePath ?? ""];
   const activeFilesPath = inSight("files") && filesTab && !filesTab.item && paneOwner && inDir(filesTab.path, cwdOfOwner(paneOwner) ?? "\0") ? filesTab.path : undefined;
   const ownerOnScreen = !paneRef || (splitShown && split!.ids.includes(currentId!));
+  // GH-722: what the Changes tab shows (its selected row, selected diff lines) and the file manager target: the Files editor's file, else the selected Changes row, else the folder.
+  const changesNow = useChangesFocus();
+  const changesShown = inSight("changes");
+  const selectedChange = changesShown && changesNow.selected ? changesNow.selected : undefined;
+  const revealCwd = panelTarget?.cwd ?? shownCwd;
+  const revealPath = activeFilesPath ?? selectedChange?.path ?? revealCwd;
+  const accountChoices = [...(claudeEnvToken ? [{ id: "", title: tr("app.plan.accountDefault") }] : []), { id: "cli", title: tr("app.plan.accountCli") }, ...claudeAccounts.map((a) => ({ id: a.id, title: a.name }))];
+  const gitAsk = (pane: "changes" | "graph", ask: Parameters<typeof askPanel>[0]) => () => (reveal(pane), askPanel(ask));
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     askAside: shown && !paneRef && !draftShown ? () => setInsert("/btw ") : undefined,
@@ -3336,6 +3346,19 @@ export function App() {
       reveal("terminal");
     },
     commitBox: (what) => (reveal("changes"), askCommitBox(what)),
+    // GH-722: the panel that owns the action takes the ask (panel-ask.ts). They show only in a git repository with panels (appCommands).
+    rollback: gitAsk("changes", { kind: "rollback" }),
+    newBranch: gitAsk("graph", { kind: "branch", action: "new" }),
+    checkout: gitAsk("graph", { kind: "branch", action: "checkout" }),
+    smartCheckout: gitAsk("graph", { kind: "branch", action: "checkoutSmart" }),
+    stash: gitAsk("graph", { kind: "stash" }),
+    merge: gitAsk("graph", { kind: "branch", action: "merge" }),
+    rebase: gitAsk("graph", { kind: "branch", action: "rebase" }),
+    annotate: activeFilesPath ? () => askPanel({ kind: "annotate", path: activeFilesPath }) : undefined,
+    revealFile: openExternal && revealCwd && revealPath && openExternal.canOpen(revealCwd) ? () => openExternal.run(revealPath, "reveal", revealCwd) : undefined,
+    addToPrompt: selectedChange && !selectedChange.deleted ? () => (setInsert(fileMention(selectedChange.path, selectedChange.cwd)), setPane("session")) : undefined,
+    sendSelection: changesShown && changesNow.hasDiffSelection ? () => askPanel({ kind: "sendSelection" }) : undefined,
+    accounts: shownCaps.account ? { choices: accountChoices, active: claudeAccount === "" && !claudeEnvToken ? "cli" : claudeAccount, switchTo: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)) } : undefined,
     resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,

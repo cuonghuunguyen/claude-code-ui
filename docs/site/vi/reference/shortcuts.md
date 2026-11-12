@@ -70,6 +70,48 @@ Phím tắt hoạt động ở mọi nơi trong ứng dụng, kể cả ô promp
 | Đổi model | <kbd>Ctrl</kbd>+<kbd>'</kbd> | <kbd>⌘</kbd> <kbd>'</kbd> |
 | Chạy nền | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 
+## Lệnh không có phím mặc định {#commands-without-a-default-key}
+
+Các lệnh này nằm trong [bảng lệnh](../features/palette) và hiện **Chưa đặt** trong hộp thoại **Phím tắt**. Nhấn **Sửa** bên cạnh lệnh để gán phím.
+
+- Mở Focus
+- Bật/tắt giữ màn hình sáng
+- Hiện hướng dẫn
+- Máy chủ MCP
+- Lệnh slash
+- Shell nền
+- Quản lý plugin
+- Manage addons
+- Đóng các tab khác
+- Đóng các tab bên phải
+- Đóng tất cả tab
+- Ghim hoặc bỏ ghim tab
+- Dọn dẹp tab…
+- Đóng tab rảnh
+- Đóng tab đã xong
+- Đóng tab của phiên đã lưu trữ hoặc đã xóa
+- Đóng tab không dùng trong 1 giờ
+- Đóng tab không dùng trong 1 ngày
+- Đóng tab không dùng trong 7 ngày
+- Đóng tab worker
+- Chia sang phải
+- Chia xuống dưới
+- Đến khung chia trước
+- Gộp các khung
+- Hiện kế hoạch
+- Rollback
+- Nhánh mới
+- Checkout
+- Smart checkout
+- Stash
+- Chú thích (Blame)
+- Merge
+- Rebase
+- Mở trong trình quản lý tệp
+- Thêm vào prompt
+- Gửi phần chọn cho Claude
+- Đổi tài khoản Claude
+
 ## Phím tiền tố {#prefix-key}
 
 Nhấn <kbd>Alt</kbd>+<kbd>A</kbd> (giống tmux), thả ra, rồi nhấn thêm một phím trong vòng 1,5 giây:

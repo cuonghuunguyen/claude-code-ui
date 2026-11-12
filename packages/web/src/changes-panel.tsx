@@ -27,6 +27,8 @@ import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
 import { CommitBox } from "./commit-box.tsx";
+import { usePanelAsk } from "./panel-ask.ts";
+import { setChangesSelected, setDiffSelection } from "./changes-focus.ts";
 import { ConflictBanner } from "./conflict-banner.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { ofRepo } from "./git-branch-menu.tsx";
@@ -572,6 +574,18 @@ export function ChangesPanel({
   const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.path]);
   const active = shown.find((r) => r.path === selected) ?? shown[0];
   const index = active ? shown.indexOf(active) : -1;
+  // GH-722: the palette's Add to prompt reads the selected row (changes-focus.ts); Rollback runs on the checked rows, else on that row.
+  useEffect(() => {
+    setChangesSelected(active ? { path: active.path, cwd, deleted: active.kind === "D" } : undefined);
+    return () => setChangesSelected(undefined);
+  }, [active?.path, active?.kind, cwd]);
+  usePanelAsk("rollback", () => {
+    const paths = commitPaths(commitRows, checked);
+    const one = active && commitable(active) ? commitPaths([active], new Set([active.path])) : [];
+    const list = paths.length ? paths : one;
+    if (!commitMode || opRunning || !list.length) return false;
+    setRollbackPaths(list);
+  });
   const wanted = narrow ? shown.filter((r) => expanded[r.path]).map((r) => r.path) : active ? [active.path] : [];
   const wantedKey = wanted.join("\n");
   useEffect(() => {
@@ -1089,6 +1103,12 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     });
     return parsed && { at, lines: [...at.keys()].map((k): DiffLineAnnotation => ({ side: k.startsWith("a") ? "additions" : "deletions", lineNumber: Number(k.split(":")[1]) })) };
   }, [parsed, onHunk !== undefined]);
+  // GH-722: the palette's Send selection (changes-focus.ts) knows whether lines are selected; its ask sends them.
+  const focusId = useRef(Symbol("diff")).current;
+  useEffect(() => {
+    setDiffSelection(focusId, range !== null);
+    return () => setDiffSelection(focusId, false);
+  }, [range !== null]);
   const sub = row.submodule;
   const nested = row.nested;
   // Add to prompt for the file (nothing selected, like the Files tab; a deleted file is not on disk) or the selected diff lines.
@@ -1098,6 +1118,11 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     if (text) onSend?.(text);
   };
   const canSend = !!onSend && !sub && !nested && !row.image && !row.error && !same && !!files;
+  // The diff that has selected lines takes the palette's Send selection; the others leave the ask.
+  usePanelAsk("sendSelection", () => {
+    if (!range || !canSend) return false;
+    send();
+  });
   // `compact`: the header beside the file name is icon-only until it is wide (the name keeps truncate priority).
   const sendButton = (compact?: boolean) =>
     canSend && (

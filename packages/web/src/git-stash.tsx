@@ -20,7 +20,7 @@ const ACTION = {
 } as const;
 const TYPE = { Apply: "git.stashApply", Pop: "git.stashPop", Drop: "git.stashDrop" } as const;
 
-export function StashSection({ client, cwd, exact, repoName, version, busy, onRun, open }: { client: Client; cwd: string; exact?: boolean; repoName?: string; version: number; busy: boolean; onRun: (msg: StashRequest, done: string | ((r: OpReply) => string), running: string) => void; open: boolean }) {
+export function StashSection({ client, cwd, exact, repoName, version, busy, onRun, open, pushAsk = 0 }: { client: Client; cwd: string; exact?: boolean; repoName?: string; version: number; busy: boolean; onRun: (msg: StashRequest, done: string | ((r: OpReply) => string), running: string) => void; open: boolean; /** Counts the palette's Stash asks: each opens the message dialog. */ pushAsk?: number }) {
   const t = useT();
   const of = (x: string) => ofRepo(x, repoName);
   const ex = exact ? { exact: true as const } : {};
@@ -29,6 +29,9 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
   const [push, setPush] = useState<{ message: string; untracked: boolean }>();
   const [drop, setDrop] = useState<GitStash>();
   const gen = useRef(0);
+  useEffect(() => {
+    if (pushAsk) setPush({ message: "", untracked: false });
+  }, [pushAsk]);
   // The list of another repository must not stay actionable.
   useEffect(() => setStashes(undefined), [cwd]);
   useEffect(() => {

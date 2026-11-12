@@ -163,8 +163,32 @@ it("the docs page generator lists bound shortcuts and skips unbound commands", (
     expect(page).toContain("| Toggle sidebar |");
     expect(page).not.toContain("undefined");
     for (const t of ["Open Focus", "Show guide", "MCP servers", "Slash commands", "Manage plugins"]) expect(page).not.toContain(`| ${t} |`);
+    // GH-722: the commands without a default key are listed as bullets, so a reader finds them.
+    expect(page).toContain("Commands without a default key");
+    expect(page).toContain("- Rollback");
+    expect(page).toContain("- Switch Claude account");
   } finally {
     if (before !== undefined) writeFileSync(out, before);
     else rmSync(out, { force: true });
   }
 }, 30000);
+
+const NEW_IDS = ["git.rollback", "git.branchNew", "git.checkout", "git.checkoutSmart", "git.stash", "git.annotate", "git.merge", "git.rebase", "file.reveal", "changes.addToPrompt", "changes.sendSelection", "account.switch"];
+
+it("GH-722: every 1.3.0 command id is registered once with a title and a group", () => {
+  for (const id of NEW_IDS) {
+    const found = SHORTCUTS.filter((s) => s.id === id);
+    expect(found, id).toHaveLength(1);
+    expect(found[0]!.title.length, id).toBeGreaterThan(0);
+    expect(["General", "Tabs", "Panels", "Session", "Prefix"]).toContain(found[0]!.group);
+  }
+});
+
+it("GH-722: 1.3.0 commands have no default key and no KEYS entry", () => {
+  for (const id of NEW_IDS) {
+    const s = SHORTCUTS.find((x) => x.id === id)!;
+    expect(defaultSpec(s, false), id).toBeUndefined();
+    expect(defaultSpec(s, true), id).toBeUndefined();
+    expect(id in KEYS, id).toBe(false);
+  }
+});

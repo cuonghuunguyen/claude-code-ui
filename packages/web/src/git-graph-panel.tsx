@@ -17,6 +17,7 @@ import { BranchMenu, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import { BranchPopup } from "./git-branch-popup.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { StashSection } from "./git-stash.tsx";
+import { usePanelAsk } from "./panel-ask.ts";
 import { runRemoteOp, useRemoteOp, type OpReply, type StashRequest } from "./git-remote-ops.ts";
 import { joinPath } from "./paths.ts";
 import { RepoSelector } from "./repo-selector.tsx";
@@ -156,6 +157,9 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const [branches, setBranches] = useState<string[]>([]);
   const [reload, setReload] = useState(0);
   const [stashOpen, setStashOpen] = useState(false);
+  // GH-722: the palette's Stash opens the stash section with its message dialog (the message field has focus).
+  const [stashAsk, setStashAsk] = useState(0);
+  usePanelAsk("stash", () => (setStashOpen(true), setStashAsk((n) => n + 1)));
   // The branch HEAD points to, from the first page (absent when detached: no branch in the list).
   const [head, setHead] = useState<string>();
   // The refs stamp of the loaded first page. On return to the tab, a fresh stamp (git.refs: file stats, no git process) is
@@ -328,7 +332,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
         {op ?? ""}
       </span>
       <GitOpResult cwd={cwd} />
-      {!notGit && <StashSection client={client} cwd={cwd} exact={exact} repoName={repoName} version={reload} busy={!!op} onRun={runRemote} open={stashOpen} />}
+      {!notGit && <StashSection client={client} cwd={cwd} exact={exact} repoName={repoName} version={reload} busy={!!op} onRun={runRemote} open={stashOpen} pushAsk={stashAsk} />}
       {notGit ? (
         <p className="m-auto p-4 text-muted-foreground">{tr("files.graph.notGit")}</p>
       ) : (
