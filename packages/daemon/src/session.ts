@@ -361,6 +361,11 @@ export class Session {
     this.emit({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
   }
 
+  /** The last turn ended at the usage limit and no turn has started since. */
+  get limitStop() {
+    return this.limitStopped;
+  }
+
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
   setQueue(items: { id: string; text: string; images: string[]; bash?: true; brief?: string; error?: string }[], held: { reason: "usage_limit" | "not_live"; until?: number } | undefined) {
     const next = { items: items.map((i) => ({ id: i.id, text: i.text, imageCount: i.images.length, ...(i.bash && { bash: true as const }), ...(i.brief && { brief: true as const }), ...(i.error && { error: i.error }) })), ...(held && { held }) };

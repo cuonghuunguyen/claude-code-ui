@@ -775,6 +775,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "maxDepth", kind: "number", min: 1, max: 5 },
       { key: "maxChildren", kind: "number", min: 1, max: 20 },
       { key: "stallMinutes", kind: "number", min: 0, max: 240 },
+      { key: "keepWarmMinutes", kind: "number", min: 0, max: 59 },
       { key: "closeFinished", kind: "switch" },
       {
         key: "workerMode",

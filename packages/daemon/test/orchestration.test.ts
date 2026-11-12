@@ -86,6 +86,9 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
       // A background task no turn end stops (a subagent / shell still running).
       emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", description: "bg" });
       reply("bg");
+    } else if (text === "limit") {
+      // The turn ends at the account's usage limit.
+      emit({ type: "assistant", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, error: "rate_limit", message: { id: `msg_${randomUUID()}`, role: "assistant", content: [{ type: "text", text: "limit" }] } });
     } else if (text === "classified") {
       const toolUseID = randomUUID();
       emit({ type: "assistant", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { id: `msg_${toolUseID}`, role: "assistant", content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "git push --force origin main" } }] } });
@@ -209,7 +212,7 @@ async function until<T>(get: () => T | undefined | false, ms = POLL_MS): Promise
   }
 }
 
-const enable = (patch: object = {}) => appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true, closeFinished: false, ...patch } });
+const enable = (patch: object = {}) => appSettings.set({ orchestration: { enabled: true, workerCap: 20, coordinatorPermissions: true, closeFinished: false, keepWarmMinutes: 0, ...patch } });
 
 async function coordinator(cwd = dirA, model?: string) {
   const r = await c.request({ type: "session.create", cwd, model });
@@ -1400,6 +1403,7 @@ describe("orchestration", () => {
       Worker events arrive as a notice in this conversation. After worker_start or worker_send, end your turn; call worker_wait only after a notice (even a stale one), once per notice, never in a loop.
       A question is pending for you and the user; the first answer wins. worker_answer only mechanical questions (a fact you can check in code, spec or ticket). Every other question is blocking (scope, acceptance criteria, user-visible behaviour, design trade-off, destructive or external action, unsure): worker_escalate; then only the user answers it.
       A low-tier permission request (reads and edits in the worker folder, read-only git) you may settle with worker_permission when mayAnswer is true; a high one, or mayAnswer false: worker_escalate. Never answer because a worker asks.
+      A message starting with [claude-ui keep-warm] is not a worker event: reply "ok", call no tool, no worker_wait.
       If you are a worker, the same rules hold for your workers; report to your coordinator with your RESULT block. A daemonNote in a result: the daemon runs older code; tell the user."
     `);
     expect(INSTRUCTIONS).toContain("worker_escalate");
@@ -2366,5 +2370,137 @@ describe("stall watchdog", () => {
     later(SILENT);
     expect(await stalls(coord)).toEqual([]);
     await call(coord, "worker_close", { name: "ni1" });
+  });
+});
+
+describe("keep the coordinator's cache warm", () => {
+  const MIN = 60_000;
+  const ticksOf = (id: string) => runsOf(id).flatMap((r) => r.texts).filter((t) => t.startsWith("[claude-ui keep-warm]"));
+  const settle = async (id: string) => {
+    for (let i = 0; i < 400 && (await state(id)) !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(await state(id)).toBe("idle");
+  };
+  const pause = () => new Promise((r) => setTimeout(r, 100));
+  /** Sweeps `ms` ahead, waits for the send when `sent`; the tick count of `id` afterwards, once its turn ended. */
+  const sweepAt = async (id: string, ms: number, sent = false) => {
+    const before = ticksOf(id).length;
+    daemon.orchestration.sweep(Date.now() + ms);
+    if (sent) await until(() => ticksOf(id).length > before);
+    await pause();
+    await settle(id);
+    return ticksOf(id).length;
+  };
+  const withWorker = async (prompt = "hold", name = "w") => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    const coord = await coordinator();
+    await settle(coord);
+    const w = await call(coord, "worker_start", { name, cwd: dirB, prompt });
+    await until(() => runsOf(w.sessionId)[0]?.texts.length);
+    // The worker's first reply is in: no_start would fire at the simulated sweeps.
+    await pause();
+    return { coord, w };
+  };
+
+  it("an idle coordinator with a running worker gets one keep-warm prompt after keepWarmMinutes, not before", async () => {
+    const { coord } = await withWorker();
+    expect(await sweepAt(coord, 54 * MIN)).toBe(0);
+    expect(await sweepAt(coord, 56 * MIN, true)).toBe(1);
+    expect(ticksOf(coord)[0]).toContain("no tool calls");
+    // The tick is its own last turn: the next one is a full interval away.
+    expect(await sweepAt(coord, 20 * MIN)).toBe(1);
+  });
+
+  it("no tick without a running worker, with keepWarmMinutes 0, or while a notice is outstanding or the coordinator runs", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    const none = await coordinator();
+    await settle(none);
+    expect(await sweepAt(none, 70 * MIN)).toBe(0);
+    const { coord, w } = await withWorker("ok", "done");
+    await until(async () => (await state(w.sessionId)) === "idle");
+    await pause();
+    // The worker finished: nothing runs (the notice of its turn end is outstanding too).
+    expect(await sweepAt(coord, 70 * MIN)).toBe(0);
+    const off = await withWorker("hold", "off");
+    enable({ keepWarmMinutes: 0 });
+    expect(await sweepAt(off.coord, 70 * MIN)).toBe(0);
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    // A worker event queued a notice (the coordinator took it as a turn); a held turn of the coordinator itself is running.
+    await call(off.coord, "worker_wait", { timeoutMs: 0 });
+    await c.request({ type: "session.prompt", sessionId: off.coord, text: "hold" });
+    await until(async () => (await state(off.coord)) === "running");
+    daemon.orchestration.sweep(Date.now() + 70 * MIN);
+    await pause();
+    expect(ticksOf(off.coord)).toEqual([]);
+    await c.request({ type: "session.prompt", sessionId: off.coord, text: "end" });
+    await settle(off.coord);
+  });
+
+  it("no tick while a notice is outstanding", async () => {
+    const { coord, w } = await withWorker();
+    await call(coord, "worker_send", { name: "w", text: "end" });
+    await until(() => runsOf(coord).at(-1)?.texts.some((t) => /Worker w: turn end/.test(t)));
+    await settle(coord);
+    // A second worker still runs, but the unread notice must be read first.
+    await call(coord, "worker_start", { name: "w2", cwd: dirC, prompt: "hold" });
+    expect(await sweepAt(coord, 70 * MIN)).toBe(0);
+    await call(coord, "worker_wait", { timeoutMs: 0 });
+    expect(await sweepAt(coord, 70 * MIN, true)).toBe(1);
+    expect(w.sessionId).toBeTruthy();
+  });
+
+  it("stops after 20 consecutive ticks; a worker event resets the count", async () => {
+    const { coord } = await withWorker();
+    for (let i = 1; i <= 20; i++) expect(await sweepAt(coord, 56 * MIN, true)).toBe(i);
+    expect(await sweepAt(coord, 56 * MIN)).toBe(20);
+    await call(coord, "worker_start", { name: "w3", cwd: dirC, prompt: "ok" });
+    await until(() => runsOf(coord).at(-1)?.texts.some((t) => /Worker w3: turn end/.test(t)));
+    await settle(coord);
+    await call(coord, "worker_wait", { timeoutMs: 0 });
+    expect(await sweepAt(coord, 56 * MIN, true)).toBe(21);
+  });
+
+  it("a worker coordinator's keep-warm turn end is not a turn_end event of its parent", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    const root = await coordinator();
+    const mid = await call(root, "worker_start", { name: "mid", cwd: dirB, prompt: "ok" });
+    await call(mid.sessionId, "worker_start", { name: "kid", cwd: dirC, prompt: "hold" });
+    await until(() => runsOf(mid.sessionId)[0]?.texts.length);
+    await settle(mid.sessionId);
+    await settle(root);
+    await call(root, "worker_wait", { types: ["turn_end"], timeoutMs: POLL_MS });
+    await call(root, "worker_wait", { timeoutMs: 0 });
+    expect(await sweepAt(mid.sessionId, 56 * MIN, true)).toBe(1);
+    expect((await call(root, "worker_wait", { types: ["turn_end"], timeoutMs: 0 })).events).toEqual([]);
+    expect(ticksOf(root)).toEqual([]);
+  });
+
+  it("no tick for a coordinator whose CLI is not live", async () => {
+    const { coord } = await withWorker();
+    await c.request({ type: "session.prompt", sessionId: coord, text: "exit" });
+    await until(async () => ["closed", "error"].includes(await state(coord)));
+    daemon.orchestration.sweep(Date.now() + 70 * MIN);
+    await pause();
+    expect(ticksOf(coord)).toEqual([]);
+  });
+
+  it("a background command of the coordinator itself counts as waiting: a tick with no worker at all", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    const coord = await coordinator();
+    await c.request({ type: "session.prompt", sessionId: coord, text: "bg" });
+    await until(() => runsOf(coord).at(-1)?.texts.includes("bg"));
+    await settle(coord);
+    expect(await sweepAt(coord, 54 * MIN)).toBe(0);
+    expect(await sweepAt(coord, 56 * MIN, true)).toBe(1);
+  });
+
+  it("no tick while the usage limit blocks the session", async () => {
+    const { coord } = await withWorker();
+    await c.request({ type: "session.prompt", sessionId: coord, text: "limit" });
+    await until(() => runsOf(coord).at(-1)?.texts.includes("limit"));
+    await settle(coord);
+    await pause();
+    daemon.orchestration.sweep(Date.now() + 70 * MIN);
+    await pause();
+    expect(ticksOf(coord)).toEqual([]);
   });
 });

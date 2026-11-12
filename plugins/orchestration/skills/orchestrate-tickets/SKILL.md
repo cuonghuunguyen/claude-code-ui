@@ -236,6 +236,8 @@ You do not poll. After starting or messaging workers, **end your turn**. claude-
 notice into this conversation when a worker has news; then call `worker_wait` **once** and
 handle every event it returns. Never call `worker_wait` in a loop: each call is a full model
 request.
+While workers run, claude-ui may send a message starting with `[claude-ui keep-warm]` to keep your
+prompt cache warm. It is not a worker notice: reply "ok", call no tool, no `worker_wait`.
 
 | Event | Do | Never |
 |---|---|---|
