@@ -2368,6 +2368,26 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
+  it("reconnect: a background view of an idle not-live session is kept when it is unread, so its marker survives", async () => {
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+      // The turn ends while the session is in the background (attention it has not seen), and its CLI closes: idle, not live.
+      replies["session.list"] = { sessions: [session, { ...other, state: "idle" as const, live: false as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => emit({ type: "event", sessionId: other.id, seq: 1, part: { type: "session_state", id: "session_state", state: "running" } }));
+      await act(async () => emit({ type: "event", sessionId: other.id, seq: 2, part: { type: "session_state", id: "session_state", state: "idle" } }));
+      await act(async () => {});
+      sent.length = 0;
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toEqual([expect.objectContaining({ background: true })]);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
   it("reconnect: tab sessions resubscribe holding, the others in the background", async () => {
     const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] } });
     try {

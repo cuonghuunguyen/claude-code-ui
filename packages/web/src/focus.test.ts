@@ -153,6 +153,12 @@ it("finished after a daemon restart (GH-305): a closed session with an unread re
   expect(attentionRows(input([closed({ archived: true })], {}, { unread: ["a"] }))).toEqual([]);
 });
 
+it("an idle session that is not live, with no view and an unread record, gets a finished row (it is not followed, like a closed one)", () => {
+  const s = item("a", { state: "idle", live: false, lastActivity: NOW - 60_000 });
+  expect(attentionRows(input([s], {}, { unread: ["a"] }))[0]).toMatchObject({ kind: "finished", id: "finished:a" });
+  expect(attentionRows(input([s], {}))).toEqual([]);
+});
+
 it("error, limit and quiet rows still need a view (a closed or unknown session without one gets none of them)", () => {
   expect(attentionRows(input([item("a", { state: "error", lastActivity: NOW })], {}, { unread: ["a"] }))).toEqual([]);
 });

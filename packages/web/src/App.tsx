@@ -1569,7 +1569,7 @@ export function App() {
         held.current.clear();
         if (h && !viewsRef.current[h]) void subscribe(h);
         // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
-        // A background view of a session that is no longer live (idle, not live) is dropped: the list does not follow it either.
+        // A background view of a session that is no longer live (idle, not live) is dropped, unless it is unread: the list does not follow it either.
         const live = (id: string) => {
           const s = listRef.current.find((x) => x.id === id);
           return !s || followed(s) || unreadRef.current.has(id);

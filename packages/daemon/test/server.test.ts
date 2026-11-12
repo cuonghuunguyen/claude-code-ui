@@ -3291,6 +3291,54 @@ describe("daemon", () => {
     }
   });
 
+  it("a delete of a session whose background restore is still queued moves that restore ahead of the other queued ones", async () => {
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    const ids = Array.from({ length: 5 }, (_, i) => `7c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a${String(i).padStart(2, "0")}`);
+    const victim = ids[4]!;
+    const started: string[] = [];
+    const waiting: (() => void)[] = [];
+    let transcripts = ids.map((sessionId) => ({ sessionId, summary: "s", lastModified: 1000, cwd }));
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => transcripts) as never,
+        getSessionInfo: (async (sid: string) => transcripts.find((t) => t.sessionId === sid)) as never,
+        getSessionMessages: (async (sid: string) => {
+          started.push(sid);
+          await new Promise<void>((r) => waiting.push(r));
+          return history;
+        }) as never,
+        deleteSession: (async (sid: string) => void (transcripts = transcripts.filter((t) => t.sessionId !== sid))) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const subscribed = ids.map((id) => c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0, background: true }));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(started).toEqual([ids[0], ids[1]]);
+      const deleted = c.request({ type: "session.delete", sessionId: victim });
+      await new Promise((r) => setTimeout(r, 50));
+      // One slot frees: the queued restore of the deleted session starts before the earlier queued ones.
+      waiting.splice(0, 1)[0]!();
+      await expect.poll(() => started.length, { timeout: 5000 }).toBeGreaterThanOrEqual(3);
+      expect(started[2]).toBe(victim);
+      for (let i = 0; i < 200; i++) {
+        waiting.splice(0).forEach((f) => f());
+        await new Promise((r) => setTimeout(r, 10));
+        if (started.length === 5) break;
+      }
+      waiting.splice(0).forEach((f) => f());
+      await Promise.all([deleted, ...subscribed]);
+    } finally {
+      d.close();
+    }
+  });
+
   it("previews and runs a rewind over WebSocket; bad mode and unknown message are errors", async () => {
     const c = await client();
     const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
