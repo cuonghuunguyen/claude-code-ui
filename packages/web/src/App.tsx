@@ -817,6 +817,10 @@ export function App() {
       }
       setRecentProjects(recentProjects);
       setSides(sides);
+      // A side that became ready: its sessions that failed to follow are asked again.
+      const ready = new Set((sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
+      if ([...ready].some((id) => !readySides.current.has(id))) retryFailedFollows();
+      readySides.current = ready;
       setDocker(docker);
       setSsh(ssh);
       setCwdSides(cwdSides);
@@ -838,6 +842,16 @@ export function App() {
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
+  }
+
+  const failedBatch = useRef<string[]>([]);
+  const failedMessage = useRef("");
+  /** Sessions whose follow failed with side_not_ready: kept in `requested` so a list change does not ask again. */
+  const failedFollow = useRef(new Set<string>());
+  const readySides = useRef(new Set<string>());
+  function retryFailedFollows() {
+    for (const id of failedFollow.current) requested.current.delete(id);
+    failedFollow.current.clear();
   }
 
   // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
@@ -884,10 +898,21 @@ export function App() {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
       if ((e as Error).message !== "disconnected") {
-        setError((e as Error).message);
-        setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
-        // Asked again by the next follow (a reconnect, another pane tab) instead of waiting on "Loading plan…" for good.
-        if (!viewsRef.current[sessionId]) requested.current.delete(sessionId);
+        // One toast and one state update for a burst of failures (a stopped side fails every one of its sessions at once).
+        failedBatch.current.push(sessionId);
+        failedMessage.current = (e as Error).message;
+        if (failedBatch.current.length === 1)
+          queueMicrotask(() => {
+            const ids = failedBatch.current.splice(0);
+            setError(failedMessage.current);
+            setFailedTabs((f) => (ids.every((x) => f.has(x)) ? f : new Set([...f, ...ids])));
+          });
+        // A stopped side (side_not_ready) fails the same way again: asked again only after a reconnect or when a side becomes ready, not by every list change.
+        // Another failure may be transient: asked again by the next follow instead of waiting on "Loading plan…" for good.
+        if (!viewsRef.current[sessionId]) {
+          if ((e as RequestError).code === "side_not_ready") failedFollow.current.add(sessionId);
+          else requested.current.delete(sessionId);
+        }
       } else if (!viewsRef.current[sessionId]) requested.current.delete(sessionId); // a dropped request: the next follow asks again; a view is resubscribed on reconnect
     } finally {
       resubscribing.current.delete(sessionId);
@@ -1527,6 +1552,7 @@ export function App() {
         // A transient page failure (a side restarting) is retried after a reconnect.
         failedPage.current.clear();
         modelsRequested.current.clear();
+        retryFailedFollows();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),

@@ -2287,6 +2287,33 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
+  it("a background follow that fails with side_not_ready is not asked again by every list change; it is when its side becomes ready", async () => {
+    const running = { ...other, state: "running" as const };
+    const sideOff = [{ id: "wsl:X", label: "WSL: X", state: "off" }];
+    const subscribeReply = (m: { sessionId: string }) => {
+      if (m.sessionId === running.id) throw Object.assign(new Error("side is not running"), { code: "side_not_ready" });
+      return { logEpoch: "e1", session };
+    };
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, running], projects: ["/p/demo", "/p/other"], sides: sideOff }, "session.subscribe": subscribeReply });
+    const toasts = () => document.querySelectorAll('[data-testid="toast"]').length;
+    try {
+      for (let i = 0; i < 3; i++) {
+        await act(async () => sessionsChanged({ type: "sessions.changed" }));
+        await act(async () => {});
+      }
+      expect(subscribes().filter((m) => m.sessionId === running.id)).toHaveLength(1);
+      expect(toasts()).toBeLessThanOrEqual(1);
+      replies["session.list"] = { sessions: [session, running], projects: ["/p/demo", "/p/other"], sides: [{ ...sideOff[0], state: "ready" }] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === running.id)).toHaveLength(2);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
   it("reconnect: tab sessions resubscribe holding, the others in the background", async () => {
     const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] } });
     try {
