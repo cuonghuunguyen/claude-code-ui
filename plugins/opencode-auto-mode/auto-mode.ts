@@ -225,6 +225,9 @@ export const AutoModePlugin: Plugin = async (input, options) => {
   return hooks;
 };
 
-export default AutoModePlugin;
+// V1 plugin module: OpenCode 1.19.5 reads `default` as `{ id, server }` and then ignores the named
+// exports. Without it the loader treats EVERY export as a plugin function and rejects the module
+// ("Plugin export is not a function") as soon as one of them (like JOB_SLACK_MS) is not one.
+export default { id: "auto-mode", server: AutoModePlugin };
 
 export type { PluginOptions };

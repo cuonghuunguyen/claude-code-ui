@@ -7,7 +7,7 @@ export const IMPROVE_COMMAND = "auto-mode-improve";
 
 const EVAL_ARGS =
   "Arguments given by the user (may be empty): $ARGUMENTS\n" +
-  "Map them onto the tool's arguments: a bare number is `limit`; the word `all` as a case selector is `only`; `all-projects` or `global` is `scope` \"all\"; `model=provider/model` is `model`. " +
+  "Map them onto the tool's arguments: a bare number is `limit`; the standalone word `all` (exactly that word) is `only` \"all\"; `all-projects` or `global` is `scope` \"all\" and does not change `only`; `model=provider/model` is `model`. " +
   'Anything not given takes the neutral default: limit 0, only "labeled", scope "project", model "".';
 
 const IMPROVE_ARGS =

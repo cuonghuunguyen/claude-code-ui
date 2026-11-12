@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AutoModePlugin, JOB_SLACK_MS } from "../auto-mode.ts";
+import AutoModeModule, { AutoModePlugin, JOB_SLACK_MS } from "../auto-mode.ts";
 import { EVAL_CONCURRENCY } from "../eval.ts";
 import type { ChatParamsOutput, Hooks, OpencodeClient, PluginInput } from "../types.ts";
 
@@ -721,5 +721,11 @@ describe("commands and tools", () => {
     expect(run.client.session.prompt).not.toHaveBeenCalled();
     const none = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, { worktree: "/elsewhere", directory: "/elsewhere" });
     expect(none).toContain("No overrides");
+  });
+});
+
+describe("module shape", () => {
+  it("default-exports a V1 plugin object ({ id, server }) so OpenCode 1.19.5 ignores the other exports", () => {
+    expect(AutoModeModule).toEqual({ id: "auto-mode", server: AutoModePlugin });
   });
 });
