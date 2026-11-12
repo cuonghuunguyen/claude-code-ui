@@ -220,6 +220,8 @@ const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border b
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
+/** Background views resubscribed at once after a reconnect. */
+const RESUBSCRIBE_CONCURRENCY = 4;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
@@ -1564,7 +1566,22 @@ export function App() {
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
         held.current.clear();
         if (h && !viewsRef.current[h]) void subscribe(h);
-        Object.keys(viewsRef.current).forEach((id) => void subscribe(id, false, false, !isShown(id)));
+        // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
+        // A background view of a session that is no longer live (idle, not live) is dropped: the list does not follow it either.
+        const live = (id: string) => {
+          const s = listRef.current.find((x) => x.id === id);
+          return !s || s.live !== false || s.state === "running" || s.state === "needs_input";
+        };
+        const background: string[] = [];
+        for (const id of Object.keys(viewsRef.current)) {
+          if (isShown(id)) void subscribe(id);
+          else if (live(id)) background.push(id);
+        }
+        const gen = connGen.current;
+        const worker = async () => {
+          for (let id = background.shift(); id !== undefined && gen === connGen.current; id = background.shift()) if (viewsRef.current[id]) await subscribe(id, false, false, true);
+        };
+        for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});

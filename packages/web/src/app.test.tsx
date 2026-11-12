@@ -2314,6 +2314,39 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
+  it("reconnect: the shown session resubscribes at once, background views through a queue of 4; every one is resubscribed in the end", async () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ ...other, id: `${String(i).padStart(8, "0")}-2222-3333-4444-555555555555`, cwd: "/p/other", state: "running" as const }));
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, ...many], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(new Set(subscribes().map((m) => m.sessionId)).size).toBe(21);
+      sent.length = 0;
+      const open: (() => void)[] = [];
+      let inflight = 0;
+      let peak = 0;
+      replies["session.subscribe"] = () =>
+        new Promise((res) => {
+          peak = Math.max(peak, ++inflight);
+          open.push(() => (inflight--, res({ logEpoch: "e1", session })));
+        });
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes()[0]!.sessionId).toBe(ID);
+      expect(inflight).toBeLessThanOrEqual(5);
+      const done = () => new Set(subscribes().map((m) => m.sessionId)).size;
+      for (let i = 0; i < 40 && done() < 21; i++) {
+        await act(async () => open.splice(0).forEach((f) => f()));
+        await act(async () => {});
+      }
+      expect(peak).toBeLessThanOrEqual(5);
+      expect(done()).toBe(21);
+    } finally {
+      restoreSubscribe();
+      sent.length = 0;
+      restore();
+    }
+  });
+
   it("reconnect: tab sessions resubscribe holding, the others in the background", async () => {
     const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] } });
     try {
