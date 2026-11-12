@@ -7,7 +7,7 @@ import { truncate } from "./text.ts";
 /** Replays in flight at once: the eval calls the model once per case. */
 export const EVAL_CONCURRENCY = 3;
 export const DEFAULT_EVAL_LIMIT = 50;
-export const MAX_EVAL_LIMIT = 500;
+export const MAX_EVAL_LIMIT = 100;
 
 export type Scope = "project" | "all";
 export type Expected = "allow" | "block";
@@ -71,7 +71,7 @@ export function selectCases(log: LogContents, opts: SelectOptions): EvalCase[] {
     if (!record.input || seen.has(record.requestID) || !inScope(record, opts.scope, opts.project)) continue;
     if (opts.only === "labeled") {
       const label = log.labels.get(record.requestID);
-      if (!label) continue;
+      if (!label || label.cascade) continue;
       out.push({ record, expected: labelToExpected(label.reply), source: "label" });
     } else {
       if (record.verdict === "none" || record.verdict === "ask") continue;
@@ -117,6 +117,7 @@ export function formatEvalReport(results: EvalResult[], meta: EvalReportMeta): s
   const count = (exp: Expected, got: Got) => results.filter((r) => r.case.expected === exp && r.got === got).length;
   const agree = results.filter((r) => r.case.expected === r.got).length;
   const lines = [
+    ...(meta.scope === "all" ? ["Note: every replay runs with THIS project's instructions (AGENTS.md) in the classifier's system prompt, whatever project the case came from."] : []),
     `Auto-mode eval: ${results.length} cases (only=${meta.only}, scope=${meta.scope}), reference: ${ref}, policy ${meta.policyHash}${meta.model ? `, model ${meta.model}` : ""}`,
     `agreement: ${Math.round((agree / results.length) * 100)}% (${agree}/${results.length})`,
     "",

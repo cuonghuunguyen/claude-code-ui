@@ -41,6 +41,12 @@ describe("selectCases", () => {
     ]);
   });
 
+  it("cascade labels are not ground truth", () => {
+    const l = logOf([decision({ requestID: "a", at: at(1) }), decision({ requestID: "b", at: at(2) })], [["a", "reject"], ["b", "reject"]]);
+    l.labels.set("b", { v: 1, kind: "label", at: "t", requestID: "b", reply: "reject", cascade: true });
+    expect(selectCases(l, base).map((c) => c.record.requestID)).toEqual(["a"]);
+  });
+
   it("scope all includes other projects", () => {
     expect(selectCases(log, { ...base, scope: "all" }).map((c) => c.record.requestID)).toEqual(["e", "c", "b", "a"]);
   });
@@ -114,6 +120,12 @@ describe("formatEvalReport", () => {
   it("previous-verdict mode skips records whose verdict was ask", () => {
     const log = logOf([decision({ requestID: "q", verdict: "ask", outcome: "deferred" }), decision({ requestID: "r", at: at(2), verdict: "allow" })]);
     expect(selectCases(log, { limit: 50, only: "all", scope: "all", project: "/proj" }).map((c) => c.record.requestID)).toEqual(["r"]);
+  });
+
+  it("for scope all, notes that this project's instructions file is used for every replay", () => {
+    const r = [{ case: { record: decision(), expected: "allow" as const, source: "label" as const }, got: "allow" as const, reason: "" }];
+    expect(formatEvalReport(r, { only: "labeled", scope: "all", policyHash: "h" })).toContain("AGENTS.md");
+    expect(formatEvalReport(r, { only: "labeled", scope: "project", policyHash: "h" })).not.toContain("AGENTS.md");
   });
 
   it("says so when there is nothing to evaluate", () => {

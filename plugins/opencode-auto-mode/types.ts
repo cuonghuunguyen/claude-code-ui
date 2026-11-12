@@ -108,6 +108,7 @@ export type PluginOptions = Record<string, unknown>;
 /** The slice of opencode.json `Config` the `config` hook may mutate. */
 export interface ConfigHookInput {
   agent?: Record<string, unknown>;
+  permission?: unknown;
   command?: Record<string, { template: string; description?: string }>;
   [key: string]: unknown;
 }

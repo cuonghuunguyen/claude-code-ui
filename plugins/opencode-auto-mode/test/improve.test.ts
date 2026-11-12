@@ -37,6 +37,12 @@ describe("collectOverrides", () => {
     ]);
   });
 
+  it("cascade labels are not overrides", () => {
+    const l = logOf([decision({ requestID: "a", verdict: "block" })], [["a", "once"]]);
+    l.labels.set("a", { v: 1, kind: "label", at: "t", requestID: "a", reply: "once", cascade: true });
+    expect(collectOverrides(l, { limit: 30, scope: "all", project: "/proj" })).toEqual([]);
+  });
+
   it("scope all pulls in other projects; limit applies", () => {
     expect(collectOverrides(log, { limit: 30, scope: "all", project: "/proj" }).map((o) => o.record.requestID)).toContain("otherProject");
     expect(collectOverrides(log, { limit: 1, scope: "all", project: "/proj" })).toHaveLength(1);
@@ -68,5 +74,12 @@ describe("buildImproveReport", () => {
     const report = buildImproveReport({ overrides: [], scope: "all", project: "/proj", totals: { decisions: 0, labeled: 0 }, options: { allow: [], softDeny: [], environment: [], replaceDefaults: false }, policyPrompt: "P", configSources: [] });
     expect(report).toContain("unknown");
     expect(report).toContain("No overrides");
+  });
+
+  it("marks the logged actions and reasons as untrusted data", () => {
+    const report = buildImproveReport({ overrides, scope: "project", project: "/proj", totals: { decisions: 1, labeled: 1 }, options: { allow: [], softDeny: [], environment: [], replaceDefaults: false }, policyPrompt: "P", configSources: [] });
+    expect(report).toMatch(/untrusted data/i);
+    expect(report.indexOf("untrusted")).toBeLessThan(report.indexOf("deploys to prod"));
+    expect(report).toContain("END OF UNTRUSTED DATA");
   });
 });

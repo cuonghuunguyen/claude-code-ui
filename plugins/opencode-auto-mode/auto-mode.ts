@@ -9,7 +9,7 @@ import { logDecision, toast } from "./logging.ts";
 import { buildPolicyPrompt } from "./prompt.ts";
 import { effectiveDecision } from "./verdict.ts";
 import { allowOnce, otherPendingAsks, pendingAsks, rejectWithMessage, type ReplyOutcome } from "./reply.ts";
-import { createTools, projectKey } from "./tools.ts";
+import { createTools, LOG_PERMISSION, projectKey } from "./tools.ts";
 import type { CachedToolCall } from "./transcript.ts";
 import { resolveOptions, type Hooks, type PermissionAskedProperties, type Plugin, type PluginOptions } from "./types.ts";
 
@@ -18,6 +18,8 @@ const MAX_REPLIED_IDS = 1000;
 const MAX_SEEN_ASKS = 1000;
 /** Whole-job budget beyond the classifier timeout, for the calls around it (list, reply, cleanup). */
 export const JOB_SLACK_MS = 10_000;
+/** Replies of one session closer together than this are one burst: OpenCode publishes a primary reply and its cascade siblings synchronously. */
+const CASCADE_WINDOW_MS = 50;
 const DEFAULT_BLOCK_MESSAGE = "Blocked by auto mode.";
 const UNSURE_BLOCK_MESSAGE = "Blocked by auto mode: could not tell whether this is authorised.";
 
@@ -43,6 +45,7 @@ export const AutoModePlugin: Plugin = async (input, options) => {
 
   const repliedIds = new Set<string>(); // asks already answered by anyone (permission.replied), bounded
   const seenAsks = new Set<string>(); // asks this plugin considered (not filtered out), bounded: only these get human labels
+  const lastReplyAt = new Map<string, number>(); // per session: when a permission.replied last arrived, to spot cascade siblings
   const ownReplies = new Set<string>(); // asks this plugin is answering, or answered, itself: not human labels
 
   const policyPrompt = buildPolicyPrompt(opts);
@@ -174,6 +177,12 @@ export const AutoModePlugin: Plugin = async (input, options) => {
 
   const hooks: Hooks = {
     config: async (config) => {
+      // The default agent permissions allow everything unknown, so without this rule the tools'
+      // ctx.ask(auto_mode_log) would pass silently. A rule the user set themselves wins.
+      const perm = config.permission;
+      if (perm === undefined || perm === null) config.permission = { [LOG_PERMISSION]: "ask" };
+      else if (typeof perm === "string") config.permission = { "*": perm, [LOG_PERMISSION]: "ask" };
+      else if (typeof perm === "object" && !(LOG_PERMISSION in perm)) (perm as Record<string, unknown>)[LOG_PERMISSION] = "ask";
       config.agent = config.agent ?? {};
       config.agent[CLASSIFIER_AGENT] = buildClassifierAgentConfig(opts);
       config.command = config.command ?? {};
@@ -203,14 +212,21 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     event: async ({ event }) => {
       if (event.type === "permission.replied") {
         // Payload (1.19.5 permission/index.ts): { sessionID, requestID, reply: "once" | "always" | "reject" }
-        const props = event.properties as { requestID?: unknown; reply?: unknown } | undefined;
+        const props = event.properties as { requestID?: unknown; reply?: unknown; sessionID?: unknown } | undefined;
         const id = props?.requestID;
         if (typeof id === "string") {
           repliedIds.add(id);
           if (repliedIds.size > MAX_REPLIED_IDS) repliedIds.delete(repliedIds.values().next().value as string);
           const reply = props?.reply;
+          const session = typeof props?.sessionID === "string" ? props.sessionID : undefined;
+          const at = Date.now();
+          const cascade = session !== undefined && at - (lastReplyAt.get(session) ?? -Infinity) < CASCADE_WINDOW_MS;
+          if (session !== undefined) {
+            lastReplyAt.set(session, at);
+            if (lastReplyAt.size > MAX_SEEN_ASKS) lastReplyAt.delete(lastReplyAt.keys().next().value as string);
+          }
           if (store && seenAsks.has(id) && !ownReplies.has(id) && (reply === "once" || reply === "always" || reply === "reject")) {
-            const label: LabelRecord = { v: 1, kind: "label", at: new Date().toISOString(), requestID: id, reply };
+            const label: LabelRecord = { v: 1, kind: "label", at: new Date().toISOString(), requestID: id, reply, ...(cascade ? { cascade: true as const } : {}) };
             await store.append(label); // a human's decision: ground truth for eval and improve
           }
         }
@@ -219,6 +235,7 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       if (event.type !== "permission.asked") return;
       const info = event.properties as unknown as PermissionAskedProperties;
       if (classifierSessions.has(info.sessionID)) return; // never act on our own classifier
+      if (info.permission === LOG_PERMISSION) return; // always the human's: never auto-decided, whatever the options
       if (opts.skipPermissions.includes(info.permission)) return;
       if (opts.onlyPermissions && !opts.onlyPermissions.includes(info.permission)) return;
       seenAsks.add(info.id);

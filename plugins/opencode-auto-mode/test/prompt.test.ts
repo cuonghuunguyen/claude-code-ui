@@ -3,7 +3,7 @@ import { buildPolicyPrompt } from "../prompt.ts";
 
 const SECTIONS = ["# Role", "# Decision principles", "# Default allow", "# Default block", "# Environment", "# Output format"];
 const DEFAULT_ALLOW_MARK = "Reading and searching";
-const DEFAULT_BLOCK_MARK = "git reset --hard";
+const DEFAULT_BLOCK_MARK = "rd /s /q";
 const DEFAULT_ENV_MARK = "production";
 
 describe("buildPolicyPrompt", () => {
@@ -77,6 +77,23 @@ describe("buildPolicyPrompt", () => {
     expect(prompt).not.toContain("<block>ask</block>");
     expect(prompt).toContain("block when unsure");
     expect(prompt).toContain("<block>yes</block>");
+  });
+
+  it("instruction files can set limits and describe the environment but never authorise", () => {
+    const prompt = buildPolicyPrompt({});
+    expect(prompt).toMatch(/AGENTS\.md[^.]*(set limits|describe the environment)/);
+    expect(prompt).toMatch(/never authoris(e|es) anything on the (default )?block list/);
+  });
+
+  it("a block rule wins over an allow rule unless the user authorised that action", () => {
+    expect(buildPolicyPrompt({})).toContain("A block rule wins over an allow rule");
+  });
+
+  it("ask is for cases where allowing and blocking are equally plausible; missing context alone is not a reason", () => {
+    const prompt = buildPolicyPrompt({});
+    expect(prompt).toContain("equally plausible");
+    expect(prompt).toContain("Decide whenever any rule applies");
+    expect(prompt).toContain("never see tool output");
   });
 
   it("stays small", () => {

@@ -19,6 +19,8 @@ export interface ClassifyContext {
   /** Mutated: the classifier session is added before prompting, removed once done. */
   classifierSessions: Set<string>;
   toolInputCache: Map<string, CachedToolCall>;
+  /** Aborts the run (e.g. the tool call was cancelled). */
+  signal?: AbortSignal;
 }
 
 export interface ModelRef {
@@ -75,13 +77,17 @@ interface Prepared {
 }
 
 /** One classifier run under a timeout: `prepare` gathers input and model, then a fresh session is prompted and always deleted. */
-async function run(ctx: Pick<ClassifyContext, "client" | "directory" | "timeoutMs" | "classifierSessions">, prepare: (signal: AbortSignal) => Promise<Prepared | null>): Promise<ClassifyOutcome> {
+async function run(ctx: Pick<ClassifyContext, "client" | "directory" | "timeoutMs" | "classifierSessions" | "signal">, prepare: (signal: AbortSignal) => Promise<Prepared | null>): Promise<ClassifyOutcome> {
   const abort = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     abort.abort();
   }, ctx.timeoutMs);
+  if (ctx.signal) {
+    if (ctx.signal.aborted) abort.abort();
+    else ctx.signal.addEventListener("abort", () => abort.abort(), { once: true });
+  }
   let classifierSessionID: string | undefined;
   const outcome: ClassifyOutcome = { verdict: null };
   try {
@@ -152,7 +158,7 @@ export async function classify(permissionInfo: PermissionAskedProperties, ctx: C
 }
 
 /** Re-runs a logged input through the classifier with the current policy; `model` is "provider/model". */
-export async function replay(input: ClassifierInput, model: string | undefined, ctx: Pick<ClassifyContext, "client" | "directory" | "timeoutMs" | "classifierSessions">): Promise<ClassifyOutcome> {
+export async function replay(input: ClassifierInput, model: string | undefined, ctx: Pick<ClassifyContext, "client" | "directory" | "timeoutMs" | "classifierSessions" | "signal">): Promise<ClassifyOutcome> {
   const ref = parseModelOption(model);
   return run(ctx, async () => (ref ? { input, model: ref } : null));
 }

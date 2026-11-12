@@ -2,8 +2,7 @@
 // decisions can be replayed (eval) and mined for rule suggestions (improve). Never inside the
 // project; never throws out of a hook. See README "Decision log".
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -44,6 +43,8 @@ export interface LabelRecord {
   at: string;
   requestID: string;
   reply: "once" | "always" | "reject";
+  /** A sibling of another reply, answered by OpenCode in the same burst (reject cascade, or always): not a human decision. */
+  cascade?: true;
 }
 
 export type LogRecord = DecisionRecord | LabelRecord;
@@ -69,18 +70,71 @@ export interface LogStore {
 export interface LogStoreOptions {
   dir: string;
   maxBytes: number;
-  /** Called at most once, with the first failure. */
+  /** Called with a failure, at most once per hour. */
   onError: (err: unknown) => void;
+  /** Test seam. */
+  now?: () => number;
+}
+
+const LOCK_STALE_MS = 30_000;
+const REPORT_EVERY_MS = 60 * 60_000;
+const lockFile = (dir: string) => join(dir, "auto-mode", "decisions.lock");
+
+const isCode = (err: unknown, code: string) => (err as NodeJS.ErrnoException)?.code === code;
+
+/** Runs `job` under an exclusive lock file (shared by every OpenCode process using this dir); skips it if someone else holds a fresh lock. */
+async function withLock(dir: string, now: () => number, job: () => Promise<void>): Promise<void> {
+  const lock = lockFile(dir);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const handle = await open(lock, "wx", 0o600);
+      await handle.close();
+      try {
+        await job();
+      } finally {
+        await rm(lock, { force: true });
+      }
+      return;
+    } catch (err) {
+      if (!isCode(err, "EEXIST")) throw err;
+      try {
+        if (now() - (await stat(lock)).mtimeMs <= LOCK_STALE_MS) return; // another process is rotating
+        await rm(lock, { force: true }); // stale: its owner died
+      } catch {
+        // vanished meanwhile: retry
+      }
+    }
+  }
 }
 
 export function createLogStore(opts: LogStoreOptions): LogStore {
+  const now = opts.now ?? Date.now;
   let chain: Promise<void> = Promise.resolve();
-  let reported = false;
+  let lastReport = -Infinity;
+
+  async function rotate(): Promise<void> {
+    await withLock(opts.dir, now, async () => {
+      const file = logFile(opts.dir);
+      let size = 0;
+      try {
+        size = (await stat(file)).size; // re-check under the lock: another process may have rotated already
+      } catch {
+        return;
+      }
+      if (size <= opts.maxBytes) return;
+      await rm(rotatedFile(opts.dir), { force: true });
+      try {
+        await rename(file, rotatedFile(opts.dir));
+      } catch (err) {
+        if (!isCode(err, "ENOENT")) throw err;
+      }
+    });
+  }
 
   async function write(record: LogRecord): Promise<void> {
     const file = logFile(opts.dir);
     const line = JSON.stringify(record) + "\n";
-    await mkdir(join(opts.dir, "auto-mode"), { recursive: true });
+    await mkdir(join(opts.dir, "auto-mode"), { recursive: true, mode: 0o700 });
     let size = 0;
     try {
       size = (await stat(file)).size;
@@ -88,8 +142,11 @@ export function createLogStore(opts: LogStoreOptions): LogStore {
       // not created yet
     }
     if (size > 0 && size + Buffer.byteLength(line) > opts.maxBytes) {
-      await rm(rotatedFile(opts.dir), { force: true });
-      await rename(file, rotatedFile(opts.dir));
+      try {
+        await rotate();
+      } catch {
+        // rotation is best-effort; the append below still happens
+      }
     }
     await appendFile(file, line, { mode: 0o600 });
   }
@@ -98,8 +155,8 @@ export function createLogStore(opts: LogStoreOptions): LogStore {
     append(record) {
       chain = chain.then(() =>
         write(record).catch((err) => {
-          if (reported) return;
-          reported = true;
+          if (now() - lastReport < REPORT_EVERY_MS) return;
+          lastReport = now();
           try {
             opts.onError(err);
           } catch {
@@ -120,15 +177,14 @@ export interface LogContents {
 }
 
 /** Reads the log and its rotated generation; missing files and malformed lines are skipped. */
-export function readLog(dir: string): LogContents {
+export async function readLog(dir: string): Promise<LogContents> {
   const out: LogContents = { decisions: [], labels: new Map() };
   for (const file of [rotatedFile(dir), logFile(dir)]) {
-    if (!existsSync(file)) continue;
     let text: string;
     try {
-      text = readFileSync(file, "utf8");
+      text = await readFile(file, "utf8");
     } catch {
-      continue;
+      continue; // missing or unreadable
     }
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;

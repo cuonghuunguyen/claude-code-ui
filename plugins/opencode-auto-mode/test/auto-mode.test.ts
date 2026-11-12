@@ -80,6 +80,11 @@ function fakeClient(opts: FakeClientOptions = {}) {
   return { client, log, toasts, replies, deleted, aborted };
 }
 
+/** The tool context OpenCode passes; `ask` records the permission asks the tool makes. */
+function toolCtx(dir: string, ask = vi.fn(async (_req: Record<string, unknown>) => {})) {
+  return { worktree: dir, directory: dir, ask };
+}
+
 function pluginInput(client: OpencodeClient): PluginInput {
   return { client, directory: "/proj", worktree: "/proj", serverUrl: new URL("http://127.0.0.1:4096") };
 }
@@ -690,6 +695,7 @@ describe("commands and tools", () => {
     expect(config.command!["auto-mode-improve"].template).toContain("auto_mode_improve");
     expect(config.command!["auto-mode-improve"].template).toMatch(/project-specific[\s\S]*personal[\s\S]*shipped defaults/);
     expect(config.command!["auto-mode-improve"].template).toContain("Do not edit any files");
+    expect(config.command!["auto-mode-improve"].template).toMatch(/untrusted/i);
     expect(config.command!["auto-mode-eval"].description).toBeTruthy();
     expect(config.agent!["auto-mode-classifier"].permission).toEqual({ "*": "deny" });
   });
@@ -714,6 +720,7 @@ describe("commands and tools", () => {
     for (let i = 0; i < 6; i++) {
       await holdHooks.event!(askedEvent({ id: `h${i}`, metadata: { command: `held-${i}` } }));
       await holdHooks.event!(repliedEvent(`h${i}`, i % 2 === 0 ? "once" : "reject"));
+      await new Promise((r) => setTimeout(r, 60)); // a human answers one ask at a time: not one cascade burst
     }
     const run = fakeClient({ promptText });
     const hooks = await AutoModePlugin(pluginInput(run.client), { logDir, ...extra });
@@ -733,7 +740,7 @@ describe("commands and tools", () => {
       return { data: { info: {}, parts: [{ type: "text" as const, text: "<block>no</block><reason>fine</reason>" }] } };
     });
 
-    const report = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, { worktree: "/proj", directory: "/proj" });
+    const report = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, toolCtx("/proj"));
 
     expect(report).toContain("6 cases");
     expect(report).toContain("agreement: 50% (3/6)");
@@ -748,7 +755,7 @@ describe("commands and tools", () => {
 
   it("eval matrix: an ask reply is its own column and a disagreement; with unsure block it counts as block", async () => {
     const asked = await seeded({}, "<block>ask</block><reason>unsure</reason>");
-    const ctx = { worktree: "/proj", directory: "/proj" };
+    const ctx = toolCtx("/proj");
     const report = await asked.hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, ctx);
     expect(report).toContain("agreement: 0% (0/6)");
     expect(report).toMatch(/expected allow\s*\|\s*0\s*\|\s*0\s*\|\s*3\s*\|\s*0/);
@@ -760,25 +767,81 @@ describe("commands and tools", () => {
     expect(report2).toMatch(/expected block\s*\|\s*0\s*\|\s*3\s*\|\s*0\s*\|\s*0/);
   });
 
+  it("both tools ask the human (auto_mode_log) before reading the log, and read nothing when refused", async () => {
+    const { hooks } = await seeded();
+    for (const [name, args] of [["auto_mode_eval", { limit: 0, only: "labeled", scope: "all", model: "x/y" }], ["auto_mode_improve", { limit: 0, scope: "all" }]] as const) {
+      const order: string[] = [];
+      const ctx = toolCtx("/proj", vi.fn(async (req: Record<string, unknown>) => { order.push("ask"); expect(req).toMatchObject({ permission: "auto_mode_log", patterns: ["all"], always: [] }); }));
+      const out = await hooks.tool![name].execute({ ...args }, ctx);
+      expect(ctx.ask).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(["ask"]);
+      expect(out).toContain("held-");
+      const refusing = toolCtx("/proj", vi.fn(async () => { throw new Error("rejected"); }));
+      await expect(hooks.tool![name].execute({ ...args }, refusing)).rejects.toThrow("rejected");
+    }
+    // no ask in the context: fail closed
+    await expect(hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "all" }, { worktree: "/proj", directory: "/proj" })).rejects.toThrow(/ask/);
+  });
+
+  it("the plugin never auto-decides an auto_mode_log ask, and the config hook makes it an ask rule", async () => {
+    const { client, replies, log } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: newLogDir(), onlyPermissions: undefined, skipPermissions: [] });
+    await hooks.event!(askedEvent({ id: "log1", permission: "auto_mode_log" }));
+    expect(replies).toEqual([]);
+    expect(log).toEqual([]);
+    expect(vi.mocked(client.session.prompt)).not.toHaveBeenCalled();
+
+    const config: { permission?: unknown } = {};
+    await hooks.config!(config);
+    expect(config.permission).toMatchObject({ auto_mode_log: "ask" });
+    const user: { permission?: unknown } = { permission: { auto_mode_log: "deny", bash: "ask" } };
+    await hooks.config!(user);
+    expect(user.permission).toEqual({ auto_mode_log: "deny", bash: "ask" }); // the user's own rule wins
+    const str: { permission?: unknown } = { permission: "allow" };
+    await hooks.config!(str);
+    expect(str.permission).toEqual({ "*": "allow", auto_mode_log: "ask" });
+  });
+
+  it("eval caps the replay count at 100", async () => {
+    const { run, hooks } = await seeded();
+    await hooks.tool!.auto_mode_eval.execute({ limit: 100000, only: "all", scope: "all", model: "" }, toolCtx("/proj"));
+    expect(vi.mocked(run.client.session.prompt).mock.calls.length).toBeLessThanOrEqual(100);
+  });
+
+  it("cascade siblings of one burst are labeled cascade, a later human answer is not", async () => {
+    const logDir = newLogDir();
+    const { client } = fakeClient({ promptText: "garbage" });
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir });
+    for (const id of ["c1", "c2", "c3", "c4"]) await hooks.event!(askedEvent({ id }));
+    const ev = (id: string, reply: string) => ({ event: { type: "permission.replied", properties: { sessionID: "ses1", requestID: id, reply } } });
+    await hooks.event!(ev("c1", "reject"));
+    await hooks.event!(ev("c2", "reject")); // the cascade
+    await hooks.event!(ev("c3", "always")); // the cascade of an always: still the same burst
+    await new Promise((r) => setTimeout(r, 120));
+    await hooks.event!(ev("c4", "once")); // a separate human answer
+    const labels = readRecords(logDir).filter((r) => r.kind === "label");
+    expect(labels.map((l) => [l.requestID, l.cascade === true])).toEqual([["c1", false], ["c2", true], ["c3", true], ["c4", false]]);
+  });
+
   it("eval honours scope: another project's decisions are excluded unless scope is all", async () => {
     const { run, hooks } = await seeded();
-    const other = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    const other = await hooks.tool!.auto_mode_eval.execute({ limit: 0, only: "labeled", scope: "project", model: "" }, toolCtx("/elsewhere"));
     expect(other).toContain("No matching");
-    const all = await hooks.tool!.auto_mode_eval.execute({ limit: 3, only: "labeled", scope: "all", model: "" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    const all = await hooks.tool!.auto_mode_eval.execute({ limit: 3, only: "labeled", scope: "all", model: "" }, toolCtx("/elsewhere"));
     expect(all).toContain("3 cases");
     expect(run.client.session.prompt).toHaveBeenCalledTimes(3);
   });
 
   it("improve returns the effective rules, the overrides and makes no model call", async () => {
     const { run, hooks } = await seeded({ allow: ["Deploys to staging.sh are fine"], environment: ["staging host is example.com"] });
-    const report = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, { worktree: "/proj", directory: "/proj" });
+    const report = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, toolCtx("/proj"));
     expect(report).toContain("Deploys to staging.sh are fine");
     expect(report).toContain("staging host is example.com");
     expect(report).toContain("human allowed");
     expect(report).toContain("held-0");
     expect(run.client.session.create).not.toHaveBeenCalled();
     expect(run.client.session.prompt).not.toHaveBeenCalled();
-    const none = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, { worktree: "/elsewhere", directory: "/elsewhere" });
+    const none = await hooks.tool!.auto_mode_improve.execute({ limit: 0, scope: "project" }, toolCtx("/elsewhere"));
     expect(none).toContain("No overrides");
   });
 });

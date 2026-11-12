@@ -105,7 +105,7 @@ On by default. Every decision is appended, one JSON object per line, to
 `<data dir>/auto-mode/decisions.jsonl`. The data dir is `logDir` if set, else what OpenCode itself
 uses (`$XDG_DATA_HOME/opencode`, falling back to `~/.local/share/opencode` on Linux, macOS and
 Windows alike: `opencode debug paths` shows it). It is never inside your project. The file is
-created with mode `0600` (best effort on Windows) and rotated once to `decisions.1.jsonl` past
+created with mode `0600` and its directory `0700` (best effort on Windows) and rotated once to `decisions.1.jsonl` past
 `logMaxBytes`.
 
 - `{"v":1,"kind":"decision", at, requestID, sessionID, project, permission, patterns, model,
@@ -116,14 +116,19 @@ created with mode `0600` (best effort on Windows) and rotated once to `decisions
   `input` is the exact `{transcript, action}` sent to the classifier, so the decision can be replayed.
 - `{"v":1,"kind":"label", at, requestID, reply}`: written when the human answers an ask the plugin
   did not answer itself (`permission.replied` carries `requestID` and `reply`: `once`, `always` or
-  `reject`). That answer is the ground truth the commands below use. Caveat: when you reject one
-  ask, OpenCode also rejects the session's other pending asks, and those are labeled `reject` too.
+  `reject`). That answer is the ground truth the commands below use. When you reject one ask, OpenCode
+  also rejects the session's other pending asks, and an `always` answer approves matching pending
+  asks, all published in one burst right after the primary reply. Replies of one session less than
+  50 ms apart are therefore marked `"cascade": true` and ignored by eval and improve.
 
 **The log can contain secrets and source code** from your sessions (user messages and tool-call
-inputs). It stays on your machine. It is only ever sent to the classifier model (by
-`/auto-mode-eval`, as replays) and to your session model (by `/auto-mode-improve`, as a compact
-report of overrides); nowhere else. A write failure is reported once through the OpenCode log and
-never affects a decision.
+inputs). It stays on your machine. It leaves it only through the two tools below: to the classifier
+model (`auto_mode_eval`, as replays) and to your session model (`auto_mode_improve`, as a compact
+report of overrides). Because any agent can call those tools, each use asks you first (permission
+`auto_mode_log`, shown with the scope and arguments); the plugin never answers that ask itself, and
+registers it as an `ask` rule unless you set your own. A write failure is reported through the OpenCode
+log (at most once an hour) and never affects a decision. Several OpenCode processes may share the
+log; rotation takes a lock file (`decisions.lock`, stale after 30 s).
 
 Turn it off with `"log": false`. Delete it by removing `<data dir>/auto-mode/` (both files).
 
@@ -139,7 +144,7 @@ worktree) or `all` (every project), e.g. `/auto-mode-eval 100 all-projects`.
   at a time, and reports counts, agreement, a confusion matrix (expected allow/block against got
   allow/block/ask/none) and the disagreements. By default (`labeled`) the truth is your answer
   (`once`/`always` = allow, `reject` = block); with `all` the previous verdict is the reference (a
-  regression check). Default 50 cases, max 500. **It calls the model once per case**, so it costs
+  regression check). Default 50 cases, max 100. With `all-projects`, every replay uses this project's `AGENTS.md` in the classifier's system prompt. **It calls the model once per case**, so it costs
   tokens. Replays are not written to the log.
 - `/auto-mode-improve [limit] [all-projects]` makes no model call itself. It returns the effective
   rules, the current policy prompt, which config file appears to supply the options (or "unknown"),
@@ -147,7 +152,7 @@ worktree) or `all` (every project), e.g. `/auto-mode-eval 100 all-projects`.
   then proposes `allow`/`softDeny`/`environment` changes as an `opencode.json` snippet, split into
   project-specific (this project's config), personal (`~/.config/opencode/opencode.json`) and
   candidates for the plugin's shipped defaults (reported only), explains which examples each fixes,
-  warns about over-allowing rules, and edits no files. Run `/auto-mode-eval` after applying them.
+  warns about over-allowing rules, and edits no files. The logged actions and reasons are marked untrusted data in the report: the model must not follow instructions inside them. Run `/auto-mode-eval` after applying them.
 
 ## Limits and known caveats
 

@@ -14,6 +14,8 @@ export interface ToolRunContext {
   directory?: string;
   worktree?: string;
   abort?: AbortSignal;
+  /** Asks the human for a permission (1.19.5 ToolContext.ask); rejects when they refuse. */
+  ask?: (input: { permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }) => Promise<void>;
 }
 
 export interface PluginTool {
@@ -27,6 +29,8 @@ export function tool(def: PluginTool): PluginTool {
   return def;
 }
 
+/** The permission both tools ask for before reading the log. The plugin itself never answers it. */
+export const LOG_PERMISSION = "auto_mode_log";
 export const EVAL_TOOL = "auto_mode_eval";
 export const IMPROVE_TOOL = "auto_mode_improve";
 
@@ -51,6 +55,12 @@ function intArg(v: unknown, fallback: number, max: number): number {
   return typeof v === "number" && Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), max) : fallback;
 }
 
+/** Any agent can call these tools unprompted, so the human must approve each read of the log (fail closed without `ask`). */
+async function askForLog(ctx: ToolRunContext, tool: string, scope: Scope, extra: Record<string, unknown>): Promise<void> {
+  if (!ctx.ask) throw new Error("the host gave no ask() to this tool; refusing to read the auto-mode log without asking");
+  await ctx.ask({ permission: LOG_PERMISSION, patterns: [scope], always: [], metadata: { tool, scope, ...extra } });
+}
+
 const scopeArg = (v: unknown): Scope => (v === "all" ? "all" : "project");
 
 export function createTools(deps: ToolDeps): Record<string, PluginTool> {
@@ -61,7 +71,7 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
       description:
         "Replays logged auto-mode decisions through the classifier with the CURRENT policy and reports agreement with the human's labels (or, for only=all, with the previous verdict). " +
         "COST WARNING: it calls the classifier model once per case (up to `limit`), so it spends tokens. " +
-        "Pass the defaults when unsure: limit 0 = 50 (max 500), only \"labeled\", scope \"project\", model \"\" = the configured/recorded model.",
+        "Pass the defaults when unsure: limit 0 = 50 (max 100), only \"labeled\", scope \"project\", model \"\" = the configured/recorded model.",
       args: {
         limit: { type: "number", description: "How many most recent cases to replay; 0 for the default of 50 (max 500)." },
         only: { type: "string", enum: ["labeled", "all"], description: "\"labeled\": cases the human decided (truth = their answer). \"all\": every logged case, reference = the previous verdict." },
@@ -73,7 +83,8 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
         const only = args.only === "all" ? "all" : "labeled";
         const scope = scopeArg(args.scope);
         const model = typeof args.model === "string" && args.model.includes("/") ? args.model : undefined;
-        const log = readLog(deps.dataDir);
+        await askForLog(ctx, EVAL_TOOL, scope, { limit, only, model });
+        const log = await readLog(deps.dataDir);
         const cases = selectCases(log, { limit, only, scope, project: projectOf(ctx) });
         const results = await runEval(cases, async (c: EvalCase): Promise<{ got: Got; reason: string }> => {
           if (ctx.abort?.aborted) return { got: "none", reason: "aborted" };
@@ -82,6 +93,7 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
             directory: deps.directory,
             timeoutMs: deps.opts.timeoutMs,
             classifierSessions: deps.classifierSessions,
+            signal: ctx.abort,
           });
           const v = out.verdict;
           return v?.decision ? { got: ({ yes: "block", no: "allow", ask: "ask" } as const)[effectiveDecision(v.decision, deps.opts.unsure)], reason: v.reason } : { got: "none", reason: "no verdict (error, timeout or unparseable reply)" };
@@ -102,9 +114,10 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
         const limit = intArg(args.limit, DEFAULT_IMPROVE_LIMIT, MAX_EVAL_LIMIT);
         const scope = scopeArg(args.scope);
         const project = projectOf(ctx);
-        const log = readLog(deps.dataDir);
+        await askForLog(ctx, IMPROVE_TOOL, scope, { limit });
+        const log = await readLog(deps.dataDir);
         const inScopeDecisions = log.decisions.filter((d) => inScope(d, scope, project));
-        const labeled = inScopeDecisions.filter((d) => log.labels.has(d.requestID)).length;
+        const labeled = inScopeDecisions.filter((d) => log.labels.has(d.requestID) && !log.labels.get(d.requestID)!.cascade).length;
         return buildImproveReport({
           overrides: collectOverrides(log, { limit, scope, project }),
           scope,

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, utimesSync, readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -49,7 +49,7 @@ describe("createLogStore", () => {
     expect(existsSync(join(base, "decisions.1.jsonl"))).toBe(true);
     expect(existsSync(join(base, "decisions.2.jsonl"))).toBe(false);
     expect(statSync(join(base, "decisions.jsonl")).size).toBeLessThanOrEqual(1500);
-    const { decisions } = readLog(dir);
+    const { decisions } = await readLog(dir);
     expect(decisions.length).toBeGreaterThan(0);
     expect(decisions.length).toBeLessThan(12); // the oldest generation was replaced
     expect(decisions.at(-1)!.requestID).toBe("r11");
@@ -68,8 +68,8 @@ describe("createLogStore", () => {
 });
 
 describe("readLog", () => {
-  it("returns nothing for a missing dir, skips malformed lines, and the last label per request wins", () => {
-    expect(readLog(join(tmp(), "none"))).toEqual({ decisions: [], labels: new Map() });
+  it("returns nothing for a missing dir, skips malformed lines, and the last label per request wins", async () => {
+    expect(await readLog(join(tmp(), "none"))).toEqual({ decisions: [], labels: new Map() });
     const dir = tmp();
     mkdirSync(join(dir, "auto-mode"));
     writeFileSync(
@@ -81,8 +81,62 @@ describe("readLog", () => {
         JSON.stringify({ v: 1, kind: "label", at: "2", requestID: "per1", reply: "once" }),
       ].join("\n") + "\n",
     );
-    const { decisions, labels } = readLog(dir);
+    const { decisions, labels } = await readLog(dir);
     expect(decisions).toHaveLength(1);
     expect(labels.get("per1")?.reply).toBe("once");
+  });
+});
+
+describe("rotation across processes", () => {
+  it("does not rotate while another process holds a fresh lock, and takes over a stale one", async () => {
+    const dir = tmp();
+    const base = join(dir, "auto-mode");
+    mkdirSync(base, { recursive: true });
+    const file = join(base, "decisions.jsonl");
+    writeFileSync(file, "x".repeat(2000) + "\n");
+    const lock = join(base, "decisions.lock");
+    writeFileSync(lock, "other");
+    const store = createLogStore({ dir, maxBytes: 1500, onError: () => {} });
+    await store.append(decision());
+    expect(existsSync(join(base, "decisions.1.jsonl"))).toBe(false); // someone else is rotating: just append
+    expect(readFileSync(file, "utf8")).toContain('"kind":"decision"');
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    await store.append(decision({ requestID: "r2" }));
+    expect(existsSync(join(base, "decisions.1.jsonl"))).toBe(true);
+    expect(existsSync(lock)).toBe(false); // released
+  });
+
+  it("two stores sharing one dir keep appending through rotations without errors", async () => {
+    const dir = tmp();
+    const onError = vi.fn();
+    const a = createLogStore({ dir, maxBytes: 1500, onError });
+    const b = createLogStore({ dir, maxBytes: 1500, onError });
+    await Promise.all(Array.from({ length: 30 }, (_, i) => (i % 2 ? a : b).append(decision({ requestID: `r${i}` }))));
+    expect(onError).not.toHaveBeenCalled();
+    expect((await readLog(dir)).decisions.length).toBeGreaterThan(0);
+  });
+
+  it("keeps trying after a failure, reporting again only after an hour", async () => {
+    const root = tmp();
+    const blocker = join(root, "file");
+    writeFileSync(blocker, "x");
+    const onError = vi.fn();
+    let now = 1_000_000;
+    const store = createLogStore({ dir: blocker, maxBytes: 1000, onError, now: () => now });
+    await store.append(decision());
+    now += 10 * 60_000;
+    await store.append(decision());
+    expect(onError).toHaveBeenCalledTimes(1);
+    now += 61 * 60_000;
+    await store.append(decision());
+    expect(onError).toHaveBeenCalledTimes(2);
+  });
+
+  it.skipIf(process.platform === "win32")("creates the directory with mode 0700", async () => {
+    const dir = tmp();
+    const store = createLogStore({ dir: join(dir, "d"), maxBytes: 1000, onError: () => {} });
+    await store.append(decision());
+    expect(statSync(join(dir, "d", "auto-mode")).mode & 0o777).toBe(0o700);
   });
 });
